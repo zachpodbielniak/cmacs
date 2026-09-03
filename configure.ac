@@ -1303,16 +1303,27 @@ if test "$with_cmacs_roamgraph" != "no"; then
   # roamgraph renders an org-roam knowledge graph as a live libregnum
   # scene.  Its scene half (cmacs-roamgraph-scene.c) includes
   # libregnum.h, so it reuses the libregnum/graylib include paths
-  # already folded into CMACS_CFLAGS; the graph/layout halves are pure
-  # C over glib (also already global) and the data layer is Elisp over
-  # Emacs's builtin SQLite.  No extra deps -- deliberately no
-  # PKG_CHECK_MODULES here.
+  # already folded into CMACS_CFLAGS; the graph store and the solver
+  # live in cmacs/graphcore (pure C over glib, also already global) and
+  # the data layer is Elisp over Emacs's builtin SQLite.  No extra
+  # deps -- deliberately no PKG_CHECK_MODULES here.
   CMACS_ROAMGRAPH_CFLAGS=""
   CMACS_ROAMGRAPH_LIBS=""
   AC_DEFINE([HAVE_CMACS_ROAMGRAPH], 1, [CMacs org-roam knowledge-graph visualiser])
   CMACS_ROAMGRAPH_OBJ="cmacs-roamgraph-init.o cmacs-roamgraph-defuns.o \
-    cmacs-roamgraph-graph.o cmacs-roamgraph-layout.o \
     cmacs-roamgraph-scene.o cmacs-roamgraph-scan.o"
+fi
+
+# graphcore: the graph store and the force-directed solver, shared by
+# every graph visualiser (roamgraph today, secondbrain next).  NOT a
+# --with- option of its own -- it has no user-visible surface and no
+# deps beyond glib, so it is simply linked in whenever something that
+# needs it is enabled.  Pure C: the TU includes neither lisp.h nor
+# libregnum.h, which is what keeps the solver headless-testable.
+CMACS_GRAPHCORE_OBJ=""
+if test "$with_cmacs_roamgraph" != "no"; then
+  AC_DEFINE([HAVE_CMACS_GRAPHCORE], 1, [CMacs shared graph model and layout solver])
+  CMACS_GRAPHCORE_OBJ="cmacs-graphcore-graph.o cmacs-graphcore-layout.o"
 fi
 if test "$with_cmacs_lrgscript" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
@@ -1907,6 +1918,7 @@ AC_SUBST(CMACS_VIDSTUDIO_LIBS)
 AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)
+AC_SUBST(CMACS_GRAPHCORE_OBJ)
 AC_SUBST(CMACS_ROAMGRAPH_OBJ)
 AC_SUBST(CMACS_ROAMGRAPH_CFLAGS)
 AC_SUBST(CMACS_ROAMGRAPH_LIBS)

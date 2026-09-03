@@ -46,6 +46,7 @@ makefile
 !cmacs/gsurf/modules/Makefile
 !cmacs/screensaver/render/Makefile
 !cmacs/screensaver/render/tests/Makefile
+!cmacs/graphcore/tests/Makefile
 !test/manual/etags/Makefile
 !test/manual/etags/make-src/Makefile
 !test/manual/indent/Makefile
@@ -280,6 +281,7 @@ cmacs/emacsctl/emacsctl
 cmacs/emacsctl/cmacsctl
 cmacs/emacsctl/tests/test-ctl
 cmacs/screensaver/render/tests/test-proto
+cmacs/graphcore/tests/test-graphcore
 src/sfnt
 src/Emacs
 src/temacs

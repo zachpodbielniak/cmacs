@@ -1,0 +1,177 @@
+#+title: CMacs Graphcore — the shared graph model and layout solver
+#+description: Node/edge store, force-directed solver, closed-form layouts, tweening and hierarchical collapse, shared by every cmacs graph visualiser
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:00:00-0400
+#+updated: 2026-09-03T17:00:00-0400
+#+version: 1.0
+
+* Overview
+
+=cmacs/graphcore/= is the graph engine every cmacs graph visualiser sits on. It owns the node/edge store, the CSR adjacency, the force-directed solver, three closed-form layouts, position tweening and hierarchical collapse.
+
+It is *not* a =--with-cmacs-*= option. It has no user-visible surface and no dependency beyond glib, so it is simply compiled in whenever something that needs it is enabled — today [[file:cmacs-roamgraph.org][roamgraph]], with =secondbrain= to follow. The =HAVE_CMACS_GRAPHCORE= define is set by =configure.ac= on that basis.
+
+** Why it exists separately
+
+Two consumers want the same maths. roamgraph draws an org-roam knowledge graph; a second-brain visualiser draws applications, routines, memory and skills. Neither difference reaches the solver: it deals in ids, groups, degrees and positions, and knows nothing about where any of them came from.
+
+Keeping it shared means an improvement lands in both. A new layout, a smoother transition or a solver fix is written once.
+
+* The firewall
+
+Graphcore is in the *third translation-unit class*: it includes neither ="lisp.h"= nor =<libregnum.h>=, only =<glib.h>=.
+
+This is the single most important property of the subsystem, and it is worth stating why. raylib's =Color= is a struct and cmacs's =pgtkgui.h= =Color= is a =void*=; they cannot coexist in one TU, which is what forces every libregnum subsystem into a render half, a Lisp half, and a pure model. Graphcore is entirely that third class.
+
+The payoff is testability. Because the solver links against nothing but glib, the whole of it can be exercised with *no Lisp VM, no GL context and no display*:
+
+#+begin_src bash
+just test-graphcore          # or: make -C cmacs/graphcore/tests check
+#+end_src
+
+That suite is 25 tests and runs anywhere, including headless CI. =cmacs/graphcore/tests/config.h= is a two-line shim standing in for Emacs's gnulib-laden =src/config.h=; if it ever needs to grow, something has breached the firewall.
+
+* Data model
+
+** Node
+
+Nodes are keyed by a caller-chosen *id string*, never by index. Indices are dense and stable only within one finalized generation; the id is what survives a rebuild, so it is also what is handed to the libregnum node table as the pick =path=.
+
+| Field | Meaning |
+|-------+---------|
+| =id= | identity key (owned) |
+| =title= | display title |
+| =file= | absolute path, may be =NULL= |
+| =group= | colour/grouping bucket, e.g. the PARA directory |
+| =level=, =pos= | position within =file=, for visiting a heading node |
+| =rgba= | =0xRRGGBBAA=, assigned by the Lisp side |
+| =in_deg=, =out_deg=, =edge_first=, =edge_count= | degree and CSR slice |
+| =x, y, z= | layout position |
+| =vx, vy, vz= | per-step displacement scratch (solver-owned) |
+| =sx, sy, sz= / =tx, ty, tz= | tween start / target |
+| =parent=, =descendants=, =ring= | hierarchy and band assignment |
+| =radius= | render radius, derived from degree |
+| =pinned=, =placed=, =collapsed=, =visible= | flags |
+
+Tween endpoints are deliberately *not* aliased onto =x/y/z= or the solver's =vx/vy/vz=. A tween and a solve are different animations, and overlapping their storage makes an interrupted transition land somewhere neither intended.
+
+** Edge
+
+=(a, b, kind, weight)=. =kind= is =id= (the real topology), =cite= (citations) or =sim= (the ai-brigade semantic index — an overlay, weighted 0.35 so it nudges without competing with real structure, and excluded from link navigation).
+
+=add_edge= sanitises: it drops self-loops, dangling endpoints, and duplicates on the *unordered* pair plus kind, so =A→B= and =B→A= collapse into one spring.
+
+** Adding nodes
+
+#+begin_src c
+gint idx = cmacs_graph_add_node (g, id, title, file, group, level, pos, rgba);
+if (idx < 0) continue;   /* graph is full -- drop it */
+#+end_src
+
+The return is *signed*. Returning =0= for "full" aliased every overflowing node onto node 0, which silently corrupted the graph rather than dropping the node. A caller that ignores the result will keep a payload for a node that does not exist.
+
+* Layouts
+
+** Force (the default)
+
+Fruchterman–Reingold with Barnes–Hut repulsion. Stepped, not one-shot: =begin= seeds and arms it, =step= advances a few iterations and reports convergence, and the Lisp side drives it from a timer so the graph visibly unfolds and then stops.
+
+Choices worth knowing:
+
+- =k= (ideal edge length) is a *constant*, not =sqrt(area/n)=. That formula exists to pack a graph into a fixed frame; here the camera fits itself to the content instead, so making =k= depend on =n= would only make the map's scale depend on how many notes you happen to have.
+- Gravity is proportional to distance *and* to =sqrt(degree)=. Weighting by degree is what makes it look like a knowledge graph rather than a soap bubble.
+- Displacement is damped by =log2(1 + degree)=. Without it the high-degree hubs whip around and drag the whole map.
+- Convergence requires three consecutive quiet iterations. A single quiet pass is not enough: the first iterations of a cold-started component can be near-still by accident.
+- Setting =theta= to 0 degenerates Barnes–Hut to an exact all-pairs sum, which the tests use as a free reference implementation.
+
+** Closed-form layouts
+
+=CIRCLE=, =HEX= and =RINGS= compute a final position for every node in a single pass. There is nothing to step and no convergence — running the solver over them would only undo them, which is why =place= marks the layout converged.
+
+#+begin_src c
+cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+cmacs_graph_layout_tween_begin (l, g, 24);   /* or _snap (g) */
+#+end_src
+
+- =CIRCLE= — one concentric circle per distinct =group=, in first-appearance order.
+- =HEX= — axial hex lattice spiralling out from the origin. Ring /r/ holds 6/r/ cells; the traversal starts at the ring's =DIR[2]= corner and walks from =DIR[4]=. Starting from =DIR[0]= instead re-visits cells and lands two nodes on the same point — the lattice test catches exactly that.
+- =RINGS= — concentric bands taken from =node->ring=, members spread by angle, groups kept contiguous so a department reads as one wedge. Alternate bands counter-rotate under spin so the motion reads as depth. This is the ARMS layout.
+
+*Placement writes to =tx/ty/tz= and moves nothing.* Separating "decide where things go" from "move them there" is what lets one code path serve both an instant switch and an animated one, and it keeps the layouts testable without running an animation.
+
+Only *visible* nodes are placed. A collapsed subtree has no position to occupy, and including it would leave gaps in every ring.
+
+Determinism is a requirement, not a nicety: these are re-run on every spin tick and every expand, so ordering is always by an explicit key (ring, then group name, then index) and never by hash iteration order.
+
+* Tweening
+
+#+begin_src c
+cmacs_graph_layout_tween_begin (l, g, frames);
+while (!cmacs_graph_layout_tween_step (l, g)) { /* one per frame */ }
+#+end_src
+
+Ease-in-out cubic. A linear tween starts and stops abruptly, which reads as a jump-cut rather than as motion.
+
+Three behaviours worth relying on:
+
+- =frames <= 0= snaps.
+- The final step lands *exactly* on the target rather than merely near it. Accumulated float error would otherwise leave the graph a hair off its own layout, which shows up as drift after repeated switches.
+- =tween_begin= mid-flight re-snapshots from wherever the nodes currently *are*, so an interrupted transition continues smoothly instead of rewinding to its origin.
+
+Placing =FORCE= aims every node at its current position, so a caller that tweens unconditionally after a layout switch does not drag the graph to the origin.
+
+* Hierarchy and collapse
+
+Optional. A graph that never calls =set_parent= behaves exactly as it did before this existed: every node a visible root, no walks, no cost.
+
+#+begin_src c
+cmacs_graph_set_parent    (g, child_idx, parent_idx);  /* before finalize */
+cmacs_graph_set_collapsed (g, idx, TRUE);
+cmacs_graph_collapse_all  (g, TRUE);
+guint shown = cmacs_graph_n_visible (g);
+#+end_src
+
+=finalize= computes =descendants= (transitive child count, used to size a collapsed hub) and initial visibility. A node is visible unless some ancestor is collapsed.
+
+Two implementation notes:
+
+- Descendant counting is *bottom-up over a depth-sorted order*, not a recursive walk. Recursion on a pathological tree — 35k files nested one per level — would overflow the C stack, and it is O(n) either way.
+- =set_parent= *refuses* a cycle rather than propagating it. Every consumer of the field walks upward, so a cycle is a hang, not a wrong answer. It is cheap to check at the point of creation and impossible to diagnose later.
+
+* Consumers
+
+A consumer supplies data and owns rendering. The contract in both directions is small:
+
+- Build with =begin_update= / =add_node= / =add_edge= / (optionally =set_parent=) / =finalize=.
+- Drive the solver with =layout_begin= / =layout_step=, or place a closed-form layout with =layout_place= and animate with the tween.
+- Read =x/y/z=, =radius=, =rgba=, =visible= and =descendants= when building the scene.
+
+Graphcore never allocates a drawable, never touches a Lisp object and never talks to GL. Everything it produces is numbers on a struct.
+
+** Emission order is not graph order
+
+A consumer that skips nodes — invisible ones, or ones past a drawable budget — *must* keep a graph-index → emission-index map. The scene's node table and shape arrays are in emission order while the graph is in graph order, and the two diverge the moment anything is skipped. Reading node flags with a graph index then recolours the wrong nodes. See =cmacs-roamgraph-scene.c='s =node_emit= / =edge_emit= for the worked example.
+
+* What you cannot extend from here
+
+Honest list:
+
+- *Node geometry.* Graphcore has no opinion about shapes; that is the consumer's scene builder. roamgraph draws one sphere per note by policy, not by limitation.
+- *Edge routing.* Straight lines only, at every consumer so far. Nothing in graphcore forbids curves, but nothing provides them either.
+- *Per-node layout overrides.* Pinning is the escape hatch: a pinned node is not moved by the solver, so precomputing positions and pinning everything is how you get a layout that does not exist here.
+- *Incremental layout.* =begin= re-seeds. Survivors keep their positions, so a rebuild does not teleport, but there is no "add one node and relax only its neighbourhood" entry point — =reheat= is the closest thing.
+
+* Tests
+
+=cmacs/graphcore/tests/test-graphcore.c=, 25 GTest cases, all headless:
+
+| Group | Covers |
+|-------+--------|
+| =/graphcore/graph/= | lookup, duplicate ids, *overflow returns -1*, edge sanitising, position inheritance across rebuild |
+| =/graphcore/hierarchy/= | absent by default, descendant counts, collapse hides a subtree, transitivity, collapse-all, *cycle refusal* |
+| =/graphcore/layout/= | convergence, 2D planarity, determinism |
+| =/graphcore/place/= | circle radii per group, hex is a real lattice, ring bands ordered outward, invisible nodes skipped, determinism, spin rotates without reshaping |
+| =/graphcore/tween/= | lands exactly, monotonic, zero-frames snaps, restart continues from current, FORCE holds still |
+
+The hex and overflow tests are both regressions with real bite: the first caught a ring traversal that placed two nodes on the same point, the second guards the aliasing bug described above.

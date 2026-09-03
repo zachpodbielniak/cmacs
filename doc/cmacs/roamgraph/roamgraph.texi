@@ -413,8 +413,8 @@ Includes @file{libregnum.h}, so it may not include @file{lisp.h} ---
 raylib's @code{Color} clashes with pgtk's.
 @item cmacs-roamgraph-defuns.c
 Includes @file{lisp.h} only; the Elisp boundary.
-@item cmacs-roamgraph-graph.c
-@itemx cmacs-roamgraph-layout.c
+@item cmacs/graphcore/cmacs-graphcore-graph.c
+@itemx cmacs/graphcore/cmacs-graphcore-layout.c
 Include @emph{neither}, only glib.
 @end table
 
@@ -422,6 +422,13 @@ That third class is the point: the graph model and the force solver can
 be exercised with no Lisp VM and no GL context, which is why the layout
 has real unit tests rather than only screenshots.  Same split as
 gnuseye's geodesy (@pxref{CMacs Gnuseye}).
+
+The graph model and the solver are @emph{shared}, not roamgraph's own.
+They live in @ref{CMacs Graphcore} and are linked by every graph
+visualiser; run their suite with @command{just test-graphcore}, which
+needs no display and no built emacs.  roamgraph inherits whatever lands
+there --- the closed-form layouts (circle, hex, rings), position
+tweening and hierarchical collapse all arrived that way.
 
 C owns geometry, the solver, the pick ray and the node table.  Elisp
 owns where the data comes from, what a click means, and every pane.  C

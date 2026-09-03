@@ -1,16 +1,16 @@
-/* cmacs-roamgraph-layout.c --- force-directed graph layout.
+/* cmacs-graphcore-layout.c --- force-directed graph layout.
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * See cmacs-roamgraph-layout.h for the contract and the rationale.
+ * See cmacs-graphcore-layout.h for the contract and the rationale.
  * Pure C -- no "lisp.h", no <libregnum.h>. */
 
 #include <config.h>
 
-#ifdef HAVE_CMACS_ROAMGRAPH
+#ifdef HAVE_CMACS_GRAPHCORE
 
-#include "cmacs-roamgraph-layout.h"
+#include "cmacs-graphcore-layout.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -26,10 +26,10 @@
  * at 2000, and the natural cluster extent stays k*cbrt(n) (3D) or
  * k*sqrt(n) (2D).  Nodes are ~0.3 units in radius, so 3.0 leaves a
  * comfortable gap. */
-#define ROAM_K            3.0
+#define GRAPHCORE_K            3.0
 
 /* Initial temperature as a fraction of the graph's nominal extent. */
-#define ROAM_T0_FRACTION  0.10
+#define GRAPHCORE_T0_FRACTION  0.10
 
 /* Pull toward the origin.
  *
@@ -48,18 +48,27 @@
  *    the same shell and the middle hollows out.  Pulling hubs harder
  *    seats them centrally and lets their leaves fan outward, which is
  *    both the conventional reading and the useful one. */
-#define ROAM_GRAVITY_SCALE 0.25
+#define GRAPHCORE_GRAVITY_SCALE 0.25
 
 /* Similarity edges are a hint, not topology: they nudge, they must not
  * dominate the real link structure. */
-#define ROAM_W_SIM        0.35f
+#define GRAPHCORE_W_SIM        0.35f
 
 /* Convergence: this many consecutive iterations below the threshold. */
-#define ROAM_QUIET_RUNS   3
+#define GRAPHCORE_QUIET_RUNS   3
 
 /* Octree recursion cap.  Coincident points would otherwise split
  * forever; past this depth a cell simply accumulates mass. */
-#define ROAM_BH_MAX_DEPTH 24
+#define GRAPHCORE_BH_MAX_DEPTH 24
+
+/* Radial distance between adjacent rings / circles.  Twice the ideal
+ * edge length, so a band reads as its own orbit rather than merging
+ * into its neighbours. */
+#define GRAPHCORE_RING_GAP     6.0
+
+/* Centre-to-centre spacing of the hex lattice, in the same world units
+ * as GRAPHCORE_K. */
+#define GRAPHCORE_HEX_SIZE     2.0
 
 /* ── Barnes-Hut octree ────────────────────────────────────────────
  * A flat array of cells addressed by index rather than a pointer tree:
@@ -77,7 +86,7 @@ typedef struct
   guint8 is_leaf;
 } BhCell;
 
-struct CmacsRoamLayout
+struct CmacsGraphLayout
 {
   int      dims;
   int      iter;        /* iterations completed */
@@ -92,23 +101,32 @@ struct CmacsRoamLayout
 
   GArray  *cells;       /* BhCell */
   GArray  *disp;        /* float, 3 per node */
+
+  /* Closed-form placement + tweening. */
+  CmacsGraphLayoutKind kind;
+  double   spin;        /* RINGS angular offset, radians */
+  double   ring_gap;    /* radial distance between bands */
+  int      tween_frame; /* frames elapsed in the current tween */
+  int      tween_frames;/* 0 = not tweening */
 };
 
-CmacsRoamLayout *
-cmacs_roam_layout_new (void)
+CmacsGraphLayout *
+cmacs_graph_layout_new (void)
 {
-  CmacsRoamLayout *l = g_new0 (CmacsRoamLayout, 1);
+  CmacsGraphLayout *l = g_new0 (CmacsGraphLayout, 1);
 
   l->dims      = 3;
   l->theta     = 0.9;
   l->converged = TRUE;      /* nothing armed yet */
+  l->kind      = CMACS_GRAPH_LAYOUT_FORCE;
+  l->ring_gap  = GRAPHCORE_RING_GAP;
   l->cells     = g_array_new (FALSE, FALSE, sizeof (BhCell));
   l->disp      = g_array_new (FALSE, TRUE, sizeof (float));
   return l;
 }
 
 void
-cmacs_roam_layout_free (CmacsRoamLayout *l)
+cmacs_graph_layout_free (CmacsGraphLayout *l)
 {
   if (!l) return;
   if (l->cells) g_array_free (l->cells, TRUE);
@@ -117,19 +135,19 @@ cmacs_roam_layout_free (CmacsRoamLayout *l)
 }
 
 int
-cmacs_roam_layout_dims (CmacsRoamLayout *l)
+cmacs_graph_layout_dims (CmacsGraphLayout *l)
 {
   return l ? l->dims : 3;
 }
 
 gboolean
-cmacs_roam_layout_converged (CmacsRoamLayout *l)
+cmacs_graph_layout_converged (CmacsGraphLayout *l)
 {
   return l ? l->converged : TRUE;
 }
 
 double
-cmacs_roam_layout_progress (CmacsRoamLayout *l)
+cmacs_graph_layout_progress (CmacsGraphLayout *l)
 {
   if (!l || l->iters <= 0) return 1.0;
   if (l->iter >= l->iters) return 1.0;
@@ -137,22 +155,22 @@ cmacs_roam_layout_progress (CmacsRoamLayout *l)
 }
 
 void
-cmacs_roam_layout_set_theta (CmacsRoamLayout *l, double theta)
+cmacs_graph_layout_set_theta (CmacsGraphLayout *l, double theta)
 {
   if (!l) return;
   l->theta = (theta < 0.0) ? 0.0 : theta;
 }
 
 double
-cmacs_roam_layout_get_theta (CmacsRoamLayout *l)
+cmacs_graph_layout_get_theta (CmacsGraphLayout *l)
 {
   return l ? l->theta : 0.9;
 }
 
 gboolean
-cmacs_roam_layout_bounds (CmacsRoamGraph *g, float *min, float *max)
+cmacs_graph_layout_bounds (CmacsGraph *g, float *min, float *max)
 {
-  guint n = cmacs_roam_graph_n_nodes (g), i;
+  guint n = cmacs_graph_n_nodes (g), i;
   float lo[3], hi[3];
   gboolean any = FALSE;
 
@@ -163,7 +181,7 @@ cmacs_roam_layout_bounds (CmacsRoamGraph *g, float *min, float *max)
 
   for (i = 0; i < n; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       if (!nd || !nd->visible) continue;
       if (nd->x < lo[0]) lo[0] = nd->x;
       if (nd->y < lo[1]) lo[1] = nd->y;
@@ -232,7 +250,7 @@ component_direction (int dims, guint i, guint c, float *ox, float *oy,
 /* ── begin: seed positions and arm the schedule ───────────────────── */
 
 void
-cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
+cmacs_graph_layout_begin (CmacsGraphLayout *l, CmacsGraph *g,
                          int dims, int iters)
 {
   guint n, i, pass;
@@ -241,7 +259,7 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
 
   g_return_if_fail (l != NULL && g != NULL);
 
-  n = cmacs_roam_graph_n_nodes (g);
+  n = cmacs_graph_n_nodes (g);
   l->dims      = (dims == 2) ? 2 : 3;
   l->iter      = 0;
   l->quiet     = 0;
@@ -261,23 +279,23 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
       return;
     }
 
-  /* Ideal edge length is fixed (see ROAM_K); what depends on the node
+  /* Ideal edge length is fixed (see GRAPHCORE_K); what depends on the node
      count is the resulting cluster extent, and therefore the starting
      temperature and how hard the origin has to pull. */
   count = (double) n;
-  l->k = ROAM_K;
+  l->k = GRAPHCORE_K;
   l->extent = l->k * ((l->dims == 2) ? sqrt (count) : cbrt (count));
-  l->gravity = ROAM_GRAVITY_SCALE * cbrt (count);
+  l->gravity = GRAPHCORE_GRAVITY_SCALE * cbrt (count);
   if (l->gravity < 0.05) l->gravity = 0.05;
-  l->t0 = ROAM_T0_FRACTION * l->extent;
+  l->t0 = GRAPHCORE_T0_FRACTION * l->extent;
 
-  cmacs_roam_graph_reset_rand (g);
+  cmacs_graph_reset_rand (g);
 
   /* In 2D, flatten anything inherited from a previous 3D layout. */
   if (l->dims == 2)
     for (i = 0; i < n; i++)
       {
-        CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+        CmacsGraphNode *nd = cmacs_graph_node (g, i);
         nd->z = 0.0f;
       }
 
@@ -294,7 +312,7 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
 
       for (i = 0; i < n; i++)
         {
-          CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+          CmacsGraphNode *nd = cmacs_graph_node (g, i);
           if (!nd->placed) continue;
           if (nd->z < zlo) zlo = nd->z;
           if (nd->z > zhi) zhi = nd->z;
@@ -302,9 +320,9 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
       if (zhi >= zlo && (double) (zhi - zlo) < 0.01 * l->extent)
         for (i = 0; i < n; i++)
           {
-            CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+            CmacsGraphNode *nd = cmacs_graph_node (g, i);
             if (!nd->placed) continue;
-            nd->z += (cmacs_roam_graph_rand (g) - 0.5f)
+            nd->z += (cmacs_graph_rand (g) - 0.5f)
                      * (float) (l->extent * 0.5);
           }
     }
@@ -319,16 +337,16 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
 
       for (i = 0; i < n; i++)
         {
-          CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+          CmacsGraphNode *nd = cmacs_graph_node (g, i);
           const guint32 *nb;
           guint cnt = 0, j, seen = 0;
           float sx = 0, sy = 0, sz = 0;
 
           if (nd->placed) continue;
-          nb = cmacs_roam_graph_neighbours (g, i, NULL, &cnt);
+          nb = cmacs_graph_neighbours (g, i, NULL, &cnt);
           for (j = 0; j < cnt; j++)
             {
-              CmacsRoamNode *o = cmacs_roam_graph_node (g, nb[j]);
+              CmacsGraphNode *o = cmacs_graph_node (g, nb[j]);
               if (!o || !o->placed) continue;
               sx += o->x; sy += o->y; sz += o->z;
               seen++;
@@ -336,15 +354,15 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
           if (seen == 0) continue;
 
           nd->x = sx / (float) seen
-                  + (float) (((double) cmacs_roam_graph_rand (g) - 0.5)
+                  + (float) (((double) cmacs_graph_rand (g) - 0.5)
                              * l->k);
           nd->y = sy / (float) seen
-                  + (float) (((double) cmacs_roam_graph_rand (g) - 0.5)
+                  + (float) (((double) cmacs_graph_rand (g) - 0.5)
                              * l->k);
           nd->z = (l->dims == 2)
                   ? 0.0f
                   : sz / (float) seen
-                    + (float) (((double) cmacs_roam_graph_rand (g) - 0.5)
+                    + (float) (((double) cmacs_graph_rand (g) - 0.5)
                                * l->k);
           nd->placed = 1;
           progressed = TRUE;
@@ -357,19 +375,19 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
      orphan notes (a mature notes tree has hundreds of unlinked
      dailies) spread out instead of piling up at the origin. */
   {
-    guint m = cmacs_roam_graph_n_edges (g);
+    guint m = cmacs_graph_n_edges (g);
     GHashTable *slot;
     guint n_unplaced = 0, n_comp = 0, next_slot = 0;
 
     for (i = 0; i < n; i++)
-      if (!cmacs_roam_graph_node (g, i)->placed) n_unplaced++;
+      if (!cmacs_graph_node (g, i)->placed) n_unplaced++;
     if (n_unplaced == 0) goto seeded;
 
     parent = g_new (guint, n);
     for (i = 0; i < n; i++) parent[i] = i;
     for (i = 0; i < m; i++)
       {
-        CmacsRoamEdge *e = cmacs_roam_graph_edge (g, i);
+        CmacsGraphEdge *e = cmacs_graph_edge (g, i);
         uf_union (parent, e->a, e->b);
       }
 
@@ -378,7 +396,7 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
     for (i = 0; i < n; i++)
       {
         guint root;
-        if (cmacs_roam_graph_node (g, i)->placed) continue;
+        if (cmacs_graph_node (g, i)->placed) continue;
         root = uf_find (parent, i);
         if (!g_hash_table_contains (slot, GUINT_TO_POINTER (root + 1)))
           {
@@ -393,7 +411,7 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
 
       for (i = 0; i < n; i++)
         {
-          CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+          CmacsGraphNode *nd = cmacs_graph_node (g, i);
           guint root, s;
           float dx, dy, dz, jitter;
           double dist;
@@ -412,13 +430,13 @@ cmacs_roam_layout_begin (CmacsRoamLayout *l, CmacsRoamGraph *g,
           jitter = (float) (l->k * 1.5);
 
           nd->x = (float) ((double) dx * dist)
-                  + (cmacs_roam_graph_rand (g) - 0.5f) * jitter;
+                  + (cmacs_graph_rand (g) - 0.5f) * jitter;
           nd->y = (float) ((double) dy * dist)
-                  + (cmacs_roam_graph_rand (g) - 0.5f) * jitter;
+                  + (cmacs_graph_rand (g) - 0.5f) * jitter;
           nd->z = (l->dims == 2)
                   ? 0.0f
                   : (float) ((double) dz * dist)
-                    + (cmacs_roam_graph_rand (g) - 0.5f) * jitter;
+                    + (cmacs_graph_rand (g) - 0.5f) * jitter;
           nd->placed = 1;
         }
     }
@@ -468,10 +486,10 @@ bh_child_centre (const BhCell *c, int oct, float *cx, float *cy, float *cz,
 }
 
 static void
-bh_insert (GArray *cells, gint32 ci, CmacsRoamGraph *g, guint body,
+bh_insert (GArray *cells, gint32 ci, CmacsGraph *g, guint body,
            int depth)
 {
-  CmacsRoamNode *nd = cmacs_roam_graph_node (g, body);
+  CmacsGraphNode *nd = cmacs_graph_node (g, body);
   BhCell *c;
   int oct;
   gint32 kid;
@@ -491,7 +509,7 @@ bh_insert (GArray *cells, gint32 ci, CmacsRoamGraph *g, guint body,
               c->body = (gint32) body;
               return;
             }
-          if (depth >= ROAM_BH_MAX_DEPTH)
+          if (depth >= GRAPHCORE_BH_MAX_DEPTH)
             /* Coincident (or near-coincident) points: stop splitting
                and let the cell hold several bodies.  The repulsion
                kernel's epsilon keeps the forces finite. */
@@ -501,7 +519,7 @@ bh_insert (GArray *cells, gint32 ci, CmacsRoamGraph *g, guint body,
              through and place the incoming one. */
           {
             guint resident = (guint) c->body;
-            CmacsRoamNode *rn = cmacs_roam_graph_node (g, resident);
+            CmacsGraphNode *rn = cmacs_graph_node (g, resident);
             float kx, ky, kz, kh;
             int roct;
 
@@ -533,15 +551,15 @@ bh_insert (GArray *cells, gint32 ci, CmacsRoamGraph *g, guint body,
 }
 
 static void
-bh_build (CmacsRoamLayout *l, CmacsRoamGraph *g)
+bh_build (CmacsGraphLayout *l, CmacsGraph *g)
 {
-  guint n = cmacs_roam_graph_n_nodes (g), i;
+  guint n = cmacs_graph_n_nodes (g), i;
   float lo[3], hi[3], cx, cy, cz, half = 1.0f;
 
   g_array_set_size (l->cells, 0);
   if (n == 0) return;
 
-  if (!cmacs_roam_layout_bounds (g, lo, hi))
+  if (!cmacs_graph_layout_bounds (g, lo, hi))
     return;
 
   cx = 0.5f * (lo[0] + hi[0]);
@@ -554,7 +572,7 @@ bh_build (CmacsRoamLayout *l, CmacsRoamGraph *g)
   bh_new_cell (l->cells, cx, cy, cz, half);
   for (i = 0; i < n; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       if (nd->visible) bh_insert (l->cells, 0, g, i, 0);
     }
 }
@@ -562,11 +580,11 @@ bh_build (CmacsRoamLayout *l, CmacsRoamGraph *g)
 /* Repulsive force on node BODY from cell CI's subtree, accumulated
  * into (*fx,*fy,*fz).  k2 is k^2, the FR repulsion numerator. */
 static void
-bh_accumulate (CmacsRoamLayout *l, CmacsRoamGraph *g, gint32 ci,
+bh_accumulate (CmacsGraphLayout *l, CmacsGraph *g, gint32 ci,
                guint body, double k2, float *fx, float *fy, float *fz)
 {
   const BhCell *c;
-  CmacsRoamNode *nd;
+  CmacsGraphNode *nd;
   float px, py, pz, dx, dy, dz;
   double d2, d, f;
   int i;
@@ -575,7 +593,7 @@ bh_accumulate (CmacsRoamLayout *l, CmacsRoamGraph *g, gint32 ci,
   c = &g_array_index (l->cells, BhCell, ci);
   if (c->mass <= 0.0f) return;
 
-  nd = cmacs_roam_graph_node (g, body);
+  nd = cmacs_graph_node (g, body);
 
   if (c->is_leaf)
     {
@@ -637,9 +655,9 @@ bh_accumulate (CmacsRoamLayout *l, CmacsRoamGraph *g, gint32 ci,
 /* ── One iteration ────────────────────────────────────────────────── */
 
 static double
-layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
+layout_iteration (CmacsGraphLayout *l, CmacsGraph *g)
 {
-  guint n = cmacs_roam_graph_n_nodes (g), m = cmacs_roam_graph_n_edges (g);
+  guint n = cmacs_graph_n_nodes (g), m = cmacs_graph_n_edges (g);
   guint i;
   double k = l->k, k2 = k * k;
   double t, max_disp = 0.0;
@@ -666,7 +684,7 @@ layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
   /* Repulsion (Barnes-Hut) + origin gravity. */
   for (i = 0; i < n; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       float fx = 0, fy = 0, fz = 0;
 
       if (!nd->visible) continue;
@@ -690,9 +708,9 @@ layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
   /* Attraction along edges: d^2 / k, weighted by edge kind. */
   for (i = 0; i < m; i++)
     {
-      CmacsRoamEdge *e = cmacs_roam_graph_edge (g, i);
-      CmacsRoamNode *a = cmacs_roam_graph_node (g, e->a);
-      CmacsRoamNode *b = cmacs_roam_graph_node (g, e->b);
+      CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+      CmacsGraphNode *a = cmacs_graph_node (g, e->a);
+      CmacsGraphNode *b = cmacs_graph_node (g, e->b);
       float dx, dy, dz;
       double d, f, w;
 
@@ -705,8 +723,8 @@ layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
                 + (double) dz * (double) dz);
       if (d < 1e-4) continue;
 
-      w = (e->kind == CMACS_ROAM_EDGE_SIM)
-          ? (double) ROAM_W_SIM : (double) e->w;
+      w = (e->kind == CMACS_GRAPH_EDGE_SIM)
+          ? (double) GRAPHCORE_W_SIM : (double) e->w;
       f = d * d / k * w;
 
       disp[e->a * 3 + 0] -= (float) ((double) dx / d * f);
@@ -722,7 +740,7 @@ layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
      whole map with them. */
   for (i = 0; i < n; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       double dx, dy, dz, len, scale, mass;
 
       if (!nd->visible || nd->pinned) continue;
@@ -752,7 +770,7 @@ layout_iteration (CmacsRoamLayout *l, CmacsRoamGraph *g)
 }
 
 gboolean
-cmacs_roam_layout_step (CmacsRoamLayout *l, CmacsRoamGraph *g, int n_iters)
+cmacs_graph_layout_step (CmacsGraphLayout *l, CmacsGraph *g, int n_iters)
 {
   int i;
 
@@ -771,7 +789,7 @@ cmacs_roam_layout_step (CmacsRoamLayout *l, CmacsRoamGraph *g, int n_iters)
          cold-started component can be near-still by accident. */
       if (moved < 1e-3 * l->k)
         {
-          if (++l->quiet >= ROAM_QUIET_RUNS)
+          if (++l->quiet >= GRAPHCORE_QUIET_RUNS)
             {
               l->converged = TRUE;
               return TRUE;
@@ -790,7 +808,7 @@ cmacs_roam_layout_step (CmacsRoamLayout *l, CmacsRoamGraph *g, int n_iters)
 }
 
 void
-cmacs_roam_layout_reheat (CmacsRoamLayout *l, double frac, int extra_iters)
+cmacs_graph_layout_reheat (CmacsGraphLayout *l, double frac, int extra_iters)
 {
   g_return_if_fail (l != NULL);
 
@@ -806,4 +824,379 @@ cmacs_roam_layout_reheat (CmacsRoamLayout *l, double frac, int extra_iters)
   l->converged = FALSE;
 }
 
-#endif /* HAVE_CMACS_ROAMGRAPH */
+
+/* ---- Closed-form placement ----------------------------------------
+ *
+ * Three layouts that compute a final position directly instead of
+ * simulating one.  All of them write to tx/ty/tz and move nothing, and
+ * all of them place only VISIBLE nodes -- a collapsed subtree has no
+ * position to occupy, and including it would leave gaps in every ring.
+ *
+ * Determinism is a requirement, not a nicety: these are re-run on every
+ * spin tick and every expand, and a layout that reshuffles under a
+ * stable input would make the animation jitter.  Ordering is therefore
+ * always by an explicit key (group name, then node index), never by
+ * hash iteration order. */
+
+/* Stable ordering key for placement: group name first so a group forms
+ * one contiguous arc, then index so ties never reshuffle. */
+static gint
+place_cmp (gconstpointer pa, gconstpointer pb, gpointer user)
+{
+  CmacsGraph *g = user;
+  guint ia = *(const guint *) pa, ib = *(const guint *) pb;
+  const CmacsGraphNode *a = &g_array_index (g->nodes, CmacsGraphNode, ia);
+  const CmacsGraphNode *b = &g_array_index (g->nodes, CmacsGraphNode, ib);
+  int c;
+
+  if (a->ring != b->ring) return (a->ring < b->ring) ? -1 : 1;
+  c = g_strcmp0 (a->group, b->group);
+  if (c) return c;
+  return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+}
+
+/* Indices of the visible nodes, in placement order. */
+static GArray *
+place_order (CmacsGraph *g)
+{
+  GArray *order = g_array_new (FALSE, FALSE, sizeof (guint));
+  guint n = cmacs_graph_n_nodes (g), i;
+
+  for (i = 0; i < n; i++)
+    if (g_array_index (g->nodes, CmacsGraphNode, i).visible)
+      g_array_append_val (order, i);
+
+  g_array_sort_with_data (order, place_cmp, g);
+  return order;
+}
+
+static void
+place_set (CmacsGraphNode *nd, double x, double y, double z, int dims)
+{
+  nd->tx = (float) x;
+  nd->ty = (float) y;
+  nd->tz = (dims == 2) ? 0.0f : (float) z;
+  nd->placed = 1;
+}
+
+/* CIRCLE: one concentric circle per distinct group, in first-appearance
+ * order, each node evenly spaced around its own circle. */
+static void
+place_circle (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
+{
+  guint n = order->len, i, start = 0;
+  guint circle = 0;
+
+  while (start < n)
+    {
+      guint idx0 = g_array_index (order, guint, start);
+      const gchar *grp =
+        g_array_index (g->nodes, CmacsGraphNode, idx0).group;
+      guint end = start;
+      double r, step;
+
+      while (end < n)
+        {
+          guint idx = g_array_index (order, guint, end);
+          if (g_strcmp0 (g_array_index (g->nodes, CmacsGraphNode, idx).group,
+                         grp) != 0)
+            break;
+          end++;
+        }
+
+      /* Radius grows with the circle index; the innermost circle still
+         gets a non-zero radius so its members do not stack. */
+      r    = l->ring_gap * (double) (circle + 1);
+      step = 2.0 * G_PI / (double) MAX (1u, end - start);
+
+      for (i = start; i < end; i++)
+        {
+          CmacsGraphNode *nd =
+            &g_array_index (g->nodes, CmacsGraphNode,
+                            g_array_index (order, guint, i));
+          double a = step * (double) (i - start) + l->spin;
+          place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
+        }
+
+      start = end;
+      circle++;
+    }
+}
+
+/* HEX: axial hex lattice spiralling out from the origin.
+ *
+ * Ring r holds 6r cells; walking the six edges of each ring in turn
+ * visits them all exactly once.  Axial (q, s) converts to a pointy-top
+ * pixel position with the standard basis. */
+static void
+place_hex (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
+{
+  /* The six axial steps, one per edge of a hex ring. */
+  static const int DQ[6] = {  1,  0, -1, -1,  0,  1 };
+  static const int DS[6] = {  0,  1,  1,  0, -1, -1 };
+  const double size = GRAPHCORE_HEX_SIZE;
+  guint placed = 0;
+  int ring = 0;
+  int q = 0, sx = 0;
+
+  (void) l;
+
+  while (placed < order->len)
+    {
+      int e, step;
+
+      if (ring == 0)
+        {
+          CmacsGraphNode *nd =
+            &g_array_index (g->nodes, CmacsGraphNode,
+                            g_array_index (order, guint, placed));
+          place_set (nd, 0.0, 0.0, 0.0, dims);
+          placed++;
+          ring = 1;
+          continue;
+        }
+
+      /* Start at the ring's DIR[2] corner and walk the six edges.  The
+         first edge must be DIR[4], not DIR[0]: starting at r*DIR[i] the
+         traversal that closes the ring begins at DIR[i+2].  Walking
+         from DIR[0] instead re-visits cells, which lands two nodes on
+         the same point -- caught by the lattice test. */
+      q = -ring; sx = ring;
+      for (e = 0; e < 6 && placed < order->len; e++)
+        {
+          int d = (e + 4) % 6;
+          for (step = 0; step < ring && placed < order->len; step++)
+            {
+              CmacsGraphNode *nd =
+                &g_array_index (g->nodes, CmacsGraphNode,
+                                g_array_index (order, guint, placed));
+              double px = size * 1.5 * (double) q;
+              double py = size * sqrt (3.0) * ((double) sx + 0.5 * (double) q);
+              place_set (nd, px, py, 0.0, dims);
+              placed++;
+              q += DQ[d]; sx += DS[d];
+            }
+        }
+      ring++;
+    }
+}
+
+/* RINGS: concentric bands taken from node->ring, each band's members
+ * spread by angle, groups kept contiguous so a department reads as one
+ * wedge.  This is the ARMS layout. */
+static void
+place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
+{
+  guint n = order->len, start = 0;
+
+  /* `order' is already sorted by ring, so each band is one run. */
+  while (start < n)
+    {
+      guint idx0 = g_array_index (order, guint, start);
+      guint8 band = g_array_index (g->nodes, CmacsGraphNode, idx0).ring;
+      guint end = start, i, count;
+      double r, step;
+
+      while (end < n
+             && g_array_index (g->nodes, CmacsGraphNode,
+                               g_array_index (order, guint, end)).ring == band)
+        end++;
+
+      count = end - start;
+      r     = l->ring_gap * (double) (band + 1);
+      step  = 2.0 * G_PI / (double) MAX (1u, count);
+
+      for (i = start; i < end; i++)
+        {
+          CmacsGraphNode *nd =
+            &g_array_index (g->nodes, CmacsGraphNode,
+                            g_array_index (order, guint, i));
+          /* Alternate bands counter-rotate, so spinning does not slide
+             every ring the same way and the motion reads as depth. */
+          double dir = (band & 1) ? -1.0 : 1.0;
+          double a   = step * (double) (i - start) + l->spin * dir;
+          place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
+        }
+
+      start = end;
+    }
+}
+
+void
+cmacs_graph_layout_place (CmacsGraphLayout *l, CmacsGraph *g,
+                          CmacsGraphLayoutKind kind, int dims)
+{
+  GArray *order;
+
+  g_return_if_fail (l != NULL);
+  g_return_if_fail (g != NULL);
+
+  l->kind = kind;
+  l->dims = (dims == 2) ? 2 : 3;
+
+  if (kind == CMACS_GRAPH_LAYOUT_FORCE)
+    {
+      /* Nothing closed-form to compute: the solver owns this one.  Aim
+         every node at where it already is, so a caller that tweens
+         unconditionally does not drag the graph to the origin. */
+      guint n = cmacs_graph_n_nodes (g), i;
+      for (i = 0; i < n; i++)
+        {
+          CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, i);
+          nd->tx = nd->x; nd->ty = nd->y; nd->tz = nd->z;
+        }
+      return;
+    }
+
+  order = place_order (g);
+  switch (kind)
+    {
+    case CMACS_GRAPH_LAYOUT_CIRCLE: place_circle (l, g, order, l->dims); break;
+    case CMACS_GRAPH_LAYOUT_HEX:    place_hex    (l, g, order, l->dims); break;
+    case CMACS_GRAPH_LAYOUT_RINGS:  place_rings  (l, g, order, l->dims); break;
+    default: break;
+    }
+  g_array_free (order, TRUE);
+
+  /* A closed-form layout is final by definition; leaving the solver
+     armed would let a stray step() pull it apart. */
+  l->converged = TRUE;
+  l->quiet     = GRAPHCORE_QUIET_RUNS;
+}
+
+void
+cmacs_graph_layout_snap (CmacsGraph *g)
+{
+  guint n, i;
+
+  g_return_if_fail (g != NULL);
+  n = cmacs_graph_n_nodes (g);
+  for (i = 0; i < n; i++)
+    {
+      CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, i);
+      nd->x = nd->tx; nd->y = nd->ty; nd->z = nd->tz;
+    }
+}
+
+void
+cmacs_graph_layout_set_spin (CmacsGraphLayout *l, double radians)
+{
+  g_return_if_fail (l != NULL);
+  l->spin = radians;
+}
+
+double
+cmacs_graph_layout_get_spin (CmacsGraphLayout *l)
+{
+  return l ? l->spin : 0.0;
+}
+
+void
+cmacs_graph_layout_set_ring_gap (CmacsGraphLayout *l, double gap)
+{
+  g_return_if_fail (l != NULL);
+  if (gap > 0.0) l->ring_gap = gap;
+}
+
+double
+cmacs_graph_layout_get_ring_gap (CmacsGraphLayout *l)
+{
+  return l ? l->ring_gap : GRAPHCORE_RING_GAP;
+}
+
+CmacsGraphLayoutKind
+cmacs_graph_layout_get_kind (CmacsGraphLayout *l)
+{
+  return l ? l->kind : CMACS_GRAPH_LAYOUT_FORCE;
+}
+
+/* ---- Tweening ------------------------------------------------------ */
+
+void
+cmacs_graph_layout_tween_begin (CmacsGraphLayout *l, CmacsGraph *g, int frames)
+{
+  guint n, i;
+
+  g_return_if_fail (l != NULL);
+  g_return_if_fail (g != NULL);
+
+  n = cmacs_graph_n_nodes (g);
+
+  if (frames <= 0)
+    {
+      cmacs_graph_layout_snap (g);
+      l->tween_frame = l->tween_frames = 0;
+      return;
+    }
+
+  /* Snapshot from where the nodes ARE, not from where a previous tween
+     started: interrupting a transition half way must continue from the
+     current position, not rewind to the old one. */
+  for (i = 0; i < n; i++)
+    {
+      CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, i);
+      nd->sx = nd->x; nd->sy = nd->y; nd->sz = nd->z;
+    }
+
+  l->tween_frame  = 0;
+  l->tween_frames = frames;
+}
+
+gboolean
+cmacs_graph_layout_tween_step (CmacsGraphLayout *l, CmacsGraph *g)
+{
+  guint n, i;
+  double t, e;
+
+  g_return_val_if_fail (l != NULL, TRUE);
+  g_return_val_if_fail (g != NULL, TRUE);
+
+  if (l->tween_frames <= 0) return TRUE;
+
+  l->tween_frame++;
+  t = (double) l->tween_frame / (double) l->tween_frames;
+  if (t > 1.0) t = 1.0;
+
+  /* Ease-in-out cubic.  A linear tween starts and stops abruptly, which
+     reads as a jump-cut rather than as motion. */
+  e = (t < 0.5) ? (4.0 * t * t * t)
+                : (1.0 - pow (-2.0 * t + 2.0, 3.0) / 2.0);
+
+  n = cmacs_graph_n_nodes (g);
+  for (i = 0; i < n; i++)
+    {
+      CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, i);
+      nd->x = (float) ((double) nd->sx
+                       + ((double) nd->tx - (double) nd->sx) * e);
+      nd->y = (float) ((double) nd->sy
+                       + ((double) nd->ty - (double) nd->sy) * e);
+      nd->z = (float) ((double) nd->sz
+                       + ((double) nd->tz - (double) nd->sz) * e);
+    }
+
+  if (l->tween_frame >= l->tween_frames)
+    {
+      /* Land exactly on the target.  Accumulated float error would
+         otherwise leave the graph a hair off its own layout, which
+         shows up as drift after repeated switches. */
+      cmacs_graph_layout_snap (g);
+      l->tween_frame = l->tween_frames = 0;
+      return TRUE;
+    }
+  return FALSE;
+}
+
+gboolean
+cmacs_graph_layout_tweening (CmacsGraphLayout *l)
+{
+  return l && l->tween_frames > 0;
+}
+
+double
+cmacs_graph_layout_tween_progress (CmacsGraphLayout *l)
+{
+  if (!l || l->tween_frames <= 0) return 1.0;
+  return (double) l->tween_frame / (double) l->tween_frames;
+}
+
+#endif /* HAVE_CMACS_GRAPHCORE */

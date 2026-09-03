@@ -1,0 +1,311 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Graphcore
+@chapter CMacs Graphcore: the shared graph model and layout solver
+
+@file{cmacs/graphcore/} is the graph engine every cmacs graph
+visualiser sits on.  It owns the node/edge store, the CSR adjacency,
+the force-directed solver, three closed-form layouts, position
+tweening and hierarchical collapse.
+
+It is @emph{not} a @option{--with-cmacs-*} option.  It has no
+user-visible surface and no dependency beyond glib, so it is compiled
+in whenever something that needs it is enabled --- today
+@ref{CMacs Roamgraph}.  @code{configure.ac} sets
+@code{HAVE_CMACS_GRAPHCORE} on that basis.
+
+Two consumers want the same maths, and neither difference reaches the
+solver: it deals in ids, groups, degrees and positions, and knows
+nothing about where any of them came from.  Keeping it shared means a
+new layout, a smoother transition or a solver fix is written once.
+
+@menu
+* Graphcore Firewall::          Why it includes neither lisp.h nor libregnum.h.
+* Graphcore Data Model::        Nodes, edges and identity.
+* Graphcore Force Layout::      The stepped solver, and its choices.
+* Graphcore Placement::         Circle, hex and rings.
+* Graphcore Tweening::          Animating a transition.
+* Graphcore Hierarchy::         Collapse and expand.
+* Graphcore Consumers::         What a visualiser must do.
+* Graphcore Limits::            What you cannot extend from here.
+* Graphcore Tests::             The headless suite.
+@end menu
+
+@node Graphcore Firewall
+@section The firewall
+
+Graphcore is in the @strong{third translation-unit class}: it includes
+neither @file{lisp.h} nor @file{<libregnum.h>}, only @file{<glib.h>}.
+
+This is the most important property of the subsystem.  raylib's
+@code{Color} is a struct and cmacs's @file{pgtkgui.h} @code{Color} is a
+@code{void *}; they cannot coexist in one translation unit, which is
+what forces every libregnum subsystem into a render half, a Lisp half,
+and a pure model.  Graphcore is entirely that third class.
+
+The payoff is testability.  Because the solver links against nothing
+but glib, all of it runs with no Lisp VM, no GL context and no display:
+
+@example
+just test-graphcore          # or: make -C cmacs/graphcore/tests check
+@end example
+
+@file{cmacs/graphcore/tests/config.h} is a two-line shim standing in
+for Emacs's gnulib-laden @file{src/config.h}.  If it ever needs to
+grow, something has breached the firewall.
+
+@node Graphcore Data Model
+@section Data model
+
+Nodes are keyed by a caller-chosen @strong{id string}, never by index.
+Indices are dense and stable only within one finalized generation; the
+id is what survives a rebuild, so it is also what is handed to the
+libregnum node table as the pick @code{path}.
+
+Besides the obvious fields (@code{title}, @code{file}, @code{group},
+@code{level}, @code{pos}, @code{rgba}, degrees and the CSR slice), a
+node carries @code{x, y, z} for its position, @code{vx, vy, vz} as
+solver scratch, @code{sx@dots{}sz} and @code{tx@dots{}tz} as tween
+endpoints, and @code{parent}, @code{descendants} and @code{ring} for
+hierarchy and band assignment.
+
+Tween endpoints are deliberately @emph{not} aliased onto @code{x/y/z}
+or the solver's scratch.  A tween and a solve are different
+animations, and overlapping their storage makes an interrupted
+transition land somewhere neither intended.
+
+An edge is @code{(a, b, kind, weight)}, where @code{kind} is @code{id}
+(the real topology), @code{cite}, or @code{sim} (the ai-brigade
+semantic index --- an overlay, weighted 0.35 so it nudges without
+competing with real structure, and excluded from link navigation).
+@code{add_edge} drops self-loops, dangling endpoints, and duplicates on
+the @emph{unordered} pair plus kind, so @code{A->B} and @code{B->A}
+collapse into one spring.
+
+@code{cmacs_graph_add_node} returns a @strong{signed} index:
+
+@example
+gint idx = cmacs_graph_add_node (g, id, title, file, group,
+                                 level, pos, rgba);
+if (idx < 0) continue;   /* graph is full -- drop it */
+@end example
+
+Returning @code{0} for ``full'' aliased every overflowing node onto
+node 0, silently corrupting the graph rather than dropping the node.
+
+@node Graphcore Force Layout
+@section The force layout
+
+Fruchterman--Reingold with Barnes--Hut repulsion.  Stepped, not
+one-shot: @code{begin} seeds and arms it, @code{step} advances a few
+iterations and reports convergence, and the Lisp side drives it from a
+timer so the graph visibly unfolds and then stops.
+
+Choices worth knowing:
+
+@itemize @bullet
+@item
+@code{k} (ideal edge length) is a @emph{constant}, not
+@code{sqrt(area/n)}.  That formula exists to pack a graph into a fixed
+frame; here the camera fits itself to the content, so making @code{k}
+depend on @code{n} would only make the map's scale depend on how many
+notes you happen to have.
+@item
+Gravity is proportional to distance @emph{and} to
+@code{sqrt(degree)}.  Weighting by degree is what makes it look like a
+knowledge graph rather than a soap bubble.
+@item
+Displacement is damped by @code{log2(1 + degree)}.  Without it the
+high-degree hubs whip around and drag the whole map.
+@item
+Convergence requires three consecutive quiet iterations.  One is not
+enough: the first iterations of a cold-started component can be
+near-still by accident.
+@item
+Setting @code{theta} to 0 degenerates Barnes--Hut to an exact
+all-pairs sum, which the tests use as a free reference implementation.
+@end itemize
+
+@node Graphcore Placement
+@section Closed-form placement
+
+@code{CIRCLE}, @code{HEX} and @code{RINGS} compute a final position for
+every node in a single pass.  There is nothing to step and no
+convergence --- running the solver over them would only undo them,
+which is why @code{place} marks the layout converged.
+
+@example
+cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+cmacs_graph_layout_tween_begin (l, g, 24);   /* or _snap (g) */
+@end example
+
+@table @code
+@item CMACS_GRAPH_LAYOUT_CIRCLE
+One concentric circle per distinct @code{group}, in first-appearance
+order.
+@item CMACS_GRAPH_LAYOUT_HEX
+Axial hex lattice spiralling out from the origin.  Ring @var{r} holds
+6@var{r} cells; the traversal starts at the ring's @code{DIR[2]} corner
+and walks from @code{DIR[4]}.  Starting from @code{DIR[0]} instead
+re-visits cells and lands two nodes on the same point --- the lattice
+test catches exactly that.
+@item CMACS_GRAPH_LAYOUT_RINGS
+Concentric bands taken from @code{node->ring}, members spread by angle,
+groups kept contiguous so a department reads as one wedge.  Alternate
+bands counter-rotate under spin so the motion reads as depth.  This is
+the ARMS layout.
+@end table
+
+@strong{Placement writes to @code{tx/ty/tz} and moves nothing.}
+Separating ``decide where things go'' from ``move them there'' is what
+lets one code path serve both an instant switch and an animated one,
+and it keeps the layouts testable without running an animation.
+
+Only @emph{visible} nodes are placed: a collapsed subtree has no
+position to occupy, and including it would leave gaps in every ring.
+
+Determinism is a requirement, not a nicety.  These are re-run on every
+spin tick and every expand, so ordering is always by an explicit key
+(ring, then group name, then index) and never by hash iteration order.
+
+@node Graphcore Tweening
+@section Tweening
+
+@example
+cmacs_graph_layout_tween_begin (l, g, frames);
+while (!cmacs_graph_layout_tween_step (l, g)) @{ /* one per frame */ @}
+@end example
+
+Ease-in-out cubic.  A linear tween starts and stops abruptly, which
+reads as a jump-cut rather than as motion.
+
+@itemize @bullet
+@item
+@code{frames <= 0} snaps.
+@item
+The final step lands @emph{exactly} on the target rather than merely
+near it.  Accumulated float error would otherwise leave the graph a
+hair off its own layout, which shows up as drift after repeated
+switches.
+@item
+@code{tween_begin} mid-flight re-snapshots from wherever the nodes
+currently @emph{are}, so an interrupted transition continues smoothly
+instead of rewinding to its origin.
+@end itemize
+
+Placing @code{FORCE} aims every node at its current position, so a
+caller that tweens unconditionally after a layout switch does not drag
+the graph to the origin.
+
+@node Graphcore Hierarchy
+@section Hierarchy and collapse
+
+Optional.  A graph that never calls @code{set_parent} behaves exactly
+as it did before this existed: every node a visible root, no walks, no
+cost.
+
+@example
+cmacs_graph_set_parent    (g, child_idx, parent_idx);  /* pre-finalize */
+cmacs_graph_set_collapsed (g, idx, TRUE);
+cmacs_graph_collapse_all  (g, TRUE);
+guint shown = cmacs_graph_n_visible (g);
+@end example
+
+@code{finalize} computes @code{descendants} (the transitive child
+count, used to size a collapsed hub) and initial visibility.  A node is
+visible unless some ancestor is collapsed.
+
+Descendant counting is @emph{bottom-up over a depth-sorted order}, not
+a recursive walk: recursion on a pathological tree --- 35k files nested
+one per level --- would overflow the C stack, and it is O(n) either
+way.
+
+@code{set_parent} @strong{refuses} a cycle rather than propagating it.
+Every consumer of the field walks upward, so a cycle is a hang, not a
+wrong answer.  It is cheap to check at the point of creation and
+impossible to diagnose later.
+
+@node Graphcore Consumers
+@section What a consumer does
+
+A consumer supplies data and owns rendering:
+
+@itemize @bullet
+@item
+Build with @code{begin_update} / @code{add_node} / @code{add_edge} /
+optionally @code{set_parent} / @code{finalize}.
+@item
+Drive the solver with @code{layout_begin} / @code{layout_step}, or
+place a closed-form layout with @code{layout_place} and animate with
+the tween.
+@item
+Read @code{x/y/z}, @code{radius}, @code{rgba}, @code{visible} and
+@code{descendants} when building the scene.
+@end itemize
+
+Graphcore never allocates a drawable, never touches a Lisp object and
+never talks to GL.  Everything it produces is numbers on a struct.
+
+@subsection Emission order is not graph order
+
+A consumer that skips nodes --- invisible ones, or ones past a drawable
+budget --- @strong{must} keep a graph-index to emission-index map.  The
+scene's node table and shape arrays are in emission order while the
+graph is in graph order, and the two diverge the moment anything is
+skipped.  Reading node flags with a graph index then recolours the
+wrong nodes.  See @code{node_emit} / @code{edge_emit} in
+@file{cmacs-roamgraph-scene.c} for the worked example.
+
+@node Graphcore Limits
+@section What you cannot extend from here
+
+@itemize @bullet
+@item
+@strong{Node geometry.}  Graphcore has no opinion about shapes; that is
+the consumer's scene builder.  roamgraph draws one sphere per note by
+policy, not by limitation.
+@item
+@strong{Edge routing.}  Straight lines only, at every consumer so far.
+Nothing here forbids curves, but nothing provides them either.
+@item
+@strong{Per-node layout overrides.}  Pinning is the escape hatch: a
+pinned node is not moved by the solver, so precomputing positions and
+pinning everything is how you get a layout that does not exist here.
+@item
+@strong{Incremental layout.}  @code{begin} re-seeds.  Survivors keep
+their positions, so a rebuild does not teleport, but there is no ``add
+one node and relax only its neighbourhood'' entry point ---
+@code{reheat} is the closest thing.
+@end itemize
+
+@node Graphcore Tests
+@section Tests
+
+@file{cmacs/graphcore/tests/test-graphcore.c}, 25 GTest cases, all
+headless.
+
+@table @code
+@item /graphcore/graph/
+Lookup, duplicate ids, @emph{overflow returns -1}, edge sanitising,
+position inheritance across a rebuild.
+@item /graphcore/hierarchy/
+Absent by default, descendant counts, collapse hides a subtree,
+transitivity, collapse-all, @emph{cycle refusal}.
+@item /graphcore/layout/
+Convergence, 2D planarity, determinism.
+@item /graphcore/place/
+Circle radii per group, hex is a real lattice, ring bands ordered
+outward, invisible nodes skipped, determinism, spin rotates without
+reshaping.
+@item /graphcore/tween/
+Lands exactly, monotonic, zero frames snaps, restart continues from
+current, @code{FORCE} holds still.
+@end table
+
+The hex and overflow tests are both regressions with real bite: the
+first caught a ring traversal that placed two nodes on the same point,
+the second guards the aliasing bug described in
+@ref{Graphcore Data Model}.

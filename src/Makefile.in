@@ -403,6 +403,7 @@ CMACS_VIDSTUDIO_LIBS = @CMACS_VIDSTUDIO_LIBS@
 CMACS_GNUSEYE_OBJ = @CMACS_GNUSEYE_OBJ@
 CMACS_GNUSEYE_CFLAGS = @CMACS_GNUSEYE_CFLAGS@
 CMACS_GNUSEYE_LIBS = @CMACS_GNUSEYE_LIBS@
+CMACS_GRAPHCORE_OBJ = @CMACS_GRAPHCORE_OBJ@
 CMACS_ROAMGRAPH_OBJ = @CMACS_ROAMGRAPH_OBJ@
 CMACS_ROAMGRAPH_CFLAGS = @CMACS_ROAMGRAPH_CFLAGS@
 CMACS_ROAMGRAPH_LIBS = @CMACS_ROAMGRAPH_LIBS@
@@ -486,6 +487,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/core \
                         -I$(srcdir)/../cmacs/ai \
                         -I$(srcdir)/../cmacs/libregnum \
                         -I$(srcdir)/../cmacs/gnuseye \
+                        -I$(srcdir)/../cmacs/graphcore \
                         -I$(srcdir)/../cmacs/roamgraph \
                         -I$(srcdir)/../cmacs/office \
                         -I$(srcdir)/../cmacs/dbexplorer \
@@ -671,7 +673,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_ROAMGRAPH_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) $(CMACS_LSP_OBJ) $(CMACS_OFFICE_OBJ) $(CMACS_DBEXPLORER_OBJ) $(CMACS_AI_BRIGADE_OBJ)
+	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_GRAPHCORE_OBJ) $(CMACS_ROAMGRAPH_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) $(CMACS_LSP_OBJ) $(CMACS_OFFICE_OBJ) $(CMACS_DBEXPLORER_OBJ) $(CMACS_AI_BRIGADE_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -916,7 +918,7 @@ CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) \
                 $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) \
                 $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) \
-                $(CMACS_GNUSEYE_OBJ) $(CMACS_ROAMGRAPH_OBJ) \
+                $(CMACS_GNUSEYE_OBJ) $(CMACS_GRAPHCORE_OBJ) $(CMACS_ROAMGRAPH_OBJ) \
                 $(CMACS_OFFICE_OBJ) \
                 $(CMACS_DBEXPLORER_OBJ) \
                 $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) \
@@ -924,7 +926,7 @@ CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) \
                 $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) \
                 $(CMACS_LSP_OBJ) $(CMACS_AI_BRIGADE_OBJ)
-CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai ai-brigade libregnum gnuseye roamgraph office lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator lsp dbexplorer
+CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw org-ex mcp cintrospect cpatch video audio whisper piper ai ai-brigade libregnum gnuseye graphcore roamgraph office lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator lsp dbexplorer
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \

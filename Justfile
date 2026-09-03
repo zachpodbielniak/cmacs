@@ -374,9 +374,16 @@ test:
 test-gowl:
     make -C {{ gowl_dir }} test
 
+# Pure C over glib -- no Emacs, no GL, no display -- so it runs headless
+# and needs no built emacs.
+# Run graphcore's GTest suite (shared graph model + layout solver).
+[group('test')]
+test-graphcore:
+    make -C cmacs/graphcore/tests check
+
 # Run everything testable.
 [group('test')]
-test-all: test-gowl test
+test-all: test-gowl test-graphcore test
 
 # ──────────────────────────────────────────────────────────────────────
 # Diagnostics

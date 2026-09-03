@@ -21,8 +21,8 @@
 #include "buffer.h"
 #include "coding.h"
 #include "cmacs-roamgraph.h"
-#include "cmacs-roamgraph-graph.h"
-#include "cmacs-roamgraph-layout.h"
+#include "cmacs-graphcore-graph.h"
+#include "cmacs-graphcore-layout.h"
 #include "cmacs-roamgraph-scene.h"
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-render.h"
@@ -50,8 +50,8 @@ static Lisp_Object Vcmacs_roamgraph__payloads;
 
 typedef struct
 {
-  CmacsRoamGraph  *graph;
-  CmacsRoamLayout *layout;
+  CmacsGraph  *graph;
+  CmacsGraphLayout *layout;
   int              dims;
 } RoamState;
 
@@ -63,8 +63,8 @@ roam_state_free (gpointer p)
   RoamState *st = p;
 
   if (!st) return;
-  cmacs_roam_layout_free (st->layout);
-  cmacs_roam_graph_free (st->graph);
+  cmacs_graph_layout_free (st->layout);
+  cmacs_graph_free (st->graph);
   g_free (st);
 }
 
@@ -83,8 +83,8 @@ roam_state (CmacsLibregnumView *v, bool create)
   if (!st && create)
     {
       st = g_new0 (RoamState, 1);
-      st->graph  = cmacs_roam_graph_new (0x9E3779B9u);
-      st->layout = cmacs_roam_layout_new ();
+      st->graph  = cmacs_graph_new (0x9E3779B9u);
+      st->layout = cmacs_graph_layout_new ();
       st->dims   = 3;
       g_hash_table_insert (s_states, v, st);
     }
@@ -143,14 +143,14 @@ rg_string (Lisp_Object plist, Lisp_Object key, Lisp_Object *keep)
   return SSDATA (*keep);
 }
 
-static CmacsRoamEdgeKind
+static CmacsGraphEdgeKind
 rg_edge_kind (Lisp_Object plist)
 {
   Lisp_Object v = plist_get (plist, QCrg_kind);
 
-  if (EQ (v, Qrg_sim))  return CMACS_ROAM_EDGE_SIM;
-  if (EQ (v, Qrg_cite)) return CMACS_ROAM_EDGE_CITE;
-  return CMACS_ROAM_EDGE_ID;
+  if (EQ (v, Qrg_sim))  return CMACS_GRAPH_EDGE_SIM;
+  if (EQ (v, Qrg_cite)) return CMACS_GRAPH_EDGE_CITE;
+  return CMACS_GRAPH_EDGE_ID;
 }
 
 /* ── Payload table ─────────────────────────────────────────────────── */
@@ -294,7 +294,7 @@ Returns the number of nodes actually emitted.  */)
   payloads = buffer_payloads (buffer, true);
   Fclrhash (payloads);
 
-  cmacs_roam_graph_begin_update (st->graph);
+  cmacs_graph_begin_update (st->graph);
 
   for (i = 0; i < nn; i++)
     {
@@ -314,10 +314,12 @@ Returns the number of nodes actually emitted.  */)
          a 32-bit build, so read it as a double and truncate. */
       rgba = (guint32) rg_double (e, QCrg_color, 0.0);
 
-      cmacs_roam_graph_add_node (st->graph, id, title, file, group,
-                                 rg_int (e, QCrg_level, 0),
-                                 rg_int (e, QCrg_pos, 1),
-                                 rgba);
+      if (cmacs_graph_add_node (st->graph, id, title, file, group,
+                                rg_int (e, QCrg_level, 0),
+                                rg_int (e, QCrg_pos, 1),
+                                rgba) < 0)
+        continue;   /* graph is full; do not record a payload for a
+                       node that was not added */
 
       /* Keep the whole plist so a pick returns the full record. */
       Fputhash (build_string_from_utf8 (id), e, payloads);
@@ -334,12 +336,12 @@ Returns the number of nodes actually emitted.  */)
       to   = rg_string (e, QCrg_to,   &k_to);
       if (!from || !to) continue;
 
-      cmacs_roam_graph_add_edge (st->graph, from, to, rg_edge_kind (e),
+      cmacs_graph_add_edge (st->graph, from, to, rg_edge_kind (e),
                                  (float) rg_double (e, QCrg_weight, 1.0));
     }
 
-  cmacs_roam_graph_finalize (st->graph);
-  cmacs_roam_layout_begin (st->layout, st->graph, st->dims, 0);
+  cmacs_graph_finalize (st->graph);
+  cmacs_graph_layout_begin (st->layout, st->graph, st->dims, 0);
 
   emitted = cmacs_roamgraph_scene_build (ctx, st->graph, st->dims);
   cmacs_roamgraph_scene_set_projection (ctx, st->dims == 2);
@@ -381,7 +383,7 @@ DEFUN ("cmacs-roamgraph-node-index", Fcmacs_roamgraph_node_index,
   if (!st) return Qnil;
 
   enc = ENCODE_UTF_8 (node_id);
-  idx = cmacs_roam_graph_index_of (st->graph, SSDATA (enc));
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
   return (idx < 0) ? Qnil : make_fixnum (idx);
 }
 
@@ -391,14 +393,14 @@ DEFUN ("cmacs-roamgraph-node-id", Fcmacs_roamgraph_node_id,
   (Lisp_Object buffer, Lisp_Object index)
 {
   RoamState *st;
-  CmacsRoamNode *nd;
+  CmacsGraphNode *nd;
 
   CHECK_BUFFER (buffer);
   CHECK_FIXNUM (index);
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st || XFIXNUM (index) < 0) return Qnil;
 
-  nd = cmacs_roam_graph_node (st->graph, (guint) XFIXNUM (index));
+  nd = cmacs_graph_node (st->graph, (guint) XFIXNUM (index));
   return nd ? build_string_from_utf8 (nd->id) : Qnil;
 }
 
@@ -432,20 +434,20 @@ started.  */)
              || EQ (direction, Qrg_in);
 
   enc = ENCODE_UTF_8 (node_id);
-  idx = cmacs_roam_graph_index_of (st->graph, SSDATA (enc));
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
   if (idx < 0) return Qnil;
 
-  nb = cmacs_roam_graph_neighbours (st->graph, (guint) idx, &dirs, &cnt);
+  nb = cmacs_graph_neighbours (st->graph, (guint) idx, &dirs, &cnt);
   if (!nb) return Qnil;
 
   /* Build back-to-front so the result comes out in slice order. */
   for (j = cnt; j > 0; j--)
     {
       guint p = j - 1;
-      CmacsRoamNode *o = cmacs_roam_graph_node (st->graph, nb[p]);
+      CmacsGraphNode *o = cmacs_graph_node (st->graph, nb[p]);
 
       if (!o) continue;
-      if (dirs[p] == CMACS_ROAM_DIR_OUT ? !want_out : !want_in) continue;
+      if (dirs[p] == CMACS_GRAPH_DIR_OUT ? !want_out : !want_in) continue;
       out = Fcons (build_string_from_utf8 (o->id), out);
     }
   return out;
@@ -461,7 +463,7 @@ DEFUN ("cmacs-roamgraph-node-count", Fcmacs_roamgraph_node_count,
   CHECK_BUFFER (buffer);
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return Qnil;
-  return make_fixnum ((EMACS_INT) cmacs_roam_graph_n_nodes (st->graph));
+  return make_fixnum ((EMACS_INT) cmacs_graph_n_nodes (st->graph));
 }
 
 DEFUN ("cmacs-roamgraph-edge-count", Fcmacs_roamgraph_edge_count,
@@ -474,7 +476,7 @@ DEFUN ("cmacs-roamgraph-edge-count", Fcmacs_roamgraph_edge_count,
   CHECK_BUFFER (buffer);
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return Qnil;
-  return make_fixnum ((EMACS_INT) cmacs_roam_graph_n_edges (st->graph));
+  return make_fixnum ((EMACS_INT) cmacs_graph_n_edges (st->graph));
 }
 
 /* ── DEFUNs: layout ────────────────────────────────────────────────── */
@@ -495,7 +497,7 @@ t once the layout has converged, so the caller's timer knows to stop.  */)
   st = state_for_buffer (buffer, &v, &ctx);
   if (!st || !ctx) return Qt;
 
-  done = cmacs_roam_layout_step (st->layout, st->graph,
+  done = cmacs_graph_layout_step (st->layout, st->graph,
                                  FIXNUMP (n) ? (int) XFIXNUM (n) : 1);
   cmacs_roamgraph_scene_sync_positions (ctx, st->graph);
   cmacs_libregnum_view_request_redraw (v);
@@ -513,7 +515,7 @@ DEFUN ("cmacs-roamgraph-layout-converged-p",
   CHECK_BUFFER (buffer);
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return Qt;
-  return cmacs_roam_layout_converged (st->layout) ? Qt : Qnil;
+  return cmacs_graph_layout_converged (st->layout) ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-roamgraph-layout-progress", Fcmacs_roamgraph_layout_progress,
@@ -526,7 +528,7 @@ DEFUN ("cmacs-roamgraph-layout-progress", Fcmacs_roamgraph_layout_progress,
   CHECK_BUFFER (buffer);
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return make_float (1.0);
-  return make_float (cmacs_roam_layout_progress (st->layout));
+  return make_float (cmacs_graph_layout_progress (st->layout));
 }
 
 DEFUN ("cmacs-roamgraph-layout-reheat", Fcmacs_roamgraph_layout_reheat,
@@ -542,7 +544,7 @@ FRAC is the fraction of the initial temperature to restart at (default
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return Qnil;
 
-  cmacs_roam_layout_reheat (st->layout,
+  cmacs_graph_layout_reheat (st->layout,
                             FLOATP (frac) ? XFLOAT_DATA (frac) : 0.3,
                             FIXNUMP (iters) ? (int) XFIXNUM (iters) : 120);
   return Qt;
@@ -562,7 +564,7 @@ the approximation against.  */)
   st = state_for_buffer (buffer, NULL, NULL);
   if (!st) return Qnil;
 
-  cmacs_roam_layout_set_theta (st->layout,
+  cmacs_graph_layout_set_theta (st->layout,
                                FLOATP (theta) ? XFLOAT_DATA (theta)
                                : (double) XFIXNUM (theta));
   return Qt;
@@ -574,7 +576,7 @@ DEFUN ("cmacs-roamgraph-node-position", Fcmacs_roamgraph_node_position,
   (Lisp_Object buffer, Lisp_Object node_id)
 {
   RoamState *st;
-  CmacsRoamNode *nd;
+  CmacsGraphNode *nd;
   Lisp_Object enc;
   gint idx;
 
@@ -584,10 +586,10 @@ DEFUN ("cmacs-roamgraph-node-position", Fcmacs_roamgraph_node_position,
   if (!st) return Qnil;
 
   enc = ENCODE_UTF_8 (node_id);
-  idx = cmacs_roam_graph_index_of (st->graph, SSDATA (enc));
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
   if (idx < 0) return Qnil;
 
-  nd = cmacs_roam_graph_node (st->graph, (guint) idx);
+  nd = cmacs_graph_node (st->graph, (guint) idx);
   return list3 (make_float (nd->x), make_float (nd->y), make_float (nd->z));
 }
 
@@ -598,7 +600,7 @@ A pinned node is never moved by the layout solver.  */)
   (Lisp_Object buffer, Lisp_Object node_id, Lisp_Object on)
 {
   RoamState *st;
-  CmacsRoamNode *nd;
+  CmacsGraphNode *nd;
   Lisp_Object enc;
   gint idx;
 
@@ -608,10 +610,10 @@ A pinned node is never moved by the layout solver.  */)
   if (!st) return Qnil;
 
   enc = ENCODE_UTF_8 (node_id);
-  idx = cmacs_roam_graph_index_of (st->graph, SSDATA (enc));
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
   if (idx < 0) return Qnil;
 
-  nd = cmacs_roam_graph_node (st->graph, (guint) idx);
+  nd = cmacs_graph_node (st->graph, (guint) idx);
   nd->pinned = NILP (on) ? 0 : 1;
   return Qt;
 }

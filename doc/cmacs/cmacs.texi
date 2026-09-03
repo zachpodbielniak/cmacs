@@ -60,6 +60,7 @@ interaction.
 * CMacs AI Harness::            An agentic AI session in a buffer.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
+* CMacs Graphcore::             Shared graph model and layout solver.
 * CMacs Roamgraph::             Native org-roam knowledge-graph visualiser (2D + 3D).
 * CMacs Office::                Native .docx/.xlsx/.pptx and OpenDocument support.
 * CMacs Lrgscript::             Emacs Lisp scripting + game authoring for libregnum.
@@ -7798,6 +7799,9 @@ mode does not composite in the editor FBO batch, so sprites/tiles use textured
 
 @c ===================================================================
 @include gnuseye/gnuseye.texi
+
+@c ===================================================================
+@include graphcore/graphcore.texi
 
 @c ===================================================================
 @include roamgraph/roamgraph.texi

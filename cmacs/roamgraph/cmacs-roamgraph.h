@@ -15,7 +15,7 @@
  *     NOT include lisp.h (raylib's `Color' clashes with pgtkgui.h's).
  *   - cmacs-roamgraph-defuns.c / -scan.c include lisp.h and talk to the
  *     render half only through cmacs-roamgraph-scene.h.
- *   - cmacs-roamgraph-graph.c / -layout.c include NEITHER, only glib.
+ *   - cmacs-graphcore-graph.c / -layout.c include NEITHER, only glib.
  *     That is what makes the graph model and the force solver testable
  *     with no Lisp VM and no GL context.  (Same split as gnuseye, whose
  *     geodesy lives in cmacs-gnuseye-geomath.h.)

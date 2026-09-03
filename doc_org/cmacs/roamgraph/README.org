@@ -33,10 +33,11 @@ The usual libregnum firewall has two sides: files that include =<libregnum.h>= (
 | =cmacs-roamgraph-scene.c=    | =<libregnum.h>=      | Drawables, node table, camera           |
 | =cmacs-roamgraph-defuns.c=   | =lisp.h=             | The Elisp boundary                      |
 | =cmacs-roamgraph-scan.c=     | =lisp.h=             | The native scanner backend              |
-| =cmacs-roamgraph-graph.c=    | *neither*          | Node/edge store, CSR adjacency          |
-| =cmacs-roamgraph-layout.c=   | *neither*          | Fruchterman–Reingold + Barnes–Hut       |
+| =cmacs/graphcore/*.c=        | *neither*          | Node/edge store, CSR adjacency, solver  |
 
-That third class is the point. The graph model and the solver can be exercised with no Lisp VM and no GL context, which is why the layout has real unit assertions — determinism, convergence, an equilateral triangle, component separation, Barnes–Hut checked against its own exact mode — rather than only screenshots. It is the same split gnuseye uses for its geodesy ([[file:../gnuseye/README.org][cmacs-gnuseye-geomath.h]]).
+That third class is the point, and it is now a *shared library* rather than roamgraph's own: the graph model and the solver live in [[file:../graphcore.org][cmacs/graphcore]], where they can be exercised with no Lisp VM and no GL context. That is why the layout has real unit assertions — determinism, convergence, an equilateral triangle, component separation, Barnes–Hut checked against its own exact mode — rather than only screenshots. It is the same split gnuseye uses for its geodesy ([[file:../gnuseye/README.org][cmacs-gnuseye-geomath.h]]).
+
+Sharing it is what makes an engine improvement arrive in more than one place: the closed-form layouts (circle, hex, rings), position tweening and hierarchical collapse were added for the second-brain visualiser and are available here for the same reason.
 
 ** Ids, never indices
 

@@ -20,7 +20,7 @@
 
 #include <glib.h>
 #include "cmacs-libregnum-render.h"   /* opaque CmacsLibregnumRenderCtx */
-#include "cmacs-roamgraph-graph.h"
+#include "cmacs-graphcore-graph.h"
 
 G_BEGIN_DECLS
 
@@ -36,7 +36,7 @@ G_BEGIN_DECLS
  *
  * Returns the number of nodes emitted. */
 extern guint cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r,
-                                          CmacsRoamGraph *g,
+                                          CmacsGraph *g,
                                           int dims);
 
 /* Push the graph's current positions into the retained drawables and
@@ -44,7 +44,7 @@ extern guint cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r,
  * what the animated layout calls each step; skipping it would leave
  * picking pointing at where the nodes used to be. */
 extern void cmacs_roamgraph_scene_sync_positions (CmacsLibregnumRenderCtx *r,
-                                                  CmacsRoamGraph *g);
+                                                  CmacsGraph *g);
 
 /* Drop the retained drawable references (called before the render
  * context clears its drawable list out from under us). */
@@ -55,7 +55,7 @@ extern void cmacs_roamgraph_scene_reset (CmacsLibregnumRenderCtx *r);
  * follow their endpoints).  In place -- recolouring on every search
  * keystroke must not mean rebuilding the scene. */
 extern void cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
-                                               CmacsRoamGraph *g);
+                                               CmacsGraph *g);
 
 /* Camera.  FLAT selects a front-facing orthographic view of the XY
  * plane (X right, Y up -- the conventional 2D reading, matching the
@@ -69,7 +69,7 @@ extern gboolean cmacs_roamgraph_scene_flat_p (CmacsLibregnumRenderCtx *r);
 /* Frame the whole graph: place the camera so every node is visible,
  * respecting the current projection. */
 extern void cmacs_roamgraph_scene_fit (CmacsLibregnumRenderCtx *r,
-                                       CmacsRoamGraph *g);
+                                       CmacsGraph *g);
 
 G_END_DECLS
 

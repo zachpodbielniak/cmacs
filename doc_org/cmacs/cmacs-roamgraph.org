@@ -261,14 +261,16 @@ Measured on a 1166-node, 1321-edge database:
 
 Three translation-unit classes, not the usual two:
 
-| File                       | Includes                | Why                                        |
-|----------------------------+-------------------------+--------------------------------------------|
-| =cmacs-roamgraph-scene.c=    | =<libregnum.h>=           | raylib's =Color= clashes with pgtk's         |
-| =cmacs-roamgraph-defuns.c=   | =lisp.h=                  | the Elisp boundary                         |
-| =cmacs-roamgraph-graph.c=    | neither, only glib      | so the graph model is testable headless    |
-| =cmacs-roamgraph-layout.c=   | neither, only glib      | so the solver is testable headless         |
+| File                             | Includes                | Why                                        |
+|----------------------------------+-------------------------+--------------------------------------------|
+| =cmacs-roamgraph-scene.c=          | =<libregnum.h>=           | raylib's =Color= clashes with pgtk's         |
+| =cmacs-roamgraph-defuns.c=         | =lisp.h=                  | the Elisp boundary                         |
+| =cmacs/graphcore/…-graph.c=        | neither, only glib      | so the graph model is testable headless    |
+| =cmacs/graphcore/…-layout.c=       | neither, only glib      | so the solver is testable headless         |
 
 That third class is the point: the graph and the force solver can be exercised with no Lisp VM and no GL context, which is why the layout has real unit tests rather than only screenshots. Same split as gnuseye's geodesy.
+
+The graph model and the solver are *shared*, not roamgraph's own — they live in [[file:graphcore.org][cmacs/graphcore]] and are linked by every graph visualiser. Run their suite with =just test-graphcore=; it needs no display and no built emacs. roamgraph inherits whatever lands there, which is where the closed-form layouts, position tweening and hierarchical collapse came from.
 
 C owns geometry, the solver, the pick ray and the node table. Elisp owns where the data comes from, what a click means and every pane. C never touches org-roam. The whole contract is one DEFUN, =cmacs-roamgraph-set-graph=.
 

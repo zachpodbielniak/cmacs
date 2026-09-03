@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Turns a CmacsRoamGraph into libregnum drawables plus node-table
+ * Turns a CmacsGraph into libregnum drawables plus node-table
  * entries on a CmacsLibregnumRenderCtx.
  *
  * Translation-unit firewall: this file includes <libregnum.h> (and
@@ -18,16 +18,28 @@
 #ifdef HAVE_CMACS_ROAMGRAPH
 
 #include "cmacs-roamgraph-scene.h"
-#include "cmacs-roamgraph-layout.h"
+#include "cmacs-graphcore-layout.h"
 
 #include <libregnum.h>
 #include <glib.h>
 #include <math.h>
 #include <string.h>
 
-/* Hard cap on emitted drawables, mirroring the other scene builders.
- * A node costs one sphere, an edge one line. */
-#define ROAM_MAX_DRAWABLES 12000
+/* Hard caps on emitted drawables.  A node costs one sphere, an edge
+ * one line.
+ *
+ * Separate budgets, deliberately not one shared cap.
+ *
+ * These used to be a single 12000-drawable budget consumed edges-first.
+ * On a dense graph the edges exhausted it before a single sphere was
+ * emitted, so the view came up with every link drawn and NO nodes --
+ * silently, because nothing overflowed or errored.  Nodes are the
+ * content; edges are the garnish.  Giving each its own ceiling is what
+ * fixes it -- edges are still emitted first, because that is what makes
+ * them render BEHIND the nodes they join, and with separate budgets
+ * they can no longer starve the nodes by doing so. */
+#define ROAM_MAX_NODE_DRAWABLES 12000
+#define ROAM_MAX_EDGE_DRAWABLES 24000
 
 /* Edge alpha at rest.  Low: at a few thousand edges the lines are
  * texture, not information, and a solid web hides the nodes. */
@@ -52,8 +64,21 @@
 
 typedef struct
 {
-  GPtrArray *node_shapes;   /* LrgSphere3D*, borrowed, parallel to nodes */
-  GPtrArray *edge_shapes;   /* LrgLine3D*,   borrowed, parallel to edges */
+  GPtrArray *node_shapes;   /* LrgSphere3D*, borrowed, emission order */
+  GPtrArray *edge_shapes;   /* LrgLine3D*,   borrowed, emission order */
+
+  /* Graph index -> emission index, or -1 when the node/edge was not
+     emitted (invisible, or past its drawable budget).
+
+     Not a convenience: the shape arrays and the render context's node
+     table are in EMISSION order, while the graph is in GRAPH order,
+     and the two diverge the moment anything is skipped.  Reading node
+     flags with a graph index -- which apply_flags used to do for the
+     match scan and for both edge endpoints -- then recolours the wrong
+     spheres.  It was invisible only because nothing ever cleared
+     `visible'; collapse does. */
+  GArray    *node_emit;     /* gint32, one per graph node */
+  GArray    *edge_emit;     /* gint32, one per graph edge */
   gboolean   flat;
 } SceneState;
 
@@ -67,6 +92,8 @@ scene_state_free (gpointer p)
   if (!st) return;
   if (st->node_shapes) g_ptr_array_free (st->node_shapes, TRUE);
   if (st->edge_shapes) g_ptr_array_free (st->edge_shapes, TRUE);
+  if (st->node_emit)   g_array_free (st->node_emit, TRUE);
+  if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
   g_free (st);
 }
 
@@ -88,6 +115,8 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
       /* No element free func: the entries are borrowed. */
       st->node_shapes = g_ptr_array_new ();
       st->edge_shapes = g_ptr_array_new ();
+      st->node_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
+      st->edge_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       g_hash_table_insert (s_states, r, st);
     }
   return st;
@@ -128,12 +157,12 @@ edge_tint (guint8 x, guint8 y)
  * pass and the flag pass must agree, or recolouring silently discards
  * the endpoint tint and every edge turns flat grey. */
 static GrlColor *
-edge_base_color (CmacsRoamEdge *e, CmacsRoamNode *a, CmacsRoamNode *b,
+edge_base_color (CmacsGraphEdge *e, CmacsGraphNode *a, CmacsGraphNode *b,
                  guint8 alpha)
 {
   guint8 ar, ag, ab, aa, br, bg, bb, ba;
 
-  if (e->kind == CMACS_ROAM_EDGE_SIM)
+  if (e->kind == CMACS_GRAPH_EDGE_SIM)
     return grl_color_new (150, 110, 210, alpha);
 
   unpack_rgba (a->rgba ? a->rgba : 0x7FA8D8FFu, &ar, &ag, &ab, &aa);
@@ -145,11 +174,12 @@ edge_base_color (CmacsRoamEdge *e, CmacsRoamNode *a, CmacsRoamNode *b,
 /* ── Build ────────────────────────────────────────────────────────── */
 
 guint
-cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
+cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
                              int dims)
 {
   SceneState *st;
-  guint n, m, i, emitted = 0, drawables = 0;
+  guint n, m, i, emitted = 0;
+  guint n_nodes_drawn = 0, n_edges_drawn = 0;
 
   if (!r || !g) return 0;
 
@@ -162,20 +192,30 @@ cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
 
-  n = cmacs_roam_graph_n_nodes (g);
-  m = cmacs_roam_graph_n_edges (g);
+  n = cmacs_graph_n_nodes (g);
+  m = cmacs_graph_n_edges (g);
+
+  /* -1 everywhere, then filled in as each node/edge is emitted. */
+  g_array_set_size (st->node_emit, n);
+  g_array_set_size (st->edge_emit, m);
+  {
+    guint z;
+    for (z = 0; z < n; z++) g_array_index (st->node_emit, gint32, z) = -1;
+    for (z = 0; z < m; z++) g_array_index (st->edge_emit, gint32, z) = -1;
+  }
 
   /* Edges first, so they render behind the nodes they connect. */
   for (i = 0; i < m; i++)
     {
-      CmacsRoamEdge *e = cmacs_roam_graph_edge (g, i);
-      CmacsRoamNode *a = cmacs_roam_graph_node (g, e->a);
-      CmacsRoamNode *b = cmacs_roam_graph_node (g, e->b);
+      CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+      CmacsGraphNode *a = cmacs_graph_node (g, e->a);
+      CmacsGraphNode *b = cmacs_graph_node (g, e->b);
       LrgLine3D *line;
       g_autoptr (GrlColor) col = NULL;
 
       if (!a || !b) continue;
-      if (drawables >= ROAM_MAX_DRAWABLES) break;
+      if (!a->visible || !b->visible) continue;
+      if (n_edges_drawn >= ROAM_MAX_EDGE_DRAWABLES) break;
 
       line = lrg_line3d_new_from_to (a->x, a->y, a->z, b->x, b->y, b->z);
       /* Tinted with the average of the two notes it joins, muted toward
@@ -187,9 +227,10 @@ cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
       col = edge_base_color (e, a, b, ROAM_EDGE_ALPHA);
       lrg_shape_set_color (LRG_SHAPE (line), col);
 
+      g_array_index (st->edge_emit, gint32, i) = (gint32) n_edges_drawn;
       g_ptr_array_add (st->edge_shapes, line);
       cmacs_libregnum_render_ctx_add_drawable (r, line);
-      drawables++;
+      n_edges_drawn++;
     }
 
   /* Nodes.  One sphere and one node-table entry each; the node-table
@@ -198,14 +239,14 @@ cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
      the pick dispatch resolves by string. */
   for (i = 0; i < n; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       LrgSphere3D *s;
       g_autoptr (GrlColor) col = NULL;
       guint8 cr, cg, cb, ca;
       guint id;
 
       if (!nd || !nd->visible) continue;
-      if (drawables >= ROAM_MAX_DRAWABLES) break;
+      if (n_nodes_drawn >= ROAM_MAX_NODE_DRAWABLES) break;
 
       s = lrg_sphere3d_new_at (nd->x, nd->y, nd->z, nd->radius);
       unpack_rgba (nd->rgba ? nd->rgba : 0x7FA8D8FFu, &cr, &cg, &cb, &ca);
@@ -221,9 +262,10 @@ cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
       else
         { lrg_sphere3d_set_rings (s, 6);  lrg_sphere3d_set_slices (s, 8); }
 
+      g_array_index (st->node_emit, gint32, i) = (gint32) n_nodes_drawn;
       g_ptr_array_add (st->node_shapes, s);
       cmacs_libregnum_render_ctx_add_drawable (r, s);
-      drawables++;
+      n_nodes_drawn++;
 
       id = cmacs_libregnum_render_ctx_add_node (r, nd->id, nd->title,
                                                 FALSE, nd->level, -1,
@@ -244,21 +286,21 @@ cmacs_roamgraph_scene_build (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g,
 
 void
 cmacs_roamgraph_scene_sync_positions (CmacsLibregnumRenderCtx *r,
-                                      CmacsRoamGraph *g)
+                                      CmacsGraph *g)
 {
   SceneState *st = scene_state (r, FALSE);
   guint n, m, i, node_i = 0;
 
   if (!st || !g) return;
 
-  n = cmacs_roam_graph_n_nodes (g);
-  m = cmacs_roam_graph_n_edges (g);
+  n = cmacs_graph_n_nodes (g);
+  m = cmacs_graph_n_edges (g);
 
   for (i = 0; i < m && i < st->edge_shapes->len; i++)
     {
-      CmacsRoamEdge *e = cmacs_roam_graph_edge (g, i);
-      CmacsRoamNode *a = cmacs_roam_graph_node (g, e->a);
-      CmacsRoamNode *b = cmacs_roam_graph_node (g, e->b);
+      CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+      CmacsGraphNode *a = cmacs_graph_node (g, e->a);
+      CmacsGraphNode *b = cmacs_graph_node (g, e->b);
       LrgLine3D *line = g_ptr_array_index (st->edge_shapes, i);
 
       if (!a || !b || !line) continue;
@@ -270,7 +312,7 @@ cmacs_roamgraph_scene_sync_positions (CmacsLibregnumRenderCtx *r,
      emission order, not by graph index -- walk both in step. */
   for (i = 0; i < n && node_i < st->node_shapes->len; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       LrgSphere3D *s;
 
       if (!nd || !nd->visible) continue;
@@ -299,9 +341,23 @@ bump (guint8 c)
   return (guint8) MIN (255, v);
 }
 
+/* Node flags for GRAPH index I, resolved through the emission map.
+   0 when the node was not emitted -- it has no scene entry to carry
+   flags, and reading some other node's would be worse than nothing. */
+static guint
+emitted_node_flags (CmacsLibregnumRenderCtx *r, SceneState *st, guint i)
+{
+  gint32 e;
+
+  if (!st->node_emit || i >= st->node_emit->len) return 0;
+  e = g_array_index (st->node_emit, gint32, i);
+  if (e < 0) return 0;
+  return cmacs_libregnum_render_ctx_get_node_flags (r, e);
+}
+
 void
 cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
-                                   CmacsRoamGraph *g)
+                                   CmacsGraph *g)
 {
   SceneState *st = scene_state (r, FALSE);
   guint n, m, i, node_i = 0;
@@ -309,17 +365,16 @@ cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
 
   if (!st || !g) return;
 
-  n = cmacs_roam_graph_n_nodes (g);
-  m = cmacs_roam_graph_n_edges (g);
+  n = cmacs_graph_n_nodes (g);
+  m = cmacs_graph_n_edges (g);
 
   for (i = 0; i < n; i++)
-    if (cmacs_libregnum_render_ctx_get_node_flags (r, (gint) i)
-        & CMACS_LIBREGNUM_NODE_MATCH)
+    if (emitted_node_flags (r, st, i) & CMACS_LIBREGNUM_NODE_MATCH)
       { any_match = TRUE; break; }
 
   for (i = 0; i < n && node_i < st->node_shapes->len; i++)
     {
-      CmacsRoamNode *nd = cmacs_roam_graph_node (g, i);
+      CmacsGraphNode *nd = cmacs_graph_node (g, i);
       LrgSphere3D *s;
       guint flags;
       guint8 cr, cg, cb, ca;
@@ -329,7 +384,7 @@ cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       node_i++;
       if (!s) continue;
 
-      flags = cmacs_libregnum_render_ctx_get_node_flags (r, (gint) (node_i - 1));
+      flags = emitted_node_flags (r, st, i);
       unpack_rgba (nd->rgba ? nd->rgba : 0x7FA8D8FFu, &cr, &cg, &cb, &ca);
 
       if (flags & CMACS_LIBREGNUM_NODE_MATCH)
@@ -362,20 +417,28 @@ cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
 
   /* Edges follow their endpoints: an edge between two dimmed nodes is
      noise, one touching a match is context worth seeing. */
-  for (i = 0; i < m && i < st->edge_shapes->len; i++)
+  for (i = 0; i < m; i++)
     {
-      CmacsRoamEdge *e = cmacs_roam_graph_edge (g, i);
-      LrgLine3D *line = g_ptr_array_index (st->edge_shapes, i);
-      CmacsRoamNode *ea, *eb;
+      CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+      LrgLine3D *line;
+      CmacsGraphNode *ea, *eb;
+      gint32 ei;
       guint fa, fb;
       guint8 alpha = ROAM_EDGE_ALPHA;
 
-      if (!e || !line) continue;
-      ea = cmacs_roam_graph_node (g, e->a);
-      eb = cmacs_roam_graph_node (g, e->b);
-      if (!ea || !eb) continue;
-      fa = cmacs_libregnum_render_ctx_get_node_flags (r, (gint) e->a);
-      fb = cmacs_libregnum_render_ctx_get_node_flags (r, (gint) e->b);
+      if (!e) continue;
+      /* Emission index, not graph index: skipped edges shift everything
+         after them. */
+      ei = (st->edge_emit && i < st->edge_emit->len)
+             ? g_array_index (st->edge_emit, gint32, i) : -1;
+      if (ei < 0 || (guint) ei >= st->edge_shapes->len) continue;
+      line = g_ptr_array_index (st->edge_shapes, (guint) ei);
+
+      ea = cmacs_graph_node (g, e->a);
+      eb = cmacs_graph_node (g, e->b);
+      if (!line || !ea || !eb) continue;
+      fa = emitted_node_flags (r, st, e->a);
+      fb = emitted_node_flags (r, st, e->b);
 
       if (any_match)
         alpha = ((fa | fb) & CMACS_LIBREGNUM_NODE_MATCH) ? 160 : 18;
@@ -443,14 +506,14 @@ cmacs_roamgraph_scene_flat_p (CmacsLibregnumRenderCtx *r)
 }
 
 void
-cmacs_roamgraph_scene_fit (CmacsLibregnumRenderCtx *r, CmacsRoamGraph *g)
+cmacs_roamgraph_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g)
 {
   SceneState *st = scene_state (r, TRUE);
   float lo[3], hi[3];
   double cx, cy, cz, extent, dist;
 
   if (!r || !g) return;
-  if (!cmacs_roam_layout_bounds (g, lo, hi))
+  if (!cmacs_graph_layout_bounds (g, lo, hi))
     {
       cmacs_libregnum_render_ctx_set_camera_state (r, 0.0, 0.0, 20.0,
                                                    0.0, 0.0, 0.0, ROAM_FOV);
