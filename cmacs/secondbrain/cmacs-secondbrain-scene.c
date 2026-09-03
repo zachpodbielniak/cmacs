@@ -189,7 +189,13 @@ glyph_for (CmacsSbKind kind, CmacsGraphNode *nd, GrlColor *col)
       return LRG_SHAPE3D (lrg_cylinder3d_new_full (x, y, z, rad,
                                                    rad * 0.45f, 6, col));
     case CMACS_SB_KIND_SKILL:
-      return LRG_SHAPE3D (lrg_icosphere3d_new_full (x, y, z, rad, 0, col));
+      /* 1 subdivision, the coarsest the property allows (its range is
+         1..6).  Passing 0 is a GObject CRITICAL per node -- and the
+         shape still constructs, so it is a warning storm rather than a
+         failure.  Coarse is what is wanted here: the facets are the
+         point, so a skill reads as a gem beside memory's smooth
+         spheres. */
+      return LRG_SHAPE3D (lrg_icosphere3d_new_full (x, y, z, rad, 1, col));
     case CMACS_SB_KIND_ROUTINE:
     case CMACS_SB_KIND_HUB:
     case CMACS_SB_KIND_CENTRE:
