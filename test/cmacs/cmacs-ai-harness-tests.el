@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cl-lib)
 
 (when (locate-library "cmacs-ai-harness")

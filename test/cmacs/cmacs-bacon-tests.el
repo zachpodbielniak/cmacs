@@ -13,6 +13,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 
@@ -73,26 +74,29 @@
 
 ;;; Eval tests
 
-(ert-deftest cmacs-bacon-test-eval-returns-integer ()
-  "Test that `bacon-eval' returns an integer exit code."
+(ert-deftest cmacs-bacon-test-eval-returns-exit-and-output ()
+  "Test that `bacon-eval' returns a cons (EXIT-CODE . OUTPUT)."
   (skip-unless (cmacs-feature-p 'bacon))
   (unwind-protect
       (progn
         (bacon-start)
         (let ((rc (bacon-eval "true")))
-          (should (integerp rc))
-          (should (= rc 0))))
+          (should (consp rc))
+          (should (integerp (car rc)))
+          (should (= (car rc) 0))
+          (should (stringp (cdr rc)))))
     (bacon-stop)))
 
 (ert-deftest cmacs-bacon-test-eval-false ()
-  "Test that `bacon-eval' of false returns nonzero."
+  "Test that `bacon-eval' of false reports a nonzero exit code."
   (skip-unless (cmacs-feature-p 'bacon))
   (unwind-protect
       (progn
         (bacon-start)
         (let ((rc (bacon-eval "false")))
-          (should (integerp rc))
-          (should (/= rc 0))))
+          (should (consp rc))
+          (should (integerp (car rc)))
+          (should (/= (car rc) 0))))
     (bacon-stop)))
 
 (ert-deftest cmacs-bacon-test-eval-requires-string ()
@@ -114,14 +118,16 @@
 
 ;;; C block eval tests
 
-(ert-deftest cmacs-bacon-test-eval-c-returns-integer ()
-  "Test that `bacon-eval-c' returns an integer exit code."
+(ert-deftest cmacs-bacon-test-eval-c-returns-exit-and-output ()
+  "Test that `bacon-eval-c' returns a cons (EXIT-CODE . OUTPUT)."
   (skip-unless (cmacs-feature-p 'bacon))
   (unwind-protect
       (progn
         (bacon-start)
         (let ((rc (bacon-eval-c "int main(void) { return 0; }")))
-          (should (integerp rc))))
+          (should (consp rc))
+          (should (integerp (car rc)))
+          (should (stringp (cdr rc)))))
     (bacon-stop)))
 
 (ert-deftest cmacs-bacon-test-eval-c-requires-string ()

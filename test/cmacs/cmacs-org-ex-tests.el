@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cmacs)               ; defines `cmacs-feature-p' (not preloaded)
 
 ;;; Feature detection

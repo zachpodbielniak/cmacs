@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 (declare-function bacon-start "bacon")
@@ -31,6 +32,12 @@
        (progn (bacon-start) ,@body)
      (bacon-stop)))
 
+(defun cmacs-cmacsgi-c--rc (command)
+  "Run COMMAND through `bacon-eval' and return only its exit code.
+`bacon-eval' returns a cons (EXIT-CODE . OUTPUT); these tests assert
+on the exit status alone."
+  (car (bacon-eval command)))
+
 ;;; Read-only introspection
 
 (ert-deftest cmacs-cmacsgi-c-help ()
@@ -38,42 +45,44 @@
   (skip-unless (cmacs-feature-p 'bacon))
   (cmacs-cmacsgi-c--with-bacon
     (let ((rc (bacon-eval "cmacsgi c --help")))
-      (should (integerp rc))
-      (should (= rc 0)))))
+      (should (consp rc))
+      (should (integerp (car rc)))
+      (should (= (car rc) 0))
+      (should (string-match-p "subcommands" (cdr rc))))))
 
 (ert-deftest cmacs-cmacsgi-c-list-defuns ()
   "`cmacsgi c list defun -n 1' completes successfully."
   (skip-unless (cmacs-feature-p 'bacon))
   (skip-unless (fboundp 'cmacs-c-list-defuns))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c list defun -n 1")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c list defun -n 1")))))
 
 (ert-deftest cmacs-cmacsgi-c-list-objects ()
   "`cmacsgi c objects' completes successfully."
   (skip-unless (cmacs-feature-p 'bacon))
   (skip-unless (fboundp 'cmacs-c-list-objects))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c objects")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c objects")))))
 
 (ert-deftest cmacs-cmacsgi-c-defun-info ()
   "`cmacsgi c defun-info Fcons' completes successfully."
   (skip-unless (cmacs-feature-p 'bacon))
   (skip-unless (fboundp 'cmacs-c-defun-info))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c defun-info cons")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c defun-info cons")))))
 
 (ert-deftest cmacs-cmacsgi-c-stack ()
   "`cmacsgi c stack -d 4' completes successfully."
   (skip-unless (cmacs-feature-p 'bacon))
   (skip-unless (fboundp 'cmacs-c-stack-trace))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c stack -d 4")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c stack -d 4")))))
 
 (ert-deftest cmacs-cmacsgi-c-list-missing-kind ()
   "`cmacsgi c list' without a KIND exits non-zero."
   (skip-unless (cmacs-feature-p 'bacon))
   (cmacs-cmacsgi-c--with-bacon
-    (should (/= 0 (bacon-eval "cmacsgi c list")))))
+    (should (/= 0 (cmacs-cmacsgi-c--rc "cmacsgi c list")))))
 
 ;;; Symbol read/write (uses the cintrospect demo globals)
 
@@ -82,7 +91,7 @@
   (skip-unless (cmacs-feature-p 'bacon))
   (skip-unless (fboundp 'cmacs-c-symbol-value))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval
+    (should (= 0 (cmacs-cmacsgi-c--rc
                   "cmacsgi c get cmacs_cintrospection_test_int int")))))
 
 ;;; cpatch (only when --enable-cmacs-cpatch)
@@ -93,13 +102,13 @@
   ;; Always succeeds: with cpatch enabled it returns the (possibly
   ;; empty) list; without cpatch it prints the friendly disabled msg.
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c patches")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c patches")))))
 
 (ert-deftest cmacs-cmacsgi-c-unpatch-all-clean ()
   "`cmacsgi c unpatch-all' on a clean image is a no-op."
   (skip-unless (cmacs-feature-p 'bacon))
   (cmacs-cmacsgi-c--with-bacon
-    (should (= 0 (bacon-eval "cmacsgi c unpatch-all")))))
+    (should (= 0 (cmacs-cmacsgi-c--rc "cmacsgi c unpatch-all")))))
 
 (provide 'cmacs-cmacsgi-c-tests)
 

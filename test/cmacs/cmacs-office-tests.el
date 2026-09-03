@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cl-lib)
 
 ;; `fboundp' and `boundp', not `cmacs-feature-p': the latter is void

@@ -21,6 +21,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cl-lib)
 
 ;; The data-source helpers are Elisp, not DEFUNs, so they must be

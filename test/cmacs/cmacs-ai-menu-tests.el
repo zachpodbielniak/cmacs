@@ -25,6 +25,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'dired)                        ; the dired-marks test drives it
 (require 'cmacs-menu)
 (require 'cmacs-ai-target)

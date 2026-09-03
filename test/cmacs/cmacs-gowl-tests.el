@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 
@@ -553,11 +554,11 @@ not the plain tag number / \"0\" that gowl's default-config.c uses."
   "`cmacs-gowl--bemenu-binary' derives the dmenu-mode binary name."
   (skip-unless (cmacs-feature-p 'gowl))
   (require 'cmacs-gowl)
-  (let ((cmacs-gowl-menu-command "bemenu-run"))
+  (let ((cmacs-gowl-dmenu-command "bemenu-run"))
     (should (equal (cmacs-gowl--bemenu-binary) "bemenu")))
-  (let ((cmacs-gowl-menu-command "bemenu"))
+  (let ((cmacs-gowl-dmenu-command "bemenu"))
     (should (equal (cmacs-gowl--bemenu-binary) "bemenu")))
-  (let ((cmacs-gowl-menu-command "rofi -show drun"))
+  (let ((cmacs-gowl-dmenu-command "rofi -show drun"))
     (should (equal (cmacs-gowl--bemenu-binary) "rofi"))))
 
 (ert-deftest cmacs-gowl-test-launch-commands-defined ()
@@ -582,8 +583,9 @@ not the plain tag number / \"0\" that gowl's default-config.c uses."
     (cl-letf (((symbol-function 'gowl-running-p) (lambda () t))
               ((symbol-function 'gowl-list-monitors)
                (lambda () '(:m0 :m1 :m2)))
+              ((symbol-function 'gowl-monitor-enabled-p) (lambda (&rest _) t))
               ((symbol-function 'gowl-view-tags)
-               (lambda (mask mon) (push (cons mon mask) calls)))
+               (lambda (mask mon &rest _) (push (cons mon mask) calls)))
               ((symbol-function 'cmacs-gowl--bar-redraw) #'ignore))
       (cmacs-gowl-assign-monitor-tags))
     ;; monitor 0 → tag 1 (bit 0 = 1), 1 → tag 2 (2), 2 → tag 3 (4).

@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 
 ;;; Feature availability
 

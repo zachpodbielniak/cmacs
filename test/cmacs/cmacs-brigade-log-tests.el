@@ -13,6 +13,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cmacs-brigade nil 'noerror)
 (require 'cmacs-brigade-output nil 'noerror)
 (require 'cmacs-brigade-log nil 'noerror)

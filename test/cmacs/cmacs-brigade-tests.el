@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cmacs-brigade nil 'noerror)
 ;; Not in the eager-load set (it is autoloaded), but the window-behaviour
 ;; tests below rebind `cmacs-brigade-dashboard-display', which needs the

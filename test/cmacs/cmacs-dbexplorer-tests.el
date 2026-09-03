@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cmacs-dbexplorer-model nil t)
 
 ;; `fboundp' and `boundp', not `cmacs-feature-p': the latter lives in

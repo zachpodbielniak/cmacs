@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 

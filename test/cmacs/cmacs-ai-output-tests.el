@@ -30,6 +30,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cl-lib)
 (require 'cmacs-ai-output)
 ;; Loaded here rather than inside the promotion tests: `skip-unless'

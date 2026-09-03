@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cmacs)
 (require 'cl-lib)
 (require 'cmacs-ai-view)
 ;; Required, not merely declared: tests `let'-bind defcustoms from
