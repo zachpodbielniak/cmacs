@@ -51,7 +51,9 @@ DEFUN ("cmacs-ai-providers", Fcmacs_ai_providers,
                intern ("claude-code"),
                intern ("opencode"),
                intern ("claude-tmux"),
-               intern ("grok-build"));
+               intern ("grok-build"),
+               intern ("antigravity"),
+               intern ("cursor"));
 }
 
 DEFUN ("cmacs-ai-config-default-provider",

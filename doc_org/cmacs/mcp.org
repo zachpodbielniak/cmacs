@@ -210,7 +210,8 @@ Note this blocks the cmacs main thread for the tens of seconds
 generation takes.
 
 The AI subsystem also exposes =ai_prompt=, =ai_call=, =ai_list_providers=,
-=ai_list_models= and =ai_open_chat=; see [[file:cmacs-ai.org][cmacs-ai.org]].
+=ai_list_models=, =ai_open_chat= and =ai_embed_similarity= (cosine
+similarity of two texts' embeddings); see [[file:cmacs-ai.org][cmacs-ai.org]].
 
 ** gi --- GObject Introspection (optional)
 

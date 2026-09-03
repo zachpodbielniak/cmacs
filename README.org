@@ -267,9 +267,13 @@ orchestrates conversations across channels, =cmacs-ai= is raw,
 low-latency, single-conversation model invocation tuned for code
 editing.
 
-- Nine providers via one DEFUN: =claude=, =openai=, =gemini=,
+- Eleven providers via one DEFUN: =claude=, =openai=, =gemini=,
   =grok=, =ollama=, =claude-code=, =opencode=, =claude-tmux=,
-  =grok-build=
+  =grok-build=, =antigravity= (Google's =agy= CLI), =cursor=
+  (Cursor's =cursor-agent= CLI)
+- *Embeddings* over ai-glib's =AiEmbedder=: =cmacs-ai-embed= and a
+  non-blocking =cmacs-ai-embed-async=, which is what indexes the notes
+  corpus behind =cmacs-brigade-memory=
 - Streaming chat buffers in =cmacs-ai-chat-mode= (derived from
   org-mode) with the same read-only history + =* Compose= sentinel
   pattern as libreclaw

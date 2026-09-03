@@ -35,6 +35,8 @@ cmacs_ai__provider_from_symbol (Lisp_Object sym)
    * ai-glib keeps them as separate AiProviderType values for the
    * same reason (its model ids are not interchangeable).  */
   if (EQ (sym, intern ("grok-build")))   return AI_PROVIDER_GROK_BUILD;
+  if (EQ (sym, intern ("antigravity")))  return AI_PROVIDER_ANTIGRAVITY;
+  if (EQ (sym, intern ("cursor")))       return AI_PROVIDER_CURSOR;
   error ("cmacs-ai: unknown provider %s", SSDATA (SYMBOL_NAME (sym)));
 }
 

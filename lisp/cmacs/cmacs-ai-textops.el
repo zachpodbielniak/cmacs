@@ -59,7 +59,7 @@ reason."
                  (const claude) (const openai) (const gemini)
                  (const grok) (const ollama)
                  (const claude-code) (const opencode) (const claude-tmux)
-                 (const grok-build)))
+                 (const grok-build) (const antigravity) (const cursor)))
 
 (defcustom cmacs-ai-textops-model "sonnet"
   "Model string used by summarize/rephrase/reply.

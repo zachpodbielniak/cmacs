@@ -256,6 +256,8 @@ cmacs_ai_harness__provider_type (Lisp_Object sym)
   if (EQ (sym, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
   if (EQ (sym, intern ("claude-tmux"))) return AI_PROVIDER_CLAUDE_TMUX;
   if (EQ (sym, intern ("grok-build")))  return AI_PROVIDER_GROK_BUILD;
+  if (EQ (sym, intern ("antigravity"))) return AI_PROVIDER_ANTIGRAVITY;
+  if (EQ (sym, intern ("cursor")))      return AI_PROVIDER_CURSOR;
   error ("cmacs-ai-harness: unknown provider %s",
          SSDATA (SYMBOL_NAME (sym)));
 }

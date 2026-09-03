@@ -98,6 +98,10 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
     return AI_PROVIDER (ai_claude_tmux_client_new ());
   if (EQ (provider_sym, intern ("grok-build")))
     return AI_PROVIDER (ai_grok_build_client_new ());
+  if (EQ (provider_sym, intern ("antigravity")))
+    return AI_PROVIDER (ai_antigravity_client_new ());
+  if (EQ (provider_sym, intern ("cursor")))
+    return AI_PROVIDER (ai_cursor_client_new ());
   return NULL;
 }
 
@@ -105,7 +109,8 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
  *
  * The registry holds AiProvider implementors of two unrelated GObject
  * hierarchies: AiClient (HTTP API providers) and AiCliClient
- * (claude-code / opencode / claude-tmux / grok-build).  Calling
+ * (claude-code / opencode / claude-tmux / grok-build / antigravity /
+ * cursor).  Calling
  * ai_client_* on a CLI client is a CRITICAL + silent no-op, so every
  * property access routes on the instance type. */
 
@@ -152,7 +157,8 @@ DEFUN ("cmacs-ai-client-new", Fcmacs_ai_client_new,
        Scmacs_ai_client_new, 1, 2, 0,
        doc: /* Create an ai-glib client for PROVIDER.
 PROVIDER is one of the symbols: claude, openai, gemini, grok, ollama,
-claude-code, opencode, claude-tmux, grok-build.  Optional MODEL is a
+claude-code, opencode, claude-tmux, grok-build, antigravity, cursor.
+Optional MODEL is a
 string (passed to `ai-client-set-model').  Returns an integer handle.
 Free with `cmacs-ai-client-free'.  */)
   (Lisp_Object provider, Lisp_Object model)
@@ -312,7 +318,8 @@ DEFUN ("cmacs-ai-client-cli-p", Fcmacs_ai_client_cli_p,
        Scmacs_ai_client_cli_p, 1, 1, 0,
        doc: /* Return t when HANDLE drives a command-line agent.
 
-The CLI providers (claude-code, opencode, claude-tmux, grok-build) are
+The CLI providers (claude-code, opencode, claude-tmux, grok-build,
+antigravity, cursor) are
 a different GObject hierarchy from the HTTP ones, and they ignore the
 tools argument entirely -- ai-glib discards it.  A caller that wants the
 model to have tools must therefore hand a CLI provider an MCP config

@@ -19,6 +19,7 @@ extern void syms_of_cmacs_ai_session_defuns(void);
 extern void syms_of_cmacs_ai_stream_defuns (void);
 extern void syms_of_cmacs_ai_tools_defuns  (void);
 extern void syms_of_cmacs_ai_image_defuns  (void);
+extern void syms_of_cmacs_ai_embed_defuns  (void);
 extern void syms_of_cmacs_ai_harness       (void);
 
 static bool init_done = false;
@@ -33,6 +34,7 @@ syms_of_cmacs_ai (void)
   syms_of_cmacs_ai_stream_defuns ();
   syms_of_cmacs_ai_tools_defuns ();
   syms_of_cmacs_ai_image_defuns ();
+  syms_of_cmacs_ai_embed_defuns ();
   syms_of_cmacs_ai_harness ();
 }
 

@@ -28,6 +28,8 @@ with =--with-cmacs-libreclaw= when both are enabled.
 | =opencode=       | CLI      | =opencode= on PATH                   |
 | =claude-tmux=    | CLI/tmux | =claude= + tmux on PATH              |
 | =grok-build=     | CLI      | =grok= on PATH (or =GROK_PATH=)      |
+| =antigravity=    | CLI      | =agy= on PATH                        |
+| =cursor=         | CLI      | =cursor-agent= on PATH               |
 
 =grok= and =grok-build= are two different backends, not two names for one. =grok= is xAI's HTTP API and takes API model ids; =grok-build= wraps the agentic =grok= CLI and takes /its/ model ids (=grok-4.6=, =grok-4.5=), which the API rejects and vice versa. Run =grok models= to see what the installed CLI offers.
 
@@ -1066,6 +1068,105 @@ or =(:error MSG)=.  =BYTES= is a unibyte string, already materialised
 whether the provider returned inline data or a URL -- so a caller can
 write it straight to a file without knowing which.
 
+* Embeddings
+
+An embedding turns text into a vector whose /direction/ carries meaning:
+two passages that say the same thing point the same way, whatever words
+they used.  That is what makes semantic search possible, and it is the
+machinery under [[file:ai-brigade/][the brigade memory index]].
+
+ai-glib models this as an interface, =AiEmbedder=, rather than a method
+on every provider --- most providers do not serve embeddings at all.
+Two do: =ollama= (local, no key) and =openai=.  Asking any other
+provider signals rather than failing later inside a request.
+
+** Getting vectors
+
+#+begin_src emacs-lisp
+(cmacs-ai-embed "hello world")            ; => [0.013 -0.041 ...], 768 floats
+(cmacs-ai-embed '("alpha" "beta"))        ; => (VECTOR VECTOR), in order
+(cmacs-ai-embed "text" 'openai "text-embedding-3-small")
+#+end_src
+
+A string returns one vector; a list returns a list of vectors.  The
+default provider is =ollama= and the default model its
+=nomic-embed-text:v1.5= (768 dimensions).
+
+=cmacs-ai-embed= *blocks*, which is right for a single query and wrong
+for a corpus.  For anything larger use =cmacs-ai-embed-async=:
+
+#+begin_src emacs-lisp
+(cmacs-ai-embed-async
+ '("chunk one" "chunk two")
+ (lambda (reply)
+   (pcase reply
+     (`(:ok ,vectors)  (use vectors))
+     (`(:cancelled)    nil)
+     (`(:error ,msg)   (message "embed failed: %s" msg)))))
+#+end_src
+
+It returns an integer request id, and =cmacs-ai-embed-cancel= stops a
+request still in flight --- which is how a half-finished index build is
+abandoned.  A cancelled request still calls back exactly once, with
+=(:cancelled)=; that is deliberate, so a caller's bookkeeping always
+gets closed out.
+
+Note that an Emacs thread would *not* have made the blocking call safe:
+a thread parked in a synchronous call still holds the global Lisp lock,
+so the main thread cannot run either.  What actually yields is the GLib
+main loop cmacs already pumps, which is where the reply is delivered.
+
+** Comparing vectors
+
+=cmacs-ai-embed-cosine= scores two vectors in [-1, 1] --- 1 for the same
+direction, 0 for unrelated, -1 for opposite.  It normalises internally,
+so unscaled vectors compare correctly:
+
+#+begin_src emacs-lisp
+(cmacs-ai-embed-cosine (cmacs-ai-embed "the cat sat on the mat")
+                       (cmacs-ai-embed "a feline rested on the rug"))
+;; => 0.698   -- and 0.251 against "quarterly financial report"
+#+end_src
+
+** Which model
+
+=cmacs-ai-embed-models= returns what a provider publishes, and
+=cmacs-ai-embed-default-model= names the one used when you pass nil:
+
+| Model                   | Dimensions | Notes                       |
+|-------------------------+------------+-----------------------------|
+| =nomic-embed-text:v1.5= |        768 | the default; good all-round |
+| =mxbai-embed-large=     |       1024 | larger and slower           |
+| =all-minilm=            |        384 | small, quick, weaker        |
+
+=:dimensions= is the number an index is built for.  Changing the model
+almost always changes it, which invalidates every vector already stored
+--- the brigade manifest records the model and its digest precisely so a
+mismatch is caught instead of silently returning nonsense.
+
+** Brigade memory backend
+
+=cmacs-brigade-memory= embeds through this by default.
+=cmacs-brigade-embed-backend= chooses:
+
+- =ai-glib= (default) --- =cmacs-ai-embed-async=, in process.
+- =curl= --- posts JSON with the =curl= binary, which is what this did
+  before ai-glib served embeddings.
+
+They are interchangeable: both speak =/api/embed= to the same model, so
+vectors from one are valid in an index built by the other and switching
+requires no rebuild (the round trip through JSON moves the last bit or
+two of an fp32 value; a regression test asserts the two agree to better
+than 0.9999 cosine).  =ai-glib= is preferred because it drops the curl
+dependency and the temporary request files, reports real errors instead
+of an exit status, and can be cancelled.  A build without
+=--with-cmacs-ai= falls back to =curl= automatically.
+
+=cmacs-brigade-embed-endpoint= keeps working under either: the ai-glib
+path pushes it into ai-glib's own config before each call, since
+ai-glib otherwise reads a base URL that knows nothing about this
+package's setting.
+
 * Org-babel integration
 
 =cmacs-ai-org-block-register= adds an =ai= language to
@@ -1090,16 +1191,25 @@ runs, the typelib is reachable from:
 
 * MCP tools
 
-Built with =--with-cmacs-mcp=, six tools are exposed:
+Built with =--with-cmacs-mcp=, seven tools are exposed:
 
-| Tool                | Args                                       |
-|---------------------+--------------------------------------------|
-| =ai_prompt=         | =prompt= req, =provider=, =system=, =model= |
-| =ai_call=           | as =ai_prompt= + =tools= (bool; built-in agent tools) |
-| =ai_list_providers= | (none)                                     |
-| =ai_list_models=    | =provider= (opt; default: all providers)   |
-| =ai_open_chat=      | =prompt=, =provider=, =model= (all opt)    |
-| =generate_image=    | =prompt= req, =references=, =provider=, =model=, =aspect=, =size=, =quality=, =buffer= |
+| Tool                   | Args                                    |
+|------------------------+-----------------------------------------|
+| =ai_prompt=            | =prompt= req, =provider=, =system=, =model= |
+| =ai_call=              | as =ai_prompt= + =tools= (bool; built-in agent tools) |
+| =ai_list_providers=    | (none)                                  |
+| =ai_list_models=       | =provider= (opt; default: all providers) |
+| =ai_open_chat=         | =prompt=, =provider=, =model= (all opt) |
+| =ai_embed_similarity=  | =a= req, =b= req, =model= (opt)          |
+| =generate_image=       | =prompt= req, =references=, =provider=, =model=, =aspect=, =size=, =quality=, =buffer= |
+
+=ai_embed_similarity= returns the cosine of two texts' embeddings.
+Embeddings reach MCP as a /score/ and not as vectors on purpose: a
+vector is 768 floats, roughly 10 kB of JSON per text, which no caller
+can act on directly --- and semantic /search/ is already served by
+=memory_search= over the brigade index.  What is useful over the wire is
+the comparison itself: near-duplicate detection, or checking an answer
+against its source.
 
 =ai_list_models= returns a JSON object mapping each provider to its
 model-name array (network for API providers, static tables for CLI

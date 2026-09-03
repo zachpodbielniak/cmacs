@@ -27,14 +27,19 @@
 (defcustom cmacs-ai-default-provider 'claude
   "Default provider symbol used by `cmacs-ai-chat'.
 One of: claude openai gemini grok ollama claude-code opencode
-claude-tmux grok-build.
+claude-tmux grok-build antigravity cursor.
 
 `grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.  They
-take different model ids and are not interchangeable."
+take different model ids and are not interchangeable.
+
+`antigravity' wraps Google's `agy' CLI and `cursor' wraps Cursor's
+`cursor-agent' CLI.  Both are agentic CLIs like claude-code, so they
+ignore the tools argument and need an MCP config instead -- see
+`cmacs-ai-client-cli-p'."
   :type '(choice (const claude) (const openai) (const gemini)
                  (const grok) (const ollama)
                  (const claude-code) (const opencode) (const claude-tmux)
-                 (const grok-build))
+                 (const grok-build) (const antigravity) (const cursor))
   :group 'cmacs-ai)
 
 (defcustom cmacs-ai-default-model nil

@@ -75,6 +75,72 @@ Disposable: delete it and rebuild."
   :type 'string
   :group 'cmacs-brigade-memory)
 
+(defcustom cmacs-brigade-embed-backend 'ai-glib
+  "How chunks and queries reach the embedding service.
+
+`ai-glib' calls `cmacs-ai-embed-async', ai-glib\='s AiEmbedder
+interface, in process.  `curl' posts JSON with the curl binary, which
+is what this did before ai-glib served embeddings.
+
+They are interchangeable: both speak the same /api/embed endpoint to
+the same model, so vectors from one are valid in an index built by the
+other and switching does not require a rebuild.  ai-glib is preferred
+because it drops the curl dependency and the temporary request files,
+reports real errors instead of an exit status, and can be cancelled.
+
+Falls back to `curl' automatically when cmacs was built without
+--with-cmacs-ai, so this stays correct on a build with no AI support."
+  :type '(choice (const :tag "ai-glib (in process)" ai-glib)
+                 (const :tag "curl subprocess" curl))
+  :group 'cmacs-brigade-memory)
+
+(defun cmacs-brigade-memory--embed-backend ()
+  "Return the embedding backend actually usable in this build."
+  (if (and (eq cmacs-brigade-embed-backend 'ai-glib)
+           (fboundp 'cmacs-ai-embed-async))
+      'ai-glib
+    'curl))
+
+(defun cmacs-brigade-memory--embed-sync-ai-glib (texts)
+  "Embed TEXTS through ai-glib, blocking.  Returns a list of vectors."
+  (cmacs-brigade-memory--embed-apply-endpoint)
+  (condition-case err
+      (cmacs-ai-embed texts 'ollama cmacs-brigade-embed-model)
+    (error
+     (signal 'cmacs-brigade-embed-error (list (error-message-string err))))))
+
+(defun cmacs-brigade-memory--embed-apply-endpoint ()
+  "Point ai-glib\='s ollama client at `cmacs-brigade-embed-endpoint'.
+
+ai-glib reads the base URL from its own AiConfig singleton, which knows
+nothing about this package\='s defcustom.  Without this the endpoint
+setting would silently stop working the moment the backend changed."
+  (when (fboundp 'cmacs-ai-config-set-base-url)
+    (cmacs-ai-config-set-base-url
+     'ollama (string-remove-suffix "/" cmacs-brigade-embed-endpoint))))
+
+(defun cmacs-brigade-memory--embed-async-ai-glib (texts on-ok on-error)
+  "Embed TEXTS through ai-glib, without blocking.
+Returns the integer request id, which `cmacs-brigade-memory-build-cancel'
+passes to `cmacs-ai-embed-cancel'."
+  (cmacs-brigade-memory--embed-apply-endpoint)
+  (cmacs-ai-embed-async
+   texts
+   (lambda (reply)
+     (pcase reply
+       (`(:ok ,vectors)
+        ;; As in the curl sentinel: an error raised by ON-OK is the
+        ;; caller's problem, but it must not escape this callback, or
+        ;; the build stops with nothing said.
+        (condition-case err
+            (funcall on-ok vectors)
+          (error (funcall on-error (error-message-string err)))))
+       (`(:cancelled) nil)          ; asked for; not a failure to report
+       (`(:error ,msg) (funcall on-error msg))
+       (_ (funcall on-error (format "unexpected embed reply: %S" reply)))))
+   'ollama
+   cmacs-brigade-embed-model))
+
 (defcustom cmacs-brigade-embed-model "nomic-embed-text:v1.5"
   "Model used to embed chunks and queries.
 
@@ -240,8 +306,17 @@ command line."
 
 Synchronous, and therefore only for a single query: this blocks Emacs
 for as long as the server takes.  Indexing uses
-`cmacs-brigade-memory--embed-async', which does not."
+`cmacs-brigade-memory--embed-async', which does not.
+
+Routes through `cmacs-brigade-embed-backend'."
   (unless texts (cl-return-from cmacs-brigade-memory--embed nil))
+  (if (eq (cmacs-brigade-memory--embed-backend) 'ai-glib)
+      (cmacs-brigade-memory--embed-sync-ai-glib texts)
+    (cmacs-brigade-memory--embed-curl texts)))
+
+(cl-defun cmacs-brigade-memory--embed-curl (texts)
+  "Embed TEXTS by posting JSON with the curl binary."
+  (unless texts (cl-return-from cmacs-brigade-memory--embed-curl nil))
   (let ((tmp (cmacs-brigade-memory--embed-payload-file texts))
         (out (generate-new-buffer " *brigade-embed*")))
     (unwind-protect
@@ -258,6 +333,24 @@ for as long as the server takes.  Indexing uses
 
 (defun cmacs-brigade-memory--embed-async (texts on-ok on-error)
   "Embed TEXTS, calling ON-OK with the vectors or ON-ERROR with a message.
+
+Routes through `cmacs-brigade-embed-backend'.  Returns a handle for
+`cmacs-brigade-memory--embed-abort': a process for the curl backend, an
+integer request id for ai-glib."
+  (if (eq (cmacs-brigade-memory--embed-backend) 'ai-glib)
+      (cmacs-brigade-memory--embed-async-ai-glib texts on-ok on-error)
+    (cmacs-brigade-memory--embed-async-curl texts on-ok on-error)))
+
+(defun cmacs-brigade-memory--embed-abort (handle)
+  "Abandon the in-flight embed HANDLE, whichever backend produced it."
+  (cond
+   ((null handle) nil)
+   ((processp handle) (when (process-live-p handle) (delete-process handle)))
+   ((integerp handle) (when (fboundp 'cmacs-ai-embed-cancel)
+                        (cmacs-ai-embed-cancel handle)))))
+
+(defun cmacs-brigade-memory--embed-async-curl (texts on-ok on-error)
+  "Embed TEXTS with a curl subprocess.
 
 Returns the process.  The whole reason indexing does not halt Emacs: a
 thread would not have helped, because a thread sitting in `call-process'
@@ -460,7 +553,7 @@ rather than the state plist, so the state stays private."
       ;; failure for something that was cancelled on purpose.
       (setq cmacs-brigade-memory--build nil)
       (when-let* ((p (plist-get st :proc)))
-        (when (process-live-p p) (delete-process p)))
+        (cmacs-brigade-memory--embed-abort p))
       ;; Abort discards the temporary; the live index never saw any of it.
       (ignore-errors (cmacs-brigade-index-writer-abort (plist-get st :writer)))
       (message "cmacs-brigade: build cancelled after %d chunks"

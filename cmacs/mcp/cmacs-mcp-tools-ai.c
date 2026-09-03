@@ -289,6 +289,52 @@ handle_ai_list_models (McpServer *server, const gchar *name,
   return r;
 }
 
+/* Embeddings reach MCP as a similarity score, not as vectors.
+ * A vector is 768 floats -- ~10 kB of JSON per text, which no caller
+ * can act on directly, and semantic *search* is already served by the
+ * memory_search tool over the brigade index.  What is actually useful
+ * over the wire is the comparison itself. */
+static McpToolResult *
+handle_ai_embed_similarity (McpServer *server, const gchar *name,
+                            JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *a = json_object_get_string_member_with_default (
+    arguments, "a", NULL);
+  const gchar *b = json_object_get_string_member_with_default (
+    arguments, "b", NULL);
+  const gchar *model = json_object_has_member (arguments, "model")
+    ? json_object_get_string_member_with_default (arguments, "model", NULL)
+    : NULL;
+
+  if (!a || !*a || !b || !*b)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_embed_similarity: need both 'a' and 'b'");
+      return r;
+    }
+
+  /* Every interpolated string goes through escape_for_lisp: these are
+   * attacker-controlled tool arguments being spliced into a form that
+   * is about to be evaluated. */
+  g_autofree gchar *a_esc = escape_for_lisp (a);
+  g_autofree gchar *b_esc = escape_for_lisp (b);
+  g_autofree gchar *model_esc = escape_for_lisp (model ? model : "");
+  g_autofree gchar *model_form = model && *model
+    ? g_strdup_printf ("\"%s\"", model_esc) : g_strdup ("nil");
+
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *expr = g_strdup_printf (
+    "(let* ((vs (cmacs-ai-embed (list \"%s\" \"%s\") nil %s)))"
+    " (format \"%%.6f\" (cmacs-ai-embed-cosine (nth 0 vs) (nth 1 vs))))",
+    a_esc, b_esc, model_form);
+  g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
+  McpToolResult *r = mcp_tool_result_new (res == NULL);
+  mcp_tool_result_add_text (r,
+    res ? res : (err ? err->message : "ai_embed_similarity failed"));
+  return r;
+}
+
 static McpToolResult *
 handle_ai_open_chat (McpServer *server, const gchar *name,
                      JsonObject *arguments, gpointer user_data)
@@ -337,8 +383,8 @@ cmacs_mcp_tools_ai_register (McpServer *server)
   tool = mcp_tool_new ("ai_prompt",
     "Send PROMPT to an AI provider via cmacs-ai (synchronous).  "
     "Optional 'provider' (claude / openai / gemini / grok / ollama / "
-    "claude-code / opencode / claude-tmux / grok-build) overrides the "
-    "default; "
+    "claude-code / opencode / claude-tmux / grok-build / antigravity / "
+    "cursor) overrides the default; "
     "optional 'system' is a system prompt; optional 'model' overrides "
     "the provider's default model.");
   schema = cmacs_mcp_schema_from_string (
@@ -421,6 +467,25 @@ cmacs_mcp_tools_ai_register (McpServer *server)
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
   mcp_server_add_tool (server, tool, handle_ai_list_models, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("ai_embed_similarity",
+    "Cosine similarity of two texts' embeddings, in [-1, 1]: 1 is the "
+    "same direction, 0 unrelated, -1 opposite.  Use it to judge whether "
+    "two passages mean the same thing -- near-duplicate detection, or "
+    "checking an answer against a source.  Needs a local embedding "
+    "provider (ollama).  Optional 'model' overrides the default "
+    "embedding model.  To SEARCH the notes corpus use memory_search "
+    "instead; this compares two specific strings.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"a\":{\"type\":\"string\",\"description\":\"First text\"},"
+    "\"b\":{\"type\":\"string\",\"description\":\"Second text\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Embedding model\"}"
+    "},\"required\":[\"a\",\"b\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_ai_embed_similarity, NULL, NULL);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("ai_open_chat",

@@ -89,6 +89,32 @@ thread has nothing left to contribute, while still bringing a second Lisp
 execution context into a subsystem that calls into GLib. Under =--gowl= a crash
 there takes the desktop session with it. Sentinels, not threads.
 
+** Which backend does the embedding
+
+=cmacs-brigade-embed-backend= picks how the request is actually made:
+
+- =ai-glib= (the default) — =cmacs-ai-embed-async=, ai-glib's
+  =AiEmbedder= interface, in process. The reply arrives on the GLib main
+  loop cmacs already pumps, so this is asynchronous for the same reason
+  the sentinel path was, without the subprocess.
+- =curl= — posts JSON with the =curl= binary and waits on a process
+  sentinel. What this did before ai-glib served embeddings.
+
+The two are interchangeable. Both speak =/api/embed= to the same model,
+so vectors from one are valid in an index built by the other and
+switching backends does /not/ require a rebuild — a regression test
+embeds the same text through both and asserts they agree to better than
+0.9999 cosine. =ai-glib= is preferred: no curl dependency, no temporary
+request files, real error messages rather than an exit status, and a
+request that can be cancelled (=cmacs-brigade-memory-build-cancel=
+reaches it through =cmacs-ai-embed-cancel=, the same way it used to
+=delete-process= the curl job). A build without =--with-cmacs-ai= falls
+back to =curl= automatically.
+
+=cmacs-brigade-embed-endpoint= applies to both: the ai-glib path pushes
+it into ai-glib's own config before each call, because ai-glib otherwise
+resolves a base URL that knows nothing about this package's setting.
+
 * Chunking
 
 Three passes, in C, over a line scanner rather than an org parser — the latter
