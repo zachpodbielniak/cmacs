@@ -51,6 +51,7 @@ Returns nil for an unknown or not-compiled-in FEATURE."
            ('libregnum (cmacs-libregnum-supported-p))
            ('gnuseye   (cmacs-gnuseye-supported-p))
            ('roamgraph (cmacs-roamgraph-supported-p))
+           ('secondbrain (cmacs-secondbrain-supported-p))
            ('cad       (cmacs-cad-supported-p))
            ;; No `calculator' branch: its engine is Elisp over GNU Calc, so
            ;; compiled-in means available -- and unlike the C-backed
@@ -72,7 +73,7 @@ unavailable at runtime is excluded."
                     '(glib gi crispy bacon gowl podomation libreclaw ai
                       ai-brigade
                       libregnum lrgterm imgedit vidstudio gnuseye
-                      roamgraph cad
+                      roamgraph secondbrain cad
                       screensaver org-ex mcp print video audio whisper
                       piper gsurf gsurf-lrg emacsctl cintrospect cpatch
                       calculator lsp transcode transcribe lrgscript

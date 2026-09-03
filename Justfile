@@ -100,6 +100,7 @@ configure_flags := """
     --with-cmacs-libregnum
     --with-cmacs-gnuseye
     --with-cmacs-roamgraph
+    --with-cmacs-secondbrain
     --with-cmacs-office
     --with-cmacs-lrgscript
     --with-cmacs-cad

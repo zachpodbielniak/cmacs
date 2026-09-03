@@ -673,6 +673,7 @@ OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.
 OPTION_DEFAULT_OFF([cmacs-dbexplorer], [CMacs database explorer (query/browse/edit/export SQLite, PostgreSQL and MySQL through orm-glib)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
+OPTION_DEFAULT_OFF([cmacs-secondbrain], [CMacs ARMS second-brain visualiser, 2D + 3D (requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgscript], [CMacs Emacs Lisp scripting backend + game authoring for libregnum (requires libregnum + glib)])
 OPTION_DEFAULT_OFF([cmacs-cad], [CMacs parametric CAD subsystem (cad-glib kernels; parts render as libregnum CAD nodes)])
 OPTION_DEFAULT_OFF([cmacs-screensaver], [CMacs libregnum screensavers as animated wallpaper / lock screen / buffer (requires libregnum; wallpaper+lock need gowl)])
@@ -1314,14 +1315,35 @@ if test "$with_cmacs_roamgraph" != "no"; then
     cmacs-roamgraph-scene.o cmacs-roamgraph-scan.o"
 fi
 
+if test "$with_cmacs_secondbrain" != "no"; then
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-secondbrain requires --with-cmacs-libregnum (the rings are rendered through libregnum)])
+  fi
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-secondbrain requires --with-cmacs-glib (redraws are coalesced on the cmacs GMainContext)])
+  fi
+  # secondbrain renders an agentic workspace as four concentric ARMS
+  # rings in a live libregnum scene.  Its scene half
+  # (cmacs-secondbrain-scene.c) includes libregnum.h, so it reuses the
+  # libregnum/graylib include paths already folded into CMACS_CFLAGS;
+  # the graph store and the solver live in cmacs/graphcore and the data
+  # layer is Elisp.  No extra deps -- deliberately no PKG_CHECK_MODULES.
+  CMACS_SECONDBRAIN_CFLAGS=""
+  CMACS_SECONDBRAIN_LIBS=""
+  AC_DEFINE([HAVE_CMACS_SECONDBRAIN], 1, [CMacs ARMS second-brain visualiser])
+  CMACS_SECONDBRAIN_OBJ="cmacs-secondbrain-init.o cmacs-secondbrain-defuns.o \
+    cmacs-secondbrain-model.o cmacs-secondbrain-scene.o"
+fi
+
 # graphcore: the graph store and the force-directed solver, shared by
-# every graph visualiser (roamgraph today, secondbrain next).  NOT a
-# --with- option of its own -- it has no user-visible surface and no
-# deps beyond glib, so it is simply linked in whenever something that
-# needs it is enabled.  Pure C: the TU includes neither lisp.h nor
-# libregnum.h, which is what keeps the solver headless-testable.
+# every graph visualiser.  NOT a --with- option of its own -- it has no
+# user-visible surface and no deps beyond glib, so it is simply linked
+# in whenever something that needs it is enabled.  Pure C: the TU
+# includes neither lisp.h nor libregnum.h, which is what keeps the
+# solver headless-testable.
 CMACS_GRAPHCORE_OBJ=""
-if test "$with_cmacs_roamgraph" != "no"; then
+if test "$with_cmacs_roamgraph" != "no" \
+   || test "$with_cmacs_secondbrain" != "no"; then
   AC_DEFINE([HAVE_CMACS_GRAPHCORE], 1, [CMacs shared graph model and layout solver])
   CMACS_GRAPHCORE_OBJ="cmacs-graphcore-graph.o cmacs-graphcore-layout.o"
 fi
@@ -1533,6 +1555,9 @@ if test "$with_cmacs_mcp" != "no"; then
   fi
   if test "$with_cmacs_gnuseye" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gnuseye.o"
+  fi
+  if test "$with_cmacs_secondbrain" != "no"; then
+    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-secondbrain.o"
   fi
   if test "$with_cmacs_cad" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cad.o"
@@ -1919,6 +1944,9 @@ AC_SUBST(CMACS_GNUSEYE_OBJ)
 AC_SUBST(CMACS_GNUSEYE_CFLAGS)
 AC_SUBST(CMACS_GNUSEYE_LIBS)
 AC_SUBST(CMACS_GRAPHCORE_OBJ)
+AC_SUBST(CMACS_SECONDBRAIN_OBJ)
+AC_SUBST(CMACS_SECONDBRAIN_CFLAGS)
+AC_SUBST(CMACS_SECONDBRAIN_LIBS)
 AC_SUBST(CMACS_ROAMGRAPH_OBJ)
 AC_SUBST(CMACS_ROAMGRAPH_CFLAGS)
 AC_SUBST(CMACS_ROAMGRAPH_LIBS)
@@ -9256,6 +9284,7 @@ for cmacs_isystem_var in \
   CMACS_LRGTERM_CFLAGS CMACS_LSP_CFLAGS CMACS_MCP_CFLAGS \
   CMACS_OFFICE_CFLAGS CMACS_ORG_EX_CFLAGS CMACS_PIPER_CFLAGS \
   CMACS_PODOMATION_CFLAGS CMACS_ROAMGRAPH_CFLAGS \
+  CMACS_SECONDBRAIN_CFLAGS \
   CMACS_SCREENSAVER_CFLAGS CMACS_VIDEO_CFLAGS CMACS_VIDSTUDIO_CFLAGS \
   CMACS_WHISPER_CFLAGS; do
   eval "cmacs_isystem_val=\$$cmacs_isystem_var"

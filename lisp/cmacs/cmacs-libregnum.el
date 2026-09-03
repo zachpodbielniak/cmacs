@@ -382,6 +382,10 @@ GMainContext."
           ;; Same discipline: PATH is the org-roam id string, which is
           ;; what every piece of roamgraph state is keyed on.
           (cmacs-roamgraph--on-pick buffer id vx vy path))
+         ((and (fboundp 'cmacs-secondbrain--on-pick)
+               (derived-mode-p 'cmacs-secondbrain-mode))
+          ;; And again: PATH is the source-assigned id string.
+          (cmacs-secondbrain--on-pick buffer id vx vy path))
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 
@@ -401,7 +405,10 @@ timer (the editor does the same)."
           (cmacs-gnuseye--context-menu buffer id path vx vy))
          ((and (fboundp 'cmacs-roamgraph--context-menu)
                (derived-mode-p 'cmacs-roamgraph-mode))
-          (cmacs-roamgraph--context-menu buffer id path vx vy)))))))
+          (cmacs-roamgraph--context-menu buffer id path vx vy))
+         ((and (fboundp 'cmacs-secondbrain--context-menu)
+               (derived-mode-p 'cmacs-secondbrain-mode))
+          (cmacs-secondbrain--context-menu buffer id path vx vy)))))))
 
 ;; ── 2D image-mode input dispatchers ────────────────────────────────────
 ;; The C input layer defers image-viewport mouse events here (document pixel

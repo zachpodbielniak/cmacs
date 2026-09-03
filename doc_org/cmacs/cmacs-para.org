@@ -1,0 +1,68 @@
+#+title: CMacs PARA — the shared notes taxonomy
+#+description: One path-to-bucket classifier, shared by roamgraph and secondbrain
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:50:00-0400
+#+updated: 2026-09-03T17:50:00-0400
+#+version: 1.0
+
+* Why this exists
+
+PARA — Projects, Areas, Resources, Archives, plus an Inbox — is how the notes tree is organised, and more than one subsystem needs to agree about it: [[file:cmacs-roamgraph.org][roamgraph]] colours nodes by bucket, and [[file:cmacs-secondbrain.org][secondbrain]] groups its Memory ring by department.
+
+Two independent answers to "which bucket is this file in?" would disagree at the edges, so there is one.
+
+It also resolves a live bug. =cmacs-roamgraph-directory= defaulted to =org-roam-directory= (often =~/org=) while =cmacs-brigade-memory-roots= defaulted to =~/Documents/notes=. On a default install that made PARA colouring *silently inert* — no error, just every node the fallback colour. Both now consult =cmacs-para-roots=.
+
+* The shape
+
+#+begin_example
+00_inbox/          unprocessed captures
+01_projects/       time-bounded work with an outcome
+02_areas/          ongoing responsibilities
+03_resources/      topic reference
+04_archives/       inactive, preserving the original path
+#+end_example
+
+Most top levels carry =personal/= and =work/= beneath them, and each directory has a =00_index.org=.
+
+* API
+
+#+begin_src emacs-lisp
+(cmacs-para-classify "~/Documents/notes/01_projects/work/x.org")
+;; => (:category projects :dir "01_projects" :scope work
+;;     :special nil :bucket "01_projects" :rel "01_projects/work/x.org")
+
+(cmacs-para-bucket FILE)      ; the grouping string a colour keys on
+(cmacs-para-color BUCKET)     ; 0xRRGGBBAA
+(cmacs-para-root-for FILE)    ; which root contains it
+(cmacs-para-relative FILE)    ; FILE relative to that root
+#+end_src
+
+=cmacs-para-roots= is a list, because a file is classified against whichever root contains it and there is no reason to assume one. The *longest* matching root wins, so a tree nested inside another still classifies correctly.
+
+* Two refinements over a naive split
+
+Both exist because the naive version produced a worse map:
+
+- **=02_areas/dailies= is its own bucket.** It is roughly 40% of a mature tree, and folded into areas it swamps that colour entirely.
+- **Scope and role are reported alongside the category, not folded into it.** A caller can then group by whichever it actually wants. Archives mirror the original tree, so scope sits one level deeper there — reading the first component after =04_archives= would report =nil= for every archived file.
+
+A path outside every root classifies as =nil= rather than guessing, and an unrecognised bucket still gets a colour rather than =nil=: a file outside the trees must still render.
+
+* Colours
+
+Fixed, not hashed, so a colour means the same thing in every session — the only way they become readable at a glance.
+
+| Bucket | Meaning |
+|--------+---------|
+| =00_inbox= | amber |
+| =01_projects= | blue |
+| =02_areas= | green |
+| =dailies= | violet |
+| =03_resources= | yellow |
+| =04_archives= | grey |
+
+* Tests
+
+=test/cmacs/cmacs-para-tests.el=, 11 tests, no display and no filesystem access — classification works on the path string. Covers every category, the longest-root rule, the dailies split, personal/work scope, archives keeping their inner scope, index files, colour distinctness, and that roamgraph genuinely delegates here rather than keeping a second copy.

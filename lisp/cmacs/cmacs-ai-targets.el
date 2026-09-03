@@ -647,6 +647,38 @@ cheap -- no disk access, just walking the buffer."
         :lang "org"
         :plist (list :roam-id id :title title))))))
 
+;;;; secondbrain -------------------------------------------------------
+
+(cmacs-ai-register-target-resolver
+ :name 'brain-node :order 20
+ :modes '(cmacs-secondbrain-mode)
+ :resolve
+ (lambda (_click)
+   (when (and (boundp 'cmacs-secondbrain--selected) cmacs-secondbrain--selected)
+     (let* ((id cmacs-secondbrain--selected)
+            (node (and (fboundp 'cmacs-secondbrain-node-at)
+                       (cmacs-secondbrain-node-at (current-buffer) id)))
+            (file (plist-get node :file))
+            (title (or (plist-get node :title) id))
+            (kind (or (plist-get node :kind) 'file))
+            (ring (or (plist-get node :ring) 'memory)))
+       (cmacs-ai-target-create
+        :kind 'brain-node
+        ;; The ring is part of the identity: "skill: daily-log" and
+        ;; "file: daily-log" are different questions.
+        :label (format "%s: %s" kind title)
+        ;; Left nil so `cmacs-ai-target-content' reads the file only
+        ;; when something actually asks -- resolvers run while a menu is
+        ;; being built and must stay cheap.
+        :text (unless file
+                ;; A node with no file still has something to say.
+                (format "%s (%s, %s ring)" title kind ring))
+        :file file
+        :buffer (current-buffer)
+        :lang (when (and file (string-suffix-p ".org" file)) "org")
+        :plist (list :brain-id id :title title :kind kind :ring ring
+                     :department (plist-get node :department)))))))
+
 ;;;; gnuseye -----------------------------------------------------------
 
 (cmacs-ai-register-target-resolver

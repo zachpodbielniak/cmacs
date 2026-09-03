@@ -1,0 +1,48 @@
+#+title: secondbrain — design notes
+#+description: Design pillars, the TU split, what it borrows, and what is not implemented
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:50:00-0400
+#+updated: 2026-09-03T17:50:00-0400
+#+version: 1.0
+
+* Design pillars
+
+1. *Operational, not decorative.* Every ring exists to make a question askable that a file browser cannot answer. If a ring does not change a decision, it should not be a ring.
+2. *Shape before label.* The map must be readable before any text resolves, so each ARMS role gets its own glyph.
+3. *Collapsed by default.* A ring holding four thousand notes is not a map. Departments are hubs sized by what they hide.
+4. *Nothing teleports.* Every layout change, expand and spin animates, because a change that moves everything at once cannot be followed.
+5. *The engine is shared.* Anything worth having here is worth having in roamgraph, so the store, the solver, the layouts and the tween live in [[file:../graphcore.org][graphcore]].
+
+* Three translation-unit classes
+
+| File | Includes | Role |
+|------+----------+------|
+| =cmacs-secondbrain-scene.c= | =<libregnum.h>= | drawables, glyphs, band guides, camera |
+| =cmacs-secondbrain-defuns.c= | =lisp.h= | the Elisp boundary |
+| =cmacs-secondbrain-model.c= | *neither* | the ARMS ring vocabulary |
+| =cmacs/graphcore/*.c= | *neither* | store, solver, layouts, tween, collapse |
+
+raylib's =Color= is a struct and pgtk's is a =void*=; they cannot coexist in one TU. The third class is what makes the ring maths and the layout maths testable with no Lisp VM and no GL.
+
+* What it borrows from libregnum
+
+- Ray-pick (=render_ctx_pick=), an AABB cast that works unchanged in both views because the flat camera is still perspective.
+- The per-node flag set (=MATCH= / =DIM= / =NEIGHBOUR=) and =set_match_set=, a bulk update — one call per keystroke, not one per node.
+- In-scene labels, with their three load-bearing rules: do not flip Y in the FBO pass, flush the batch before =glReadPixels=, anchor in screen space.
+- The shared animation clock (=view_set_animated=), a single process-wide GSource that self-terminates so an idle scene costs nothing.
+- =cmacs-menu.el= for popups — the only sanctioned =x-popup-menu= caller, because under =--lrg= the RIF menu hook deliberately returns "nothing selected" and =context-menu-mode= does nothing at all.
+
+* What it deliberately does differently from roamgraph
+
+- *Multiple glyphs.* roamgraph keeps one visual vocabulary because every node there is the same kind of thing. Here they are not.
+- *Rings, not force, by default.* The taxonomy is the message; the structure is secondary.
+- *Hierarchy.* roamgraph has no notion of a parent. This needs one, because the corpus does not fit.
+
+* Not implemented
+
+- Skills are faceted gems, not four-pointed stars (needs a custom mesh).
+- No app icons. =LrgVectorImage= exists in libregnum and is unused by cmacs; the billboard array needs per-node linkage and a scale policy before it is usable here.
+- No node dragging — =dragging_object= is gated on =editor_active= in the input layer.
+- No folders view; departments group by PARA bucket or by source, not by the literal directory tree.
+- Similarity edges are computed on demand, not maintained as the notes change.

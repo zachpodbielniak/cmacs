@@ -27,6 +27,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'cmacs-para)
 (require 'subr-x)
 
 (defgroup cmacs-roamgraph nil
@@ -96,42 +97,28 @@ quotes; integers arrive as integers.  Returns nil for NULL."
    (t v)))
 
 ;;;; PARA grouping and colours -----------------------------------------
-
-(defconst cmacs-roamgraph-db--para-colors
-  ;; Fixed palette rather than a hash of the group name: the colours
-  ;; then mean the same thing every session, which is the only way they
-  ;; become readable at a glance.  0xRRGGBBAA.
-  '(("00_inbox"    . #xE8A33DFF)
-    ("01_projects" . #x5FB3E8FF)
-    ("02_areas"    . #x6FD98AFF)
-    ("dailies"     . #x9C8FE0FF)
-    ("03_resources". #xE0C24BFF)
-    ("04_archives" . #x8A8F9AFF))
-  "PARA bucket to node colour.")
-
-(defconst cmacs-roamgraph-db--default-color #xB0B8C8FF
-  "Colour for a node outside any known PARA bucket.")
+;;
+;; The taxonomy itself lives in `cmacs-para', so roamgraph and the
+;; second-brain visualiser cannot disagree about which bucket a file is
+;; in.  These two remain as the names the rest of this file already
+;; uses, and because roamgraph classifies against its own
+;; `cmacs-roamgraph-directory' when that has been pointed somewhere
+;; other than the shared roots.
 
 (defun cmacs-roamgraph-db--group (file)
   "Return the PARA grouping bucket for FILE, or nil."
-  (when (and (stringp file) (stringp cmacs-roamgraph-directory))
-    (let* ((root (file-name-as-directory
-                  (expand-file-name cmacs-roamgraph-directory)))
-           (rel (and (string-prefix-p root (expand-file-name file))
-                     (substring (expand-file-name file) (length root))))
-           (parts (and rel (split-string rel "/" t))))
-      (when parts
-        ;; `02_areas/dailies' is split out as its own bucket: it is
-        ;; roughly 40% of a mature notes tree and would otherwise swamp
-        ;; the whole areas colour.
-        (if (and (cadr parts) (string= (cadr parts) "dailies"))
-            "dailies"
-          (car parts))))))
+  (when (stringp file)
+    (or (cmacs-para-bucket file)
+        ;; `cmacs-roamgraph-directory' may point outside
+        ;; `cmacs-para-roots' -- a scratch tree, or a second graph.
+        ;; Classify against it directly rather than reporting nil.
+        (when (stringp cmacs-roamgraph-directory)
+          (let ((cmacs-para-roots (list cmacs-roamgraph-directory)))
+            (cmacs-para-bucket file))))))
 
 (defun cmacs-roamgraph-db--color (group)
   "Return the 0xRRGGBBAA colour for GROUP."
-  (or (cdr (assoc group cmacs-roamgraph-db--para-colors))
-      cmacs-roamgraph-db--default-color))
+  (cmacs-para-color group))
 
 ;;;; Backend A: org-roam.db --------------------------------------------
 

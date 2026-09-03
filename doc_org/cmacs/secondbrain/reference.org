@@ -1,0 +1,101 @@
+#+title: secondbrain — reference
+#+description: Node and edge schemas, every DEFUN, every defcustom, keys and MCP tools
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:50:00-0400
+#+updated: 2026-09-03T17:50:00-0400
+#+version: 1.0
+
+* Node plist
+
+Passed to =cmacs-secondbrain-set-graph=. *Any key not listed here is preserved* and comes back from =cmacs-secondbrain-node-at=, which is how the context menu and the AI resolver read their own fields.
+
+| Key | Meaning |
+|-----+---------|
+| =:id= | identity key, required.  Scene indices churn on rebuild; this does not |
+| =:title= | display title (defaults to =:id=) |
+| =:file= | absolute path, when the node is backed by one |
+| =:ring= | =skills= / =memory= / =routines= / =applications=, or an index |
+| =:kind= | =hub= / =file= / =folder= / =app= / =routine= / =skill= / =centre= |
+| =:department= | grouping within a ring; laid out as a contiguous arc |
+| =:parent= | the =:id= of the parent node, for collapse |
+| =:collapsed= | non-nil to fold this node's subtree |
+| =:color= | =0xRRGGBBAA=; defaults to the ring's colour |
+
+An unrecognised =:ring= falls back to =memory= rather than signalling — a source that grows a category should degrade, not take the graph down.
+
+* Edge plist
+
+| Key | Meaning |
+|-----+---------|
+| =:from=, =:to= | id strings; edges with a missing endpoint are dropped |
+| =:edge-kind= | =id= (default), =cite= or =sim= |
+| =:weight= | attraction weight |
+
+* DEFUNs
+
+** Lifecycle
+| =cmacs-secondbrain-supported-p= | built-in? |
+| =cmacs-secondbrain-attach BUFFER &optional W H= | attach a view |
+| =cmacs-secondbrain-detach BUFFER= | detach and free |
+| =cmacs-secondbrain-attached-p BUFFER= | |
+
+** Data
+| =cmacs-secondbrain-set-graph BUFFER NODES EDGES &optional DIMS= | replace the graph; returns nodes emitted |
+| =cmacs-secondbrain-node-at BUFFER ID= | the full plist |
+| =cmacs-secondbrain-node-count BUFFER= | |
+| =cmacs-secondbrain-edge-count BUFFER= | |
+| =cmacs-secondbrain-visible-count BUFFER= | differs whenever anything is collapsed |
+| =cmacs-secondbrain-node-position BUFFER ID= | =(X Y Z)= |
+
+** Layout
+| =cmacs-secondbrain-set-layout BUFFER KIND &optional FRAMES= | =rings= / =circle= / =hex= / =force= |
+| =cmacs-secondbrain-layout-kind BUFFER= | |
+| =cmacs-secondbrain-tween-step BUFFER= | one frame; t when finished |
+| =cmacs-secondbrain-tweening-p BUFFER= | |
+| =cmacs-secondbrain-layout-step BUFFER &optional N= | the force solver |
+| =cmacs-secondbrain-set-spin BUFFER RADIANS &optional FRAMES= | |
+| =cmacs-secondbrain-set-ring-gap BUFFER GAP= | |
+
+** Collapse
+| =cmacs-secondbrain-set-collapsed BUFFER ID COLLAPSED &optional FRAMES= | t when visibility changed |
+| =cmacs-secondbrain-collapse-all BUFFER &optional COLLAPSED FRAMES= | |
+| =cmacs-secondbrain-collapsed-p BUFFER ID= | |
+
+** View
+| =cmacs-secondbrain-set-projection BUFFER FLAT= | |
+| =cmacs-secondbrain-flat-p BUFFER= | |
+| =cmacs-secondbrain-set-band-guides BUFFER ON= | the ring circles |
+| =cmacs-secondbrain-apply-flags BUFFER= | recolour from search flags, in place |
+| =cmacs-secondbrain-fit BUFFER= | |
+| =cmacs-secondbrain-ring-names= | innermost first |
+
+* Elisp commands
+
+=cmacs-secondbrain=, =cmacs-secondbrain-3d=, =-refresh=, =-search=, =-search-semantic=, =-search-clear=, =-find-similar=, =-add-similarity-edges=, =-toggle-collapse=, =-expand-all=, =-collapse-all-cmd=, =-visit=, =-copy-path=, =-spin=, =-spin-back=, =-toggle-view=, =-fit-cmd=, =-layout-{rings,circle,hex,force}=.
+
+Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
+
+* Defcustoms
+
+| Name | Default | Meaning |
+|------+---------+---------|
+| =cmacs-secondbrain-buffer-name= | ="*second brain*"= | |
+| =cmacs-secondbrain-default-size= | =(1200 . 800)= | framebuffer pixels |
+| =cmacs-secondbrain-transition-frames= | 24 | 0 switches instantly |
+| =cmacs-secondbrain-fps= | 30 | while animating |
+| =cmacs-secondbrain-default-layout= | =rings= | |
+| =cmacs-secondbrain-enabled-sources= | =t= | =t= or a list of names |
+| =cmacs-secondbrain-claude-dir= | ="~/.claude"= | |
+| =cmacs-secondbrain-centre-title= | ="CLAUDE.md"= | |
+| =cmacs-secondbrain-memory-max-nodes= | 4000 | what is dropped is reported |
+| =cmacs-secondbrain-similar-count= | 8 | |
+| =cmacs-secondbrain-sim-threshold= | 0.62 | deliberately high |
+
+* Keys
+
+See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving from =cmacs-libregnum-mode-map=.
+
+* MCP tools
+
+=secondbrain_open=, =_set_layout=, =_search=, =_expand=, =_node_info=, =_stats=, =_sources=, =_refresh=.

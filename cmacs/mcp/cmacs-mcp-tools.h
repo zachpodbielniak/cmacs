@@ -61,6 +61,10 @@ void cmacs_mcp_tools_libregnum_register (McpServer *server);
 void cmacs_mcp_tools_gnuseye_register (McpServer *server);
 #endif
 
+#ifdef HAVE_CMACS_SECONDBRAIN
+void cmacs_mcp_tools_secondbrain_register (McpServer *server);
+#endif
+
 #ifdef HAVE_CMACS_CAD
 void cmacs_mcp_tools_cad_register (McpServer *server);
 #endif

@@ -1,0 +1,200 @@
+#+title: CMacs Secondbrain — your agentic workspace as four rings
+#+description: The ARMS second-brain visualiser: Applications, Routines, Memory and Skills as concentric rings, 2D and 3D
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:50:00-0400
+#+updated: 2026-09-03T17:50:00-0400
+#+version: 1.0
+
+* Overview
+
+=M-x cmacs-secondbrain= draws your agentic workspace as four concentric rings around a centre, as a live libregnum scene inside a cmacs buffer. =M-x cmacs-secondbrain-3d= gives the same graph with a free camera.
+
+It is a sibling of [[file:cmacs-roamgraph.org][roamgraph]], not a mode of it. Either can be built and used without the other; what they share is [[file:graphcore.org][cmacs/graphcore]], so layouts, animation and collapse arrive in both.
+
+Requires =--with-cmacs-secondbrain= (part of the standard flag set), which needs =--with-cmacs-libregnum= and =--with-cmacs-glib=.
+
+* The ARMS framework
+
+Four layers, innermost to outermost:
+
+| Ring | What it holds | The question it answers |
+|------+---------------+-------------------------|
+| *Skills* | what the agent can do | what capabilities exist, and what do they connect to |
+| *Memory* | what has accumulated | what context has been built up, and how is it organised |
+| *Routines* | what runs unattended | what is automated, and what have I forgotten I automated |
+| *Applications* | what it is wired into | what can it reach, and therefore what does it have my trust for |
+
+The ordering is deliberate. Skills sit at the centre because they are what the agent actually /does/; Applications sit at the edge because they are the boundary with everything else. Memory is normally the largest by an order of magnitude.
+
+** Why this is not decoration
+
+roamgraph answers "how are my notes linked?". This answers "what does my system consist of?", and the difference matters because the second question has consequences:
+
+- An application in the outer ring that you no longer use is *standing trust you have not revoked*. If your agent can reach a CRM, it can mail your list.
+- A routine you do not recognise is *unattended automation*. It has been running.
+- A skill you cannot see is one you will rewrite.
+
+A file browser shows you the same bytes and answers none of that.
+
+* Getting started
+
+#+begin_src emacs-lisp
+(cmacs-secondbrain)          ; M-x, flat
+(cmacs-secondbrain-3d)       ; free camera
+#+end_src
+
+Departments arrive *collapsed*: a ring holding four thousand notes is not a map. Each department is one hub sized by how much it is hiding, and =TAB= on a selected hub unfolds it — animated outward, so you can see where its contents came from.
+
+** Keys
+
+| Key | Does |
+|-----+------|
+| =1= =2= =3= =4= | Force / Circle / Hex / Rings layout |
+| =TAB= | expand or collapse the selected node |
+| =e= / =c= | expand all / collapse all |
+| =/= | substring search |
+| =?= | semantic search |
+| =~= | find nodes similar to the selection |
+| =n= | clear the search |
+| =RET= / =O= | open the node's file, here or in another window |
+| =y= | copy the node's path |
+| =s= / =S= | spin the rings |
+| =v= | toggle flat / 3D |
+| =0= | frame the whole graph |
+| =g= | re-read every source |
+| =q= | quit |
+
+Mouse: left-click selects, hover highlights, right-drag pans, the wheel zooms, and right-click opens a context menu that adapts to what you clicked.
+
+* Layouts
+
+Four, switchable at any time, and every switch *animates* rather than teleporting — a change that moves every node at once gives the eye no way to follow which node went where.
+
+- *Rings* — the ARMS layout, and the default. Four concentric bands, departments as contiguous arcs.
+- *Circle* — one concentric circle per department, ignoring rings.
+- *Hex* — a hex lattice. Dense and regular; good for seeing how /many/ of something there is.
+- *Force* — the same Fruchterman–Reingold solver roamgraph uses, for when you want the structure to speak rather than the taxonomy.
+
+Ring spin (=s= / =S=) rotates the bands. Alternate bands counter-rotate, so the motion reads as depth rather than as the whole figure sliding.
+
+* Search
+
+Three tiers, cheapest first. The ordering is the point: most of a lookup needs no intelligence at all, so spend none.
+
+1. *Substring* (=/=) — instant, over the loaded node set. Most of what you look for you already know the name of.
+2. *Semantic* (=?=) — embeds the query once and ranks against the brigade notes index. Reach for it when you do not know the name.
+3. *Similarity edges* (=M-x cmacs-secondbrain-add-similarity-edges=) — materialises "these are about the same thing" as edges you can see.
+
+Matching nodes take an accent colour and everything else dims, in place — recolouring on every keystroke must not mean rebuilding the scene.
+
+** Similarity edges, in roamgraph too
+
+=M-x cmacs-roamgraph-similarity-edges= does the same for the knowledge graph. roamgraph has carried the =sim= edge kind since before anything emitted one: parsed, weighted 0.35 in the solver so it nudges without competing with real structure, rendered violet so it is never mistaken for a link you wrote, and excluded from =[= / =]= navigation.
+
+* AI actions
+
+Right-click any node and the shared AI menu is there, plus four questions this view makes askable:
+
+- *Explain this skill / routine / application* — what it is and what it is for.
+- *What would break without this?* — the trust question the Applications ring exists for. An honest "probably nothing" is the most useful answer it can give, because that is what you were looking for.
+- *Is this stale?* — superseded, abandoned, or referring to things that no longer exist.
+- *Summarise this department* — offered only on a hub.
+
+All of them answer through =cmacs-ai-textops-stream=, so the reply lands in the output window with =C-c C-c= to follow up and =g= to retry.
+
+Because the view registers a target resolver, =cmacs-ai-view-context= sees it too: a chat turn knows which node you are looking at without being told.
+
+* Where the data comes from
+
+Everything is a registered *source*. Adding a ring member is a registration, not a patch:
+
+#+begin_src emacs-lisp
+(cmacs-secondbrain-register-source
+ :name 'my-thing :ring 'applications :label "My thing"
+ :enumerate (lambda () (list (list :id "x" :title "X" :kind 'app))))
+#+end_src
+
+Shipped sources cover two worlds, because both are real:
+
+| Ring | Claude Code workspace | cmacs-native |
+|------+-----------------------+--------------|
+| Applications | MCP servers from =~/.claude.json=, installed plugins | connected subsystems (gsurf, dbexplorer, MCP, voice) |
+| Routines | =~/.claude/scheduled-tasks= | brigade schedules, podomation pods |
+| Memory | — | the PARA notes tree |
+| Skills | =~/.claude/skills/*/SKILL.md=, =~/.claude/agents= | brigade registered tools |
+
+=cmacs-secondbrain-enabled-sources= selects which contribute. A source you do not use is not merely noise: an Applications ring listing things you never connected tells you nothing about your actual trust surface.
+
+*A source that signals is caught, reported and skipped.* One unreadable config file costs you one ring member, not the map.
+
+** Memory is PARA
+
+The Memory ring groups by [[file:cmacs-para.org][PARA]] bucket — =00_inbox=, =01_projects=, =02_areas=, =03_resources=, =04_archives=, with =02_areas/dailies= split out because it is roughly 40% of a mature tree and would otherwise swamp the areas colour. The tree is already organised; grouping it by anything else would be inventing a second organisation on top of the real one.
+
+Notes are read from =org-roam.db= when it exists. When it does not — org-roam builds it on demand, and roamgraph's native C scanner is a stub — a built-in scanner walks the tree for =:ID:= drawers and =[[id:]]= links instead. Without that fallback the largest of the four rings comes up empty on a machine whose notes are perfectly well formed.
+
+* Reading the map
+
+Shape is the primary signal; the map should be readable before any label resolves.
+
+| Glyph | Means |
+|-------+-------|
+| hex prism | an application |
+| sphere with a wide ring | a collapsed department, sized by what it hides |
+| sphere | a note or file |
+| faceted gem | a skill |
+
+A collapsed hub's radius grows with the *cube root* of its descendant count: a department hiding 12000 files must read as bigger than one hiding 300 without swallowing the frame. Linear makes the large one absurd; logarithmic flattens the two into the same dot.
+
+Colours are per ring, fixed rather than hashed, so a colour means the same thing in every session. Memory nodes take their PARA bucket's colour instead.
+
+* MCP
+
+Eight tools, when built with =--with-cmacs-mcp=:
+
+| Tool | Does |
+|------+------|
+| =secondbrain_open= | open the view (=three_d= for the free camera) |
+| =secondbrain_set_layout= | rings / circle / hex / force |
+| =secondbrain_search= | substring, or =semantic= |
+| =secondbrain_expand= | expand or collapse a department, or all of them |
+| =secondbrain_node_info= | the full record for an id |
+| =secondbrain_stats= | node / visible / edge counts and the layout |
+| =secondbrain_sources= | the registered sources |
+| =secondbrain_refresh= | re-read everything |
+
+* Architecture
+
+Three translation-unit classes, the roamgraph split:
+
+| File | Includes | Why |
+|------+----------+-----|
+| =cmacs-secondbrain-scene.c= | =<libregnum.h>= | raylib's =Color= clashes with pgtk's |
+| =cmacs-secondbrain-defuns.c= | =lisp.h= | the Elisp boundary |
+| =cmacs-secondbrain-model.c= | neither, only glib | so the ring vocabulary is testable headless |
+| =cmacs/graphcore/= | neither, only glib | the shared store and solver |
+
+C owns geometry, the rings, the pick ray and the node table. Elisp owns where the data comes from, what a click means and every pane. C knows nothing about MCP servers, cron or org files. The contract is one DEFUN, =cmacs-secondbrain-set-graph=.
+
+*Identity.* libregnum scene node ids are insertion indices and churn on every rebuild, so every piece of state keys on the source-assigned id string — which is what the C side stores as the node's =path= and what arrives synchronously in the click dispatch.
+
+** Not implemented
+
+Honest list:
+
+- *Skills are faceted gems, not four-pointed stars.* The reference design draws a star; that needs a custom mesh.
+- *No app icons yet.* libregnum ships =LrgVectorImage= (SVG → texture) and cmacs does not use it anywhere. Wiring it plus the existing billboard path would give real per-app icons; the billboard array needs per-node linkage and a scale policy first.
+- *No node dragging.* =dragging_object= is gated on =editor_active= in the libregnum input layer; it needs a new dispatch branch there.
+- *No folders view.* Departments group by PARA bucket or by source; grouping by the literal directory tree is not wired.
+- *Similarity edges are computed on demand, not maintained.* Re-running after the notes change is manual.
+
+* Tests
+
+=test/cmacs/cmacs-secondbrain-tests.el=, 24 tests in three tiers:
+
+- *Registry and collection* — registration, replacement, enabled-source filtering, ring inheritance, hub/centre synthesis, and that a *failing source is contained*.
+- *The scanner* — reads =:ID:= and =[[id:]]= from a temporary tree, drops dangling links, ignores non-roam files.
+- *The viewport* (needs a display) — attach/detach, collapse round-trip, payload round-trip including unknown keys, layout switching, *rings ordered outward*, tween completion, projection toggle, empty graph, and the menu adapting to node kind.
+
+Plus =just test-graphcore= for the shared engine: 25 more, fully headless.

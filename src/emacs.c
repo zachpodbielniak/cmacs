@@ -2977,6 +2977,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_ROAMGRAPH
       syms_of_cmacs_roamgraph ();	/* CMACS: org-roam graph visualiser */
 #endif
+#ifdef HAVE_CMACS_SECONDBRAIN
+      syms_of_cmacs_secondbrain ();	/* CMACS: ARMS second brain */
+#endif
 #ifdef HAVE_CMACS_OFFICE
       syms_of_cmacs_office ();	/* CMACS: OOXML + OpenDocument */
 #endif
@@ -3133,6 +3136,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_ROAMGRAPH
   init_cmacs_roamgraph ();	/* CMACS: org-roam graph visualiser */
+#endif
+#ifdef HAVE_CMACS_SECONDBRAIN
+  init_cmacs_secondbrain ();	/* CMACS: ARMS second brain */
 #endif
 #ifdef HAVE_CMACS_OFFICE
   init_cmacs_office ();	/* CMACS: OOXML + OpenDocument */

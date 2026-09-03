@@ -38,6 +38,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
 | =--with-cmacs-lrgscript=      | Emacs Lisp scripting + full game authoring for libregnum (requires libregnum + glib) |
 | =--with-cmacs-roamgraph=      | Native org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum + glib) |
+| =--with-cmacs-secondbrain=    | ARMS second-brain visualiser, 2D + 3D (requires libregnum + glib) |
 | =--with-cmacs-office=         | Native Office documents: =.docx=/=.xlsx=/=.pptx= + =.odt=/=.ods=/=.odp= as editable packages, with lossless save-back (needs =libzip= + =libxml2=) |
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
@@ -84,6 +85,7 @@ Example with explicit flags:
   --with-cmacs-libregnum \
   --with-cmacs-lrgscript \
   --with-cmacs-roamgraph \
+  --with-cmacs-secondbrain \
   --with-cmacs-office \
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \

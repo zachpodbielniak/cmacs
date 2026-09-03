@@ -61,6 +61,8 @@ interaction.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Graphcore::             Shared graph model and layout solver.
+* CMacs PARA::                  The shared notes taxonomy.
+* CMacs Secondbrain::           ARMS second-brain visualiser (2D + 3D).
 * CMacs Roamgraph::             Native org-roam knowledge-graph visualiser (2D + 3D).
 * CMacs Office::                Native .docx/.xlsx/.pptx and OpenDocument support.
 * CMacs Lrgscript::             Emacs Lisp scripting + game authoring for libregnum.
@@ -7804,6 +7806,12 @@ mode does not composite in the editor FBO batch, so sprites/tiles use textured
 @include graphcore/graphcore.texi
 
 @c ===================================================================
+@include cmacs-para.texi
+
+@c ===================================================================
+@include secondbrain/secondbrain.texi
+
+@c ===================================================================
 @include roamgraph/roamgraph.texi
 
 @c ===================================================================
@@ -9656,6 +9664,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-piper \
   --with-cmacs-cintrospect \
   --with-cmacs-libregnum \
+  --with-cmacs-secondbrain \
   --with-cmacs-lrgscript \
   --with-cmacs-screensaver \
   --with-cmacs-gsurf \

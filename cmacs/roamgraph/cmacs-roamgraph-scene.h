@@ -57,9 +57,11 @@ extern void cmacs_roamgraph_scene_reset (CmacsLibregnumRenderCtx *r);
 extern void cmacs_roamgraph_scene_apply_flags (CmacsLibregnumRenderCtx *r,
                                                CmacsGraph *g);
 
-/* Camera.  FLAT selects a front-facing orthographic view of the XY
- * plane (X right, Y up -- the conventional 2D reading, matching the
- * solver's DIMS == 2 layout); otherwise a perspective view.  Deliberately
+/* Camera.  FLAT selects a head-on view of the XY plane (X right, Y up
+ * -- the conventional 2D reading, matching the solver's DIMS == 2
+ * layout) with orbit locked; otherwise a free perspective view.  Both
+ * are PERSPECTIVE cameras: see cmacs-roamgraph-scene.c for why
+ * orthographic is unusable here.  Deliberately
  * NOT the libregnum editor's top-down `editor_set_view_2d', which is
  * editor-scoped and hard-codes its own camera placement. */
 extern void     cmacs_roamgraph_scene_set_projection

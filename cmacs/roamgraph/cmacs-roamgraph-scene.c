@@ -296,13 +296,23 @@ cmacs_roamgraph_scene_sync_positions (CmacsLibregnumRenderCtx *r,
   n = cmacs_graph_n_nodes (g);
   m = cmacs_graph_n_edges (g);
 
-  for (i = 0; i < m && i < st->edge_shapes->len; i++)
+  /* Emission index, not graph index: an edge whose endpoints are
+     hidden is never emitted, so everything after it shifts. */
+  for (i = 0; i < m; i++)
     {
       CmacsGraphEdge *e = cmacs_graph_edge (g, i);
-      CmacsGraphNode *a = cmacs_graph_node (g, e->a);
-      CmacsGraphNode *b = cmacs_graph_node (g, e->b);
-      LrgLine3D *line = g_ptr_array_index (st->edge_shapes, i);
+      CmacsGraphNode *a, *b;
+      LrgLine3D *line;
+      gint32 ei;
 
+      if (!e) continue;
+      ei = (st->edge_emit && i < st->edge_emit->len)
+             ? g_array_index (st->edge_emit, gint32, i) : -1;
+      if (ei < 0 || (guint) ei >= st->edge_shapes->len) continue;
+      line = g_ptr_array_index (st->edge_shapes, (guint) ei);
+
+      a = cmacs_graph_node (g, e->a);
+      b = cmacs_graph_node (g, e->b);
       if (!a || !b || !line) continue;
       lrg_shape3d_set_position_xyz (LRG_SHAPE3D (line), a->x, a->y, a->z);
       lrg_line3d_set_end_xyz (line, b->x, b->y, b->z);

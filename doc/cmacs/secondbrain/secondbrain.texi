@@ -1,0 +1,336 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Secondbrain
+@chapter CMacs Secondbrain: your agentic workspace as four rings
+
+@kbd{M-x cmacs-secondbrain} draws your agentic workspace as four
+concentric rings around a centre, as a live libregnum scene inside a
+cmacs buffer.  @kbd{M-x cmacs-secondbrain-3d} gives the same graph with
+a free camera.
+
+It is a sibling of @ref{CMacs Roamgraph}, not a mode of it.  Either can
+be built and used without the other; what they share is
+@ref{CMacs Graphcore}, so layouts, animation and collapse arrive in both.
+
+Requires @option{--with-cmacs-secondbrain} (part of the standard flag
+set), which needs @option{--with-cmacs-libregnum} and
+@option{--with-cmacs-glib}.
+
+@menu
+* Secondbrain ARMS::            The four layers, and why they matter.
+* Secondbrain Getting Started:: Opening it, and the keys.
+* Secondbrain Layouts::         Four layouts, all animated.
+* Secondbrain Search::          Three tiers, cheapest first.
+* Secondbrain AI::              Questions the rings make askable.
+* Secondbrain Sources::         Where the data comes from.
+* Secondbrain Reading::         Glyphs, sizes and colours.
+* Secondbrain MCP::             Driving it from an agent.
+* Secondbrain Extending::       Adding a source, action or glyph.
+* Secondbrain Architecture::    The translation-unit split.
+* Secondbrain Not Implemented:: The honest list.
+@end menu
+
+@node Secondbrain ARMS
+@section The ARMS framework
+
+Four layers, innermost to outermost:
+
+@table @strong
+@item Skills
+What the agent can do.  At the centre, because it is what the agent
+actually @emph{does}.
+@item Memory
+What has accumulated.  Normally the largest by an order of magnitude.
+@item Routines
+What runs unattended.
+@item Applications
+What it is wired into.  At the edge, because it is the boundary with
+everything else.
+@end table
+
+@subsection Why this is not decoration
+
+roamgraph answers ``how are my notes linked?''.  This answers ``what
+does my system consist of?'', and the difference matters because the
+second question has consequences:
+
+@itemize @bullet
+@item
+An application in the outer ring that you no longer use is
+@strong{standing trust you have not revoked}.  If your agent can reach a
+CRM, it can mail your list.
+@item
+A routine you do not recognise is @strong{unattended automation}.  It
+has been running.
+@item
+A skill you cannot see is one you will rewrite.
+@end itemize
+
+A file browser shows you the same bytes and answers none of that.
+
+@node Secondbrain Getting Started
+@section Getting started
+
+Departments arrive @strong{collapsed}: a ring holding four thousand
+notes is not a map.  Each department is one hub sized by how much it is
+hiding, and @key{TAB} on a selected hub unfolds it --- animated outward,
+so you can see where its contents came from.
+
+@multitable @columnfractions .22 .78
+@headitem Key @tab Does
+@item @kbd{1} @kbd{2} @kbd{3} @kbd{4} @tab Force / Circle / Hex / Rings layout
+@item @key{TAB} @tab expand or collapse the selected node
+@item @kbd{e} / @kbd{c} @tab expand all / collapse all
+@item @kbd{/} @tab substring search
+@item @kbd{?} @tab semantic search
+@item @kbd{~} @tab find nodes similar to the selection
+@item @kbd{n} @tab clear the search
+@item @key{RET} / @kbd{O} @tab open the node's file, here or in another window
+@item @kbd{y} @tab copy the node's path
+@item @kbd{s} / @kbd{S} @tab spin the rings
+@item @kbd{v} @tab toggle flat / 3D
+@item @kbd{0} @tab frame the whole graph
+@item @kbd{g} @tab re-read every source
+@item @kbd{q} @tab quit
+@end multitable
+
+Mouse: left-click selects, hover highlights, right-drag pans, the wheel
+zooms, and right-click opens a context menu that adapts to what you
+clicked.
+
+@node Secondbrain Layouts
+@section Layouts
+
+Four, switchable at any time, and every switch @strong{animates} rather
+than teleporting --- a change that moves every node at once gives the eye
+no way to follow which node went where.
+
+@table @strong
+@item Rings
+The ARMS layout, and the default.  Four concentric bands, departments as
+contiguous arcs.
+@item Circle
+One concentric circle per department, ignoring rings.
+@item Hex
+A hex lattice.  Dense and regular; good for seeing how @emph{many} of
+something there is.
+@item Force
+The same Fruchterman--Reingold solver roamgraph uses, for when you want
+the structure to speak rather than the taxonomy.
+@end table
+
+Ring spin (@kbd{s} / @kbd{S}) rotates the bands.  Alternate bands
+counter-rotate, so the motion reads as depth rather than as the whole
+figure sliding.
+
+@node Secondbrain Search
+@section Search
+
+Three tiers, cheapest first.  The ordering is the point: most of a
+lookup needs no intelligence at all, so spend none.
+
+@enumerate
+@item
+@strong{Substring} (@kbd{/}) --- instant, over the loaded node set.  Most
+of what you look for you already know the name of.
+@item
+@strong{Semantic} (@kbd{?}) --- embeds the query once and ranks against
+the brigade notes index.  Reach for it when you do not know the name.
+@item
+@strong{Similarity edges}
+(@kbd{M-x cmacs-secondbrain-add-similarity-edges}) --- materialises
+``these are about the same thing'' as edges you can see.
+@end enumerate
+
+Matching nodes take an accent colour and everything else dims, in place
+--- recolouring on every keystroke must not mean rebuilding the scene.
+
+@kbd{M-x cmacs-roamgraph-similarity-edges} does the same for the
+knowledge graph.  roamgraph has carried the @code{sim} edge kind since
+before anything emitted one: parsed, weighted 0.35 in the solver so it
+nudges without competing with real structure, rendered violet so it is
+never mistaken for a link you wrote, and excluded from @kbd{[} / @kbd{]}
+navigation.
+
+@node Secondbrain AI
+@section AI actions
+
+Right-click any node and the shared AI menu is there, plus four
+questions this view makes askable:
+
+@itemize @bullet
+@item
+@strong{Explain this skill / routine / application} --- what it is and
+what it is for.
+@item
+@strong{What would break without this?} --- the trust question the
+Applications ring exists for.  An honest ``probably nothing'' is the most
+useful answer it can give, because that is what you were looking for.
+@item
+@strong{Is this stale?} --- superseded, abandoned, or referring to things
+that no longer exist.
+@item
+@strong{Summarise this department} --- offered only on a hub.
+@end itemize
+
+All of them answer through @code{cmacs-ai-textops-stream}, so the reply
+lands in the output window with @kbd{C-c C-c} to follow up and @kbd{g} to
+retry.  Because the view registers a target resolver,
+@code{cmacs-ai-view-context} sees it too: a chat turn knows which node
+you are looking at without being told.
+
+@node Secondbrain Sources
+@section Where the data comes from
+
+Everything is a registered @dfn{source}.  Adding a ring member is a
+registration, not a patch:
+
+@example
+(cmacs-secondbrain-register-source
+ :name 'my-thing :ring 'applications :label "My thing"
+ :enumerate (lambda () (list (list :id "x" :title "X" :kind 'app))))
+@end example
+
+Shipped sources cover two worlds, because both are real: the Claude Code
+workspace under @file{~/.claude} (MCP servers, plugins, scheduled tasks,
+skills, agents) and cmacs's own equivalents (connected subsystems,
+brigade schedules, podomation pods, brigade tools).  The Memory ring
+comes from the PARA notes tree.
+
+@code{cmacs-secondbrain-enabled-sources} selects which contribute.  A
+source you do not use is not merely noise: an Applications ring listing
+things you never connected tells you nothing about your actual trust
+surface.
+
+@strong{A source that signals is caught, reported and skipped.}  One
+unreadable config file costs you one ring member, not the map.
+
+@subsection Memory is PARA
+
+The Memory ring groups by @ref{CMacs PARA} bucket, with
+@file{02_areas/dailies} split out because it is roughly 40% of a mature
+tree and would otherwise swamp the areas colour.  The tree is already
+organised; grouping it by anything else would be inventing a second
+organisation on top of the real one.
+
+Notes are read from @file{org-roam.db} when it exists.  When it does not
+--- org-roam builds it on demand, and roamgraph's native C scanner is a
+stub --- a built-in scanner walks the tree for @code{:ID:} drawers and
+@code{[[id:]]} links instead.  Without that fallback the largest of the
+four rings comes up empty on a machine whose notes are perfectly well
+formed.
+
+@node Secondbrain Reading
+@section Reading the map
+
+Shape is the primary signal; the map should be readable before any label
+resolves.  A hex prism is an application, a sphere with a wide ring a
+collapsed department, a plain sphere a note or file, a faceted gem a
+skill.
+
+A collapsed hub's radius grows with the @strong{cube root} of its
+descendant count: a department hiding 12000 files must read as bigger
+than one hiding 300 without swallowing the frame.  Linear makes the large
+one absurd; logarithmic flattens the two into the same dot.
+
+Colours are per ring, fixed rather than hashed, so a colour means the
+same thing in every session.  Memory nodes take their PARA bucket's
+colour instead.
+
+@node Secondbrain MCP
+@section MCP tools
+
+With @option{--with-cmacs-mcp}: @code{secondbrain_open},
+@code{secondbrain_set_layout}, @code{secondbrain_search},
+@code{secondbrain_expand}, @code{secondbrain_node_info},
+@code{secondbrain_stats}, @code{secondbrain_sources} and
+@code{secondbrain_refresh}.
+
+Every interpolated argument goes through the Elisp string escaper: these
+are attacker-controlled tool arguments being spliced into a form that is
+about to be evaluated.
+
+@node Secondbrain Extending
+@section Extending
+
+A data source is the recipe above --- no C.  An AI action registers
+through @code{cmacs-ai-register-action} so it appears everywhere the
+shared menu is built.  A new glyph does need C: add to
+@code{CmacsSbKind} and its name table in
+@file{cmacs-secondbrain-model.c}, add a case to @code{glyph_for}, and
+give it a base radius.
+
+libregnum's shape set is spheres, icospheres, cubes, cylinders (a
+6-slice cylinder is a hex prism), cones, planes, grids, lines and
+circles.  There is no torus.
+
+What you cannot extend from Elisp: glyph geometry, layout kinds (those
+live in graphcore), edge routing, and the pick ray.
+
+@node Secondbrain Architecture
+@section Architecture
+
+Three translation-unit classes, the roamgraph split:
+
+@table @file
+@item cmacs-secondbrain-scene.c
+Includes @file{libregnum.h}, so it may not include @file{lisp.h} ---
+raylib's @code{Color} clashes with pgtk's.
+@item cmacs-secondbrain-defuns.c
+Includes @file{lisp.h} only; the Elisp boundary.
+@item cmacs-secondbrain-model.c
+Includes @emph{neither}, only glib: the ARMS ring vocabulary, testable
+headless.
+@end table
+
+C owns geometry, the rings, the pick ray and the node table.  Elisp owns
+where the data comes from, what a click means and every pane.  C knows
+nothing about MCP servers, cron or org files.  The contract is one DEFUN,
+@code{cmacs-secondbrain-set-graph}.
+
+@subsection Identity
+
+libregnum scene node ids are insertion indices and churn on @emph{every}
+rebuild, so every piece of state keys on the source-assigned id string
+--- which is what the C side stores as the node's @code{path}, and what
+arrives synchronously in the click dispatch.
+
+@subsection Emission order is not graph order
+
+A collapsed department hides its whole subtree, so the scene's node table
+is in emission order while the graph is in graph order.  The scene keeps
+explicit @code{node_emit} / @code{edge_emit} maps; reading node flags with
+a graph index would recolour the wrong nodes.
+
+@node Secondbrain Not Implemented
+@section Not implemented
+
+@itemize @bullet
+@item
+Skills are faceted gems, not four-pointed stars --- that needs a custom
+mesh.
+@item
+No app icons.  libregnum ships @code{LrgVectorImage} (SVG to texture) and
+cmacs uses it nowhere; the billboard array needs per-node linkage and a
+scale policy first.
+@item
+No node dragging --- @code{dragging_object} is gated on
+@code{editor_active} in the libregnum input layer.
+@item
+No folders view; departments group by PARA bucket or by source, not by
+the literal directory tree.
+@item
+Similarity edges are computed on demand, not maintained as the notes
+change.
+@end itemize
+
+@section Tests
+
+@file{test/cmacs/cmacs-secondbrain-tests.el}, 24 tests in three tiers:
+the source registry and collection (pure data, always runs), the scanner
+(a temporary tree), and the viewport (needs a display).  Plus
+@command{just test-graphcore} for the shared engine --- 25 more, fully
+headless.

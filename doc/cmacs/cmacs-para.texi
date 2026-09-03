@@ -1,0 +1,88 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs PARA
+@chapter CMacs PARA: the shared notes taxonomy
+
+PARA --- Projects, Areas, Resources, Archives, plus an Inbox --- is how
+the notes tree is organised, and more than one subsystem needs to agree
+about it: @ref{CMacs Roamgraph} colours nodes by bucket, and
+@ref{CMacs Secondbrain} groups its Memory ring by department.
+
+Two independent answers to ``which bucket is this file in?'' would
+disagree at the edges, so there is one, in @file{lisp/cmacs/cmacs-para.el}.
+
+It also resolves a live bug.  @code{cmacs-roamgraph-directory} defaulted
+to @code{org-roam-directory} (often @file{~/org}) while
+@code{cmacs-brigade-memory-roots} defaulted to @file{~/Documents/notes}.
+On a default install that made PARA colouring @emph{silently inert} ---
+no error, just every node the fallback colour.  Both now consult
+@code{cmacs-para-roots}.
+
+@section The shape
+
+@example
+00_inbox/          unprocessed captures
+01_projects/       time-bounded work with an outcome
+02_areas/          ongoing responsibilities
+03_resources/      topic reference
+04_archives/       inactive, preserving the original path
+@end example
+
+Most top levels carry @file{personal/} and @file{work/} beneath them, and
+each directory has a @file{00_index.org}.
+
+@section API
+
+@example
+(cmacs-para-classify "~/Documents/notes/01_projects/work/x.org")
+;; => (:category projects :dir "01_projects" :scope work
+;;     :special nil :bucket "01_projects" :rel "01_projects/work/x.org")
+
+(cmacs-para-bucket FILE)      ; the grouping string a colour keys on
+(cmacs-para-color BUCKET)     ; 0xRRGGBBAA
+(cmacs-para-root-for FILE)    ; which root contains it
+(cmacs-para-relative FILE)    ; FILE relative to that root
+@end example
+
+@code{cmacs-para-roots} is a list, because a file is classified against
+whichever root contains it and there is no reason to assume one.  The
+@emph{longest} matching root wins, so a tree nested inside another still
+classifies correctly.
+
+@section Two refinements over a naive split
+
+Both exist because the naive version produced a worse map.
+
+@itemize @bullet
+@item
+@strong{@file{02_areas/dailies} is its own bucket.}  It is roughly 40% of
+a mature tree, and folded into areas it swamps that colour entirely.
+@item
+@strong{Scope and role are reported alongside the category}, not folded
+into it, so a caller can group by whichever it wants.  Archives mirror
+the original tree, so scope sits one level deeper there --- reading the
+first component after @file{04_archives} would report @code{nil} for
+every archived file.
+@end itemize
+
+A path outside every root classifies as @code{nil} rather than guessing,
+and an unrecognised bucket still gets a colour rather than @code{nil}: a
+file outside the trees must still render.
+
+@section Colours
+
+Fixed, not hashed, so a colour means the same thing in every session ---
+the only way they become readable at a glance.  Inbox amber, projects
+blue, areas green, dailies violet, resources yellow, archives grey.
+
+@section Tests
+
+@file{test/cmacs/cmacs-para-tests.el}, 11 tests, no display and no
+filesystem access --- classification works on the path string.  Covers
+every category, the longest-root rule, the dailies split, personal/work
+scope, archives keeping their inner scope, index files, colour
+distinctness, and that roamgraph genuinely delegates here rather than
+keeping a second copy.

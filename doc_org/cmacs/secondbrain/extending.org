@@ -1,0 +1,73 @@
+#+title: secondbrain — extending
+#+description: Adding a data source, an AI action or a glyph
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-09-03T17:50:00-0400
+#+updated: 2026-09-03T17:50:00-0400
+#+version: 1.0
+
+* Adding a source
+
+The whole recipe, with no C:
+
+#+begin_src emacs-lisp
+(cmacs-secondbrain-register-source
+ :name 'jira :ring 'applications :label "Jira"
+ :enumerate
+ (lambda ()
+   (list (list :id "app:jira" :title "Jira" :kind 'app
+               :department "Tracking"))))
+#+end_src
+
+Then =g= in the view, or =M-x cmacs-secondbrain-refresh=.
+
+Keys:
+
+- =:name= — a symbol. Re-registering a name *replaces* it, which is how a config reload works.
+- =:ring= — the ring its nodes land in. A node may still override it.
+- =:enumerate= — a function of no arguments returning node plists.
+- =:edges= — optional, a function of the node list returning edge plists.
+
+Two things the machinery does for you: nodes without =:ring= inherit the source's, and departments become collapsed hubs automatically, so you never build the hierarchy yourself.
+
+*Your source may signal.* It is called inside a =condition-case=; a failure is reported and skipped. Do not add defensive =ignore-errors= that turn a real problem into an empty ring.
+
+* Adding an AI action
+
+Register through the shared registry, not a private menu — then it appears in the graph's context menu, in =M-x cmacs-ai-act-on-target=, and anywhere else that menu is built:
+
+#+begin_src emacs-lisp
+(cmacs-ai-register-action
+ :name 'my-question :group 'notes :order 20
+ :label "Ask my question"
+ :applies (lambda (target)
+            (eq (cmacs-ai-target-kind target) 'brain-node))
+ :run (lambda (target)
+        (cmacs-ai-textops-stream
+         "My question" "" "You are..." (cmacs-ai-target-content target))))
+#+end_src
+
+=cmacs-ai-textops-stream= is the documented way to answer in prose: it opens the output window, streams deltas, and keeps the session so =C-c C-c= follows up.
+
+The target's =:plist= carries =:brain-id=, =:title=, =:kind=, =:ring= and =:department=.
+
+* Adding a glyph
+
+This one *does* need C, in =cmacs-secondbrain-scene.c=:
+
+1. Add a value to =CmacsSbKind= in =cmacs-secondbrain-model.h= and its name to the table in =-model.c=. The name is the Lisp-side spelling.
+2. Add a case to =glyph_for=.
+3. Give it a base radius in =cmacs_sb_node_radius=.
+
+libregnum's shape set is spheres, icospheres, cubes, cylinders (a 6-slice cylinder is a hex prism), cones, planes, grids, lines and circles. There is no torus.
+
+* Adding a ring
+
+Possible but invasive, and worth thinking twice about: ARMS is four layers because that is the framework, and a fifth ring is a claim that the framework is wrong. If you are sure, add to =CmacsSbRing= and both tables in =-model.c=; everything else follows.
+
+* What you cannot extend from Elisp
+
+- *Glyph geometry* — the scene builder is C.
+- *Layout kinds* — they live in graphcore. Precomputing positions and pinning is the escape hatch.
+- *Edge routing* — straight lines only.
+- *The pick ray* — libregnum's, an AABB cast over the node table.
