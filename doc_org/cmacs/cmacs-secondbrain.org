@@ -105,6 +105,29 @@ All of them answer through =cmacs-ai-textops-stream=, so the reply lands in the 
 
 Because the view registers a target resolver, =cmacs-ai-view-context= sees it too: a chat turn knows which node you are looking at without being told.
 
+* Panes
+
+=i= opens the inspector on the right: name, role, ring, department, path, the actions available and the node's connections in both directions. It refreshes as you select, because an inspector showing the previous node is worse than no inspector — it is confidently wrong about what you just clicked.
+
+=p= opens a preview on the left, rendering the node's file inline with its own major mode's fontification. This is what makes a skill readable without leaving the map — the thing a graph view usually cannot do. =W= closes both.
+
+Other packages can add inspector actions:
+
+#+begin_src emacs-lisp
+(cmacs-secondbrain-register-inspector-action
+ "R" "run it" (lambda (id) ...))
+#+end_src
+
+The binding is installed for Evil's normal and motion states too — without that half a registered =a= would just be =evil-append= under Doom, and the action would look registered while doing nothing.
+
+* Application icons
+
+Applications-ring nodes draw their real SVG logo when one is available, rasterised through libregnum's =LrgVectorImage= and uploaded as a texture, so it stays crisp at any zoom rather than being a scaled bitmap.
+
+*No icons ship with cmacs* — application logos are other people's trademarks. =cmacs-secondbrain-icon-dirs= lists where to look (=~/.claude/icons= and the system hicolor scalable theme by default); names are matched case- and separator-insensitively, so "Google Drive" finds =google-drive.svg=. A node without an icon simply keeps its glyph, and an SVG that will not load returns nil rather than failing the build.
+
+=cmacs-secondbrain-show-icons= turns the whole thing off.
+
 * Where the data comes from
 
 Everything is a registered *source*. Adding a ring member is a registration, not a patch:
@@ -184,10 +207,10 @@ C owns geometry, the rings, the pick ray and the node table. Elisp owns where th
 Honest list:
 
 - *Skills are faceted gems, not four-pointed stars.* The reference design draws a star; that needs a custom mesh.
-- *No app icons yet.* libregnum ships =LrgVectorImage= (SVG → texture) and cmacs does not use it anywhere. Wiring it plus the existing billboard path would give real per-app icons; the billboard array needs per-node linkage and a scale policy first.
 - *No node dragging.* =dragging_object= is gated on =editor_active= in the libregnum input layer; it needs a new dispatch branch there.
 - *No folders view.* Departments group by PARA bucket or by source; grouping by the literal directory tree is not wired.
 - *Similarity edges are computed on demand, not maintained.* Re-running after the notes change is manual.
+- *No icons ship with cmacs.* Application logos are other people's trademarks. =cmacs-secondbrain-icon-dirs= points at where you may already have them; a node without one keeps its glyph.
 
 * Tests
 

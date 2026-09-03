@@ -25,6 +25,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain Layouts::         Four layouts, all animated.
 * Secondbrain Search::          Three tiers, cheapest first.
 * Secondbrain AI::              Questions the rings make askable.
+* Secondbrain Panes::           The inspector, the preview, and icons.
 * Secondbrain Sources::         Where the data comes from.
 * Secondbrain Reading::         Glyphs, sizes and colours.
 * Secondbrain MCP::             Driving it from an agent.
@@ -182,6 +183,32 @@ retry.  Because the view registers a target resolver,
 @code{cmacs-ai-view-context} sees it too: a chat turn knows which node
 you are looking at without being told.
 
+@node Secondbrain Panes
+@section Panes and icons
+
+@kbd{i} opens the inspector on the right: name, role, ring, department,
+path, the actions available, and the node's connections in both
+directions.  It refreshes as you select --- an inspector showing the
+previous node is worse than no inspector, because it is confidently
+wrong about what you just clicked.
+
+@kbd{p} opens a preview on the left, rendering the node's file inline
+with its own major mode's fontification.  This is what makes a skill
+readable without leaving the map.  @kbd{W} closes both.
+
+Other packages add inspector actions with
+@code{cmacs-secondbrain-register-inspector-action}, which also installs
+the binding for Evil's normal and motion states --- without that half a
+registered @kbd{a} would just be @code{evil-append} under Doom.
+
+Applications-ring nodes draw their real SVG logo when one is available,
+rasterised through libregnum's @code{LrgVectorImage} and uploaded as a
+texture, so it stays crisp at any zoom.  @strong{No icons ship with
+cmacs} --- application logos are other people's trademarks.
+@code{cmacs-secondbrain-icon-dirs} lists where to look, names are matched
+case- and separator-insensitively, and a node without an icon simply
+keeps its glyph.
+
 @node Secondbrain Sources
 @section Where the data comes from
 
@@ -313,9 +340,9 @@ a graph index would recolour the wrong nodes.
 Skills are faceted gems, not four-pointed stars --- that needs a custom
 mesh.
 @item
-No app icons.  libregnum ships @code{LrgVectorImage} (SVG to texture) and
-cmacs uses it nowhere; the billboard array needs per-node linkage and a
-scale policy first.
+No icons ship with cmacs --- application logos are other people's
+trademarks.  @code{cmacs-secondbrain-icon-dirs} points at where you may
+already have them; a node without one keeps its glyph.
 @item
 No node dragging --- @code{dragging_object} is gated on
 @code{editor_active} in the libregnum input layer.

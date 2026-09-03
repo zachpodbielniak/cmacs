@@ -380,6 +380,85 @@ framework, so it is worth asserting rather than assuming."
   (should (equal (cmacs-secondbrain-ring-names)
                  '(skills memory routines applications))))
 
+(ert-deftest cmacs-secondbrain-test-icon-lookup ()
+  "An application icon resolves by name, case- and separator-insensitively.
+
+Nothing ships icons with cmacs -- application logos are other people's
+trademarks -- so a missing one must simply return nil and leave the node
+its glyph."
+  (let* ((dir (make-temp-file "cmacs-sb-icons" t))
+         (cmacs-secondbrain-icon-dirs (list dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "google-drive.svg" dir)
+            (insert "<svg/>"))
+          (should (cmacs-secondbrain-icon-for "Google Drive"))
+          (should (cmacs-secondbrain-icon-for "google-drive"))
+          (should (cmacs-secondbrain-icon-for "Google_Drive"))
+          (should-not (cmacs-secondbrain-icon-for "nothing-here"))
+          (should-not (cmacs-secondbrain-icon-for nil)))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-secondbrain-test-icon-failure-is-not-fatal ()
+  "An unreadable or malformed SVG returns nil rather than signalling."
+  (cmacs-secondbrain-tests--skip)
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'app :ring 'applications))
+     (vector) 2)
+    (should-not (cmacs-secondbrain-add-icon buf "a" "/nonexistent/x.svg"))
+    ;; And an id that is not in the graph is nil, not an error.
+    (should-not (cmacs-secondbrain-add-icon buf "nope" "/nonexistent/x.svg"))
+    ;; Clearing is always safe.
+    (should (cmacs-secondbrain-clear-icons buf))))
+
+;;;; Panes
+
+(ert-deftest cmacs-secondbrain-test-inspector-renders ()
+  "The inspector renders for a selection, and says so when there is none."
+  (cmacs-secondbrain-tests--skip)
+  (require 'cmacs-secondbrain-panes)
+  (let ((buf (generate-new-buffer " *sb-panes-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-secondbrain-mode)
+          (cmacs-secondbrain-attach buf 400 300)
+          (cmacs-secondbrain-set-graph
+           buf
+           (vector (list :id "s" :title "A Skill" :kind 'skill :ring 'skills
+                         :department "Skills"))
+           (vector) 2)
+          ;; Nothing selected yet.
+          (with-current-buffer (cmacs-secondbrain-inspector-render)
+            (should (string-match-p "Nothing selected" (buffer-string))))
+          (setq cmacs-secondbrain--selected "s")
+          (with-current-buffer (cmacs-secondbrain-inspector-render)
+            (should (string-match-p "A Skill" (buffer-string)))
+            (should (string-match-p "skill" (buffer-string)))
+            (should (string-match-p "Connections" (buffer-string)))))
+      (ignore-errors (cmacs-secondbrain-detach buf))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-secondbrain-test-inspector-action-registry ()
+  "A registered inspector action is listed and bound."
+  (require 'cmacs-secondbrain-panes)
+  (let ((cmacs-secondbrain-inspector-actions nil))
+    (cmacs-secondbrain-register-inspector-action
+     "Q" "test action" (lambda (_id) t))
+    (should (assoc "Q" cmacs-secondbrain-inspector-actions))
+    (should (keymapp cmacs-secondbrain-inspector-mode-map))
+    (should (lookup-key cmacs-secondbrain-inspector-mode-map (kbd "Q")))))
+
+(ert-deftest cmacs-secondbrain-test-connections-are-bidirectional ()
+  "The inspector's connection list counts both directions."
+  (require 'cmacs-secondbrain-panes)
+  (let ((cmacs-secondbrain--graph
+         (list :edges (list (list :from "a" :to "b")
+                            (list :from "c" :to "a")))))
+    (let ((conn (cmacs-secondbrain--connections "a")))
+      (should (equal (car conn) '("c")))     ; incoming
+      (should (equal (cdr conn) '("b"))))))  ; outgoing
+
 ;;;; Context menu
 
 (ert-deftest cmacs-secondbrain-test-menu-adapts-to-kind ()

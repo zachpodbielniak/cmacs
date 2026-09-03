@@ -3166,14 +3166,25 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
-        /* Camera-facing billboards (country flags), only once zoomed in. */
+        /* Camera-facing billboards.
+         *
+         * Two behaviours, selected by whether an occluder is set --
+         * i.e. whether this scene is a globe.  On a globe (gnuseye)
+         * flags appear only once zoomed in and scale with the camera's
+         * height above the surface, which is what keeps a flag a
+         * roughly constant size on screen.  Without one (a graph, whose
+         * nodes are icons at fixed world positions) neither rule makes
+         * sense: the zoom gate keys on distance from the ORIGIN, so a
+         * scene laid out past radius 13 would simply never draw an
+         * icon, and the altitude scaling has no surface to be above. */
         if (r->billboards && r->billboards->len > 0)
           {
             Camera3D bcam = ctx_raylib_camera (r);
             double cdist = sqrt (bcam.position.x*bcam.position.x
                                  + bcam.position.y*bcam.position.y
                                  + bcam.position.z*bcam.position.z);
-            if (cdist < 13.0)
+            gboolean globe = (r->occluder_radius > 0.0);
+            if (!globe || cdist < 13.0)
               {
                 Color bw = (Color){ 255, 255, 255, 255 };
                 for (guint i = 0; i < r->billboards->len; i++)
@@ -3187,12 +3198,18 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                     Texture2D *t = grl_texture_get_handle (bb->tex);
                     if (t && t->id)
                       {
-                        /* Scale to the zoom so the flag keeps a roughly
-                         * constant on-screen size (world size grows with
-                         * distance from the camera to the near surface). */
-                        double near = cdist - r->occluder_radius;
-                        if (near < 0.6) near = 0.6;
-                        float esize = bb->size * (float) near;
+                        /* On a globe, scale to the zoom so the flag
+                         * keeps a roughly constant on-screen size (world
+                         * size grows with distance from the camera to the
+                         * near surface).  Off a globe, the size given is
+                         * the size meant. */
+                        float esize = bb->size;
+                        if (globe)
+                          {
+                            double near = cdist - r->occluder_radius;
+                            if (near < 0.6) near = 0.6;
+                            esize = bb->size * (float) near;
+                          }
                         DrawBillboard (bcam, *t,
                                        (Vector3){ bb->x, bb->y, bb->z },
                                        esize, bw);

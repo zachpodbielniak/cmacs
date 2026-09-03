@@ -436,6 +436,57 @@ easy to get subtly wrong."
  :enumerate #'cmacs-secondbrain--enumerate-notes
  :edges #'cmacs-secondbrain--notes-edges)
 
+;;;; Icons -------------------------------------------------------------
+
+(defcustom cmacs-secondbrain-icon-dirs
+  (list (expand-file-name "icons" cmacs-secondbrain-claude-dir)
+        "/usr/share/icons/hicolor/scalable/apps")
+  "Directories searched for an application\='s SVG icon.
+
+Searched in order for `NAME.svg\='.  Nothing ships icons with cmacs --
+application logos are other people\='s trademarks -- so this points at
+places one may already have them, and a node with no icon simply keeps
+its glyph."
+  :type '(repeat directory)
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-show-icons t
+  "Whether to draw SVG icons on Applications-ring nodes."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defun cmacs-secondbrain-icon-for (name)
+  "Return a readable SVG path for NAME, or nil.
+
+Tried case-insensitively and with spaces folded to hyphens, because an
+application called \"Google Drive\" is `google-drive.svg\=' about as often
+as it is anything else."
+  (when (stringp name)
+    (let* ((base (downcase (replace-regexp-in-string "[ _]+" "-" name)))
+           (candidates (list (concat base ".svg")
+                             (concat (car (split-string base "-")) ".svg"))))
+      (cl-loop for dir in cmacs-secondbrain-icon-dirs
+               thereis (cl-loop for c in candidates
+                                for f = (expand-file-name c dir)
+                                when (file-readable-p f) return f)))))
+
+(defun cmacs-secondbrain-apply-icons (buffer nodes)
+  "Draw an icon on every visible Applications node in BUFFER that has one.
+
+Called after the scene is built, because icons are cleared along with
+the drawables."
+  (when (and cmacs-secondbrain-show-icons
+             (fboundp 'cmacs-secondbrain-add-icon))
+    (let ((n 0))
+      (dolist (node nodes)
+        (when (eq (plist-get node :ring) 'applications)
+          (let ((svg (cmacs-secondbrain-icon-for (plist-get node :title))))
+            (when (and svg
+                       (cmacs-secondbrain-add-icon buffer (plist-get node :id)
+                                                   svg 128))
+              (cl-incf n)))))
+      n)))
+
 ;;;; Collection -------------------------------------------------------
 
 (defcustom cmacs-secondbrain-centre-title "CLAUDE.md"

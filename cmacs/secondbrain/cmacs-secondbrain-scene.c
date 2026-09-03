@@ -356,6 +356,44 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   return emitted;
 }
 
+/* ── Icons ────────────────────────────────────────────────────────
+ *
+ * libregnum ships LrgVectorImage -- an SVG rasteriser that renders to a
+ * GrlTexture at any target size -- and until now nothing in cmacs used
+ * it.  Pairing it with the render context's billboard list gives real
+ * application icons with no new render plumbing: the billboard path
+ * already draws camera-facing textured quads every frame.
+ *
+ * Rasterised at a fixed pixel size and uploaded once.  Re-rendering per
+ * frame would be the obvious mistake: an SVG rasterise is orders of
+ * magnitude more expensive than the draw it feeds. */
+
+gboolean
+cmacs_secondbrain_scene_add_icon (CmacsLibregnumRenderCtx *r,
+                                  const char *svg_path,
+                                  float x, float y, float z,
+                                  float size, int px)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (LrgVectorImage) img = NULL;
+  GrlTexture *tex;
+
+  if (!r || !svg_path || !*svg_path) return FALSE;
+  if (px <= 0) px = 128;
+
+  img = lrg_vector_image_new_from_file (svg_path, &error);
+  if (!img) return FALSE;
+
+  /* Transparent background, aspect preserved: an icon squashed to fill
+     a square reads as a different icon. */
+  tex = lrg_vector_image_render_to_texture (img, px, px, NULL, TRUE);
+  if (!tex) return FALSE;
+
+  /* add_billboard takes ownership of the texture. */
+  cmacs_libregnum_render_ctx_add_billboard (r, x, y, z, tex, size);
+  return TRUE;
+}
+
 /* ── Position sync ────────────────────────────────────────────────── */
 
 void

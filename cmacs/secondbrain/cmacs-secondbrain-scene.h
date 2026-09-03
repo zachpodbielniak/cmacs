@@ -47,6 +47,23 @@ extern guint cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r,
                                             double ring_gap,
                                             gboolean band_guides);
 
+/* Attach an SVG icon to the node at (X, Y, Z), sized SIZE in world
+ * units.  Rasterised through libregnum's LrgVectorImage at PX pixels
+ * square and uploaded as a texture, so it stays crisp at any zoom
+ * rather than being a scaled bitmap.
+ *
+ * Returns FALSE when the file cannot be read or rendered -- an icon
+ * that will not load must leave the node with its glyph rather than
+ * taking the build down.
+ *
+ * Icons live in the render context's billboard list, which is cleared
+ * with the drawables, so this must be called AFTER scene_build. */
+extern gboolean cmacs_secondbrain_scene_add_icon
+                        (CmacsLibregnumRenderCtx *r,
+                         const char *svg_path,
+                         float x, float y, float z,
+                         float size, int px);
+
 /* Push the graph's current positions into the retained drawables and
  * the node table's pick boxes, without rebuilding.  This is what an
  * animated tween calls each frame; skipping it leaves picking pointing

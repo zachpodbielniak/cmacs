@@ -155,6 +155,9 @@ itself -- and drops the libregnum animation clock with it."
                                    (if cmacs-secondbrain--3d 3 2))
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
       (cmacs-secondbrain-fit buf)
+      ;; After the scene, always: icons live in the billboard list, which
+      ;; is cleared with the drawables on every rebuild.
+      (ignore-errors (cmacs-secondbrain-apply-icons buf nodes))
       (message "cmacs-secondbrain: %d nodes (%d shown), %d links"
                (length nodes)
                (or (cmacs-secondbrain-visible-count buf) 0)
@@ -211,8 +214,13 @@ itself -- and drops the libregnum animation clock with it."
 ;;;; Selection and collapse -------------------------------------------
 
 (defun cmacs-secondbrain--select (id)
-  "Select node ID and report it."
+  "Select node ID, report it, and refresh any open pane."
   (setq cmacs-secondbrain--selected id)
+  ;; An inspector showing the previous node is worse than no inspector:
+  ;; it is confidently wrong about what you just clicked.
+  (when (and (fboundp 'cmacs-secondbrain-inspector-render)
+             (get-buffer-window "*second brain: inspector*"))
+    (ignore-errors (cmacs-secondbrain-inspector-render)))
   (when id
     (let ((node (cmacs-secondbrain-node-at (current-buffer) id)))
       (when node
@@ -331,6 +339,9 @@ is the tier above."
   "0" #'cmacs-secondbrain-fit-cmd
   "s" #'cmacs-secondbrain-spin
   "S" #'cmacs-secondbrain-spin-back
+  "i" #'cmacs-secondbrain-inspector
+  "p" #'cmacs-secondbrain-preview
+  "W" #'cmacs-secondbrain-close-panes
   "v" #'cmacs-secondbrain-toggle-view
   "q" #'quit-window)
 
@@ -371,13 +382,14 @@ teardown, the Evil `C-w' handoff and `<escape>'.
   ;; because an action registry that is only populated once someone opens
   ;; the view is exactly when it is needed.
   (require 'cmacs-secondbrain-ai)
+  (require 'cmacs-secondbrain-panes)
   (setq-local cursor-type nil)
   (buffer-disable-undo)
   (setq-local mode-line-format
               '(" second brain  "
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
-                "  [1-4]layout [TAB]expand [/]find [RET]open [g]refresh"))
+                "  [1-4]layout [TAB]expand [/]find [i]nspect [RET]open [g]refresh"))
   (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t))
 
 (defun cmacs-secondbrain--on-kill ()

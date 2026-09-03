@@ -62,6 +62,10 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-collapse-all BUFFER &optional COLLAPSED FRAMES= | |
 | =cmacs-secondbrain-collapsed-p BUFFER ID= | |
 
+** Icons
+| =cmacs-secondbrain-add-icon BUFFER ID SVG-PATH &optional PX= | nil when it will not load |
+| =cmacs-secondbrain-clear-icons BUFFER= | |
+
 ** View
 | =cmacs-secondbrain-set-projection BUFFER FLAT= | |
 | =cmacs-secondbrain-flat-p BUFFER= | |
@@ -73,6 +77,8 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 * Elisp commands
 
 =cmacs-secondbrain=, =cmacs-secondbrain-3d=, =-refresh=, =-search=, =-search-semantic=, =-search-clear=, =-find-similar=, =-add-similarity-edges=, =-toggle-collapse=, =-expand-all=, =-collapse-all-cmd=, =-visit=, =-copy-path=, =-spin=, =-spin-back=, =-toggle-view=, =-fit-cmd=, =-layout-{rings,circle,hex,force}=.
+
+Panes: =cmacs-secondbrain-inspector=, =-preview=, =-close-panes=, and =cmacs-secondbrain-register-inspector-action KEY LABEL FN &optional PRED=.
 
 Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 
@@ -91,6 +97,11 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-memory-max-nodes= | 4000 | what is dropped is reported |
 | =cmacs-secondbrain-similar-count= | 8 | |
 | =cmacs-secondbrain-sim-threshold= | 0.62 | deliberately high |
+| =cmacs-secondbrain-inspector-width= | 0.26 | |
+| =cmacs-secondbrain-preview-width= | 0.30 | |
+| =cmacs-secondbrain-preview-max-bytes= | 40000 | it is a preview, not an editor |
+| =cmacs-secondbrain-icon-dirs= | see below | where app SVGs are looked for |
+| =cmacs-secondbrain-show-icons= | =t= | |
 
 * Keys
 

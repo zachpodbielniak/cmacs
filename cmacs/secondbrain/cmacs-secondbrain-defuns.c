@@ -915,6 +915,64 @@ they are on by default; hiding them is for a screenshot.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-secondbrain-add-icon", Fcmacs_secondbrain_add_icon,
+       Scmacs_secondbrain_add_icon, 3, 4, 0,
+       doc: /* Draw the SVG at SVG-PATH on node ID in BUFFER.
+
+Rasterised once at PX pixels square (default 128) and uploaded as a
+texture, so it stays crisp at any zoom instead of being a scaled bitmap.
+Returns t when the icon loaded, nil when it did not -- an icon that will
+not render leaves the node with its glyph rather than failing the build.
+
+Icons are cleared along with the drawables, so this must be called after
+the graph is set, and again after anything that rebuilds the scene.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object svg_path, Lisp_Object px)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  SbState *st;
+  gint idx;
+  CmacsGraphNode *nd;
+  Lisp_Object enc_id, enc_path;
+  gboolean ok;
+
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (id);
+  CHECK_STRING (svg_path);
+
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  enc_id = ENCODE_UTF_8 (id);
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc_id));
+  if (idx < 0) return Qnil;
+  nd = cmacs_graph_node (st->graph, (guint) idx);
+  if (!nd || !nd->visible) return Qnil;
+
+  enc_path = ENCODE_UTF_8 (svg_path);
+  ok = cmacs_secondbrain_scene_add_icon (ctx, SSDATA (enc_path),
+                                         nd->x, nd->y, nd->z,
+                                         nd->radius * 1.9f,
+                                         FIXNUMP (px) ? (int) XFIXNUM (px) : 128);
+  if (ok) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-secondbrain-clear-icons", Fcmacs_secondbrain_clear_icons,
+       Scmacs_secondbrain_clear_icons, 1, 1, 0,
+       doc: /* Remove every icon from BUFFER's view.  */)
+  (Lisp_Object buffer)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+
+  CHECK_BUFFER (buffer);
+  if (!state_for_buffer (buffer, &v, &ctx) || !ctx) return Qnil;
+  cmacs_libregnum_render_ctx_clear_billboards (ctx);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-secondbrain-apply-flags", Fcmacs_secondbrain_apply_flags,
        Scmacs_secondbrain_apply_flags, 1, 1, 0,
        doc: /* Recolour BUFFER's shapes from the render context's node flags.
@@ -1048,6 +1106,8 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_set_projection);
   defsubr (&Scmacs_secondbrain_flat_p);
   defsubr (&Scmacs_secondbrain_set_band_guides);
+  defsubr (&Scmacs_secondbrain_add_icon);
+  defsubr (&Scmacs_secondbrain_clear_icons);
   defsubr (&Scmacs_secondbrain_apply_flags);
   defsubr (&Scmacs_secondbrain_fit);
   defsubr (&Scmacs_secondbrain_ring_names);
