@@ -79,13 +79,16 @@ typedef struct
   GPtrArray *spark_shapes; /* LrgLine3D pool, repositioned each frame */
 } SceneState;
 
-/* Sparks are a fixed pool, not one drawable per lit edge: a note with a
+/* Beads are a fixed pool, not one drawable per lit edge: a note with a
    hundred links would otherwise add a hundred drawables on every
    selection change, and removing them again means a rebuild. */
-#define SB_N_SPARKS 256
-/* Fraction of an edge one spark covers.  Short enough to read as a
-   travelling light rather than a brightened edge. */
-#define SB_SPARK_LEN 0.13
+#define SB_N_SPARKS 1024
+/* Beads per lit edge, and how much of the gap between two of them one
+   bead fills.  Evenly spaced and marching together, which is what makes
+   a line of them read as a rope light rather than as dashes: the eye
+   picks up the direction from the whole run, not from one segment. */
+#define SB_BEADS_MAX 6
+#define SB_BEAD_FILL 0.30
 
 /* Defined below, used by apply_flags which appears first. */
 static gboolean node_in_selection (CmacsGraph *g, gint sel, guint i);
@@ -624,8 +627,24 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       if (sel_graph >= 0
           && (node_in_selection (g, sel_graph, e->a)
               || node_in_selection (g, sel_graph, e->b)))
-        alpha = 210;                /* the answer to what you asked */
-      else if (sel_graph >= 0 && !any_match)
+        {
+          /* A lit link takes the colour of the node it belongs to,
+             rather than the muted blend of its two ends: the point of
+             lighting it is to say WHOSE link it is, and a grey line
+             says nothing. */
+          CmacsGraphNode *own = cmacs_graph_node (g, (guint) sel_graph);
+          guint8 rr, gg, bb2, aa2;
+          unpack_rgba ((own && own->rgba) ? own->rgba : 0x7FA8D8FFu,
+                       &rr, &gg, &bb2, &aa2);
+          /* The tube: the node's colour, clearly visible but well below
+              the beads that run along it.  Equal brightness and the beads
+              disappear into it, which is what a pale bead on a pale line
+              looked like. */
+          col = grl_color_new (rr, gg, bb2, 150);
+          lrg_shape_set_color (LRG_SHAPE (line), col);
+          continue;
+        }
+      if (sel_graph >= 0 && !any_match)
         alpha = 10;                 /* recede, but do not vanish */
 
       col = edge_base_color (e, ea, eb, alpha);
@@ -659,19 +678,30 @@ node_in_selection (CmacsGraph *g, gint sel, guint i)
   return FALSE;
 }
 
-/* Position the spark pool along the currently lit edges.
+/* Position the bead pool along the currently lit edges.
  *
- * Each spark is a short span of one edge, marching from end to end; the
- * phase carries it, and each spark is offset so a bundle of links reads
- * as many lights in motion rather than one blinking mass.  Spare sparks
- * are given zero alpha rather than being removed, because removing a
- * drawable means rebuilding the scene. */
+ * Rope light, not fireflies: every lit edge carries a run of evenly
+ * spaced beads that all advance together, so the run reads as motion in
+ * the direction of the link.  A single travelling segment per edge does
+ * not -- one dash sliding along a line is ambiguous about which way it
+ * is going until you stare at it, and with a hundred links it is lost
+ * among them entirely.
+ *
+ * The beads take the colour of the node whose links these are, matching
+ * the lit edge underneath, so a bundle stays readable as one node's
+ * connections rather than a generic glow.
+ *
+ * Spare beads are given zero alpha rather than removed, because removing
+ * a drawable means rebuilding the scene. */
 static void
 scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st, CmacsGraph *g,
                    gint sel_graph)
 {
   guint m = cmacs_graph_n_edges (g), i, lit = 0, slot = 0;
   guint *lit_edges;
+  guint beads;
+  guint8 cr = 255, cg = 250, cb = 210, ca;
+  CmacsGraphNode *own;
 
   if (!st->spark_shapes || st->spark_shapes->len == 0) return;
 
@@ -690,32 +720,70 @@ scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st, CmacsGraph *g,
           lit_edges[lit++] = i;
       }
 
+  /* Share the pool out over the lit edges.  Few links get a full rope;
+     many links get fewer beads each rather than most edges getting none,
+     which is what a first-come split would do. */
+  beads = (lit > 0) ? (st->spark_shapes->len / lit) : 0;
+  beads = CLAMP (beads, 1u, (guint) SB_BEADS_MAX);
+
+  own = (sel_graph >= 0) ? cmacs_graph_node (g, (guint) sel_graph) : NULL;
+  if (own)
+    {
+      guint8 aa;
+      unpack_rgba (own->rgba ? own->rgba : 0x7FA8D8FFu, &cr, &cg, &cb, &aa);
+      /* Most of the way to white, keeping just enough of the node's hue
+         to say whose rope this is.  A rope light is bright lamps inside
+         a coloured tube; lamps only a little brighter than the tube are
+         not lamps.  Adding a fixed offset was not enough -- on an
+         already-bright colour it saturates and the bead vanishes. */
+      cr = (guint8) (255 - (255 - (int) cr) * 25 / 100);
+      cg = (guint8) (255 - (255 - (int) cg) * 25 / 100);
+      cb = (guint8) (255 - (255 - (int) cb) * 25 / 100);
+    }
+
   for (slot = 0; slot < st->spark_shapes->len; slot++)
     {
       LrgLine3D *sp = g_ptr_array_index (st->spark_shapes, slot);
-      g_autoptr (GrlColor) col = NULL;
+      guint ei_slot, bead;
 
       if (!sp) continue;
-      if (lit == 0)
+
+      ei_slot = (lit > 0) ? slot / beads : 0;
+      bead    = (lit > 0) ? slot % beads : 0;
+
+      if (lit == 0 || ei_slot >= lit)
         {
-          col = grl_color_new (255, 255, 255, 0);
-          lrg_shape_set_color (LRG_SHAPE (sp), col);
+          g_autoptr (GrlColor) off = grl_color_new (255, 255, 255, 0);
+          lrg_shape_set_color (LRG_SHAPE (sp), off);
           continue;
         }
+
       {
-        guint ei = lit_edges[slot % lit];
+        guint ei = lit_edges[ei_slot];
         CmacsGraphEdge *e = cmacs_graph_edge (g, ei);
         CmacsGraphNode *a = cmacs_graph_node (g, e->a);
         CmacsGraphNode *b = cmacs_graph_node (g, e->b);
-        /* Offset per slot so they do not march in lockstep; the odd
-           multiplier keeps successive slots on the same edge apart. */
-        double t = st->link_phase * 0.16 + (double) slot * 0.37;
-        double t0, t1;
+        double span = 1.0 / (double) beads;
+        double t, t0, t1;
+        g_autoptr (GrlColor) col = NULL;
 
+        /* Beads sit one span apart and every one of them advances by the
+           same phase, so the whole run travels together -- the direction
+           is read off the run, not off any single bead. */
+        t = (double) bead * span + st->link_phase * 0.05;
         t -= floor (t);
         t0 = t;
-        t1 = t + SB_SPARK_LEN;
+        t1 = t + span * SB_BEAD_FILL;
         if (t1 > 1.0) t1 = 1.0;
+
+        /* Along the edge FROM the selected node, so every rope in the
+           bundle runs the same way -- outward -- rather than each one
+           following whichever endpoint the graph happened to store
+           first. */
+        if (!node_in_selection (g, sel_graph, e->a))
+          {
+            CmacsGraphNode *tmp = a; a = b; b = tmp;
+          }
 
         {
           double ax = (double) a->x, ay = (double) a->y, az = (double) a->z;
@@ -732,14 +800,10 @@ scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st, CmacsGraph *g,
                                   (float) (az + dz * t1));
         }
 
-        /* Fade in and out at the ends of the run so a spark appears and
-           vanishes rather than popping. */
-        {
-          double fade = sin (t * G_PI);
-          col = grl_color_new (255, 250, 210,
-                               (guint8) CLAMP (60.0 + 195.0 * fade,
-                                               0.0, 255.0));
-        }
+        /* Fade in and out at the ends of the run so a bead arrives and
+           leaves rather than popping in and out at the nodes. */
+        ca = (guint8) CLAMP (170.0 + 85.0 * sin (t * G_PI), 0.0, 255.0);
+        col = grl_color_new (cr, cg, cb, ca);
         lrg_shape_set_color (LRG_SHAPE (sp), col);
       }
     }

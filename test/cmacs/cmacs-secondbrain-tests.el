@@ -1070,7 +1070,13 @@ looked at return values."
           (cmacs-secondbrain-set-link-phase buf 0.0)
           (cmacs-secondbrain-apply-flags buf)
           (cmacs-libregnum-snapshot buf p0)
-          (cmacs-secondbrain-set-link-phase buf 9.0)
+          ;; Half a bead-span, deliberately.  The beads are identical and
+          ;; evenly spaced, so the pattern REPEATS every whole span --
+          ;; advancing by one produces a pixel-identical frame and this
+          ;; test would pass or fail on arithmetic rather than on whether
+          ;; anything moved.  Verified: a whole-span delta gives 405/405
+          ;; identical pixels, a half-span delta does not.
+          (cmacs-secondbrain-set-link-phase buf 1.665)
           (cmacs-secondbrain-apply-flags buf)
           (cmacs-libregnum-snapshot buf p1)
           ;; Snapshots, not `cmacs-libregnum-mean-color': a spark covers

@@ -131,7 +131,13 @@ through the glyphs.
 
 Selecting a note *lights its links and dims everything else*. That is the part that makes them legible: at rest every link is drawn the same, which is honest and useless once there are a few hundred — the answer to "what is this note connected to" is invisible inside its own hairball.
 
-The light also *travels*: a pool of short bright segments marches along the lit links, fading in and out at each end. It is a fixed pool repositioned every frame, not one drawable per link — a note with a hundred links would otherwise add a hundred drawables on every selection change, and removing them again means a rebuild. =cmacs-secondbrain-link-pulse= turns it off; =-link-pulse-speed= sets how fast.
+The light travels as a *rope light*: each lit link carries a run of evenly spaced bright beads that all advance together, so the direction is read off the run rather than off any single bead. The link itself is the *tube* — drawn in the node's own colour at moderate brightness — and the beads are nearly white, because lamps only slightly brighter than their tube are not lamps.
+
+That colouring is the other half of making links legible: a lit link says /whose/ link it is, where a grey line says nothing.
+
+It is a fixed pool of beads repositioned every frame, not one drawable per link — a note with a hundred links would otherwise add a hundred drawables on every selection change, and removing them again means a rebuild. The pool is shared out over the lit links, so many links get fewer beads each rather than most links getting none.
+
+=cmacs-secondbrain-link-pulse= turns it off; =-link-pulse-speed= sets how fast. Note the pattern repeats every bead-span: identical, evenly spaced beads advancing by exactly one span give a pixel-identical frame.
 
 *Selecting a department lights what the department connects to.* A hub carries no org-roam links of its own — only its members do — so matching the selected node alone lit nothing at all. Membership walks the parent chain, so a note nested below a folder below a hub still counts.
 
