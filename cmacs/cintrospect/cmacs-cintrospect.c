@@ -201,7 +201,7 @@ for the per-kind plist shape.  */)
       xsignal1 (Qcintrospect_not_implemented,
                 build_string ("cmacs-c-list 'type --- use cmacs-c-type-info NAME instead"));
     }
-  else if (EQ (kind, Qobject_))
+  else if (EQ (kind, Qobject))
     {
       return Fcmacs_c_list_objects ();
     }
@@ -880,7 +880,8 @@ syms_of_cmacs_cintrospect (void)
   DEFSYM (Qsymbol,        "symbol");
   DEFSYM (Qdefun,         "defun");
   DEFSYM (Qtype,          "type");
-  DEFSYM (Qobject_,       "object");
+  /* `object' is xdisp.c's Qobject; DEFSYM'ing it again would intern a
+     second symbol of the same name and break EQ for both.  */
   DEFSYM (Qinlined_only,  "inlined-only");
 
   DEFSYM (Qcintrospect_unavailable,    "cmacs-cintrospect-unavailable");

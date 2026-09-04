@@ -825,7 +825,7 @@ nodes are boxes), `halo' (a wireframe shell, right for spheres), or
   if (!v) return Qnil;
   int st = CMACS_LIBREGNUM_SELECTION_BOX;
   if (EQ (style, Qcmacs_sel_halo))      st = CMACS_LIBREGNUM_SELECTION_HALO;
-  else if (EQ (style, Qcmacs_sel_none)) st = CMACS_LIBREGNUM_SELECTION_NONE;
+  else if (EQ (style, Qnone))           st = CMACS_LIBREGNUM_SELECTION_NONE;
   cmacs_libregnum_render_ctx_set_selection_style
     (cmacs_libregnum_view_get_render_ctx (v), st);
   cmacs_libregnum_view_request_redraw (v);
@@ -874,7 +874,7 @@ than one that ignores a bad path.  */)
   else if (EQ (kind, Qcmacs_bg_gradient))  k = CMACS_LIBREGNUM_BG_GRADIENT;
   else if (EQ (kind, Qcmacs_bg_starfield)) k = CMACS_LIBREGNUM_BG_STARFIELD;
   else if (EQ (kind, Qcmacs_bg_nebula))    k = CMACS_LIBREGNUM_BG_NEBULA;
-  else if (EQ (kind, Qcmacs_bg_image))     k = CMACS_LIBREGNUM_BG_IMAGE;
+  else if (EQ (kind, Qimage))              k = CMACS_LIBREGNUM_BG_IMAGE;
 
   ok = cmacs_libregnum_render_ctx_set_background
          (ctx, k,
@@ -2924,8 +2924,13 @@ syms_of_cmacs_libregnum_defuns (void)
   DEFSYM (Qcmacs_bg_gradient, "gradient");
   DEFSYM (Qcmacs_bg_starfield, "starfield");
   DEFSYM (Qcmacs_bg_nebula, "nebula");
-  DEFSYM (Qcmacs_bg_image, "image");
-  DEFSYM (Qcmacs_sel_none, "none");
+  /* NOT DEFSYM'd here: `image' is xdisp.c's Qimage and `none' is
+     frame.c's Qnone.  DEFSYM creates and interns a NEW symbol, so a
+     second DEFSYM of an existing name puts two distinct symbols with
+     the same name in the obarray -- and then `EQ' against the other
+     one silently fails everywhere.  Doing it to "image" stops every
+     `(image ...)' display spec from matching in xdisp.c, which shows up
+     as images not rendering and their raw data leaking out as text. */
   Fput (Qcmacs_libregnum_error, Qerror_conditions,
         list2 (Qcmacs_libregnum_error, Qerror));
   Fput (Qcmacs_libregnum_error, Qerror_message,

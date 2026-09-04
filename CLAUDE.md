@@ -113,6 +113,15 @@ the env var is the explicit override — see `cmacs_gowl_find_module`).
   `cmacs-symlinks`, they are tracked, and `gl-stamp` lists them as prerequisites — so
   without them a clean build fails with `No rule to make target 'cmacs-<name>-init.c'`,
   which names the file and not the subsystem.
+- **Never `DEFSYM` a name another compiled file already `DEFSYM`s.** `DEFSYM` does not
+  look a symbol up, it *creates and interns a new one* — so a duplicate name puts two
+  distinct symbols with that name in the obarray and `EQ` against the other one then
+  fails everywhere, with no warning and a clean build. `DEFSYM (Qcmacs_bg_image, "image")`
+  alongside `xdisp.c`'s `Qimage` stopped every `(image ...)` display spec from matching:
+  images silently stopped rendering and their raw data appeared as text. Use the existing
+  `Q<name>` (they are all global via `globals.h`). The generated `defsym_name[]` table in
+  `src/globals.h` is the authoritative list of what this build actually compiles, and
+  `test/cmacs/cmacs-defsym-tests.el` fails on any duplicate in it.
 - **Never declare a DEFSYM'd symbol as a `static Lisp_Object`.** make-docfile emits it
   into `globals.h` as a macro, so the declaration expands into a syntax error *reported
   in globals.h* — the file that caused it is not mentioned.
