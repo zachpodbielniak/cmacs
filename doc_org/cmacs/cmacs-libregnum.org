@@ -352,6 +352,23 @@ either profile — only a drag moves the camera.
 - =cmacs-libregnum-set-orbit-locked= — stop the camera tumbling while
   leaving pan and zoom live.  For a scene showing a planar layout
   head-on, orbiting only reveals that everything is coplanar.
+- =cmacs-libregnum-set-orbit-continuous= — let the elevation run all the
+  way round instead of stopping about ten degrees short of each pole.
+
+  The clamp is the default and is right for a scene with a canonical up:
+  on a globe, north stays up and the view never goes upside down.  It is
+  wrong for a scene that has none — a graph, a warped disc — where it
+  reads as the drag simply refusing to go further in one direction.
+  With this on the camera's *up vector flips* as it crosses a pole, so
+  the picture stays continuous instead of snapping through a gimbal, and
+  horizontal drag is negated while inverted so dragging right still turns
+  the scene the way it moves on screen.
+
+  The subtlety if you touch it: elevation cannot be recovered from the
+  camera position alone, because =asin= only answers in [-90°, 90°].  The
+  up vector carries the other half of the state — and reading it back
+  without also correcting the azimuth by half a turn teleports the camera
+  to the mirror-image viewpoint on the first inverted drag.
 - =cmacs-libregnum-orbit= / =cmacs-libregnum-pan= drive the camera from
   Lisp, which is also what makes the lock testable.
 
@@ -389,6 +406,8 @@ Both exist because a billboard that cannot move is only good for something fixed
 
 *Why this exists.* raylib draws an unlit sphere in one flat colour, and the renderer's real lighting applies only to =MESH_ASSET= models inside the editor build. A scene made of thousands of small spheres therefore has no shading available to it. A camera-facing quad carrying a pre-lit sphere is the standard answer, and unlike a highlight offset in world space it is correct from every camera angle rather than from one.
 
+*It is no longer the answer for graph nodes*, though — see /Shaded orbs/ below. An impostor's highlight is baked into screen space, so orbiting never changes how anything is lit and a field of them reads as stickers on a sheet. The texture stays available for callers that want a cheap lit dot.
+
 Two traps:
 
 - *The tint is a ceiling, not an addition.* The texture is multiplied by it, so the brightest a texel can be is the tint. A specular that should read as light needs the tint lifted toward white to have anywhere to go.
@@ -397,6 +416,25 @@ Two traps:
 *Two layers, two disciplines.* The normal (alpha-blended) layer is depth-sorted back-to-front every frame — a translucent quad's texels still write depth, so drawn in insertion order a near quad's soft edge clips every quad behind it into a rectangle, an artefact that only appears once the camera orbits and two quads overlap. The sort is over a scratch index list, never the array itself, so the indices handed out by =-add-billboard-full= stay valid.
 
 =cmacs_libregnum_render_ctx_add_billboard_glow= adds to the second layer: a shared radial-falloff texture drawn *after* the normal layer with additive blending and the depth mask off (depth testing stays on). Additive is what makes it a glow rather than a smudge — it can only brighten, overlapping glows sum instead of occluding, and draw order stops mattering, so this layer needs no sorting. The tint's alpha channel scales intensity, because with =GL_SRC_ALPHA, GL_ONE= what lands in the framebuffer is =rgb * alpha=. Same index space as the normal layer: move/recolour/resize and =clear-billboards= all apply.
+
+** Shaded orbs: real lit sphere geometry
+
+=cmacs_libregnum_render_ctx_add_orb= adds a real sphere at a world point, shaded per vertex, and returns an index usable with =-move-orb=, =-set-orb-color= and =-set-orb-radius= until =-clear-orbs=. =cmacs-libregnum-orb-count= exposes the count to tests.
+
+*Why not the impostor.* An impostor is a flat quad wearing a picture of a sphere with its highlight baked into *screen space*: orbiting never changes how anything is lit, quads do not occlude each other the way solids do, and a scene full of them reads as stickers on a sheet. Real geometry has a real silhouette and real depth.
+
+*The lighting is a world-fixed key plus a camera-following fill*, and having both is the point. A pure headlight looks like the answer and is the trap — a sphere lit from wherever you happen to be standing is /identical/ from every angle, so the geometry would be real and the picture would still read as a sticker. A pure key light is the opposite trap: half a graph turns to silhouette as you orbit, and in a map whose colours are the taxonomy an unidentifiable node is a lost node. A rim term keeps a small node's unlit limb from fading into the sky, and the specular is taken off the key alone so there is one highlight that visibly travels as the scene turns.
+
+*Why thousands of them are affordable.* Every orb is the same unit sphere translated and scaled, so every orb's vertex normals are identical and the shading depends only on the normal and the camera. The per-vertex terms are therefore computed *once per frame per LOD* and each orb costs a multiply per vertex rather than a lighting equation per vertex. Scale and translation are applied inline rather than through =rlPushMatrix=, because rlgl applies a pushed matrix on the CPU per vertex anyway — same arithmetic, without the matrix multiply.
+
+Three LOD tiers (5×8, 6×10, 12×20 rings×slices), chosen by the caller: a landmark is worth triangles and a leaf a few pixels across is not.
+
+Two traps:
+
+- *Winding.* Backface culling is on, so a reversed winding shows the /inside/ of every sphere — still round, lit from the wrong side, and not obviously a bug. The mesh is wound exactly as raylib winds =DrawSphereEx=.
+- *=clear-drawables= does not clear orbs*, the same as billboards. A scene adding them per node must clear them itself on rebuild, or a stale copy accumulates at every position each node used to be in — which a screenshot hides, because the stale ones sit under the live ones.
+
+Orbs are drawn *before* the billboards, so the additive glow layer sums on top of the node it belongs to rather than under it. They are opaque geometry and rely on the depth buffer rather than on draw order, so unlike the alpha layer they need no sorting.
 
 ** Rendering is on demand, and must not be frame-paced
 

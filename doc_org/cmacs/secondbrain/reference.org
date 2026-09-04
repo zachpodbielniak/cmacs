@@ -100,7 +100,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-default-layout= | =rings= | |
 | =cmacs-secondbrain-start-collapsed= | =t= | =nil= opens every file on load |
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
-| =cmacs-secondbrain-node-shading= | =t= | specular highlight per node |
+| =cmacs-secondbrain-node-shading= | =t= | light the nodes: round ones become real lit sphere geometry |
 | =cmacs-secondbrain-node-glow= | =t= | additive halo per node |
 | =cmacs-secondbrain-age-fade= | =nil= | fade Memory toward grey by mtime |
 | =cmacs-secondbrain-age-fade-days= | 180.0 | days to full fade |
@@ -109,7 +109,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-keep-selection-visible= | =t= | a spatial step that lands off-screen flies the camera |
 | =cmacs-secondbrain-edge-margin= | 48 | pixels of inset for the off-screen test |
 | =cmacs-secondbrain-zoom-step= | 2.0 | wheel notches per =+= / =-=; positive is closer |
-| =cmacs-secondbrain-galaxy-tilt= | 24.0 | degrees the 3D rings warp out of plane; 0 is flat |
+| =cmacs-secondbrain-galaxy-tilt= | 32.0 | degrees the 3D rings warp out of plane; 0 is flat |
 | =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
 | =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
 | =cmacs-secondbrain-rotate-speed= | 3.0 | what =R= turns on |
@@ -176,7 +176,7 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | Left drag a node | move it; it pins where you drop it |
 | (no click moves the camera) | =f= flies deliberately, keeping context |
 | Hover anything | light up its whole department, dim the rest |
-| Left drag | orbit (3D); no effect in the locked 2D view |
+| Left drag | orbit (3D), continuously through the poles; no effect in the locked 2D view |
 | Right drag | pan |
 | Wheel | zoom, wheel-up towards the scene |
 | Right click | the context menu for that node's kind, AI section last |

@@ -71,11 +71,26 @@ if (idx < 0) continue;   /* graph is full -- drop it */
 
 The return is *signed*. Returning =0= for "full" aliased every overflowing node onto node 0, which silently corrupted the graph rather than dropping the node. A caller that ignores the result will keep a payload for a node that does not exist.
 
+*** The plane a closed-form layout lives in
+
+Every closed-form layout here is planar by construction — a circle, a hex lattice, a set of concentric bands — and which plane that is matters more than it looks.
+
+In *2D* it is XY, because that is what "right and up" mean on a screen. In *3D* it is the world's *ground plane*, XZ, with the out-of-plane axis on Y.
+
+The obvious choice — keep XY and use Z for height — is wrong, and wrong in a way that presents as a rendering bug rather than as a layout one. The consumer's world is Y-up and so is its orbit camera, whose two drag gestures are azimuth about Y and elevation from the XZ plane. Lay a disc in XY and neither gesture matches the thing being looked at: the elevation drag walks the camera along the disc's own plane and jams against the pole clamp *edge-on*, so the layout presents as a flat streak that will not turn. In XZ the same two gestures are "spin it" and "raise your eye above it".
+
+=place_plane= is the only writer and =plane_uv= the only reader, so a pass that needs a node's in-plane direction (the fan that places children around their parent) cannot silently read the height axis instead.
+
 *** The galaxy warp (RINGS, 3D only)
 
-=cmacs_graph_layout_set_galaxy_tilt= bends the rings out of their plane: height grows with radius and varies as sine of the azimuth, so one side of the disc lifts and the opposite side drops, plus a small per-node thickness term so a group is not a perfectly flat sheet.
+=cmacs_graph_layout_set_galaxy_tilt= bends the rings out of their plane. Two terms, sharing one amplitude:
 
-Zero by default, so an existing consumer's picture does not change under it — roamgraph's rings stay coplanar unless it asks. The tilt is the warp's crest, where =atan(z/r)= equals it exactly; the thickness rides on top.
+- The *warp* is a mode-1 bend: =r·tan(tilt)·sin(azimuth)=, so height grows with radius and one side of the disc lifts while the opposite side drops.
+- The *thickness* is =r·tan(tilt)·THICKNESS·jitter(id)= — the same amplitude, scaled down, and *azimuth-independent*, because a real disc is thick everywhere and not only where it bends.
+
+Sharing the amplitude is what makes the pair statable: no node can exceed =atan((1 + THICKNESS)·tan(TILT))=, which is a bound the tests assert rather than a margin someone guessed. An absolute scatter would have had neither property — it would drift out of proportion with the ring gap and could only ever be bounded empirically.
+
+Zero by default, so an existing consumer's picture does not change under it — roamgraph's rings stay coplanar unless it asks. The tilt is the warp's crest, where =atan(h/r)= equals it exactly.
 
 The thickness is hashed from the node's *id* rather than its index, because index order churns on every rebuild and hashing that would reshuffle every height on refresh.
 

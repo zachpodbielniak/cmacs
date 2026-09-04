@@ -1424,6 +1424,93 @@ Headless-safe arity check -- no GL needed."
                (ert-skip "attach did not produce a view")))
     (error (ert-skip "attach failed (no GL)"))))
 
+(defun cmacs-libregnum-tests--cam-y (buf)
+  "The Y coordinate of BUF\='s camera position."
+  (nth 1 (plist-get (cmacs-libregnum-camera-state buf) :position)))
+
+(ert-deftest cmacs-libregnum-tests-orbit-clamps-by-default ()
+  "By default the orbit stops short of the pole, however far you drag.
+
+That clamp is right for a scene with a canonical up -- on a globe north
+stays up and the view never goes upside down -- so it stays the
+default, and this pins that it really does hold."
+  (skip-unless (fboundp 'cmacs-libregnum-set-orbit-continuous))
+  (let ((buf (generate-new-buffer " *lrg-orbit*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 160 120)
+          (cmacs-libregnum-set-camera buf '(0.0 0.0 20.0) '(0.0 0.0 0.0) 45.0)
+          (cmacs-libregnum-set-orbit-continuous buf nil)
+          (dotimes (_ 8) (cmacs-libregnum-orbit buf 0 100))
+          ;; Pinned just under the pole, never over it.
+          (let ((y (cmacs-libregnum-tests--cam-y buf)))
+            (should (> y 0.0))
+            (should (< (abs (- y (* 20.0 (sin 1.4)))) 0.2))))
+      (ignore-errors (cmacs-libregnum-detach buf))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-libregnum-tests-orbit-continuous-tumbles-past-the-pole ()
+  "With continuous orbiting on, dragging keeps going all the way round.
+
+A scene with no canonical up -- a graph, a warped disc -- has no reason
+to stop turning, and the clamp reads as the drag breaking rather than as
+a policy.  Eight steps of 100 pixels is 4 radians of elevation: past the
+top and down the far side, so the camera must end up BELOW the target.
+Under the clamp it would still be pinned just under the pole, which is
+what makes this test discriminate rather than merely pass.
+
+A drag pixel is 0.005 radians -- 100 of them is half a radian -- which is
+where the odd-looking pixel counts here come from."
+  (skip-unless (fboundp 'cmacs-libregnum-set-orbit-continuous))
+  (let ((buf (generate-new-buffer " *lrg-orbit*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 160 120)
+          (cmacs-libregnum-set-camera buf '(0.0 0.0 20.0) '(0.0 0.0 0.0) 45.0)
+          (cmacs-libregnum-set-orbit-continuous buf t)
+          (should (cmacs-libregnum-orbit-continuous-p buf))
+          (dotimes (_ 8) (cmacs-libregnum-orbit buf 0 100))
+          (should (< (cmacs-libregnum-tests--cam-y buf) 0.0))
+          ;; And a whole turn comes home.  A drag pixel is 0.005 rad, so
+          ;; 100*pi pixels is a quarter turn and four of them is 2*pi --
+          ;; over the top, down the far side, under the bottom, and back.
+          (cmacs-libregnum-set-camera buf '(0.0 0.0 20.0) '(0.0 0.0 0.0) 45.0)
+          (dotimes (_ 4) (cmacs-libregnum-orbit buf 0 (* 100 float-pi)))
+          (let ((p (plist-get (cmacs-libregnum-camera-state buf) :position)))
+            (should (< (abs (nth 0 p)) 0.05))
+            (should (< (abs (nth 1 p)) 0.05))
+            (should (< (abs (- (nth 2 p) 20.0)) 0.05))))
+      (ignore-errors (cmacs-libregnum-detach buf))
+      (kill-buffer buf))))
+
+(ert-deftest cmacs-libregnum-tests-orbit-continuous-round-trips-azimuth ()
+  "A horizontal drag out and back returns the camera where it started.
+
+Crossing a pole flips the camera\='s up vector, and elevation cannot be
+recovered from the position alone -- asin only ever answers in
+[-90, 90] -- so the up vector carries the other half of the state.  Read
+it back without also correcting the azimuth by half a turn and the
+camera teleports to the mirror-image viewpoint on the first inverted
+drag: still a valid view, and completely wrong."
+  (skip-unless (fboundp 'cmacs-libregnum-set-orbit-continuous))
+  (let ((buf (generate-new-buffer " *lrg-orbit*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 160 120)
+          (cmacs-libregnum-set-camera buf '(0.0 0.0 20.0) '(0.0 0.0 0.0) 45.0)
+          (cmacs-libregnum-set-orbit-continuous buf t)
+          ;; Tumble over the top, then drag sideways out and back.
+          (dotimes (_ 8) (cmacs-libregnum-orbit buf 0 100))
+          (let ((before (plist-get (cmacs-libregnum-camera-state buf) :position)))
+            (cmacs-libregnum-orbit buf 60 0)
+            (cmacs-libregnum-orbit buf -60 0)
+            (let ((after (plist-get (cmacs-libregnum-camera-state buf)
+                                    :position)))
+              (dotimes (i 3)
+                (should (< (abs (- (nth i before) (nth i after))) 0.05))))))
+      (ignore-errors (cmacs-libregnum-detach buf))
+      (kill-buffer buf))))
+
 (ert-deftest cmacs-libregnum-tests-image-defuns-exist ()
   "The image-mode DEFUN surface is present when built."
   (skip-unless (fboundp 'cmacs-libregnum-supported-p))

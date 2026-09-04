@@ -57,6 +57,7 @@
 (declare-function cmacs-secondbrain-cycle-galaxy-tilt "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-set-match-set "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-set-galaxy-tilt "cmacs-secondbrain-defuns")
+(declare-function cmacs-libregnum-set-orbit-continuous "cmacs-libregnum-defuns")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-supported-p "cmacs-secondbrain-defuns")
@@ -213,33 +214,45 @@ with them."
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-node-shading t
-  "Whether nodes get a specular highlight.
+  "Whether nodes are lit.
 
-raylib draws an unlit sphere in a single colour, so without one a node
-is a flat disc and size is the only depth cue the glyphs have.  Costs
-one extra small sphere per visible node."
+raylib draws a sphere unlit, in a single flat colour, so without this a
+node really is a flat disc and size is the only depth cue the map has.
+
+With it on, round nodes are drawn as real, per-vertex-lit sphere
+geometry, and the glyphs that are not round -- an application\='s hex
+prism, a skill\='s gem -- get a small offset highlight instead, because
+their silhouette is the thing carrying the meaning.  The light is
+attached to the camera, so every node stays identifiable from every
+angle; in a map whose colours are the taxonomy, a node lost to shadow
+is a node lost.
+
+Costs vertices rather than draw calls: the tessellation drops
+automatically for leaves, and again once the map is crowded."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-galaxy-tilt 24.0
+(defcustom cmacs-secondbrain-galaxy-tilt 32.0
   "Maximum out-of-plane angle, in degrees, of the 3D rings.
 
 Concentric rings viewed in three dimensions are coplanar, so orbiting
 them only proves they are flat -- the third dimension buys nothing.
 This warps the disc the way a galaxy is warped: height grows with
 radius and varies with the azimuth, so one side of the map lifts and
-the opposite side drops, with a little per-node thickness so a
-department is not a perfectly flat sheet.
+the opposite side drops, with a per-node thickness on top so the disc
+has substance rather than being a bent sheet.
 
 The angle sets the warp: at its crest the disc sits exactly this far
-above the plane.  The small per-node thickness rides on top, so an
-individual node can sit a few degrees beyond it -- this is the shape of
-the disc, not a hard ceiling on any one node.  20-30 keeps the map
-readable as rings while giving it real depth; 0 is flat.
+above the plane.  The thickness rides on top, so an individual node can
+sit beyond it -- but by a stated amount, never past
+atan(1.34 * tan(TILT)).  This is the shape of the disc, not a hard
+ceiling on any one node.  30-40 reads unmistakably as a three
+dimensional object while still reading as rings; 20 is subtle, 0 is
+flat.
 
-Applies to the `rings' layout only, and only in
-`cmacs-secondbrain-3d' -- the flat view snaps every node to z = 0, so
-this setting is simply inert there."
+Applies to the `rings\=' layout only, and only in
+`cmacs-secondbrain-3d\=' -- the flat view snaps every node into the plane,
+so this setting is simply inert there."
   :type 'number
   :group 'cmacs-secondbrain)
 
@@ -471,6 +484,13 @@ useless."
       (cmacs-libregnum-set-right-drag-pans buf t))
     (when (fboundp 'cmacs-libregnum-set-wheel-up-zooms-in)
       (cmacs-libregnum-set-wheel-up-zooms-in buf t))
+    (when (fboundp 'cmacs-libregnum-set-orbit-continuous)
+      ;; A galaxy has no north.  The default orbit stops ten degrees
+      ;; short of each pole, which is right for a globe and reads here as
+      ;; the drag simply refusing to go further in one direction -- so
+      ;; let it tumble all the way round instead.  Harmless in the flat
+      ;; view, where orbiting is locked outright.
+      (cmacs-libregnum-set-orbit-continuous buf t))
     (when (fboundp 'cmacs-libregnum-set-selection-style)
       ;; A halo, not the default wireframe cube: these are round.
       (cmacs-libregnum-set-selection-style buf 'halo))

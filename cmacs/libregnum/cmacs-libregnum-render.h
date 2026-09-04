@@ -234,6 +234,62 @@ extern void  cmacs_libregnum_render_ctx_clear_billboards
 extern guint cmacs_libregnum_render_ctx_billboard_count
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Shaded orbs: real, lit sphere GEOMETRY ───────────────────────
+ *
+ * The impostor above is a flat quad wearing a picture of a sphere, and
+ * that is exactly what it eventually looks like: its highlight is baked
+ * into screen space, so orbiting the scene never changes how any node is
+ * lit and the map reads as a sheet of stickers.  These are real
+ * spheres -- correct silhouettes, correct occlusion, correct depth --
+ * shaded per vertex so they are round rather than the flat discs
+ * raylib's own DrawSphere produces (it draws unlit, in one colour, and
+ * this renderer's real lighting reaches only MESH_ASSET models inside
+ * the editor build).
+ *
+ * Lighting is a world-fixed KEY plus a camera-following FILL, and having
+ * both is the point.  A pure headlight looks like the answer and is the
+ * trap: a sphere lit from wherever you happen to be standing looks
+ * exactly the same from every angle, so the geometry would be real and
+ * the picture would still read as a sheet of stickers.  A pure key light
+ * is the opposite trap -- half the graph turns to silhouette as you
+ * orbit, and in a map whose colours ARE the taxonomy an unidentifiable
+ * node is a lost node.  Key for form, fill for legibility.
+ *
+ * Cost is vertices, so LOD is per orb and chosen by the caller from how
+ * big the thing actually is: a department hub is worth triangles, a leaf
+ * a few pixels across is not.  Normals do not vary between orbs -- every
+ * one is the same unit sphere -- so the per-vertex lighting term is
+ * computed ONCE PER FRAME per LOD and reused by every orb at that LOD.
+ * That is what keeps thousands of lit spheres affordable.
+ *
+ * Indices are their own space (not the billboards'), valid until the
+ * next clear_orbs. */
+typedef enum
+{
+  CMACS_LIBREGNUM_ORB_LOD_LOW = 0,   /* 5x8   -- leaves in a crowd */
+  CMACS_LIBREGNUM_ORB_LOD_MED,       /* 6x10  -- ordinary nodes */
+  CMACS_LIBREGNUM_ORB_LOD_HIGH,      /* 12x20 -- landmarks */
+  CMACS_LIBREGNUM_ORB_LOD_COUNT
+} CmacsLibregnumOrbLod;
+
+extern gint  cmacs_libregnum_render_ctx_add_orb
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z, float radius,
+                               guint32 rgba, int lod);
+extern void  cmacs_libregnum_render_ctx_move_orb
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               float x, float y, float z);
+extern void  cmacs_libregnum_render_ctx_set_orb_color
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               guint32 rgba);
+extern void  cmacs_libregnum_render_ctx_set_orb_radius
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               float radius);
+extern void  cmacs_libregnum_render_ctx_clear_orbs
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_orb_count
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Per-node label policy ───────────────────────────────────────
  * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
  * behaviour (label directories + the selected node); the others let a
@@ -285,6 +341,26 @@ extern gboolean cmacs_libregnum_render_ctx_inscene_labels_p
 extern void     cmacs_libregnum_render_ctx_set_orbit_locked
                               (CmacsLibregnumRenderCtx *r, gboolean locked);
 extern gboolean cmacs_libregnum_render_ctx_orbit_locked_p
+                              (CmacsLibregnumRenderCtx *r);
+
+/* Let the orbit tumble all the way over the poles instead of stopping
+ * just short of them.
+ *
+ * The default (FALSE) clamps the elevation to about +/- 80 degrees,
+ * which is right for a scene with a canonical up: on a globe north stays
+ * up and the view never goes upside down.  It is wrong for a scene with
+ * no canonical up -- a graph, a warped disc -- where the clamp reads as
+ * the drag simply stopping in one direction, for no reason the picture
+ * explains.
+ *
+ * With this on the elevation runs continuously through a full turn and
+ * the camera's UP VECTOR flips as it crosses a pole, which is what keeps
+ * the image continuous instead of snapping through a gimbal.  Horizontal
+ * drag is negated while inverted, so dragging right still turns the
+ * scene the way it moves on screen. */
+extern void     cmacs_libregnum_render_ctx_set_orbit_continuous
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_orbit_continuous_p
                               (CmacsLibregnumRenderCtx *r);
 
 /* What a right-drag does.  The default (FALSE) is the CAD profile:

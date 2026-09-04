@@ -200,25 +200,64 @@ all; the next expand therefore animates them out of the hub's own
 position rather than out of wherever a stale placement had scattered
 them.
 
+@subsection The plane a closed-form layout lives in
+
+Every closed-form layout here is planar by construction --- a circle, a
+hex lattice, a set of concentric bands --- and which plane that is
+matters more than it looks.
+
+In @strong{2D} it is XY, because that is what ``right and up'' mean on a
+screen.  In @strong{3D} it is the world's @strong{ground plane}, XZ,
+with the out-of-plane axis on Y.
+
+The obvious choice --- keep XY and use Z for height --- is wrong, and
+wrong in a way that presents as a rendering bug rather than as a layout
+one.  The consumer's world is Y-up and so is its orbit camera, whose two
+drag gestures are azimuth about Y and elevation from the XZ plane.  Lay
+a disc in XY and neither gesture matches the thing being looked at: the
+elevation drag walks the camera along the disc's own plane and jams
+against the pole clamp @emph{edge-on}, so the layout presents as a flat
+streak that will not turn.  In XZ the same two gestures are ``spin it''
+and ``raise your eye above it''.
+
+@code{place_plane} is the only writer and @code{plane_uv} the only
+reader, so a pass that needs a node's in-plane direction (the fan that
+places children around their parent) cannot silently read the height
+axis instead.
+
 @subsection The galaxy warp: RINGS out of its plane
 
 @code{cmacs_graph_layout_set_galaxy_tilt} bends the rings out of their
 plane, because concentric rings viewed in 3D are coplanar and orbiting
-them only proves they are flat.  Height grows with radius and varies as
-the sine of the azimuth, so one side of the disc lifts and the opposite
-side drops --- the ``integral sign'' warp real galaxies have --- plus a
-small per-node thickness term so a group is not a perfectly flat sheet.
+them only proves they are flat.  Two terms, sharing one amplitude:
+
+@itemize @bullet
+@item
+The @strong{warp} is a mode-1 bend: @code{r*tan(tilt)*sin(azimuth)}, so
+height grows with radius and one side of the disc lifts while the
+opposite side drops --- the ``integral sign'' warp real galaxies have.
+@item
+The @strong{thickness} is
+@code{r*tan(tilt)*THICKNESS*jitter(id)} --- the same amplitude, scaled
+down, and @emph{azimuth-independent}, because a real disc is thick
+everywhere and not only where it bends.
+@end itemize
+
+Sharing the amplitude is what makes the pair statable: no node can
+exceed @code{atan((1 + THICKNESS) * tan(TILT))}, which is a bound the
+tests assert rather than a margin someone guessed.  An absolute scatter
+would have had neither property --- it would drift out of proportion
+with the ring gap and could only ever be bounded empirically.
 
 Zero by default, so an existing consumer's picture does not change
 under it: roamgraph's rings stay coplanar unless it asks for the warp.
 
-The tilt is the warp's crest, where @code{atan(z/r)} equals it exactly;
-the thickness rides on top, so one node may sit slightly beyond.
+The tilt is the warp's crest, where @code{atan(h/r)} equals it exactly.
 
 The thickness is hashed from the node's @emph{id} rather than its
 index, because index order churns on every rebuild and hashing that
 would reshuffle every height on refresh.  RINGS only, and inert in 2D:
-@code{place_set} zeroes z for a 2D layout.
+@code{place_set} zeroes the third axis for a 2D layout.
 
 @subsection CIRCLE: children fan around their parent
 

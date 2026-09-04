@@ -72,10 +72,19 @@
    band claims for its population. */
 #define GRAPHCORE_NODE_ARC (0.95)
 #define GRAPHCORE_ROW_GAP  (0.85)
-/* Disc thickness, as a multiple of the row gap: the per-node scatter
-   that stops one wedge's members being perfectly coplanar.  Deliberately
-   well under a row, so the warp never blurs the band structure. */
-#define GRAPHCORE_GALAXY_THICKNESS (0.6)
+/* Disc thickness, as a fraction of the LOCAL WARP AMPLITUDE (r*tan(tilt))
+   rather than an absolute distance.  Two consequences, both wanted:
+
+   - it scales with the disc, so a wide map is proportionally as thick as
+     a narrow one and the shape survives any ring gap;
+   - the maximum elevation any node can reach is exactly
+     atan((1 + THICKNESS) * tan(TILT)) -- a bound that can be stated,
+     documented and tested, which an absolute scatter cannot be.
+
+   It is also azimuth-independent, unlike the warp: a real disc is thick
+   everywhere, not only where it happens to bend.  Big enough to read as
+   volume from any angle, small enough that the bands stay bands. */
+#define GRAPHCORE_GALAXY_THICKNESS (0.34)
 #define GRAPHCORE_RING_GAP     6.0
 
 /* Centre-to-centre spacing of the hex lattice, in the same world units
@@ -909,6 +918,43 @@ place_set (CmacsGraphNode *nd, double x, double y, double z, int dims)
   nd->placed = 1;
 }
 
+/* ── The plane a closed-form layout lives in ───────────────────────
+ *
+ * Every closed-form layout here is planar by construction: a circle, a
+ * hex lattice, a set of concentric bands.  Which plane that is matters,
+ * and the obvious answer is wrong.
+ *
+ * In 2D it is XY, because that is what "right and up" mean on a screen.
+ *
+ * In 3D it is the GROUND plane, XZ, with the out-of-plane axis on Y.
+ * The renderer's world is Y-up and so is its orbit camera, whose drag
+ * gestures are azimuth about Y and elevation from the XZ plane.  Lay a
+ * disc in XY instead and those two gestures no longer match the thing
+ * being looked at: the elevation drag walks the camera along the disc's
+ * own plane and slams into the pole clamp edge-on, so the map presents
+ * as a flat streak and the drag appears to stop for no reason.  In XZ
+ * the same two gestures are "spin the galaxy" and "raise your eye above
+ * it", which is the whole interaction anyone wants with a disc.
+ *
+ * U is the in-plane axis that reads as X on screen in 2D, V the one that
+ * reads as Y, and H is the height out of the plane. */
+static void
+place_plane (CmacsGraphNode *nd, double u, double v, double h, int dims)
+{
+  if (dims == 2) place_set (nd, u, v, 0.0, dims);
+  else           place_set (nd, u, h, v, dims);
+}
+
+/* Read a node's in-plane coordinates back out, whichever plane it is
+   in.  Used by the fan pass, which needs the direction from the origin
+   to a parent and would otherwise silently read the height axis. */
+static void
+plane_uv (const CmacsGraphNode *nd, int dims, double *u, double *v)
+{
+  *u = (double) nd->tx;
+  *v = (dims == 2) ? (double) nd->ty : (double) nd->tz;
+}
+
 /* Place every visible node that has a VISIBLE parent in a disc around
  * that parent, biased outward from the origin.
  *
@@ -980,7 +1026,7 @@ place_children_around_parents (CmacsGraph *g, GArray *order, int dims,
 
       /* Outward from the origin, so a fan opens away from the centre
          rather than back across the rings it came from. */
-      px = (double) pn->tx; py = (double) pn->ty;
+      plane_uv (pn, dims, &px, &py);
       len = sqrt (px * px + py * py);
       if (len < 1e-6) { dirx = 1.0; diry = 0.0; }
       else            { dirx = px / len; diry = py / len; }
@@ -988,10 +1034,10 @@ place_children_around_parents (CmacsGraph *g, GArray *order, int dims,
       a = (double) seen * 2.39996322972865332;   /* golden angle */
       r = spread * sqrt (((double) seen + 0.5) / (double) total);
 
-      place_set (nd,
-                 px + dirx * spread * 0.75 + r * cos (a),
-                 py + diry * spread * 0.75 + r * sin (a),
-                 0.0, dims);
+      place_plane (nd,
+                   px + dirx * spread * 0.75 + r * cos (a),
+                   py + diry * spread * 0.75 + r * sin (a),
+                   0.0, dims);
       placed++;
     }
 
@@ -1041,7 +1087,7 @@ place_circle (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
               && g_array_index (g->nodes, CmacsGraphNode,
                                 (guint) nd->parent).visible)
             continue;
-          place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
+          place_plane (nd, r * cos (a), r * sin (a), 0.0, dims);
         }
 
       start = end;
@@ -1076,7 +1122,7 @@ place_hex (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
           CmacsGraphNode *nd =
             &g_array_index (g->nodes, CmacsGraphNode,
                             g_array_index (order, guint, placed));
-          place_set (nd, 0.0, 0.0, 0.0, dims);
+          place_plane (nd, 0.0, 0.0, 0.0, dims);
           placed++;
           ring = 1;
           continue;
@@ -1098,7 +1144,7 @@ place_hex (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                                 g_array_index (order, guint, placed));
               double px = size * 1.5 * (double) q;
               double py = size * sqrt (3.0) * ((double) sx + 0.5 * (double) q);
-              place_set (nd, px, py, 0.0, dims);
+              place_plane (nd, px, py, 0.0, dims);
               placed++;
               q += DQ[d]; sx += DS[d];
             }
@@ -1120,23 +1166,28 @@ place_hex (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
  *
  * Two terms, and the split is the whole design:
  *
- *   The WARP is a mode-1 (integral-sign) bend: z grows with radius and
- *   varies as sin of the azimuth, so one side of the disc lifts and the
- *   opposite side drops.  Coherent, not random -- neighbours stay
+ *   The WARP is a mode-1 (integral-sign) bend: height grows with radius
+ *   and varies as sin of the azimuth, so one side of the disc lifts and
+ *   the opposite side drops.  Coherent, not random -- neighbours stay
  *   neighbours, a department stays a clump, and the eye reads a shape
  *   rather than scatter.  Growing with radius is what keeps the middle
  *   legible while the rim does the moving.
  *
- *   The THICKNESS is a small per-node offset so members of one wedge are
- *   not perfectly coplanar.  Without it the map is a bent sheet; with it
- *   the disc has substance.  Kept small on purpose: crank it and the
- *   band structure the layout works hard to produce dissolves back into
- *   the smear it exists to prevent.
+ *   The THICKNESS is a per-node offset so members of one wedge are not
+ *   perfectly coplanar.  Without it the map is a bent sheet; with it the
+ *   disc has substance.  It does NOT vary with azimuth -- a real disc is
+ *   thick everywhere, not only where it bends -- and it is a fraction of
+ *   the same r*tan(tilt) amplitude the warp uses, so the two stay in
+ *   proportion at any tilt and any scale.
+ *
+ * The height axis is Y in 3D and does not exist in 2D; see place_plane
+ * for why a planar layout lies in the world's ground plane.
  *
  * TILT is the elevation of the warp term at its crest, in radians, and
- * there it is exact: z = r*tan(tilt) means atan(z/r) == tilt.  The
- * thickness term rides on top, so a given node may sit a little beyond
- * it; TILT is the shape of the disc, not a per-node ceiling.  The
+ * there it is exact: h = r*tan(tilt) means atan(h/r) == tilt.  The
+ * thickness rides on top, so a node may sit beyond it -- but by a stated
+ * amount: no node can exceed atan((1 + THICKNESS) * tan(TILT)).  TILT is
+ * the shape of the disc, not a per-node ceiling.  The
  * angle is the node's FINAL azimuth, spin included, so the warp is fixed
  * in world space and a spinning ring flows through it the way stars orbit
  * through a real warped disc, rather than the whole sheet rotating
@@ -1166,13 +1217,18 @@ static double
 graphcore_galaxy_z (CmacsGraphLayout *l, CmacsGraphNode *nd,
                     double r, double angle)
 {
-  double warp, thick;
+  double amp, warp, thick;
 
   if (l->galaxy_tilt <= 0.0) return 0.0;
 
-  warp  = r * tan (l->galaxy_tilt) * sin (angle);
-  thick = graphcore_id_jitter (nd->id) * GRAPHCORE_ROW_GAP
-            * GRAPHCORE_GALAXY_THICKNESS;
+  /* One scale for both terms.  The warp is the disc's SHAPE (it varies
+     with azimuth, so one side lifts and the other drops); the thickness
+     is its SUBSTANCE (it does not, so the disc is thick all the way
+     round).  Sharing r*tan(tilt) is what makes the pair bounded by
+     atan((1 + THICKNESS) * tan(TILT)) everywhere. */
+  amp   = r * tan (l->galaxy_tilt);
+  warp  = amp * sin (angle);
+  thick = amp * GRAPHCORE_GALAXY_THICKNESS * graphcore_id_jitter (nd->id);
   return warp + thick;
 }
 
@@ -1340,8 +1396,8 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
 
           cursor += span;
 
-          place_set (hub, r * cos (mid), r * sin (mid),
-                     graphcore_galaxy_z (l, hub, r, mid), dims);
+          place_plane (hub, r * cos (mid), r * sin (mid),
+                       graphcore_galaxy_z (l, hub, r, mid), dims);
 
           /* Count this root's members (excluding itself) to shape the
              lattice they sit in. */
@@ -1394,8 +1450,8 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                    the gesture implies. */
                 rr = r + GRAPHCORE_ROW_GAP * 0.9
                        + thickness * (((double) row + 0.5) / (double) rows);
-                place_set (nd, rr * cos (a), rr * sin (a),
-                           graphcore_galaxy_z (l, nd, rr, a), dims);
+                place_plane (nd, rr * cos (a), rr * sin (a),
+                             graphcore_galaxy_z (l, nd, rr, a), dims);
               }
           }
         }

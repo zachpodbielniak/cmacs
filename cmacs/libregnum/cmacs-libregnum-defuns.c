@@ -864,6 +864,25 @@ invisible in a screenshot and obvious in this number.  */)
                       : 0);
 }
 
+DEFUN ("cmacs-libregnum-orb-count",
+       Fcmacs_libregnum_orb_count,
+       Scmacs_libregnum_orb_count, 1, 1, 0,
+       doc: /* Number of shaded sphere orbs in BUFFER's scene.
+
+For tests.  Orbs are real lit geometry drawn by their own pass rather
+than drawables or billboards, so neither of the other two counts can see
+them -- and a scene that stops emitting them looks merely duller rather
+than broken.  Like billboards they survive `clear-drawables', so a scene
+that forgets to clear them grows by one per node per refresh.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return make_fixnum (ctx
+                      ? (EMACS_INT) cmacs_libregnum_render_ctx_orb_count (ctx)
+                      : 0);
+}
+
 DEFUN ("cmacs-libregnum-set-focus-policy",
        Fcmacs_libregnum_set_focus_policy,
        Scmacs_libregnum_set_focus_policy, 2, 3, 0,
@@ -1160,6 +1179,43 @@ everything is coplanar.  */)
   cmacs_libregnum_render_ctx_set_orbit_locked
     (cmacs_libregnum_view_get_render_ctx (v), !NILP (locked));
   return locked;
+}
+
+DEFUN ("cmacs-libregnum-set-orbit-continuous",
+       Fcmacs_libregnum_set_orbit_continuous,
+       Scmacs_libregnum_set_orbit_continuous, 2, 2, 0,
+       doc: /* Let BUFFER's camera tumble through the poles when ON is non-nil.
+
+By default the orbit stops about ten degrees short of straight up and
+straight down, which is right for a scene with a canonical up -- a globe
+keeps north up and never goes upside down.  For a scene that has no
+canonical up, a graph or a warped disc, the same clamp reads as the drag
+simply refusing to go any further in one direction.
+
+With this on the elevation runs continuously all the way round and the
+camera's up vector flips as it crosses a pole, so the picture stays
+continuous instead of snapping through a gimbal.  Returns ON.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_set_orbit_continuous
+    (cmacs_libregnum_view_get_render_ctx (v), !NILP (on));
+  return on;
+}
+
+DEFUN ("cmacs-libregnum-orbit-continuous-p",
+       Fcmacs_libregnum_orbit_continuous_p,
+       Scmacs_libregnum_orbit_continuous_p, 1, 1, 0,
+       doc: /* Return t when BUFFER's camera tumbles through the poles.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  return cmacs_libregnum_render_ctx_orbit_continuous_p
+           (cmacs_libregnum_view_get_render_ctx (v)) ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-libregnum-mean-color", Fcmacs_libregnum_mean_color,
@@ -3092,6 +3148,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_label_decor);
   defsubr (&Scmacs_libregnum_set_selection_style);
   defsubr (&Scmacs_libregnum_billboard_count);
+  defsubr (&Scmacs_libregnum_orb_count);
   defsubr (&Scmacs_libregnum_set_focus_policy);
   defsubr (&Scmacs_libregnum_set_background);
   defsubr (&Scmacs_libregnum_particles_enable);
@@ -3105,6 +3162,8 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_zoom);
   defsubr (&Scmacs_libregnum_orbit);
   defsubr (&Scmacs_libregnum_set_orbit_locked);
+  defsubr (&Scmacs_libregnum_set_orbit_continuous);
+  defsubr (&Scmacs_libregnum_orbit_continuous_p);
   defsubr (&Scmacs_libregnum_mean_color);
   defsubr (&Scmacs_libregnum_ink_bbox);
   defsubr (&Scmacs_libregnum_nearest_in_direction);

@@ -127,15 +127,20 @@ extern double cmacs_graph_layout_get_ring_gap (CmacsGraphLayout *l);
  * radians; 0 (the default) keeps the rings coplanar.
  *
  * Concentric rings viewed in 3D are coplanar, so orbiting them only
- * proves they are flat.  The warp bends the disc -- z grows with radius
- * and varies as sin of the azimuth -- so one side lifts and the other
- * drops, which is what makes a 3D view of a ring layout worth having.
- * TILT is the warp's crest: there atan(z/r) == TILT exactly.  The small
- * per-node thickness term rides on top, so one node may sit slightly
- * beyond it -- TILT describes the disc, not a ceiling per node.
+ * proves they are flat.  The warp bends the disc -- height grows with
+ * radius and varies as sin of the azimuth -- so one side lifts and the
+ * other drops, which is what makes a 3D view of a ring layout worth
+ * having.  A per-node thickness rides on top, azimuth-independent, so
+ * the disc has substance rather than being a bent sheet.
  *
- * Only the RINGS layout warps, and only in 3D: `place_set' zeroes z in a
- * 2D layout, so the same setting is correct in both views. */
+ * TILT is the warp's crest: there atan(h/r) == TILT exactly.  With the
+ * thickness on top, no node exceeds atan(1.34 * tan(TILT)) -- TILT
+ * describes the disc, and that expression is the actual ceiling.
+ *
+ * The height axis is Y (a 3D planar layout lies in the world's ground
+ * plane, XZ).  Only the RINGS layout warps, and only in 3D: `place_set'
+ * zeroes the third axis in a 2D layout, so one setting is correct in
+ * both views. */
 extern void   cmacs_graph_layout_set_galaxy_tilt (CmacsGraphLayout *l,
                                                   double radians);
 extern double cmacs_graph_layout_get_galaxy_tilt (CmacsGraphLayout *l);

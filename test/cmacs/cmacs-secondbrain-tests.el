@@ -1392,7 +1392,89 @@ means the feature is dead, more means something else leaked in with it."
       ;; One halo per visible node -- including the skill gem, which
       ;; keeps its geometry but still glows.
       (should (= (- with without) 3))
-      (should (> without 0)))))
+      ;; And with the halos off there are no billboards left at all.
+      ;; Round nodes used to be impostor billboards, so this number was
+      ;; once non-zero; they are real lit geometry now and the billboard
+      ;; list is the halos and nothing else.
+      (should (= without 0)))))
+
+(ert-deftest cmacs-secondbrain-test-round-nodes-are-real-geometry ()
+  "Round nodes are lit sphere GEOMETRY, not camera-facing impostors.
+
+They used to be impostors: a flat quad wearing a picture of a sphere,
+with its highlight baked into screen space, so orbiting never changed
+how anything was lit and a field of them read as stickers on a sheet.
+Counting is the only way to tell from the outside -- both look round in
+a still -- so count: one orb per round node, no impostor billboards, and
+nothing left over."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-orb-count)
+                    (fboundp 'cmacs-secondbrain-set-shading)))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file  :ring 'memory)
+                         (list :id "b" :title "B" :kind 'hub   :ring 'memory)
+                         (list :id "c" :title "C" :kind 'skill :ring 'skills)
+                         (list :id "d" :title "D" :kind 'app   :ring
+                               'applications))))
+      (cmacs-secondbrain-set-glow buf nil)
+      (cmacs-secondbrain-set-shading buf t)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      ;; Two round ones (the file and the hub).  The gem and the prism
+      ;; keep their own geometry: their shape is what they mean.
+      (should (= 2 (cmacs-libregnum-orb-count buf)))
+      (should (= 0 (cmacs-libregnum-billboard-count buf)))
+      ;; Shading off drops back to plain unlit geometry for everything.
+      (cmacs-secondbrain-set-shading buf nil)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      (should (= 0 (cmacs-libregnum-orb-count buf))))))
+
+(ert-deftest cmacs-secondbrain-test-orbs-do-not-accumulate ()
+  "Rebuilding keeps the orb count flat.
+
+The same trap billboards fall into, and for the same reason: orbs are
+not cleared by `clear-drawables\=', so a rebuild that forgets them leaves
+every previous copy behind at the position its node used to be in.  That
+is invisible in a screenshot -- the stale orbs sit under the live ones --
+and obvious in this number."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-orb-count))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                         (list :id "b" :title "B" :kind 'file :ring 'memory)))
+          counts)
+      (dotimes (_ 4)
+        (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+        (push (cmacs-libregnum-orb-count buf) counts))
+      (should (= 1 (length (delete-dups (copy-sequence counts)))))
+      (should (= 2 (car counts))))))
+
+(ert-deftest cmacs-secondbrain-test-orbiting-relights-the-nodes ()
+  "Orbiting changes how a node is lit, because the key light is fixed.
+
+The trap this catches is a pure headlight.  It looks like the obvious
+choice -- a light attached to the camera can never leave a node in
+shadow -- and it makes real geometry pointless: a sphere lit from
+wherever you are standing is IDENTICAL from every angle, so the render
+would be real and the picture would still read as a sticker.
+
+A sphere\='s silhouette does not change under orbit either, so any change
+in the frame at all is the shading and nothing else."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-mean-color)
+                    (fboundp 'cmacs-libregnum-orbit)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-glow buf nil)
+    (cmacs-secondbrain-set-shading buf t)
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'hub :ring 'memory))
+     (vector) 3)
+    (cmacs-secondbrain-fit buf)
+    (let ((before (cmacs-libregnum-mean-color buf)))
+      (cmacs-libregnum-orbit buf 0 160)
+      (let ((after (cmacs-libregnum-mean-color buf)))
+        (should before)
+        (should after)
+        (should-not (equal before after))))))
 
 (ert-deftest cmacs-secondbrain-test-glow-does-not-accumulate ()
   "Rebuilding with glow on keeps the billboard count flat.
@@ -1868,10 +1950,67 @@ see, and every further step is blind."
                                     '(skills memory routines applications)))))
 
 (defun cmacs-secondbrain-tests--zs (buf nodes)
-  "The z coordinate of every node in NODES."
-  (mapcar (lambda (n) (nth 2 (cmacs-secondbrain-node-position
-                              buf (plist-get n :id))))
+  "The out-of-plane height of every node in NODES.
+
+That is Y, not Z: a 3D planar layout lies in the world\='s GROUND plane
+so that the Y-up orbit camera\='s two drag gestures mean \"spin the
+galaxy\" and \"raise your eye above it\".  Laid out in XY instead, the
+elevation drag walks along the disc\='s own plane and jams against the
+pole clamp edge-on.  In the flat view the height axis is Z and is
+always zero, which is what every caller here is really asserting."
+  (mapcar (lambda (n)
+            (let ((p (cmacs-secondbrain-node-position
+                      buf (plist-get n :id))))
+              (if (cmacs-secondbrain-tests--3d-p buf) (nth 1 p) (nth 2 p))))
           nodes))
+
+(defun cmacs-secondbrain-tests--3d-p (buf)
+  "Non-nil when BUF\='s layout was placed in three dimensions."
+  (not (cmacs-secondbrain-flat-p buf)))
+
+(ert-deftest cmacs-secondbrain-test-3d-layout-is-in-the-ground-plane ()
+  "In 3D the disc lies in XZ, with height on Y; in 2D it lies in XY.
+
+This is not cosmetic bookkeeping, it is the fix for a map that came up
+as a flat streak you could not turn.  The renderer\='s world is Y-up and
+so is its orbit camera, whose two drag gestures are azimuth about Y and
+elevation from the XZ plane.  Lay the disc in XY instead and neither
+gesture means anything sensible: the elevation drag walks the camera
+along the disc\='s OWN plane until it jams against the pole clamp
+edge-on, so the galaxy presents as a line and the drag appears to stop
+for no reason the picture explains.
+
+Asserted as extents rather than as one node\='s coordinates, because that
+is the actual claim -- the whole disc is wide in two axes and thin in
+the third."
+  (cmacs-secondbrain-tests--skip)
+  (cmacs-secondbrain-tests--with-view buf
+    (let* ((nodes (cmacs-secondbrain-tests--ring-nodes 40))
+           (extent
+            (lambda (axis)
+              (let ((vals (mapcar
+                           (lambda (n)
+                             (nth axis (cmacs-secondbrain-node-position
+                                        buf (plist-get n :id))))
+                           nodes)))
+                (- (apply #'max vals) (apply #'min vals))))))
+      ;; 3D: wide in X and Z, thin in Y.
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 32 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (> (funcall extent 0) 1.0))
+      (should (> (funcall extent 2) 1.0))
+      (should (< (funcall extent 1) (funcall extent 0)))
+      (should (< (funcall extent 1) (funcall extent 2)))
+      ;; ... and thin does not mean flat: the warp is what makes the
+      ;; third dimension worth having.
+      (should (> (funcall extent 1) 1.0))
+      ;; 2D: wide in X and Y, exactly zero in Z.
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 2)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (> (funcall extent 0) 1.0))
+      (should (> (funcall extent 1) 1.0))
+      (should (= 0.0 (funcall extent 2))))))
 
 (ert-deftest cmacs-secondbrain-test-galaxy-tilt-lifts-the-rings ()
   "In 3D the rings warp out of the plane; at tilt 0 they stay coplanar.
@@ -1900,9 +2039,10 @@ so orbiting them only proves they are flat."
 (ert-deftest cmacs-secondbrain-test-galaxy-tilt-respects-the-angle ()
   "The warp reaches about the requested elevation, and no more.
 
-Asserts a BOUND, not an exact value: the small per-node thickness rides
-on top of the warp crest, so a node may sit a little beyond the angle.
-The docstring says so; this pins how much \"a little\" is allowed to be."
+Asserts a BOUND, not an exact value: the per-node thickness rides on top
+of the warp crest, so a node may sit beyond the angle.  The bound is not
+a guess -- both terms scale with the same r*tan(TILT), so the ceiling is
+exactly atan(1.34 * tan TILT), which for 24 degrees is 30.7."
   (cmacs-secondbrain-tests--skip)
   (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
   (cmacs-secondbrain-tests--with-view buf
@@ -1914,19 +2054,22 @@ The docstring says so; this pins how much \"a little\" is allowed to be."
              (delq nil
                    (mapcar
                     (lambda (n)
+                      ;; In 3D the disc is in XZ and the height is Y.
                       (let* ((p (cmacs-secondbrain-node-position
                                  buf (plist-get n :id)))
                              (r (sqrt (+ (* (nth 0 p) (nth 0 p))
-                                         (* (nth 1 p) (nth 1 p))))))
+                                         (* (nth 2 p) (nth 2 p))))))
                         (and (> r 0.01)
                              (radians-to-degrees
-                              (atan (abs (nth 2 p)) r)))))
+                              (atan (abs (nth 1 p)) r)))))
                     nodes))))
         (should elevations)
         ;; It actually gets up there ...
         (should (> (apply #'max elevations) 18.0))
-        ;; ... and does not run away past it.
-        (should (< (apply #'max elevations) 34.0))))))
+        ;; ... and does not run away past the stated ceiling.
+        (should (< (apply #'max elevations)
+                   (radians-to-degrees
+                    (atan (* 1.34 (tan (degrees-to-radians 24.0)))))))))))
 
 (ert-deftest cmacs-secondbrain-test-galaxy-tilt-is-inert-in-2d ()
   "The flat view stays flat however the tilt is set.

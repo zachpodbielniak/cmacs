@@ -207,6 +207,17 @@ typedef struct
                             1 = additive glow, drawn after, unsorted */
 } CmacsBillboard;
 
+/* A real, per-vertex-lit sphere at a fixed world point; see the orb
+ * pass near the billboards.  Deliberately a POD in a flat array rather
+ * than an LrgShape3D: there are thousands of these, they are all the
+ * same unit sphere at different centres, and the whole point of the
+ * pass is that their shading is computed once per frame and shared. */
+typedef struct {
+  float  x, y, z, r;
+  guint32 rgba;
+  guint8 lod;
+} CmacsOrb;
+
 /* Draw-order entry for the sorted billboard pass. */
 typedef struct
 {
@@ -379,6 +390,7 @@ struct CmacsLibregnumRenderCtx
   GrlFont      *label_font;        /* owned, or NULL for the default */
   gboolean      inscene_labels;
   gboolean      orbit_locked;    /* flat views must stay flat */
+  gboolean      orbit_continuous; /* tumble through the poles, no clamp */
   gboolean      right_drag_pans; /* else right-drag orbits (CAD profile) */
   gboolean      wheel_up_zooms_in; /* else the legacy inverted wheel */
   gboolean      label_backdrop;  /* translucent plate behind label text */
@@ -474,6 +486,8 @@ struct CmacsLibregnumRenderCtx
 
   /* Persistent camera-facing billboards (e.g. country flags). */
   GArray           *billboards;       /* CmacsBillboard */
+  /* Real, per-vertex-lit sphere geometry; see the orb pass. */
+  GArray           *orbs;             /* CmacsOrb */
   /* Shared lit-sphere impostor texture; see orb_texture(). */
   GrlTexture       *orb_tex;          /* owned */
   /* Shared radial-falloff glow texture; see ctx_glow_texture(). */
@@ -604,6 +618,7 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->click_focus = TRUE;
   r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
   g_array_set_clear_func (r->billboards, cmacs_billboard_clear);
+  r->orbs = g_array_new (FALSE, TRUE, sizeof (CmacsOrb));
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -667,6 +682,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->overlay_models) g_ptr_array_unref (r->overlay_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
+  if (r->orbs) g_array_free (r->orbs, TRUE);
   g_clear_object (&r->orb_tex);
   g_clear_object (&r->glow_tex);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
@@ -1117,6 +1133,24 @@ gboolean
 cmacs_libregnum_render_ctx_orbit_locked_p (CmacsLibregnumRenderCtx *r)
 {
   return r ? r->orbit_locked : FALSE;
+}
+
+void
+cmacs_libregnum_render_ctx_set_orbit_continuous (CmacsLibregnumRenderCtx *r,
+                                                 gboolean on)
+{
+  if (!r) return;
+  r->orbit_continuous = on;
+  /* Turning it off leaves the camera wherever it is, upside down
+     included: forcing it upright here would teleport the view as a side
+     effect of changing a policy, which is worse than an inverted camera
+     the next drag can correct. */
+}
+
+gboolean
+cmacs_libregnum_render_ctx_orbit_continuous_p (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->orbit_continuous : FALSE;
 }
 
 /* Choose what a right-drag does.  The default CAD profile orbits with
@@ -2151,6 +2185,285 @@ void
 cmacs_libregnum_render_ctx_clear_billboards (CmacsLibregnumRenderCtx *r)
 {
   if (r && r->billboards) g_array_set_size (r->billboards, 0);
+}
+
+/* ── Shaded orbs ─────────────────────────────────────────────────── */
+
+gint
+cmacs_libregnum_render_ctx_add_orb (CmacsLibregnumRenderCtx *r,
+                                    float x, float y, float z, float radius,
+                                    guint32 rgba, int lod)
+{
+  CmacsOrb o = { 0 };
+
+  if (!r || !r->orbs) return -1;
+  o.x = x; o.y = y; o.z = z;
+  o.r = (radius > 0.0f) ? radius : 0.01f;
+  o.rgba = rgba;
+  o.lod = (guint8) CLAMP (lod, 0, CMACS_LIBREGNUM_ORB_LOD_COUNT - 1);
+  g_array_append_val (r->orbs, o);
+  return (gint) r->orbs->len - 1;
+}
+
+void
+cmacs_libregnum_render_ctx_move_orb (CmacsLibregnumRenderCtx *r, gint idx,
+                                     float x, float y, float z)
+{
+  CmacsOrb *o;
+  if (!r || !r->orbs || idx < 0 || (guint) idx >= r->orbs->len) return;
+  o = &g_array_index (r->orbs, CmacsOrb, idx);
+  o->x = x; o->y = y; o->z = z;
+}
+
+void
+cmacs_libregnum_render_ctx_set_orb_color (CmacsLibregnumRenderCtx *r,
+                                          gint idx, guint32 rgba)
+{
+  if (!r || !r->orbs || idx < 0 || (guint) idx >= r->orbs->len) return;
+  g_array_index (r->orbs, CmacsOrb, idx).rgba = rgba;
+}
+
+void
+cmacs_libregnum_render_ctx_set_orb_radius (CmacsLibregnumRenderCtx *r,
+                                           gint idx, float radius)
+{
+  if (!r || !r->orbs || idx < 0 || (guint) idx >= r->orbs->len) return;
+  g_array_index (r->orbs, CmacsOrb, idx).r = (radius > 0.0f) ? radius : 0.01f;
+}
+
+void
+cmacs_libregnum_render_ctx_clear_orbs (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->orbs) g_array_set_size (r->orbs, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_orb_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->orbs) ? r->orbs->len : 0;
+}
+
+/* ── The shaded-orb pass ──────────────────────────────────────────
+ *
+ * A unit sphere per LOD, generated once for the process, plus two
+ * per-vertex shading tables recomputed once per frame per LOD.
+ *
+ * The tables are the reason this is affordable.  Every orb is the same
+ * unit sphere translated and scaled, so every orb's vertex NORMALS are
+ * identical -- and the lighting term depends only on the normal and the
+ * camera.  Shade the mesh once and thousands of orbs cost a multiply per
+ * vertex instead of a lighting equation per vertex.  Scaling and
+ * translating are done here rather than through rlPushMatrix because
+ * rlgl applies a pushed matrix on the CPU per vertex anyway; doing it
+ * inline is the same arithmetic without the matrix multiply. */
+
+typedef struct
+{
+  int     rings, slices;
+  int     rows, cols;   /* (rings + 2) x (slices + 1) grid points */
+  float  *pos;          /* 3 floats per point; a unit sphere, so also the
+                           vertex normal -- which is what lets one table
+                           of shades serve every orb */
+  guint8 *lum;          /* ambient + diffuse + rim: MULTIPLIES the colour */
+  guint8 *spc;          /* specular: ADDED as white, so a saturated node
+                           can still show a highlight */
+} CmacsOrbMesh;
+
+static CmacsOrbMesh orb_meshes[CMACS_LIBREGNUM_ORB_LOD_COUNT];
+
+/* Rings x slices per LOD.  A leaf is a few pixels across and a hub is a
+   landmark, so they are not worth the same number of triangles. */
+static const int orb_lod_rings[CMACS_LIBREGNUM_ORB_LOD_COUNT]  = {  5,  6, 12 };
+static const int orb_lod_slices[CMACS_LIBREGNUM_ORB_LOD_COUNT] = {  8, 10, 20 };
+
+/* The two triangles of one grid cell, wound exactly as raylib winds
+   DrawSphereEx -- backface culling is on, and a reversed winding shows
+   the inside of every sphere: still round, lit from the wrong side, and
+   not obviously a bug. */
+static const int orb_tri_di[6] = { 0, 1, 1, 0, 0, 1 };
+static const int orb_tri_dj[6] = { 0, 1, 0, 0, 1, 1 };
+
+static CmacsOrbMesh *
+orb_mesh (int lod)
+{
+  CmacsOrbMesh *m;
+  int i, j;
+
+  lod = CLAMP (lod, 0, CMACS_LIBREGNUM_ORB_LOD_COUNT - 1);
+  m = &orb_meshes[lod];
+  if (m->pos) return m;
+
+  m->rings  = orb_lod_rings[lod];
+  m->slices = orb_lod_slices[lod];
+  m->rows   = m->rings + 2;
+  /* The seam column is duplicated so a cell can index j and j+1 without
+     wrapping -- the wrap is one branch per vertex otherwise, in the
+     hottest loop in the pass. */
+  m->cols   = m->slices + 1;
+  m->pos = g_new (float,  (gsize) m->rows * m->cols * 3);
+  m->lum = g_new0 (guint8, (gsize) m->rows * m->cols);
+  m->spc = g_new0 (guint8, (gsize) m->rows * m->cols);
+
+  for (i = 0; i < m->rows; i++)
+    {
+      /* raylib's parametrisation: latitude runs 270 -> 450 degrees, so
+         row 0 is the south pole and row rings+1 the north. */
+      double lat = (270.0 + (180.0 / (double) (m->rings + 1)) * i)
+                     * (G_PI / 180.0);
+      double cl = cos (lat), sl = sin (lat);
+
+      for (j = 0; j < m->cols; j++)
+        {
+          double lon = (360.0 * (double) j / (double) m->slices)
+                         * (G_PI / 180.0);
+          float *p = &m->pos[((gsize) i * m->cols + j) * 3];
+          p[0] = (float) (cl * sin (lon));
+          p[1] = (float) sl;
+          p[2] = (float) (cl * cos (lon));
+        }
+    }
+  return m;
+}
+
+/* Shade one mesh for this frame's camera.
+ *
+ * KEY is world-fixed, FILL follows the camera, and having both is the
+ * point.  A pure headlight is the trap: a sphere lit from wherever you
+ * happen to be standing looks EXACTLY the same from every angle, so the
+ * geometry would be real and the picture would still read as a sticker.
+ * A pure key light is the opposite trap -- half the graph turns to
+ * silhouette as you orbit, and in a map whose colours ARE the taxonomy
+ * an unidentifiable node is a lost node.  Key for form, fill for
+ * legibility, and the specular comes off the key alone so there is one
+ * highlight that visibly travels as the scene turns.
+ *
+ * Every vector points FROM the surface TOWARD the thing.  H is the key's
+ * half-vector with the view. */
+static void
+orb_mesh_light (CmacsOrbMesh *m, const float key[3], const float fill[3],
+                const float H[3], const float V[3])
+{
+  gsize n = (gsize) m->rows * m->cols, i;
+
+  for (i = 0; i < n; i++)
+    {
+      const float *p = &m->pos[i * 3];
+      float ndk = p[0] * key[0]  + p[1] * key[1]  + p[2] * key[2];
+      float ndf = p[0] * fill[0] + p[1] * fill[1] + p[2] * fill[2];
+      float ndh = p[0] * H[0] + p[1] * H[1] + p[2] * H[2];
+      float ndv = p[0] * V[0] + p[1] * V[1] + p[2] * V[2];
+      float rim, lum, spec;
+
+      if (ndk < 0.0f) ndk = 0.0f;
+      if (ndf < 0.0f) ndf = 0.0f;
+      if (ndh < 0.0f) ndh = 0.0f;
+      if (ndv < 0.0f) ndv = 0.0f;
+
+      /* Rim light where the surface turns away from the viewer: without
+         it a small node's unlit limb fades into the sky and the ball
+         reads as a crescent rather than a ball. */
+      rim  = powf (1.0f - ndv, 3.0f) * 0.26f;
+      lum  = 0.30f + 0.55f * ndk + 0.26f * ndf + rim;
+      spec = powf (ndh, 34.0f) * 0.90f;
+
+      m->lum[i] = (guint8) CLAMP (lum  * 255.0f, 0.0f, 255.0f);
+      m->spc[i] = (guint8) CLAMP (spec * 255.0f, 0.0f, 255.0f);
+    }
+}
+
+static inline guint8
+orb_channel (guint8 c, guint8 lum, guint8 spc)
+{
+  int v = ((int) c * (int) lum) / 255 + (int) spc;
+  return (guint8) (v > 255 ? 255 : v);
+}
+
+/* Draw every orb.  Must be called inside the 3D bracket, with the depth
+   test on and normal blending -- orbs are opaque geometry and rely on
+   the depth buffer rather than on draw order. */
+static void
+ctx_draw_orbs (CmacsLibregnumRenderCtx *r, Camera3D cam)
+{
+  /* The key light, in WORLD space: up, a little left, a little front.
+     Fixed rather than camera-relative so that orbiting the scene sweeps
+     the terminator across every node -- which is the whole difference
+     between geometry that reads as three-dimensional and geometry that
+     reads as a picture of a ball. */
+  static const float ORB_KEY[3] = { -0.35f, 0.86f, 0.37f };
+  gboolean used[CMACS_LIBREGNUM_ORB_LOD_COUNT];
+  float fwd[3], key[3], V[3], H[3];
+  float len;
+  guint i;
+  int k;
+
+  if (!r || !r->orbs || r->orbs->len == 0) return;
+
+  /* V is the direction from a surface toward the viewer.  Treating it as
+     constant across the scene is exact for an orthographic camera and
+     close enough for a perspective one whose orbs are far smaller than
+     its distance to them, which is every scene that uses this -- and it
+     is what lets the shading tables be built once per frame rather than
+     once per orb. */
+  fwd[0] = cam.target.x - cam.position.x;
+  fwd[1] = cam.target.y - cam.position.y;
+  fwd[2] = cam.target.z - cam.position.z;
+  len = sqrtf (fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+  if (len < 1e-6f) return;
+  fwd[0] /= len; fwd[1] /= len; fwd[2] /= len;
+
+  V[0] = -fwd[0]; V[1] = -fwd[1]; V[2] = -fwd[2];
+
+  len = sqrtf (ORB_KEY[0]*ORB_KEY[0] + ORB_KEY[1]*ORB_KEY[1]
+               + ORB_KEY[2]*ORB_KEY[2]);
+  key[0] = ORB_KEY[0] / len;
+  key[1] = ORB_KEY[1] / len;
+  key[2] = ORB_KEY[2] / len;
+
+  H[0] = key[0] + V[0]; H[1] = key[1] + V[1]; H[2] = key[2] + V[2];
+  len = sqrtf (H[0]*H[0] + H[1]*H[1] + H[2]*H[2]);
+  if (len < 1e-6f) { H[0] = key[0]; H[1] = key[1]; H[2] = key[2]; }
+  else { H[0] /= len; H[1] /= len; H[2] /= len; }
+
+  for (k = 0; k < CMACS_LIBREGNUM_ORB_LOD_COUNT; k++) used[k] = FALSE;
+  for (i = 0; i < r->orbs->len; i++)
+    used[g_array_index (r->orbs, CmacsOrb, i).lod] = TRUE;
+  /* The fill light IS the view direction: a node facing you is never
+     dark, whatever the key is doing on the far side. */
+  for (k = 0; k < CMACS_LIBREGNUM_ORB_LOD_COUNT; k++)
+    if (used[k]) orb_mesh_light (orb_mesh (k), key, V, H, V);
+
+  rlBegin (RL_TRIANGLES);
+  for (i = 0; i < r->orbs->len; i++)
+    {
+      CmacsOrb *o = &g_array_index (r->orbs, CmacsOrb, i);
+      CmacsOrbMesh *m = orb_mesh (o->lod);
+      guint8 cr = (guint8) ((o->rgba >> 24) & 0xFF);
+      guint8 cg = (guint8) ((o->rgba >> 16) & 0xFF);
+      guint8 cb = (guint8) ((o->rgba >>  8) & 0xFF);
+      guint8 ca = (guint8) ( o->rgba        & 0xFF);
+      int row, col, v;
+
+      if (ca == 0) continue;
+      if (!ctx_point_near_side (r, o->x, o->y, o->z)) continue;
+
+      for (row = 0; row + 1 < m->rows; row++)
+        for (col = 0; col < m->slices; col++)
+          for (v = 0; v < 6; v++)
+            {
+              gsize idx = (gsize) (row + orb_tri_di[v]) * m->cols
+                            + (col + orb_tri_dj[v]);
+              const float *p = &m->pos[idx * 3];
+              guint8 lum = m->lum[idx], spc = m->spc[idx];
+
+              rlColor4ub (orb_channel (cr, lum, spc),
+                          orb_channel (cg, lum, spc),
+                          orb_channel (cb, lum, spc), ca);
+              rlVertex3f (o->x + o->r * p[0],
+                          o->y + o->r * p[1],
+                          o->z + o->r * p[2]);
+            }
+    }
+  rlEnd ();
 }
 
 /* ── Particles ─────────────────────────────────────────────────────
@@ -4228,6 +4541,11 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
+        /* Real, lit sphere geometry.  Before the billboards, because the
+         * glow layer is additive and has to sum ON TOP of the node it
+         * belongs to rather than under it. */
+        ctx_draw_orbs (r, ctx_raylib_camera (r));
+
         /* Camera-facing billboards.
          *
          * Two behaviours, selected by whether an occluder is set --
@@ -4886,12 +5204,40 @@ cmacs_libregnum_render_ctx_orbit_camera (CmacsLibregnumRenderCtx *r,
   double ox = pos->x - tgt->x, oy = pos->y - tgt->y, oz = pos->z - tgt->z;
   double rad = sqrt (ox*ox + oy*oy + oz*oz);
   if (rad < 1e-3) rad = 1e-3;
+  g_autoptr (GrlVector3) upv = lrg_camera3d_get_up (c3);
+  /* Which hemisphere the camera is in.  Elevation cannot be recovered
+     from the position alone -- asin only ever answers in [-90, 90] -- so
+     the camera's own up vector carries the other half of the state, and
+     is also what has to flip when a tumble crosses a pole. */
+  gboolean inverted = (upv && upv->y < 0.0f);
   double yaw   = atan2 (ox, oz);
-  double pitch = asin  (oy / rad);
-  yaw   -= dx_px * 0.005;
+  double pitch = asin (CLAMP (oy / rad, -1.0, 1.0));
+  /* Past a pole, cos(pitch) is negative, which flips the horizontal
+     component the reconstruction below builds -- so the azimuth read
+     back out of the position is half a turn from the real one.  Both
+     halves of the state have to be corrected together or the camera
+     jumps to the mirror-image viewpoint on the first inverted drag. */
+  if (inverted) { pitch = G_PI - pitch; yaw += G_PI; }
+  /* Upside down, screen-right is world-left: without this the drag
+     reverses the moment you tumble over the top, which feels like the
+     scene fighting the mouse. */
+  yaw   -= dx_px * 0.005 * (inverted ? -1.0 : 1.0);
   pitch += dy_px * 0.005;
-  if (pitch >  1.4) pitch =  1.4;
-  if (pitch < -1.4) pitch = -1.4;
+  if (r->orbit_continuous)
+    {
+      /* Wrap rather than clamp, and let the up vector follow.  A scene
+         with no canonical up has no reason to stop turning, and the stop
+         reads as the drag breaking. */
+      while (pitch >   G_PI) pitch -= 2.0 * G_PI;
+      while (pitch <= -G_PI) pitch += 2.0 * G_PI;
+      lrg_camera3d_set_up_xyz (c3, 0.0f, (cos (pitch) >= 0.0) ? 1.0f : -1.0f,
+                               0.0f);
+    }
+  else
+    {
+      if (inverted) pitch = CLAMP (pitch, G_PI - 1.4, G_PI + 1.4);
+      else          pitch = CLAMP (pitch, -1.4, 1.4);
+    }
   double nx = rad * cos (pitch) * sin (yaw);
   double ny = rad * sin (pitch);
   double nz = rad * cos (pitch) * cos (yaw);

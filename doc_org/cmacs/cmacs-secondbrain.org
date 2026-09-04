@@ -122,7 +122,7 @@ This has to be declared by each mode: `evil-set-initial-state` is looked up per 
 | double click a node | select it and fly the camera to it |
 | left drag a node | move it, and pin it where you drop it |
 | (a short drag is still a click) | the drag starts only past a few pixels |
-| left drag | orbit (3D); no effect in the locked 2D view |
+| left drag | orbit (3D), continuously through the poles; no effect in the locked 2D view |
 | right drag | pan |
 | wheel | zoom, wheel-up towards the scene |
 | right click | the context menu for that kind, AI section last |
@@ -194,19 +194,27 @@ Left-drag a node to move it. It is *pinned* where you drop it, so the layout lea
 
 raylib draws an unlit sphere in a single colour, and the renderer's real lighting reaches only =MESH_ASSET= models inside the editor build — so a graph of a few thousand spheres has no shading available to it at all, and every node is a flat disc with size as its only depth cue.
 
-Sphere-shaped nodes are therefore drawn as *impostors*: a camera-facing quad carrying a texture of a lit sphere (ambient, diffuse, a tight specular, and a rim term, over a soft circular alpha mask). One texture serves every node, tinted per node.
+Round nodes are therefore drawn by the renderer's *orb pass*: real sphere geometry, shaded per vertex, with correct silhouettes, correct occlusion and correct depth.
 
-*Why an impostor and not a highlight.* The obvious cheap trick is a small bright sphere offset toward the light, and it does not survive contact with the 3D view: a world-space offset is only correct for one camera position. Orbit and the highlight slides round the back of the node and vanishes. A camera-facing quad is correct from every angle by construction, and costs nothing per frame to keep that way.
+*This replaced an impostor*, and the reason is worth writing down because the impostor was the obvious answer and looked right in every screenshot. An impostor is a camera-facing quad carrying a picture of a lit sphere — cheap, round from every angle, and with its highlight baked into *screen space*. Orbiting therefore never changes how anything is lit, nodes never occlude each other properly, and a field of them reads as stickers on a sheet rather than as objects in a space. That is exactly the complaint the 3D view drew.
 
-Three details that are load-bearing rather than cosmetic:
+The lighting is a world-fixed *key* plus a camera-following *fill*, and having both is the point:
 
-- *The tint is the ceiling.* The texture is multiplied by the tint, so a node tinted with its own colour could never be brighter than that colour and the specular would have nowhere to go. The tint is lifted toward white — but only slightly, because the colour /is/ the PARA category here. Lift it far and every ring drifts toward the same pale wash.
-- *Mipmaps.* Nodes are drawn a few pixels across, and minifying a 256px texture that far without mipmaps shimmers on every camera move. The artefact is motion, so a still screenshot hides it completely.
-- *Billboards are not cleared by =clear-drawables=.* The scene clears them itself on rebuild, or every refresh appends another impostor per node — thousands of stale quads at the positions the nodes used to be in, which a screenshot of a freshly built scene hides because the newest ones are drawn in the right places.
+- A pure headlight looks like the answer and is the trap. A sphere lit from wherever you happen to be standing is /identical/ from every angle — so the geometry would be real and the picture would still read as a sticker. Real geometry with a headlight buys nothing you can see.
+- A pure key light is the opposite trap. Half the graph turns to silhouette as you orbit, and in a map whose colours /are/ the taxonomy an unidentifiable node is a lost node.
 
-Skills and applications keep their real geometry: a gem must show facets and a prism must show edges, and an impostor of a sphere shows neither. Those get the small offset highlight instead, which is adequate because there are tens of them rather than thousands.
+Key for form, fill for legibility, plus a rim term so a small node's unlit limb does not fade into the sky, and a specular taken off the key alone so there is one highlight that visibly travels as the scene turns.
 
-=cmacs-secondbrain-node-shading= turns the whole thing off.
+*Why this is affordable.* Every orb is the same unit sphere translated and scaled, so every orb's vertex normals are identical and the lighting depends only on the normal and the camera. The shading is therefore computed *once per frame per level of detail* and thousands of orbs cost a multiply per vertex rather than a lighting equation per vertex. On top of that the tessellation is chosen per node: a department hub is a landmark worth triangles, a leaf a few pixels across is not, and past ~1200 visible nodes the leaves drop another tier because at that density you are reading structure, not looking at one ball. Measured at 1200×900 on a 1400-node map: 12.1 ms a frame at the middle tier, 7.0 ms at the low one.
+
+Two details that are load-bearing rather than cosmetic:
+
+- *Winding.* Backface culling is on, and a reversed winding shows the /inside/ of every sphere: still round, lit from the wrong side, and not obviously a bug. The orb mesh is wound exactly as raylib winds =DrawSphereEx=.
+- *Orbs are not cleared by =clear-drawables=* — the same trap billboards fall into. The scene clears them itself on rebuild, or every refresh leaves another copy behind at the position each node used to be in, which a screenshot hides because the stale ones sit under the live ones.
+
+Skills and applications keep their own geometry: a gem must show facets and a prism must show edges, and a sphere shows neither. Those get a small offset highlight instead, which is adequate because there are tens of them rather than thousands.
+
+=cmacs-secondbrain-node-shading= turns the whole thing off, and round nodes fall back to raylib's flat unlit spheres.
 
 ** Glow
 
@@ -241,13 +249,29 @@ Concentric rings viewed in three dimensions are coplanar, so orbiting them only 
 Two terms, and the split is the design:
 
 - The *warp* is a mode-1 bend — the "integral sign" warp real galaxies have. Height grows with radius and varies with the azimuth, so one side of the map lifts and the opposite side drops. Coherent rather than random: neighbours stay neighbours, a department stays a clump, and the eye reads a shape instead of scatter. Growing with radius keeps the middle legible while the rim does the moving.
-- The *thickness* is a small per-node offset so one department's members are not perfectly coplanar. Without it the map is a bent sheet; with it the disc has substance. It is deliberately well under a row gap — crank it and the band structure the layout works hard to produce dissolves back into the smear it exists to prevent.
+- The *thickness* is a per-node offset so one department's members are not perfectly coplanar. Without it the map is a bent sheet; with it the disc has substance. Unlike the warp it does /not/ vary with azimuth — a real disc is thick everywhere, not only where it bends — and it is a fraction of the same =r·tan(tilt)= amplitude the warp uses, so the two stay in proportion at any tilt and any scale.
 
-=cmacs-secondbrain-galaxy-tilt= (24°) is the warp's crest: there a node sits exactly that far above the plane. The thickness rides on top, so an individual node can sit a few degrees beyond — the number describes the shape of the disc, not a ceiling on any one node. =T= cycles flat → gentle → default → steep.
+=cmacs-secondbrain-galaxy-tilt= (32°) is the warp's crest: there a node sits exactly that far above the plane. The thickness rides on top, so an individual node can sit beyond it — but by a stated amount, never past =atan(1.34 · tan TILT)=. The number describes the shape of the disc, not a ceiling on any one node. =T= cycles flat → gentle → default → steep.
 
 The height is computed from the node's *final* azimuth, spin included, so the warp is fixed in world space and a spinning ring flows through it the way stars orbit through a real warped disc, rather than the whole sheet rotating rigidly.
 
-Two scope notes. It applies to the *rings* layout only — a hex lattice bent along an azimuth it does not have would just be crooked. And it needs no branch on the view: a 2D layout snaps every node to =z = 0=, so the setting is simply inert in the flat view and =v= can toggle back and forth without anything to restore.
+Two scope notes. It applies to the *rings* layout only — a hex lattice bent along an azimuth it does not have would just be crooked. And it needs no branch on the view: a 2D layout snaps every node into the plane, so the setting is simply inert in the flat view and =v= can toggle back and forth without anything to restore.
+
+*** The disc lies in the ground plane
+
+In 3D the rings lie in the world's *ground plane* — X and Z, with the galaxy's height on Y. In 2D they lie in XY, because that is what "right and up" mean on a screen.
+
+That is not bookkeeping; it is the difference between a map you can turn and one you cannot. The renderer's world is Y-up and so is its orbit camera, whose two drag gestures are azimuth about Y and elevation from the XZ plane. Laid out in XY instead, neither gesture means anything sensible: the elevation drag walks the camera along the disc's *own* plane until it jams against the pole clamp edge-on, so the galaxy presents as a flat streak and the drag appears to stop for no reason the picture explains. In XZ the same two gestures are "spin the galaxy" and "raise your eye above it".
+
+The band guides are turned a quarter turn about X to match. Left alone, raylib draws a 3D circle in XY, which would stand four hoops vertically through the disc.
+
+*** The orbit runs all the way round
+
+A galaxy has no north, so the 3D view turns on the renderer's *continuous orbit*: the elevation runs through a full turn rather than stopping about ten degrees short of each pole, and the camera's up vector flips as it crosses one, which is what keeps the picture continuous instead of snapping through a gimbal. Horizontal drag is negated while inverted, so dragging right still turns the scene the way it moves on screen.
+
+The clamp remains the default elsewhere, and is right there: on gnuseye's globe north stays up and the view never goes upside down.
+
+The subtlety worth knowing if you touch it: elevation cannot be recovered from the camera position alone, because =asin= only ever answers in [-90°, 90°]. The camera's up vector carries the other half of the state. Read it back without also correcting the azimuth by half a turn and the camera teleports to the mirror-image viewpoint on the first inverted drag — a valid view, and completely wrong.
 
 The per-node thickness is hashed from the node's *id*, not its index: index order churns on every rebuild, so hashing that would reshuffle every height on refresh and the map would twitch for no reason.
 

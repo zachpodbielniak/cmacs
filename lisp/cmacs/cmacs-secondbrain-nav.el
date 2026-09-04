@@ -711,9 +711,9 @@ the middle of the map."
   "Cycle the 3D warp through flat, gentle, default and steep.
 
 Only does anything in `cmacs-secondbrain-3d\=': the flat view snaps every
-node to z = 0, so it says so rather than appearing to be broken."
+node into the plane, so it says so rather than appearing to be broken."
   (interactive)
-  (let* ((steps '(0.0 12.0 24.0 34.0))
+  (let* ((steps '(0.0 16.0 32.0 42.0))
          (cur (or cmacs-secondbrain-galaxy-tilt 0.0))
          (next (or (cadr (member (car (cl-member cur steps
                                                  :test (lambda (a b)
