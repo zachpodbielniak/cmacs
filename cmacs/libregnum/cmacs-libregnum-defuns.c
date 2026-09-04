@@ -1119,6 +1119,24 @@ everything is coplanar.  */)
   return locked;
 }
 
+DEFUN ("cmacs-libregnum-mean-color", Fcmacs_libregnum_mean_color,
+       Scmacs_libregnum_mean_color, 1, 1, 0,
+       doc: /* Return (R G B), the mean colour of BUFFER's rendered frame.
+
+The colour counterpart to `cmacs-libregnum-ink-bbox', and there for the
+same reason: a test that can only ask whether pixels changed cannot
+catch a frame drawn in the wrong palette, which is what a swapped
+red/blue channel produces -- a plausible picture, not a corrupt one.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  int rr = 0, gg = 0, bb = 0;
+  if (!ctx || !cmacs_libregnum_render_ctx_mean_color (ctx, &rr, &gg, &bb))
+    return Qnil;
+  return list3 (make_fixnum (rr), make_fixnum (gg), make_fixnum (bb));
+}
+
 DEFUN ("cmacs-libregnum-ink-bbox", Fcmacs_libregnum_ink_bbox,
        Scmacs_libregnum_ink_bbox, 1, 1, 0,
        doc: /* Return the drawn extent of BUFFER's scene as (MINX MINY MAXX MAXY).
@@ -3014,6 +3032,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_wheel_up_zooms_in);
   defsubr (&Scmacs_libregnum_orbit);
   defsubr (&Scmacs_libregnum_set_orbit_locked);
+  defsubr (&Scmacs_libregnum_mean_color);
   defsubr (&Scmacs_libregnum_ink_bbox);
   defsubr (&Scmacs_libregnum_nearest_in_direction);
   defsubr (&Scmacs_libregnum_node_onscreen_p);

@@ -545,6 +545,16 @@ extern gpointer cmacs_libregnum_render_ctx_get_fbo_texture
  * the colour attachment is bottom-up while the blit flips it, so an
  * overlay pass that forgets the flip still changes pixels, just
  * mirrored.  FALSE when the frame is entirely background. */
+/* Mean colour of the rendered frame, 0-255 per channel.
+ *
+ * The colour counterpart to ink_bbox, and there for the same reason: a
+ * test that can only ask "did pixels change?" cannot catch a frame
+ * rendered in the wrong palette, which is what a swapped red/blue
+ * channel produces -- a plausible picture, not a corrupt one. */
+extern gboolean cmacs_libregnum_render_ctx_mean_color
+                              (CmacsLibregnumRenderCtx *r,
+                               int *out_r, int *out_g, int *out_b);
+
 extern gboolean cmacs_libregnum_render_ctx_ink_bbox
                               (CmacsLibregnumRenderCtx *r,
                                int *minx, int *miny, int *maxx, int *maxy);

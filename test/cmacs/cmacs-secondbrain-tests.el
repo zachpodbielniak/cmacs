@@ -941,6 +941,44 @@ was uploaded once."
       (ignore-errors (delete-file a))
       (ignore-errors (delete-file b)))))
 
+(ert-deftest cmacs-secondbrain-test-screensaver-frame-byte-order ()
+  "A cool screensaver renders cool, not warm.
+
+A channel-order regression test, and it exists because the bug it guards
+is invisible to every cheaper check.  The shm frames arrive in
+ARGB8888 == GL_BGRA order; raylib has no BGRA format, so they are
+swizzled before upload.  Skip the swizzle and red and blue trade places
+-- which on a space scene is not a corrupt picture but a perfectly
+plausible one in the wrong palette.  It passed a round-trip test, an
+ink-bbox test and a frames-differ test while doing exactly that, and the
+symptom was mistaken for a bug in the screensaver's own --profile flag.
+
+So this asserts the palette: `blackhole --profile cool' must come out
+blue, and blue means the frame's mean blue beats its mean red."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-screensaver-supported-p)
+                    (cmacs-screensaver-supported-p)
+                    (fboundp 'cmacs-screensaver-attach-background)
+                    (fboundp 'cmacs-libregnum-mean-color)
+                    (getenv "CMACS_SCREENSAVER_MODULE_DIR")))
+  (cmacs-secondbrain-tests--with-view buf
+    ;; No graph: the frame is then the screensaver and nothing else.
+    (cmacs-secondbrain-set-graph buf (vector) (vector) 2)
+    (unwind-protect
+        (progn
+          (cmacs-screensaver-attach-background
+           buf 'blackhole-cool-orbit 320 240)
+          (dotimes (_ 80) (sleep-for 0.05)
+                   (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+          (let ((mean (cmacs-libregnum-mean-color buf)))
+            (should mean)
+            ;; Something was actually drawn.
+            (should (> (apply #'+ mean) 0))
+            ;; And it is cool: blue over red.  Swap the channels and this
+            ;; is the assertion that fails.
+            (should (> (nth 2 mean) (nth 0 mean)))))
+      (ignore-errors (cmacs-screensaver-detach-background buf)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

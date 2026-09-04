@@ -46,21 +46,11 @@ The base name is resolved against `cmacs-screensaver-module-path'."
     (blackhole-warm   . (:module blackhole   :args ("--profile" "warm")))
     (blackhole-cool   . (:module blackhole   :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
     (blackhole-infall . (:module blackhole   :args ("--profile" "cool" "--infall" "8")))
-    ;; The look this reproduces is the dark field with a small blue-white
-    ;; disc and indigo clouds.  It deliberately passes NO `--profile',
-    ;; because blackhole's profile handling is currently inverted: with
-    ;; the module's argv arriving main()-style, no flag and
-    ;; `--profile warm' both render the cool palette while
-    ;; `--profile cool' renders the warm one.  Measured whole-frame
-    ;; average RGB, same scene, only the flag changed:
-    ;;   (none)          (55,68,97)  blue
-    ;;   --profile warm  (54,67,96)  blue
-    ;;   --profile cool  (100,69,49) amber
-    ;; Naming this `-cool-orbit' and omitting the flag describes what you
-    ;; get; putting `--profile cool' here would describe what you asked
-    ;; for and hand you the opposite.  Fix belongs in deps/screensavers.
+    ;; The look behind the second-brain graph: pulled far back, so it is
+    ;; mostly dark field with a small blue-white disc.
     (blackhole-cool-orbit
-     . (:module blackhole :args ("--orbit-radius" "60" "--infall" "2")))
+     . (:module blackhole
+        :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
     (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden"))))
   "Named screensaver configurations.
 Each entry is (NAME . PLIST) where PLIST understands:

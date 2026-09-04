@@ -362,6 +362,13 @@ that mutates its drawables in place — an animated force layout, a dragged
 node — must call it, or picking and labelling keep pointing at where the
 node used to be.
 
+** Frame probes for tests
+
+- =cmacs-libregnum-ink-bbox= — bounding box of non-background pixels, in displayed orientation.
+- =cmacs-libregnum-mean-color= — mean (R G B) of the rendered frame.
+
+Both exist for tests, and the second exists because the first is not enough: a check that can only ask whether pixels /changed/ cannot catch a frame drawn in the wrong palette, which is exactly what a swapped red/blue channel produces.
+
 ** Focus policy
 
 How the camera responds to picking. =cmacs-libregnum-set-focus-policy= — BUFFER ON-CLICK &optional CONTEXT.

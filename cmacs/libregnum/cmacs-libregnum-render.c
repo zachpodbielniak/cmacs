@@ -473,6 +473,8 @@ struct CmacsLibregnumRenderCtx
   GDestroyNotify     bg_src_notify;
   unsigned long long bg_src_gen;       /* last frame uploaded */
   gboolean           bg_src_have;      /* a frame has been uploaded */
+  guint32           *bg_src_rgba;      /* BGRA->RGBA swizzle scratch */
+  gsize              bg_src_rgba_n;    /* its capacity, in pixels */
 
   LrgParticlePool   *particle_pool;    /* every live particle */
   GArray            *particle_emitters;/* LrgParticleEmitter *, owned */
@@ -638,6 +640,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->billboards) g_array_free (r->billboards, TRUE);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
   if (r->bg_src_notify && r->bg_src_data) r->bg_src_notify (r->bg_src_data);
+  g_free (r->bg_src_rgba);
   g_free (r->bg_path);
   g_clear_object (&r->particle_pool);
   g_clear_object (&r->burst_emitter);
@@ -2060,10 +2063,16 @@ cmacs_libregnum_render_ctx_set_background_source (CmacsLibregnumRenderCtx *r,
  * there is nothing to draw yet -- the source has not produced a first
  * frame -- as opposed to nothing NEW, where the existing texture stands.
  *
- * The frame is ARGB8888 from the producer's point of view, which is
- * exactly raylib's UNCOMPRESSED_R8G8B8A8 byte order on a little-endian
- * host; this is the same assumption gowl's frame sink makes about the
- * same pixels. */
+ * The frame arrives in ARGB8888 == GL_BGRA byte order, which is what
+ * gowl's frame sink takes and what the shm protocol documents.  raylib
+ * has no BGRA pixel format, so the channels are swapped into a scratch
+ * buffer before upload.
+ *
+ * Skipping that swap does NOT look obviously broken -- it silently
+ * exchanges red and blue, which on a space scene reads as a perfectly
+ * plausible picture in the wrong palette.  It cost an afternoon of
+ * blaming the screensaver's --profile flag for an inversion that was
+ * here. */
 static gboolean
 bg_pull_source (CmacsLibregnumRenderCtx *r)
 {
@@ -2076,6 +2085,28 @@ bg_pull_source (CmacsLibregnumRenderCtx *r)
     return r->bg_src_have;
   if (r->bg_src_have && gen == r->bg_src_gen)
     return TRUE;                       /* already have this one */
+
+  /* BGRA -> RGBA.  One pass over the frame, only when the generation
+     changed, and the compiler vectorises it. */
+  {
+    gsize n = (gsize) w * (gsize) h, i;
+    const guint32 *src = px;
+
+    if (r->bg_src_rgba_n < n)
+      {
+        g_free (r->bg_src_rgba);
+        r->bg_src_rgba = g_new (guint32, n);
+        r->bg_src_rgba_n = n;
+      }
+    for (i = 0; i < n; i++)
+      {
+        guint32 p = src[i];
+        r->bg_src_rgba[i] = (p & 0xFF00FF00u)
+                            | ((p & 0x000000FFu) << 16)
+                            | ((p >> 16) & 0x000000FFu);
+      }
+    px = r->bg_src_rgba;
+  }
 
   if (!r->bg_tex_ok || r->bg_tex_w != w || r->bg_tex_h != h)
     {
@@ -4285,6 +4316,44 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
    place -- and the framebuffer being bottom-up while the blit flips it
    makes "in the right place" the specific thing worth asserting about
    any 2D overlay pass.  Returns FALSE if nothing was drawn. */
+gboolean
+cmacs_libregnum_render_ctx_mean_color (CmacsLibregnumRenderCtx *r,
+                                       int *out_r, int *out_g, int *out_b)
+{
+  unsigned char *buf;
+  int w, h;
+  gsize i, n;
+  guint64 sr = 0, sg = 0, sb = 0;
+
+  if (!r) return FALSE;
+  w = r->width;
+  h = r->height;
+  if (w <= 0 || h <= 0) return FALSE;
+
+  buf = g_malloc0 ((gsize) w * h * 4);
+  if (!cmacs_libregnum_render_ctx_render_to_bgra (r, buf, w, h))
+    {
+      g_free (buf);
+      return FALSE;
+    }
+
+  /* render_to_bgra hands back BGRA, so index accordingly -- getting
+     this wrong here would hide exactly the bug this exists to find. */
+  n = (gsize) w * (gsize) h;
+  for (i = 0; i < n; i++)
+    {
+      sb += buf[i * 4 + 0];
+      sg += buf[i * 4 + 1];
+      sr += buf[i * 4 + 2];
+    }
+  g_free (buf);
+
+  if (out_r) *out_r = (int) (sr / n);
+  if (out_g) *out_g = (int) (sg / n);
+  if (out_b) *out_b = (int) (sb / n);
+  return TRUE;
+}
+
 gboolean
 cmacs_libregnum_render_ctx_ink_bbox (CmacsLibregnumRenderCtx *r,
                                      int *minx, int *miny,

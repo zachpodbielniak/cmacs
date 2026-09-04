@@ -113,11 +113,13 @@ more than it tells you."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-background 'nebula
+(defcustom cmacs-secondbrain-background 'screensaver
   "What fills the viewport behind the graph.
 
 One of `none' (the flat default clear colour), `solid', `gradient',
-`starfield', `nebula', or `image' -- which draws
+`starfield', `nebula', `screensaver' -- a live screensaver from
+`cmacs-secondbrain-screensaver', which falls back to `nebula' when the
+screensaver subsystem is not built -- or `image', which draws
 `cmacs-secondbrain-background-image', cover-fit so a wallpaper of any
 shape fills the viewport without being squashed.
 

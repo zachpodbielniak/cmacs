@@ -6944,6 +6944,13 @@ rather than one per node.  Match, pinned and neighbour also override the
 per-node label policy: highlighting something whose name you then cannot
 read is useless.
 
+@item cmacs-libregnum-mean-color
+The mean colour of the rendered frame, and the colour counterpart to
+@code{cmacs-libregnum-ink-bbox}.  Both exist for tests, for the same
+reason: a check that can only ask whether pixels @emph{changed} cannot
+catch a frame drawn in the wrong palette, which is what a swapped
+red/blue channel produces.
+
 @item cmacs-libregnum-set-focus-policy
 How the camera responds to picking.  @code{ON-CLICK} (default @code{t},
 the historical behaviour) flies the camera to whatever a left click
@@ -8543,7 +8550,15 @@ from the caller and is pulled rather than pushed, so it works in a plain
 pgtk Emacs.  The @strong{consumer pulls} ---
 @code{cmacs_screensaver_peek_frame} borrows the newest complete frame
 and returns false for ``no frame yet'' and ``writer mid-write'' alike,
-both meaning @emph{nothing new} rather than an error.  And
+both meaning @emph{nothing new} rather than an error.  @strong{Frames are BGRA}: the shm ring carries
+@code{ARGB8888 == GL_BGRA} byte order, which is what gowl's frame sink
+wants, and raylib has no BGRA format --- so the libregnum background
+swizzles red and blue before upload.  Skipping that does not look
+broken; it produces a plausible picture in the wrong palette (a cool
+screensaver renders warm) and survives a round-trip test, an ink-bbox
+test and a frames-differ test untouched.
+@code{cmacs-libregnum-mean-color} exists so a test can assert the
+palette itself.  And
 @strong{libregnum knows nothing about screensavers}: it exposes a
 generic @code{CmacsLibregnumFrameSource} function pointer and a
 @code{CMACS_LIBREGNUM_BG_SOURCE} background kind, so the coupling lives
