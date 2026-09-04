@@ -4079,15 +4079,26 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
    * frame; the view re-requests a redraw while focus_active is true. */
   ctx_step_focus (r);
 
-  /* NOTE: we deliberately do NOT call lrg_window_begin_frame /
-   * end_frame here.  Those wrap raylib's BeginDrawing/EndDrawing, and
-   * EndDrawing presents + paces the *hidden* offscreen window:
-   * glfwSwapBuffers (vsync-blocks), WaitTime (enforces the window's
-   * 60 FPS SetTargetFPS cap -- ~16 ms of sleep per call), and
+  /* NOTE: we deliberately do NOT open the renderer's FRAME bracket
+   * here -- only its LAYER bracket.  `lrg_renderer_begin_frame' /
+   * `end_frame' forward to lrg_window_begin_frame / end_frame whenever
+   * the renderer has a window, and those wrap raylib's BeginDrawing /
+   * EndDrawing.  EndDrawing presents + paces the *hidden* offscreen
+   * window: glfwSwapBuffers (vsync-blocks), WaitTime (enforces the
+   * window's 60 FPS SetTargetFPS cap -- ~16 ms of sleep per call), and
    * glfwPollEvents.  For an FBO-only readback path that never shows a
    * window, all three are pure latency -- the WaitTime cap alone was
    * throttling every scene update to <=60 FPS and adding up to a frame
-   * of sleep to each interactive redraw.  Offscreen rendering needs
+   * of sleep to each interactive redraw.
+   *
+   * This used to say exactly that while calling the RENDERER's frame
+   * bracket two hundred lines below, which forwards to the window's.
+   * The renderer is only windowless when there is no shared window --
+   * and there almost always is one -- so every offscreen frame paid a
+   * full windowed present.  A two-node scene measured 16.7 ms/frame:
+   * the 60 FPS period, i.e. essentially all sleep.  With a repeating
+   * 30 ms animation timer driving redraws from Lisp that is most of
+   * the main thread gone, and Emacs stops responding.  Offscreen rendering needs
    * only BeginTextureMode/EndTextureMode + a current GL context; the
    * default render batch is initialised by InitWindow and flushed by
    * EndTextureMode, so no BeginDrawing is required. */
@@ -4099,7 +4110,12 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
     ctx_draw_background (r, r->width, r->height);
     if (r->camera)
       {
-        lrg_renderer_begin_frame (r->renderer);
+        /* begin_LAYER only, never begin_FRAME -- see the note above.
+           The renderer's frame bracket presents the hidden shared
+           window; the layer bracket is the part that sets up the
+           camera (BeginMode3D), which is all an FBO render needs.
+           `in_frame' is private bookkeeping nothing reads, and
+           begin_layer/end_layer do not consult it. */
         lrg_renderer_begin_layer (r->renderer, LRG_RENDER_LAYER_WORLD);
         /* Persistent background model (e.g. the gnuseye Earth sphere):
          * drawn first, behind the per-tick scene drawables, with an
@@ -4655,7 +4671,6 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
         ctx_particles_step_and_draw (r);
 
         lrg_renderer_end_layer (r->renderer);
-        lrg_renderer_end_frame (r->renderer);
       }
 
     /* Screen-space label pass, INSIDE the FBO bracket.  Drawing labels
@@ -4667,7 +4682,7 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
     if (r->inscene_labels)
       ctx_draw_node_labels (r);
 
-    /* Flush unconditionally.  EndMode3D (inside lrg_renderer_end_frame)
+    /* Flush unconditionally.  EndMode3D (inside lrg_renderer_end_layer)
      * submits the 3D batch, but anything drawn AFTER it opens a fresh
      * batch that EndTextureMode would only submit *after* the readback
      * below.  Omit this and labels render fine under --lrg (which never

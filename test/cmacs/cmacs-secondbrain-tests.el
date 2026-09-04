@@ -1981,6 +1981,95 @@ lattice bent along an azimuth it does not have would just be crooked."
       (should (cl-some (lambda (z) (> (abs z) 1.0))
                        (cmacs-secondbrain-tests--zs buf nodes))))))
 
+(ert-deftest cmacs-secondbrain-test-animation-stops-when-unseen ()
+  "The animation clock disarms itself when no window shows the buffer.
+
+The hang this guards against: a tick renders the whole scene
+synchronously, and Emacs runs timers whenever it WAITS -- including
+inside `accept-process-output\=' during startup.  A clock left running
+for an invisible buffer therefore renders on top of whatever Emacs is
+trying to do, indefinitely.  A selected node with the link pulse on
+kept it alive forever, which is exactly the state that wedged a
+session."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain--animate))
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (cmacs-secondbrain-mode)
+      (setq cmacs-secondbrain--graph
+            (list :nodes (list (list :id "a" :title "A" :kind 'file
+                                     :ring 'memory))
+                  :edges nil))
+      (cmacs-secondbrain-set-graph
+       buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory))
+       (vector) 2)
+      ;; The state that used to run forever: a selection, pulse on.
+      (setq cmacs-secondbrain--selected "a"
+            cmacs-secondbrain-link-pulse t)
+      (cmacs-secondbrain--animate)
+      (should (timerp cmacs-secondbrain--anim-timer))
+      ;; Nothing displays this buffer, so one tick must shut it down --
+      ;; even though the pulse would otherwise keep it alive.
+      (should (cmacs-secondbrain--wants-animation-p))
+      (funcall (timer--function cmacs-secondbrain--anim-timer))
+      (should-not (timerp cmacs-secondbrain--anim-timer)))))
+
+(ert-deftest cmacs-secondbrain-test-wants-animation-covers-each-reason ()
+  "Each thing with no end state keeps the clock, and nothing else does."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain--wants-animation-p))
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (cmacs-secondbrain-mode)
+      (cmacs-secondbrain-set-graph
+       buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory))
+       (vector) 2)
+      (let ((cmacs-secondbrain-auto-rotate 0.0)
+            (cmacs-secondbrain-link-pulse nil))
+        (setq cmacs-secondbrain--selected nil)
+        (should-not (cmacs-secondbrain--wants-animation-p))
+        ;; A selection alone is not enough -- the pulse has to be on.
+        (setq cmacs-secondbrain--selected "a")
+        (should-not (cmacs-secondbrain--wants-animation-p)))
+      (let ((cmacs-secondbrain-link-pulse t))
+        (setq cmacs-secondbrain--selected "a")
+        (should (cmacs-secondbrain--wants-animation-p)))
+      (let ((cmacs-secondbrain-auto-rotate 3.0)
+            (cmacs-secondbrain-link-pulse nil))
+        (setq cmacs-secondbrain--selected nil)
+        (should (cmacs-secondbrain--wants-animation-p))))))
+
+(ert-deftest cmacs-secondbrain-test-render-is-not-frame-paced ()
+  "A render must not pay a windowed present.
+
+The offscreen path renders into an FBO and reads it back; it must not
+go through the renderer\'s FRAME bracket, which presents and PACES the
+hidden shared window -- raylib\'s EndDrawing sleeps in WaitTime to hold
+the 60 FPS cap.  That put a hard 16.7 ms floor under every redraw, so a
+30 ms animation timer spent most of the main thread asleep and the
+session stopped responding.
+
+A trivial scene is the probe: it has no real work to do, so anything
+near a frame period is the cap rather than the drawing."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-mean-color))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'skills))
+     (vector) 3)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-fit buf)
+    (cmacs-libregnum-mean-color buf)    ; warm up
+    (let* ((n 20)
+           (t0 (float-time))
+           (_ (dotimes (_ n) (cmacs-libregnum-mean-color buf)))
+           (ms (/ (* 1000.0 (- (float-time) t0)) n)))
+      ;; Measured 16.66 ms/frame with the frame bracket and 0.70 without,
+      ;; so 8 ms separates the two by a wide margin either way and does
+      ;; not make the test a benchmark of the GPU.
+      (should (< ms 8.0)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

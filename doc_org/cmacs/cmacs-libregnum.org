@@ -398,6 +398,16 @@ Two traps:
 
 =cmacs_libregnum_render_ctx_add_billboard_glow= adds to the second layer: a shared radial-falloff texture drawn *after* the normal layer with additive blending and the depth mask off (depth testing stays on). Additive is what makes it a glow rather than a smudge — it can only brighten, overlapping glows sum instead of occluding, and draw order stops mattering, so this layer needs no sorting. The tint's alpha channel scales intensity, because with =GL_SRC_ALPHA, GL_ONE= what lands in the framebuffer is =rgb * alpha=. Same index space as the normal layer: move/recolour/resize and =clear-billboards= all apply.
 
+** Rendering is on demand, and must not be frame-paced
+
+A view renders into an FBO and reads it back; it never shows a window. So the offscreen path opens the renderer's *layer* bracket (which sets up the camera) and deliberately **not** its *frame* bracket.
+
+=lrg_renderer_begin_frame= / =end_frame= forward to the window's whenever the renderer has one, and those wrap raylib's =BeginDrawing= / =EndDrawing=. =EndDrawing= presents and *paces* the hidden shared window: =glfwSwapBuffers= (vsync-blocks), =WaitTime= (holds the 60 FPS =SetTargetFPS= cap), and =glfwPollEvents=. For a readback path that never presents, all three are pure latency.
+
+The cost is not subtle. A two-node scene measured *16.66 ms per frame* with the frame bracket and *0.70 ms* without — the frame period, i.e. essentially all sleep. Under a repeating 30 ms animation timer that is most of the main thread gone, and since =request_redraw= runs its callback inline when the caller already owns the GMainContext (which the Emacs main thread does), those renders happen *inside Lisp timers* — including the ones Emacs runs while waiting in =accept-process-output=. That combination hung a session during startup.
+
+=cmacs-secondbrain-test-render-is-not-frame-paced= pins it: a trivial scene has no real work to do, so anything near a frame period is the cap rather than the drawing.
+
 ** Zooming from Lisp
 
 =cmacs-libregnum-zoom= — BUFFER AMOUNT, in wheel notches. *Positive moves closer*: the distance to the camera's target is scaled by =0.9^AMOUNT=, so each notch takes a fixed fraction of what is left, steps shrink as you approach, and the target is an asymptote you cannot overshoot or invert through. Zooming cancels an in-flight fly-to, because they are the same control and the one you touched last is the one you meant.

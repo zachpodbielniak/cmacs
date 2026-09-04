@@ -680,6 +680,25 @@ leaves it flagged animated with nothing to draw."
                                         cmacs-secondbrain-particle-fps)
         (cmacs-libregnum-set-animated (current-buffer) nil)))))
 
+(defun cmacs-secondbrain--wants-animation-p ()
+  "Non-nil when this buffer has something that needs a running clock."
+  (or (and (numberp cmacs-secondbrain-auto-rotate)
+           (/= cmacs-secondbrain-auto-rotate 0.0))
+      (and cmacs-secondbrain-link-pulse cmacs-secondbrain--selected)
+      (ignore-errors (cmacs-secondbrain-tweening-p (current-buffer)))))
+
+(defun cmacs-secondbrain--maybe-resume-animation ()
+  "Restart the clock when the buffer becomes visible again.
+
+The counterpart to the visibility check in the timer below: the clock
+stops when nobody is looking, so something has to start it again when
+they are.  On `window-configuration-change-hook\=', buffer-locally."
+  (when (and (derived-mode-p 'cmacs-secondbrain-mode)
+             (not (timerp cmacs-secondbrain--anim-timer))
+             (get-buffer-window (current-buffer) t)
+             (cmacs-secondbrain--wants-animation-p))
+    (cmacs-secondbrain--animate)))
+
 (defun cmacs-secondbrain--animate ()
   "Drive the current transition to completion, then stop.
 
@@ -695,20 +714,37 @@ itself -- and drops the libregnum animation clock with it."
           (run-with-timer
            0.03 0.03
            (lambda ()
-             (if (not (buffer-live-p buf))
-                 (ignore)
+             (when (buffer-live-p buf)
                (with-current-buffer buf
-                 (cmacs-secondbrain--rotate-step buf 0.03)
-                 (cmacs-secondbrain--pulse-step buf 0.03)
-                 ;; Rotation has no end state, so it must not let the
-                 ;; tween's completion stop the clock.
-                 (when (and (cmacs-secondbrain-tween-step buf)
-                            (or (not (numberp cmacs-secondbrain-auto-rotate))
-                                (= cmacs-secondbrain-auto-rotate 0.0))
-                            ;; A pulse has no end state either.
-                            (not (and cmacs-secondbrain-link-pulse
-                                      cmacs-secondbrain--selected)))
-                   (cmacs-secondbrain--stop-animation)))))))))
+                 (cond
+                  ;; Nobody is looking: stop the clock entirely.
+                  ;;
+                  ;; Not a micro-optimisation -- the difference between
+                  ;; an idle Emacs and a wedged one.  A tick renders the
+                  ;; whole scene SYNCHRONOUSLY: request-redraw goes
+                  ;; through `g_main_context_invoke\=', which runs its
+                  ;; callback inline when the caller already owns the
+                  ;; context, and the Emacs main thread does.  Emacs
+                  ;; also runs timers whenever it WAITS -- including
+                  ;; inside `accept-process-output\=' during startup --
+                  ;; so a clock left running for an unseen buffer
+                  ;; renders on top of whatever else Emacs is trying to
+                  ;; do, indefinitely.  That is how a session hung
+                  ;; during startup: a selected node kept the pulse
+                  ;; clock alive and every tick redrew a scene nobody
+                  ;; could see.  `--maybe-resume-animation\=' starts it
+                  ;; again when the buffer comes back on screen.
+                  ((not (get-buffer-window buf t))
+                   (cmacs-secondbrain--stop-animation t))
+                  (t
+                   (cmacs-secondbrain--rotate-step buf 0.03)
+                   (cmacs-secondbrain--pulse-step buf 0.03)
+                   ;; Rotation has no end state, so it must not let the
+                   ;; tween\'s completion stop the clock; nor must a
+                   ;; running pulse.
+                   (when (and (cmacs-secondbrain-tween-step buf)
+                              (not (cmacs-secondbrain--wants-animation-p)))
+                     (cmacs-secondbrain--stop-animation)))))))))))
 
 ;;;; Data -------------------------------------------------------------
 
@@ -1299,6 +1335,8 @@ teardown, the Evil `C-w' handoff and `<escape>'.
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
                 "  [?]keys [hjkl]move [f]center [+-]zoom [/]find [TAB]expand [RET]open"))
+  (add-hook 'window-configuration-change-hook
+            #'cmacs-secondbrain--maybe-resume-animation nil t)
   (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t)
   (add-hook 'window-size-change-functions #'cmacs-secondbrain--on-size-change))
 

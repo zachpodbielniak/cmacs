@@ -6989,6 +6989,21 @@ off --- provides per-node halos: additive can only brighten and sums
 where it overlaps, so it needs no sorting, and the tint's alpha channel
 scales its intensity.
 
+@item Rendering is on demand, and must not be frame-paced
+A view renders into an FBO and reads it back; it never shows a window.
+The offscreen path therefore opens the renderer's @emph{layer} bracket
+and deliberately not its @emph{frame} bracket:
+@code{lrg_renderer_begin_frame}/@code{end_frame} forward to the
+window's, which wrap raylib's @code{BeginDrawing}/@code{EndDrawing},
+and @code{EndDrawing} presents and paces the hidden shared window
+(@code{glfwSwapBuffers}, @code{WaitTime} holding the 60 FPS cap,
+@code{glfwPollEvents}).  A two-node scene measured 16.66@tie{}ms per
+frame with the frame bracket and 0.70@tie{}ms without --- the frame
+period, i.e.@: essentially all sleep.  Since @code{request_redraw}
+runs its callback inline when the caller already owns the
+GMainContext, those renders happen inside Lisp timers, and that
+combination hung a session during startup.
+
 @item cmacs-libregnum-zoom
 BUFFER and AMOUNT, in wheel notches.  @strong{Positive moves closer}:
 the distance to the camera's target is scaled by @code{0.9^AMOUNT}, so

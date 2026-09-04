@@ -465,6 +465,18 @@ They are on because a system you are meant to feel ownership of should
 look alive; @kbd{P} turns them off, and @code{cmacs-secondbrain-particles}
 is the defcustom.
 
+@strong{The animation clock stops when nobody is looking.}  A tick
+renders the whole scene synchronously, and Emacs runs timers whenever
+it @emph{waits} --- including inside @code{accept-process-output}
+during startup.  A clock left running for a buffer no window is
+showing therefore renders on top of whatever Emacs is trying to do,
+indefinitely.  Since the link pulse has no end state, a selected node
+used to keep that clock alive forever, and a session hung at startup
+doing exactly this.  The timer now disarms itself the first time it
+finds the buffer unseen, and
+@code{window-configuration-change-hook} starts it again when the
+buffer comes back on screen.
+
 The honest cost: particles advance on wall-clock time inside the render
 pass, so the view keeps a redraw clock up at
 @code{cmacs-secondbrain-particle-fps} (24) even when nothing is
