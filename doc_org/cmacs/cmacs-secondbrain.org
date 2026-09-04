@@ -95,7 +95,8 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =s= / =S= | spin the rings |
 | =R= | slow auto-rotation on/off |
 | =u= / =U= | unpin the selection / everything |
-| =f= | fly the camera to the selection |
+| =f= | fly to the selection, and pivot the camera around it |
+| =+= =-= (=+= also on ~=~) | zoom in / out, toward the camera's target |
 | =0= | frame the whole graph |
 | =v= | toggle flat / 3D |
 | =b= | pick the background (or a wallpaper image) |
@@ -248,7 +249,14 @@ Four tiers, mirroring =cmacs-roamgraph= so the siblings feel like one tool.
 - *Spatial* (=h j k l=, arrows) — the nearest node inside a screen-space cone in that direction. What you reach for when you can see where you want to be. Moves are *exactly reversible*: a cone metric is not self-inverse, so going back the way you came is replayed from a trail rather than recomputed, and =l= then =h= returns you rather than landing somewhere new. The cone is wider here than in roamgraph (=cmacs-secondbrain-cone-degrees=, 50°) because a ring layout puts your neighbour at an angle from you rather than beside you.
 - *Topological* (=]= =[= =>= =<= =o=) — walk links, and walk the department you are standing in. Links are treated as undirected: the hub→member edges point one way and the org-roam links the other, and someone tracing connections does not care which end the data happened to store first. =]= will not immediately walk back the way you arrived, so it cannot degenerate into a two-node oscillation.
 - *Hierarchical* (=^= =m=) — the ARMS tier, which roamgraph has no equivalent of: a node belongs to a department, which belongs to a ring.
+- *Camera* (=f= =+= =-= =0=) — =f= flies to the selection /and re-aims the camera's target at it/, so zooming and orbiting afterwards revolve around that node instead of around wherever the view happened to be centred. =+= and =-= then close and open that distance; each notch takes a fixed fraction of what is left, so steps shrink as you approach and you cannot overshoot.
 - *Search* (=/= =n= =N= =J= =o=) — below.
+
+** The camera follows only when it must
+
+A spatial step deliberately does *not* move the camera: the node you stepped to is normally right there, and moving the view on every keystroke makes the whole map swim under you.
+
+But the ring layout is much larger than the viewport, so a few steps in one direction walk the selection off the edge — and from then on you are navigating something you cannot see, which is worse than either extreme. So the camera follows on exactly the condition that matters: when the new selection is *not on screen*, inset by =cmacs-secondbrain-edge-margin= (48 px) so a node half-clipped by the edge counts as off-screen rather than visible. =cmacs-secondbrain-keep-selection-visible= turns it off.
 
 ** Navigation reveals
 

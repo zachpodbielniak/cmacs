@@ -68,6 +68,40 @@ finding 01_projects/api.org is the common case."
   :type '(choice (const literal) (const regexp) (const orderless))
   :group 'cmacs-secondbrain)
 
+(defcustom cmacs-secondbrain-keep-selection-visible t
+  "When non-nil, a spatial move that leaves the viewport flies the camera.
+
+A step with `h\='/`j\='/`k\='/`l\=' deliberately does NOT move the camera --
+moving it on every step makes the whole map swim under you, and the
+node you stepped to is normally right there already.  But the ring
+layout is far bigger than the viewport, so a few steps in one direction
+walk the selection off the edge, and from then on you are navigating
+something you cannot see.
+
+So the camera follows only when it has to: when the new selection is
+outside the viewport (inset by `cmacs-secondbrain-edge-margin\=', so a
+node hugging the edge counts as outside).  `f\=' always flies,
+deliberately."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-edge-margin 48
+  "Pixels of inset when deciding whether the selection is off-screen.
+
+A node half-clipped by the edge is legible enough to prove it exists
+and useless for seeing what it connects to, so it counts as off-screen."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-zoom-step 2.0
+  "Wheel notches per press of `+\=' / `-\='.
+
+Positive is closer.  Each notch scales the remaining distance to the
+target by 0.9, so steps shrink as you approach and the target can never
+be overshot."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
 (defvar-local cmacs-secondbrain--matches nil
   "Vector of matching ids from the last search, or nil.")
 (defvar-local cmacs-secondbrain--match-index 0
@@ -173,6 +207,15 @@ editor -- and expands each ancestor."
         (cmacs-secondbrain-set-collapsed (current-buffer) ancestor nil 0)))
     chain))
 
+(defun cmacs-secondbrain--nav-onscreen-p (id)
+  "Non-nil when ID is currently inside the viewport, with a margin."
+  (let ((idx (cmacs-secondbrain--nav-scene-index id)))
+    (and idx
+         (fboundp 'cmacs-libregnum-node-onscreen-p)
+         (ignore-errors
+           (cmacs-libregnum-node-onscreen-p
+            (current-buffer) idx cmacs-secondbrain-edge-margin)))))
+
 (defun cmacs-secondbrain--nav-goto (id &optional fly)
   "Reveal, select and report ID.  With FLY, bring the camera to it.
 
@@ -248,10 +291,18 @@ be forgotten by one of them."
                     (message "No node %s of here" dir)
                   (push (cons dir cmacs-secondbrain--selected)
                         cmacs-secondbrain--spatial-trail)
-                  ;; No fly: a spatial step lands on something already
-                  ;; on screen, and moving the camera every step makes
-                  ;; the map swim under you.
-                  (cmacs-secondbrain--nav-goto id))))))))))
+                  ;; Do not fly by default: the step normally lands on
+                  ;; something already visible, and moving the camera
+                  ;; every time makes the map swim under you.  But a few
+                  ;; steps in one direction walk off the edge of a ring
+                  ;; layout far larger than the viewport, and navigating
+                  ;; something you cannot see is useless -- so follow
+                  ;; exactly when the new selection is not on screen.
+                  (cmacs-secondbrain--nav-goto id)
+                  (when (and cmacs-secondbrain-keep-selection-visible
+                             (not (cmacs-secondbrain--nav-onscreen-p id)))
+                    (ignore-errors
+                      (cmacs-secondbrain-focus (current-buffer) id))))))))))))
 
 (defun cmacs-secondbrain-move-left ()
   "Select the nearest node to the left."
@@ -613,6 +664,49 @@ end up believing a department is empty."
   (force-mode-line-update)
   (message "View reset"))
 
+;;;; Camera -----------------------------------------------------------
+
+(defun cmacs-secondbrain-recenter ()
+  "Bring the camera to the selection and pivot around it.
+
+The companion to the spatial keys, which deliberately leave the camera
+alone: this is how you say \"take me to what I have selected\".  It also
+re-aims the camera TARGET at the node, so orbiting and zooming from
+here revolve around it rather than around wherever the view was last
+centred."
+  (interactive)
+  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
+  (cmacs-secondbrain--nav-reveal cmacs-secondbrain--selected)
+  (unless (ignore-errors
+            (cmacs-secondbrain-focus (current-buffer)
+                                     cmacs-secondbrain--selected))
+    (user-error "%s is not on screen to fly to"
+                (cmacs-secondbrain--nav-title cmacs-secondbrain--selected))))
+
+(define-obsolete-function-alias 'cmacs-secondbrain-fly-to-selected
+  'cmacs-secondbrain-recenter "cmacs 32"
+  "Renamed: it re-aims the camera target too, which `fly\=' did not say.")
+
+(defun cmacs-secondbrain--zoom (amount)
+  "Zoom the camera by AMOUNT wheel notches; positive is closer."
+  (unless (and (fboundp 'cmacs-libregnum-zoom)
+               (ignore-errors (cmacs-libregnum-zoom (current-buffer) amount)))
+    (user-error "No viewport to zoom")))
+
+(defun cmacs-secondbrain-zoom-in ()
+  "Move the camera closer.
+
+Toward the camera\'s current target -- so after `f\=' (or any move that
+brought the camera to a node) this zooms in on that node rather than on
+the middle of the map."
+  (interactive)
+  (cmacs-secondbrain--zoom cmacs-secondbrain-zoom-step))
+
+(defun cmacs-secondbrain-zoom-out ()
+  "Move the camera further away."
+  (interactive)
+  (cmacs-secondbrain--zoom (- cmacs-secondbrain-zoom-step)))
+
 ;;;; Help -------------------------------------------------------------
 
 (defun cmacs-secondbrain-help ()
@@ -674,7 +768,8 @@ end up believing a department is empty."
       (princ "  u U        unpin the selection / everything\n\n")
 
       (princ "Camera and looks\n----------------\n")
-      (princ "  f          fly to the selection\n")
+      (princ "  f          fly to the selection, and pivot around it\n")
+      (princ "  + = -      zoom in / in / out, toward the camera target\n")
       (princ "  0          frame the whole map\n")
       (princ "  v          flat / 3D\n")
       (princ "  b          background (wallpaper or screensaver)\n")

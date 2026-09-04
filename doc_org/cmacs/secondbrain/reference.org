@@ -105,6 +105,9 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-age-fade-days= | 180.0 | days to full fade |
 | =cmacs-secondbrain-cone-degrees= | 50 | half-angle of the =hjkl= search cone |
 | =cmacs-secondbrain-search-style= | =orderless= | =literal= / =regexp= / =orderless= |
+| =cmacs-secondbrain-keep-selection-visible= | =t= | a spatial step that lands off-screen flies the camera |
+| =cmacs-secondbrain-edge-margin= | 48 | pixels of inset for the off-screen test |
+| =cmacs-secondbrain-zoom-step= | 2.0 | wheel notches per =+= / =-=; positive is closer |
 | =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
 | =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
 | =cmacs-secondbrain-rotate-speed= | 3.0 | what =R= turns on |
@@ -156,6 +159,8 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | =cmacs-secondbrain-search-next= / =-prev= | =n= =N= | cycle matches |
 | =cmacs-secondbrain-jump= | =J= | any node, by name |
 | =cmacs-secondbrain-reset-view= | =z= | clear search, ring filter and isolate |
+| =cmacs-secondbrain-recenter= | =f= | fly to the selection and pivot around it |
+| =cmacs-secondbrain-zoom-in= / =-zoom-out= | =+= =-= | toward / away from the camera target |
 | =cmacs-secondbrain-help= | =?= | every key, and the legend |
 
 * Mouse

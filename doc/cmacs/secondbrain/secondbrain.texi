@@ -135,7 +135,8 @@ leaving the buffer.
 @item @kbd{s} / @kbd{S} @tab spin the rings
 @item @kbd{R} @tab slow auto-rotation on/off
 @item @kbd{u} / @kbd{U} @tab unpin the selection / everything
-@item @kbd{f} @tab fly the camera to the selection
+@item @kbd{f} @tab fly to the selection, and pivot the camera around it
+@item @kbd{+} @kbd{=} @kbd{-} @tab zoom in / in / out, toward the camera's target
 @item @kbd{0} @tab frame the whole graph
 @item @kbd{v} @tab toggle flat / 3D
 @item @kbd{b} @tab pick the background (or a wallpaper image)
@@ -188,9 +189,31 @@ a two-node oscillation.
 The ARMS tier, which roamgraph has no equivalent of: a node belongs to a
 department, which belongs to a ring.
 
+@item Camera (@kbd{f} @kbd{+} @kbd{-} @kbd{0})
+@kbd{f} flies to the selection @emph{and re-aims the camera's target at
+it}, so zooming and orbiting afterwards revolve around that node rather
+than around wherever the view happened to be centred.  @kbd{+} and
+@kbd{-} then close and open that distance; each notch takes a fixed
+fraction of what is left, so steps shrink as you approach and you
+cannot overshoot.
+
 @item Search (@kbd{/} @kbd{n} @kbd{N} @kbd{J} @kbd{o})
 See @ref{Secondbrain Search}.
 @end table
+
+@subsection The camera follows only when it must
+
+A spatial step deliberately does @emph{not} move the camera: the node
+you stepped to is normally right there, and moving the view on every
+keystroke makes the whole map swim under you.
+
+But the ring layout is much larger than the viewport, so a few steps in
+one direction walk the selection off the edge --- and from then on you
+are navigating something you cannot see.  So the camera follows on
+exactly the condition that matters: when the new selection is not on
+screen, inset by @code{cmacs-secondbrain-edge-margin} (48 px) so a node
+half-clipped by the edge counts as off-screen rather than visible.
+@code{cmacs-secondbrain-keep-selection-visible} turns it off.
 
 @subsection Navigation reveals
 

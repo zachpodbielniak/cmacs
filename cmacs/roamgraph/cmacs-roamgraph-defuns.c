@@ -677,7 +677,12 @@ keystroke.  */)
 
 DEFUN ("cmacs-roamgraph-zoom", Fcmacs_roamgraph_zoom,
        Scmacs_roamgraph_zoom, 2, 2, 0,
-       doc: /* Zoom BUFFER's camera by AMOUNT (negative moves closer).  */)
+       doc: /* Zoom BUFFER's camera by AMOUNT, in wheel notches.
+
+POSITIVE moves CLOSER (the distance to the target is scaled by
+0.9^AMOUNT).  The docstring used to say the opposite, while
+`cmacs-roamgraph-zoom-in' passed a positive amount -- the code was
+right and the sentence was wrong.  */)
   (Lisp_Object buffer, Lisp_Object amount)
 {
   CmacsLibregnumView *v;

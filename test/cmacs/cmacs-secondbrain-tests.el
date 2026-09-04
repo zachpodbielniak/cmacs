@@ -1746,6 +1746,119 @@ key, which is the worst possible time to find out."
      cmacs-secondbrain-mode-map)
     (should-not missing)))
 
+(defun cmacs-secondbrain-tests--cam-dist (buf)
+  "Distance from BUF's camera to its target."
+  (let* ((st (cmacs-libregnum-camera-state buf))
+         (p (plist-get st :position))
+         (tg (plist-get st :target)))
+    (sqrt (apply #'+ (cl-mapcar (lambda (a b) (* (- a b) (- a b))) p tg)))))
+
+(defmacro cmacs-secondbrain-tests--with-live-graph (buf &rest body)
+  "Attach BUF with a three-ring graph and both graph halves populated.
+
+The Lisp-side `cmacs-secondbrain--graph\=' matters as much as the scene:
+the navigation layer reads topology from it, and a test that sets only
+the scene passes while every keyboard command sees an empty map."
+  (declare (indent 1) (debug t))
+  `(cmacs-secondbrain-tests--with-view ,buf
+     (with-current-buffer ,buf
+       (cmacs-secondbrain-mode)
+       (let ((g (list :nodes (list (list :id "a" :title "A" :kind 'file
+                                         :ring 'memory)
+                                   (list :id "b" :title "B" :kind 'file
+                                         :ring 'skills)
+                                   (list :id "c" :title "C" :kind 'file
+                                         :ring 'applications))
+                      :edges nil)))
+         (setq cmacs-secondbrain--graph g)
+         (cmacs-secondbrain-set-graph ,buf (vconcat (plist-get g :nodes))
+                                      (vector) 2))
+       (cmacs-secondbrain-set-layout ,buf 'rings 0)
+       (cmacs-secondbrain-fit ,buf)
+       ,@body)))
+
+(ert-deftest cmacs-secondbrain-test-zoom-moves-the-camera ()
+  "`+\=' closes the distance to the target and `-\=' opens it.
+
+Asserts the DIRECTION, because the sign convention is easy to invert:
+the underlying call scales by 0.9^amount, so positive means closer --
+and roamgraph\'s docstring claimed the opposite for years while its own
+zoom-in passed a positive amount."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-zoom))
+  (cmacs-secondbrain-tests--with-live-graph buf
+    (let ((start (cmacs-secondbrain-tests--cam-dist buf)))
+      (cmacs-secondbrain-zoom-in)
+      (let ((closer (cmacs-secondbrain-tests--cam-dist buf)))
+        (should (< closer start))
+        (cmacs-secondbrain-zoom-out)
+        (cmacs-secondbrain-zoom-out)
+        (should (> (cmacs-secondbrain-tests--cam-dist buf) closer))))))
+
+(ert-deftest cmacs-secondbrain-test-recenter-repivots-on-the-selection ()
+  "`f\=' aims the camera TARGET at the selection, not just the position.
+
+That is what makes zooming and orbiting afterwards revolve around the
+node you chose.  Moving only the position would look identical in a
+still frame and behave wrongly the moment you orbit."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-recenter))
+  (let ((shot (make-temp-file "sb-rc-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-live-graph buf
+          (cmacs-secondbrain--nav-goto "c")
+          (cmacs-secondbrain-recenter)
+          ;; Focus eases inside the RENDER pass, so it needs frames --
+          ;; stepping the layout tween would prove nothing.
+          (dotimes (_ 40) (cmacs-libregnum-snapshot buf shot))
+          (let ((target (plist-get (cmacs-libregnum-camera-state buf) :target))
+                (pos (cmacs-secondbrain-node-position buf "c")))
+            (should pos)
+            (cl-loop for a in target for b in pos
+                     do (should (< (abs (- a b)) 0.01))))
+          ;; And a zoom from there closes on that node.
+          (let ((d (cmacs-secondbrain-tests--cam-dist buf)))
+            (cmacs-secondbrain-zoom-in)
+            (should (< (cmacs-secondbrain-tests--cam-dist buf) d))))
+      (ignore-errors (delete-file shot)))))
+
+(ert-deftest cmacs-secondbrain-test-recenter-needs-a-selection ()
+  "With nothing selected it says so rather than moving the camera."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-recenter))
+  (cmacs-secondbrain-tests--with-live-graph buf
+    (setq cmacs-secondbrain--selected nil)
+    (should-error (cmacs-secondbrain-recenter) :type 'user-error)))
+
+(ert-deftest cmacs-secondbrain-test-spatial-move-follows-offscreen ()
+  "A spatial step that lands off-screen brings the camera along.
+
+Zoom in far enough that the neighbours are outside the viewport, then
+step: without the follow the selection moves to a node the user cannot
+see, and every further step is blind."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-move-right)
+                    (fboundp 'cmacs-libregnum-node-onscreen-p)))
+  (cmacs-secondbrain-tests--with-live-graph buf
+    (let ((shot (make-temp-file "sb-fol-" nil ".png")))
+      (unwind-protect
+          (progn
+            (cmacs-secondbrain--nav-goto "a")
+            ;; Close in hard so the rest of the map leaves the viewport.
+            (dotimes (_ 12) (cmacs-secondbrain-zoom-in))
+            (cmacs-secondbrain-move-right)
+            ;; The step either found nothing (selection unchanged) or it
+            ;; moved -- and then the camera must end up showing it.
+            (unless (equal "a" cmacs-secondbrain--selected)
+              ;; A fly is a GOAL that the render pass eases toward, so it
+              ;; needs frames.  Asserting the camera moved the instant
+              ;; the command returned would fail on working code -- which
+              ;; is exactly how this test was first written.
+              (dotimes (_ 60) (cmacs-libregnum-snapshot buf shot))
+              (should (cmacs-secondbrain--nav-onscreen-p
+                       cmacs-secondbrain--selected))))
+        (ignore-errors (delete-file shot))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

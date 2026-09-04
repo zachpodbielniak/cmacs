@@ -1104,6 +1104,31 @@ so scenes that shipped with it are not flipped underneath them.  */)
   return up_zooms_in;
 }
 
+DEFUN ("cmacs-libregnum-zoom", Fcmacs_libregnum_zoom,
+       Scmacs_libregnum_zoom, 2, 2, 0,
+       doc: /* Zoom BUFFER's camera by AMOUNT, in wheel notches.
+
+POSITIVE moves CLOSER: the distance to the target is scaled by
+0.9^AMOUNT, so each notch takes a fixed fraction of the remaining
+distance and the target is an asymptote -- you can approach a node
+indefinitely without ever inverting through it.
+
+Zooming cancels an in-flight fly-to, because the two are the same
+control and the one you touched last is the one you meant.
+
+Returns t, or nil when BUFFER has no view.  */)
+  (Lisp_Object buffer, Lisp_Object amount)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  cmacs_libregnum_render_ctx_zoom_camera
+    (cmacs_libregnum_view_get_render_ctx (v),
+     cmacs_libregnum__to_double (amount));
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
 DEFUN ("cmacs-libregnum-orbit", Fcmacs_libregnum_orbit,
        Scmacs_libregnum_orbit, 3, 3, 0,
        doc: /* Orbit BUFFER's camera by DX and DY, in pixels of drag.
@@ -3077,6 +3102,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_pan);
   defsubr (&Scmacs_libregnum_set_right_drag_pans);
   defsubr (&Scmacs_libregnum_set_wheel_up_zooms_in);
+  defsubr (&Scmacs_libregnum_zoom);
   defsubr (&Scmacs_libregnum_orbit);
   defsubr (&Scmacs_libregnum_set_orbit_locked);
   defsubr (&Scmacs_libregnum_mean_color);

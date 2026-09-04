@@ -51,6 +51,9 @@
 (declare-function cmacs-secondbrain-search-clear "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-reset-view "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-help "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-recenter "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-zoom-in "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-zoom-out "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-set-match-set "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
@@ -1182,7 +1185,12 @@ sources."
   "R" #'cmacs-secondbrain-toggle-rotate
   "u" #'cmacs-secondbrain-unpin
   "U" #'cmacs-secondbrain-unpin-all
-  "f" #'cmacs-secondbrain-fly-to-selected
+  "f" #'cmacs-secondbrain-recenter
+  "+" #'cmacs-secondbrain-zoom-in
+  "=" #'cmacs-secondbrain-zoom-in
+  "-" #'cmacs-secondbrain-zoom-out
+  "<kp-add>" #'cmacs-secondbrain-zoom-in
+  "<kp-subtract>" #'cmacs-secondbrain-zoom-out
   "b" #'cmacs-secondbrain-set-background-interactive
   "P" #'cmacs-secondbrain-toggle-particles
   "H" #'cmacs-secondbrain-toggle-hover-highlight
@@ -1205,17 +1213,6 @@ sources."
     (unless cmacs-secondbrain--search (cmacs-secondbrain--flag-ids nil)))
   (message "Hover highlight %s"
            (if cmacs-secondbrain-hover-highlights-group "on" "off")))
-
-(defun cmacs-secondbrain-fly-to-selected ()
-  "Fly the camera to the selected node.
-
-Deliberate, because clicking does not: a click starts an animation and
-moving the camera at the same time hides it."
-  (interactive)
-  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
-  (unless (cmacs-secondbrain-focus (current-buffer)
-                                   cmacs-secondbrain--selected)
-    (user-error "That node is not on screen to fly to")))
 
 (defun cmacs-secondbrain-fit-cmd ()
   "Frame the whole graph."
@@ -1270,7 +1267,7 @@ teardown, the Evil `C-w' handoff and `<escape>'.
               '(" second brain  "
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
-                "  [?]keys [hjkl]move [/]find [J]jump [TAB]expand [RET]open"))
+                "  [?]keys [hjkl]move [f]center [+-]zoom [/]find [TAB]expand [RET]open"))
   (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t)
   (add-hook 'window-size-change-functions #'cmacs-secondbrain--on-size-change))
 

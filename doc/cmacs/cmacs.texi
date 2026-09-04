@@ -6989,6 +6989,14 @@ off --- provides per-node halos: additive can only brighten and sums
 where it overlaps, so it needs no sorting, and the tint's alpha channel
 scales its intensity.
 
+@item cmacs-libregnum-zoom
+BUFFER and AMOUNT, in wheel notches.  @strong{Positive moves closer}:
+the distance to the camera's target is scaled by @code{0.9^AMOUNT}, so
+each notch takes a fixed fraction of what is left, steps shrink as you
+approach, and the target is an asymptote that cannot be overshot.
+Zooming cancels an in-flight fly-to, because they are the same control.
+Generic, so a scene gets keyboard zoom without rolling its own.
+
 @item cmacs-libregnum-pick-at
 The same ray-pick the mouse uses, at a view pixel (VW/VH default to the
 view's own framebuffer).  It exists because the projection and the pick
