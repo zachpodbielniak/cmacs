@@ -10274,6 +10274,53 @@ terminal setup (@code{init_cmacs_glib}, @code{init_cmacs_dbus},
 @code{init_cmacs_gowl}, @dots{}, @code{init_cmacs_gsurf}).
 @end itemize
 
+@subsection src/comp.c --- native compilation
+
+Two changes.
+
+@strong{The relocation table.}  One constant, raised from upstream's
+2500:
+
+@example
+/* CMACS: raised from upstream's 2500 ... */
+#define F_RELOC_MAX_SIZE 8192
+@end example
+
+Every subr goes in this table and cmacs defines roughly a thousand
+DEFUNs on top of Emacs's, so a stock build sits about a dozen entries
+under the upstream ceiling and a handful of new DEFUNs tips it over.
+The failure is easy to misread: it fires while native-compiling
+@emph{any} unit, so it surfaces as some unrelated file failing to
+compile.  Keep the constant at 8192 or higher on merge; if upstream
+raises it past that, take upstream's value.
+
+@strong{Publish a compilation unit only after validating it.}
+@code{load_comp_unit} used to set the eln's own @code{comp_unit} slot
+(@code{*saved_cu}) @emph{before} the ABI-hash check.  That makes a stale
+@file{.eln} a segfault on the @emph{second} load rather than an error:
+the first load publishes the unit, then fails the hash check and
+signals @code{native-lisp-file-inconsistent} without ever filling the
+relocations; the second load finds @code{*saved_cu} non-nil, takes the
+@code{loaded_once} path --- which skips the whole validation block ---
+and calls @code{top_level_run} on an unrelocated unit.
+
+So a caller that merely @emph{catches} the first error crashes on its
+next attempt, and cmacs has such a caller on purpose
+(@code{cmacs_mcp_tools_brigade_register} warns and carries on when
+@code{(require 'cmacs-brigade)} fails).  The fix moves that one
+assignment to just after the hash check.
+
+This matters more here than upstream because the tree rebuilds
+constantly and every rebuild can change the ABI hash:
+@code{comp-abi-hash} is hashed over the whole subr list, so adding a
+single DEFUN invalidates every @file{.eln}.  An Emacs left running
+across a rebuild is handed elns from the wrong binary.
+
+Re-apply on merge: keep @code{*saved_cu = comp_u_lisp_obj;} inside the
+@code{if (!comp_u->loaded_once)} block, after the
+@code{xsignal1 (Qnative_lisp_file_inconsistent, ...)}.  Covered by
+@file{test/cmacs/cmacs-comp-tests.el}.
+
 @subsection src/process.c --- GLib event-loop hooks
 
 cmacs does @emph{not} replace Emacs's event loop; it hooks @code{pselect()}

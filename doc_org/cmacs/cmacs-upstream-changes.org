@@ -120,6 +120,21 @@ Worth knowing because the failure is easy to misread. Overflowing it is fatal, a
 
 The table is a static array of pointers, so the headroom costs 64 KB of BSS. Re-apply on merge by keeping the constant at 8192 or higher; if upstream raises it past that, take upstream's value.
 
+*** Publish a compilation unit only after validating it
+
+=load_comp_unit= used to set the eln's own =comp_unit= slot (=*saved_cu=) /before/ the ABI-hash check, and only signal =native-lisp-file-inconsistent= afterwards. That makes a stale =.eln= a *segfault on the second load* rather than an error:
+
+1. First load: =*saved_cu= is nil, so =loaded_once= is false; the unit is published into the shared object, then the hash check fails and the function signals — leaving the link table, =current_thread= reloc and data relocs *unset*.
+2. Second load: =dlopen= returns the same handle, =*saved_cu= is now non-nil, so =loaded_once= is true — which *skips the entire validation block* — and the function calls =top_level_run= on that unrelocated unit. SIGSEGV.
+
+So any caller that merely /catches/ the first error crashes on its next attempt. cmacs has exactly such a caller on purpose: =cmacs_mcp_tools_brigade_register= warns and carries on when =(require 'cmacs-brigade)= fails, because an MCP server with the built-in tools is still worth having.
+
+The fix moves the one assignment to just after the hash check, so a unit is published only once it is known to match the runtime. A stale file is then an error every time, which is what the signal was always for.
+
+This matters more here than upstream because *this tree rebuilds constantly and every rebuild can change the ABI hash*: =comp-abi-hash= is hashed over the whole subr list, so adding a single DEFUN invalidates every =.eln=. An Emacs left running across a rebuild will be handed elns from the wrong binary — and if a native-comp child is spawned mid-rebuild it can write an eln stamped with a *third* hash into the parent's directory, which is how this was found.
+
+Re-apply on merge: keep =*saved_cu = comp_u_lisp_obj;= inside the =if (!comp_u->loaded_once)= block, after the =xsignal1 (Qnative_lisp_file_inconsistent, ...)=. Covered by =test/cmacs/cmacs-comp-tests.el=, which loads a deliberately-stale eln twice in a subprocess and fails if the child dies by signal.
+
 ** src/process.c --- GLib event-loop hooks
 
 cmacs does *not* replace Emacs's event loop; it hooks Emacs's =pselect()=

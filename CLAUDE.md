@@ -42,6 +42,9 @@ Current upstream touch-points (keep minimal): `process.c` pselect hooks (GLib lo
 `main()` hooks (`--bacon` / `--gowl` entry, JSC GC-signal redirect) plus the guarded
 `syms_of_/init_cmacs_*` block (which now also makes one unconditional
 `syms_of_cmacs_features ()` call), `src/lisp.h` (cmacs `syms_of_*` prototypes),
+`src/comp.c` (`F_RELOC_MAX_SIZE` raised to 8192; `load_comp_unit` publishes a unit only
+*after* the ABI-hash check, so a stale `.eln` is an error every time instead of a
+segfault on the second load),
 `src/Makefile.in` (linking; `CMACS_CORE_OBJ` always links `cmacs-features.o`). Each hunk
 is marked `/* CMACS: ... */`; the full catalogue with rationale is
 `doc_org/cmacs/cmacs-upstream-changes.org` (and the *Upstream Changes* chapter in the manual).

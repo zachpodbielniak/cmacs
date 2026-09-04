@@ -5272,8 +5272,17 @@ load_comp_unit (struct Lisp_Native_Comp_Unit *comp_u, bool loading_dump,
       comp_u = XNATIVE_COMP_UNIT (comp_u_lisp_obj);
       comp_u->loaded_once = true;
     }
-  else
-    *saved_cu = comp_u_lisp_obj;
+  /* CMACS: do NOT publish the unit into the eln's own `comp_unit' slot
+     here.  Publishing before validation makes a stale eln a SEGFAULT
+     rather than the error it is meant to be: this load signals
+     `native-lisp-file-inconsistent' below without ever filling the
+     relocations, but it has already set *saved_cu -- so the next load
+     of the same file sees it non-nil, takes `loaded_once' above, skips
+     the whole validation block, and calls `top_level_run' on a unit
+     whose link table and data relocs are still unset.  A caller that
+     merely CATCHES the first error therefore crashes on the second.
+     Moved to just after the ABI-hash check below; see
+     doc_org/cmacs/cmacs-upstream-changes.org.  */
 
   /* Once we are sure to have the right compilation unit we want to
      identify is we have at least another load active on it.  */
@@ -5312,6 +5321,10 @@ load_comp_unit (struct Lisp_Native_Comp_Unit *comp_u, bool loading_dump,
 	  || NILP (Fstring_equal (load_static_obj (comp_u, LINK_TABLE_HASH_SYM),
 				  Vcomp_abi_hash)))
 	xsignal1 (Qnative_lisp_file_inconsistent, comp_u->file);
+
+      /* CMACS: only now is this unit known to match the runtime, so
+	 only now may it be published (see the note above).  */
+      *saved_cu = comp_u_lisp_obj;
 
       *current_thread_reloc = &current_thread;
       *f_symbols_with_pos_enabled_reloc = &symbols_with_pos_enabled;
