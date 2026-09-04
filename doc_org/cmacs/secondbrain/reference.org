@@ -92,6 +92,11 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-fps= | 30 | while animating |
 | =cmacs-secondbrain-default-layout= | =rings= | |
 | =cmacs-secondbrain-start-collapsed= | =nil= | =t= folds departments on open |
+| =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
+| =cmacs-secondbrain-background= | =nebula= | =none/solid/gradient/starfield/nebula/image= |
+| =cmacs-secondbrain-background-colors= | =(#x2A3A6BFF . #x05050AFF)= | top . bottom, 0xRRGGBBAA |
+| =cmacs-secondbrain-background-image= | =nil= | wallpaper file for =image= |
+| =cmacs-secondbrain-wallpaper-dirs= | see defcustom | offered by the picker; any path still accepted |
 | =cmacs-secondbrain-hover-highlights-group= | =t= | hover lights the whole department |
 | =cmacs-secondbrain-particles= | =t= | ambient drift + event bursts |
 | =cmacs-secondbrain-particle-fps= | 24 | standing redraw clock while particles are on |
@@ -119,6 +124,7 @@ See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving fr
 |---------+--------|
 | Left click on a department | select it *and expand or fold it* |
 | Left click on a leaf | select it; the inspector follows |
+| (no click moves the camera) | =f= flies deliberately, keeping context |
 | Hover anything | light up its whole department, dim the rest |
 | Left drag | orbit (3D); no effect in the locked 2D view |
 | Right drag | pan |
@@ -127,18 +133,22 @@ See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving fr
 
 Clicking a department expands it because that is the whole interaction: the rings tell you what exists, and a click tells you what is inside.  Making expand a separate keystroke would mean the obvious gesture on the obvious target does nothing.
 
+*A click does not move the camera.* libregnum's input layer flies to whatever a left click hits, which is right for a scene you navigate /by/ clicking and wrong here: the click starts an animation, and the camera arriving on top of the hub hides the one thing you clicked to see. =f= flies deliberately, keeping =cmacs-secondbrain-fly-context= of the graph's extent between camera and node — the node's own size says nothing about the scale of the graph around it, so without that floor a fly-to frames one sphere and none of its surroundings.
+
 ** The framebuffer must match its window
 
 =cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's pixel size, and =window-size-change-functions= re-runs it (coalesced through a 0.06 s idle timer) whenever the window changes.
 
 This is not cosmetic.  The framebuffer is blitted 1:1 across the window rectangle, and a pick maps view pixels against the *framebuffer's* dimensions -- so a mismatch does not merely stretch the picture, it puts every click somewhere other than where it was aimed.  A view that never fits its window is a view where nothing is clickable, which is exactly how this failed before the hook existed.
 
-* Background and particle DEFUNs
+* Background, focus and particle DEFUNs
 
 Generic, on =cmacs-libregnum=, so any libregnum scene can use them.
 
 | DEFUN | Arguments |
 |-------+-----------|
+| =cmacs-libregnum-set-background= | BUFFER KIND &optional TOP BOTTOM PATH |
+| =cmacs-libregnum-set-focus-policy= | BUFFER ON-CLICK &optional CONTEXT |
 | =cmacs-libregnum-particles-enable= | BUFFER &optional ON |
 | =cmacs-libregnum-particles-clear= | BUFFER |
 | =cmacs-libregnum-particles-emitter= | BUFFER X Y Z &optional RADIUS RATE COLOR SIZE |

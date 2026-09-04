@@ -362,6 +362,13 @@ that mutates its drawables in place — an animated force layout, a dragged
 node — must call it, or picking and labelling keep pointing at where the
 node used to be.
 
+** Focus policy
+
+How the camera responds to picking. =cmacs-libregnum-set-focus-policy= — BUFFER ON-CLICK &optional CONTEXT.
+
+- =ON-CLICK= (default =t=, the historical behaviour) flies the camera to whatever a left click hits. Right for a scene you navigate /by/ clicking — the project tree, the globe. Wrong for one you navigate by looking at, where the click starts something worth watching and the camera snatches the view away from it.
+- =CONTEXT=, a fraction of the whole scene's extent, is a floor under the focus distance. Without it the distance comes from the clicked node's own size, which says nothing about the scale of the scene around it: a 0.2-unit sphere in a 70-unit graph gets framed from 6 units away, filling the view with one dot and none of its surroundings.
+
 ** Particles
 
 A thin lease on libregnum's =LrgParticleSystem=, owned by the render context because the update and draw have to happen inside the FBO's 3D pass and nothing outside that file gets to be there. Off by default: the system is not even created until something asks for it, so a view that never uses particles pays nothing.

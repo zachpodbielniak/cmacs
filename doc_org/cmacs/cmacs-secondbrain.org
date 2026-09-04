@@ -65,6 +65,7 @@ Folding is something you reach for, not something you have to dig out of: =TAB= 
 | =y= | copy the node's path |
 | =s= / =S= | spin the rings |
 | =v= | toggle flat / 3D |
+| =f= | fly the camera to the selection |
 | =0= | frame the whole graph |
 | =g= | re-read every source |
 | =b= | pick the background (or a wallpaper image) |
@@ -84,6 +85,8 @@ Folding is something you reach for, not something you have to dig out of: =TAB= 
 | right click | the context menu for that kind, AI section last |
 
 Clicking a department expands it because that is the whole interaction: the rings tell you what exists, and a click tells you what is inside. Making expand a separate keystroke would mean the obvious gesture on the obvious target does nothing.
+
+*A click does not move the camera.* libregnum's input layer flies to whatever a left click hits — right for a scene you navigate /by/ clicking, wrong here, where the click starts an animation and the camera arriving on top of the hub hides the one thing you clicked to see. Flying is =f=, deliberately, and it keeps =cmacs-secondbrain-fly-context= (0.4 by default) of the whole graph's extent between camera and node: the node's own size says nothing about the scale of the graph around it, so without that floor a fly-to frames one sphere and none of its surroundings.
 
 ** Background
 

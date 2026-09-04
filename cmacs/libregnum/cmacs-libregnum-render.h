@@ -328,6 +328,27 @@ extern void  cmacs_libregnum_render_ctx_set_match_set
                                const gint *ids, gsize n,
                                gboolean dim_rest);
 
+/* ── Focus policy ────────────────────────────────────────────────
+ * How the camera responds to picking.
+ *
+ * ON_CLICK (default TRUE, the historical behaviour) flies the camera to
+ * whatever a left click hits.  That suits a scene you navigate BY
+ * clicking -- the project tree, the globe -- and is wrong for one you
+ * navigate by looking at, where it snatches the view away from the
+ * thing the click just started.
+ *
+ * CONTEXT_FRAC (default 0, off) puts a floor under the focus distance
+ * at that fraction of the whole scene's extent.  Without it the
+ * distance is derived from the NODE's own size, which says nothing
+ * about the scale of the scene around it: a 0.2-unit sphere in a
+ * 70-unit graph gets framed from 6 units away, filling the view with
+ * one dot and none of its surroundings. */
+extern void cmacs_libregnum_render_ctx_set_focus_policy
+                              (CmacsLibregnumRenderCtx *r,
+                               gboolean on_click, double context_frac);
+extern gboolean cmacs_libregnum_render_ctx_click_focuses
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Background ──────────────────────────────────────────────────
  * What fills the viewport behind the scene.  Drawn as a 2D blit right
  * after the clear and before anything 3D, so it is genuinely behind

@@ -779,6 +779,62 @@ that keeps what it had and says the path is bad."
     ;; And with no path at all, which is the other way to get here.
     (should-not (cmacs-libregnum-set-background buf 'image 0 0 nil))))
 
+(ert-deftest cmacs-secondbrain-test-click-does-not-move-the-camera ()
+  "Clicking selects without flying the camera.
+
+The libregnum input layer flies to whatever a left click hits, which is
+right for a scene you navigate BY clicking and wrong here: a click
+starts an expand animation, and the camera landing on the hub hides the
+very thing the click was for.  `cmacs-secondbrain--configure-view' turns
+it off, and this pins that it stays off."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-set-focus-policy))
+  (cmacs-secondbrain-tests--with-sources
+      (list (cmacs-secondbrain-tests--fixture 'a 'memory '("m1" "m2" "m3")))
+    (cmacs-secondbrain-tests--with-view buf
+      (with-current-buffer buf
+        (cmacs-secondbrain-mode)
+        (cmacs-secondbrain-refresh)
+        (let ((before (cmacs-libregnum-camera-state buf)))
+          (cmacs-secondbrain--on-pick buf 1 0 0 "m1")
+          (should (equal before (cmacs-libregnum-camera-state buf))))))))
+
+(ert-deftest cmacs-secondbrain-test-fly-to-moves-and-keeps-context ()
+  "`cmacs-secondbrain-focus' moves the camera, and not too close.
+
+The distance floor is the point: with it removed the camera frames the
+node by the node's OWN size, which in this graph means one sphere
+filling the view."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-focus))
+  (cmacs-secondbrain-tests--with-sources
+      (list (cmacs-secondbrain-tests--fixture
+             'a 'memory '("m1" "m2" "m3" "m4" "m5" "m6")))
+    (cmacs-secondbrain-tests--with-view buf
+      (with-current-buffer buf
+        (cmacs-secondbrain-mode)
+        (cmacs-secondbrain-refresh)
+        ;; An id nobody has is nil, not an error and not a camera move.
+        (should-not (cmacs-secondbrain-focus buf "no-such-node"))
+        (let ((before (cmacs-libregnum-camera-state buf)))
+          (should (cmacs-secondbrain-focus buf "m1"))
+          (dotimes (_ 40) (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+          (should-not (equal before (cmacs-libregnum-camera-state buf))))
+        ;; A bigger context fraction must end up further away.
+        (let (near far)
+          (dolist (frac '(0.1 0.8))
+            (cmacs-secondbrain-fit buf)
+            (cmacs-libregnum-set-focus-policy buf nil frac)
+            (cmacs-secondbrain-focus buf "m1")
+            (dotimes (_ 60) (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+            (let* ((cam (cmacs-libregnum-camera-state buf))
+                   (p (plist-get cam :position))
+                   (tg (plist-get cam :target))
+                   (d (sqrt (apply #'+ (cl-mapcar (lambda (a b) (* (- a b) (- a b)))
+                                                  p tg)))))
+              (if near (setq far d) (setq near d))))
+          (should (> far near)))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

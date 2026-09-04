@@ -82,6 +82,19 @@ extern void cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r);
 extern void cmacs_secondbrain_scene_apply_flags
                         (CmacsLibregnumRenderCtx *r, CmacsGraph *g);
 
+/* Scene index for graph node I, or -1 when it was not emitted (a
+ * collapsed subtree, or past the drawable budget).  Emission order is
+ * NOT graph order, so anything addressing the scene by index -- the
+ * camera, the selection marker -- has to come through here. */
+extern gint cmacs_secondbrain_scene_emit_index
+                        (CmacsLibregnumRenderCtx *r, guint i);
+
+/* Ease the camera to frame graph node I, keeping CONTEXT_FRAC of the
+ * whole scene's extent between camera and node so the node's
+ * surroundings stay visible. */
+extern gboolean cmacs_secondbrain_scene_focus_node
+                        (CmacsLibregnumRenderCtx *r, guint i);
+
 /* Camera.  FLAT gives a head-on view of the XY plane with orbit locked;
  * otherwise a free perspective view.  Both are PERSPECTIVE cameras --
  * orthographic is unusable here because graylib asserts `fovy < 180'

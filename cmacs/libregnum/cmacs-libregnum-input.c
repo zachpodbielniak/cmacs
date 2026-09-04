@@ -432,7 +432,12 @@ handle_click (struct frame *f, CmacsLibregnumView *v, double x, double y)
   if (id >= 0)
     {
       cmacs_libregnum_render_ctx_set_selected (ctx, id);
-      cmacs_libregnum_render_ctx_focus_node (ctx, id);
+      /* Only where the scene wants it.  Flying to whatever was clicked
+         is right for a scene you navigate BY clicking, and wrong for
+         one where the click starts something worth watching -- it
+         snatches the view away from the animation it just began. */
+      if (cmacs_libregnum_render_ctx_click_focuses (ctx))
+        cmacs_libregnum_render_ctx_focus_node (ctx, id);
       cmacs_libregnum_view_request_redraw (v);
     }
 

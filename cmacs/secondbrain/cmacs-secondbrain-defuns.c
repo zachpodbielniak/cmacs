@@ -560,6 +560,39 @@ collapsed, which by default is every department.  */)
   return make_fixnum ((EMACS_INT) cmacs_graph_n_visible (st->graph));
 }
 
+DEFUN ("cmacs-secondbrain-focus", Fcmacs_secondbrain_focus,
+       Scmacs_secondbrain_focus, 2, 2, 0,
+       doc: /* Ease BUFFER's camera to frame node ID.  Returns nil if unknown.
+
+Deliberate, because a click does not do this: clicking a department
+starts an animation, and moving the camera at the same time hides the
+thing the click was for.
+
+Takes the id STRING, not a scene index, because scene indices are
+emission order and churn on every rebuild.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  gint idx;
+  Lisp_Object enc;
+
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (id);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  enc = ENCODE_UTF_8 (id);
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
+  if (idx < 0) return Qnil;
+
+  if (!cmacs_secondbrain_scene_focus_node (ctx, (guint) idx))
+    return Qnil;
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return id;
+}
+
 DEFUN ("cmacs-secondbrain-node-position", Fcmacs_secondbrain_node_position,
        Scmacs_secondbrain_node_position, 2, 2, 0,
        doc: /* Return (X Y Z) for node ID in BUFFER, or nil.  */)
@@ -1092,6 +1125,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_node_count);
   defsubr (&Scmacs_secondbrain_edge_count);
   defsubr (&Scmacs_secondbrain_visible_count);
+  defsubr (&Scmacs_secondbrain_focus);
   defsubr (&Scmacs_secondbrain_node_position);
   defsubr (&Scmacs_secondbrain_set_layout);
   defsubr (&Scmacs_secondbrain_layout_kind);

@@ -60,6 +60,7 @@
 (declare-function cmacs-libregnum-set-selection-style "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-inscene-labels "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-background "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-focus-policy "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-enable "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-clear "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-emitter "cmacs-libregnum")
@@ -67,7 +68,6 @@
 (declare-function cmacs-para-color "cmacs-para")
 (declare-function cmacs-libregnum-popup-menu "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-match-set "cmacs-libregnum")
-(declare-function cmacs-libregnum-focus-node "cmacs-libregnum")
 (declare-function cmacs-ai-menu-scene-items "cmacs-ai-menu")
 
 ;;;; Customisation ----------------------------------------------------
@@ -155,6 +155,20 @@ slideshow.  It is a standing cost on an otherwise idle buffer, which is
 the honest price of the effect -- turn particles off and the clock stops
 with them."
   :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-fly-context 0.4
+  "How much of the scene to keep in view when flying to a node.
+
+A fraction of the whole graph's extent, used as a floor under the camera
+distance.  Without it the distance comes from the clicked node's own
+size, which says nothing about the scale of the graph around it: a file
+sphere here is a fifth of a world unit in a graph seventy across, so the
+camera ends up close enough to show that one dot and nothing else.
+
+At the default the view holds a whole department plus its neighbours,
+which is the scale at which \"fly to this\" is a useful answer."
+  :type 'number
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-hover-highlights-group t
@@ -286,6 +300,17 @@ useless."
       (cmacs-libregnum-set-selection-style buf 'halo))
     (when (fboundp 'cmacs-libregnum-set-inscene-labels)
       (cmacs-libregnum-set-inscene-labels buf t))
+    (when (fboundp 'cmacs-libregnum-set-focus-policy)
+      ;; A click must NOT fly the camera here.  Clicking a department
+      ;; starts an animation worth watching, and the default behaviour
+      ;; -- fly to whatever was hit -- lands the camera on top of the
+      ;; hub before the fan has moved, so the thing the click was for is
+      ;; the one thing you cannot see.  `f' flies deliberately instead,
+      ;; and keeps `cmacs-secondbrain-fly-context' of the scene extent
+      ;; between camera and node, so it frames the department rather
+      ;; than filling the view with a dot.
+      (cmacs-libregnum-set-focus-policy
+       buf nil cmacs-secondbrain-fly-context))
     (cmacs-secondbrain--apply-background buf)))
 
 (defun cmacs-secondbrain--apply-background (&optional buf)
@@ -713,6 +738,7 @@ is the tier above."
   "p" #'cmacs-secondbrain-preview
   "W" #'cmacs-secondbrain-close-panes
   "v" #'cmacs-secondbrain-toggle-view
+  "f" #'cmacs-secondbrain-fly-to-selected
   "b" #'cmacs-secondbrain-set-background-interactive
   "P" #'cmacs-secondbrain-toggle-particles
   "H" #'cmacs-secondbrain-toggle-hover-highlight
@@ -730,6 +756,17 @@ is the tier above."
     (unless cmacs-secondbrain--search (cmacs-secondbrain--flag-ids nil)))
   (message "Hover highlight %s"
            (if cmacs-secondbrain-hover-highlights-group "on" "off")))
+
+(defun cmacs-secondbrain-fly-to-selected ()
+  "Fly the camera to the selected node.
+
+Deliberate, because clicking does not: a click starts an animation and
+moving the camera at the same time hides it."
+  (interactive)
+  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
+  (unless (cmacs-secondbrain-focus (current-buffer)
+                                   cmacs-secondbrain--selected)
+    (user-error "That node is not on screen to fly to")))
 
 (defun cmacs-secondbrain-fit-cmd ()
   "Frame the whole graph."
@@ -847,9 +884,10 @@ routine it is when it runs, for a file it is open it."
                                   (cmacs-secondbrain-copy-path)))
               items))
       (push nil items)
-      (push (cons "Fly to" (lambda ()
-                             (when (fboundp 'cmacs-libregnum-focus-node)
-                               (cmacs-libregnum-focus-node buf id))))
+      ;; Was guarded on `cmacs-libregnum-focus-node', which does not
+      ;; exist -- so this menu entry had always been a silent no-op.
+      (push (cons "Fly to"
+                  (lambda () (cmacs-secondbrain-focus buf id)))
             items)
       (push (cons "Find similar"
                   (lambda () (cmacs-secondbrain-find-similar id)))

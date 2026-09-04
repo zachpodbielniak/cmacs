@@ -454,6 +454,11 @@ struct CmacsLibregnumRenderCtx
   /* Particles.  Created lazily -- a view that never asks pays
    * nothing -- and stepped inside the 3D pass, which is the only
    * place with a live camera and an open FBO. */
+  /* Focus policy (see the header).  Defaults preserve the historical
+   * behaviour: click flies the camera, no scene-scale floor. */
+  gboolean           click_focus;
+  double             focus_context;
+
   /* Background layer (see the header).  `bg_tex' is regenerated only
    * when the kind, colours, path or viewport size change. */
   CmacsLibregnumBackgroundKind bg_kind;
@@ -558,6 +563,9 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->static_polygon_models = g_ptr_array_new_with_free_func (g_object_unref);
   r->map_labels = g_array_new (FALSE, TRUE, sizeof (CmacsMapLabel));
   g_array_set_clear_func (r->map_labels, cmacs_map_label_clear);
+  /* Historical default: a click flies the camera.  A scene that is
+     navigated by looking rather than by clicking turns it off. */
+  r->click_focus = TRUE;
   r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
   g_array_set_clear_func (r->billboards, cmacs_billboard_clear);
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
@@ -3089,6 +3097,22 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
  * along the current view direction by a distance scaled to node size.
  * Animated by step_focus() over subsequent frames. */
 void
+cmacs_libregnum_render_ctx_set_focus_policy (CmacsLibregnumRenderCtx *r,
+                                             gboolean on_click,
+                                             double context_frac)
+{
+  if (!r) return;
+  r->click_focus = on_click;
+  r->focus_context = (context_frac > 0.0) ? context_frac : 0.0;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_click_focuses (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->click_focus;
+}
+
+void
 cmacs_libregnum_render_ctx_focus_node (CmacsLibregnumRenderCtx *r, gint id)
 {
   if (!r || !r->nodes || id < 0 || (guint) id >= r->nodes->len) return;
@@ -3106,6 +3130,32 @@ cmacs_libregnum_render_ctx_focus_node (CmacsLibregnumRenderCtx *r, gint id)
   dx /= len; dy /= len; dz /= len;
   float extent = fmaxf (n->hw, fmaxf (n->hh, n->hd));
   float dist = 6.0f + extent * 4.0f;
+  /* A node's own size says nothing about the scale of the scene around
+     it, so in a large graph that distance frames one dot and none of
+     its surroundings.  Where a scene has asked for context, keep at
+     least that fraction of the whole extent between camera and node. */
+  if (r->focus_context > 0.0)
+    {
+      float mnx = 0, mny = 0, mnz = 0, mxx = 0, mxy = 0, mxz = 0;
+      guint i, cnt = r->nodes->len;
+      for (i = 0; i < cnt; i++)
+        {
+          CmacsNode *m = &g_array_index (r->nodes, CmacsNode, i);
+          if (i == 0)
+            { mnx = mxx = m->x; mny = mxy = m->y; mnz = mxz = m->z; }
+          else
+            {
+              mnx = fminf (mnx, m->x); mxx = fmaxf (mxx, m->x);
+              mny = fminf (mny, m->y); mxy = fmaxf (mxy, m->y);
+              mnz = fminf (mnz, m->z); mxz = fmaxf (mxz, m->z);
+            }
+        }
+      {
+        float se = fmaxf (mxx - mnx, fmaxf (mxy - mny, mxz - mnz));
+        float floor_d = se * (float) r->focus_context;
+        if (floor_d > dist) dist = floor_d;
+      }
+    }
   r->goal_tx = n->x; r->goal_ty = n->y; r->goal_tz = n->z;
   r->goal_px = n->x + dx * dist;
   r->goal_py = n->y + dy * dist;

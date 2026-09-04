@@ -846,6 +846,32 @@ cmacs_lrg_float (Lisp_Object v, double dflt)
   return (float) (NUMBERP (v) ? XFLOATINT (v) : dflt);
 }
 
+DEFUN ("cmacs-libregnum-set-focus-policy",
+       Fcmacs_libregnum_set_focus_policy,
+       Scmacs_libregnum_set_focus_policy, 2, 3, 0,
+       doc: /* Set how BUFFER's camera responds to picking.
+
+ON-CLICK non-nil (the default) flies the camera to whatever a left click
+hits.  That suits a scene you navigate BY clicking; it is wrong for one
+you navigate by looking at, where it snatches the view away from
+whatever the click just started.
+
+CONTEXT, a fraction of the whole scene's extent, puts a floor under the
+focus distance.  Without it the distance comes from the clicked node's
+own size, which says nothing about the scale of the scene around it: a
+small node in a large graph gets framed from close enough to fill the
+view with one dot and none of its surroundings.  */)
+  (Lisp_Object buffer, Lisp_Object on_click, Lisp_Object context)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  cmacs_libregnum_render_ctx_set_focus_policy
+    (ctx, !NILP (on_click),
+     NUMBERP (context) ? XFLOATINT (context) : 0.0);
+  return NILP (on_click) ? Qnil : Qt;
+}
+
 DEFUN ("cmacs-libregnum-set-background",
        Fcmacs_libregnum_set_background,
        Scmacs_libregnum_set_background, 2, 5, 0,
@@ -2976,6 +3002,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_label_style);
   defsubr (&Scmacs_libregnum_set_label_decor);
   defsubr (&Scmacs_libregnum_set_selection_style);
+  defsubr (&Scmacs_libregnum_set_focus_policy);
   defsubr (&Scmacs_libregnum_set_background);
   defsubr (&Scmacs_libregnum_particles_enable);
   defsubr (&Scmacs_libregnum_particles_clear);

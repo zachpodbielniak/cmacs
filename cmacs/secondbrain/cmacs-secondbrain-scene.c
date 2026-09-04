@@ -617,6 +617,23 @@ cmacs_secondbrain_scene_flat_p (CmacsLibregnumRenderCtx *r)
   return st ? st->flat : FALSE;
 }
 
+gint
+cmacs_secondbrain_scene_emit_index (CmacsLibregnumRenderCtx *r, guint i)
+{
+  SceneState *st = scene_state (r, FALSE);
+  if (!st || !st->node_emit || i >= st->node_emit->len) return -1;
+  return g_array_index (st->node_emit, gint32, i);
+}
+
+gboolean
+cmacs_secondbrain_scene_focus_node (CmacsLibregnumRenderCtx *r, guint i)
+{
+  gint e = cmacs_secondbrain_scene_emit_index (r, i);
+  if (e < 0) return FALSE;
+  cmacs_libregnum_render_ctx_focus_node (r, e);
+  return TRUE;
+}
+
 void
 cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g)
 {

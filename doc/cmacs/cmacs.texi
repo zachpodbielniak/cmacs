@@ -6944,6 +6944,17 @@ rather than one per node.  Match, pinned and neighbour also override the
 per-node label policy: highlighting something whose name you then cannot
 read is useless.
 
+@item cmacs-libregnum-set-focus-policy
+How the camera responds to picking.  @code{ON-CLICK} (default @code{t},
+the historical behaviour) flies the camera to whatever a left click
+hits: right for a scene you navigate @emph{by} clicking, wrong for one
+you navigate by looking at, where the click starts something worth
+watching and the camera snatches the view away from it.  @code{CONTEXT},
+a fraction of the scene's extent, is a floor under the focus distance ---
+without it the distance comes from the clicked node's own size, which
+says nothing about the scale of the scene around it, so a small node in
+a large graph is framed close enough to fill the view with one dot.
+
 @item cmacs-libregnum-particles-enable
 @itemx cmacs-libregnum-particles-clear
 @itemx cmacs-libregnum-particles-emitter

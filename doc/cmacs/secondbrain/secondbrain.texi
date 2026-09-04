@@ -109,6 +109,7 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item @kbd{v} @tab toggle flat / 3D
 @item @kbd{0} @tab frame the whole graph
 @item @kbd{g} @tab re-read every source
+@item @kbd{f} @tab fly the camera to the selection
 @item @kbd{b} @tab pick the background (or a wallpaper image)
 @item @kbd{P} @tab particle effects on/off
 @item @kbd{H} @tab hover department-highlighting on/off
@@ -133,6 +134,16 @@ Clicking a department expands it because that is the whole interaction:
 the rings tell you what exists, and a click tells you what is inside.
 Making expand a separate keystroke would mean the obvious gesture on the
 obvious target does nothing.
+
+@strong{A click does not move the camera.}  libregnum's input layer
+flies to whatever a left click hits --- right for a scene you navigate
+@emph{by} clicking, wrong here, where the click starts an animation and
+the camera arriving on top of the hub hides the one thing you clicked to
+see.  Flying is @kbd{f}, deliberately, and it keeps
+@code{cmacs-secondbrain-fly-context} (0.4 by default) of the whole
+graph's extent between camera and node: the node's own size says nothing
+about the scale of the graph around it, so without that floor a fly-to
+frames one sphere and none of its surroundings.
 
 @subsection Background
 
