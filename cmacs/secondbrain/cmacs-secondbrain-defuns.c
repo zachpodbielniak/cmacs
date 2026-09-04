@@ -635,6 +635,160 @@ rebuild.  Returns ID, or nil if it is not on screen.  */)
   return id;
 }
 
+DEFUN ("cmacs-secondbrain-scene-index", Fcmacs_secondbrain_scene_index,
+       Scmacs_secondbrain_scene_index, 2, 2, 0,
+       doc: /* Return the scene node index for ID in BUFFER, or nil.
+
+The scene index is what the libregnum-level calls take -- picking,
+`cmacs-libregnum-nearest-in-direction', node flags.  It is EMISSION
+order, not graph order: a collapsed department emits nothing, so its
+members have no index at all and this returns nil for them.
+
+Never store what this returns.  It is valid until the next rebuild and
+no longer; ids are the only durable key.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  SbState *st;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  gint idx, emit;
+
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (id);
+  st = state_for_buffer (buffer, NULL, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  idx = cmacs_graph_index_of (st->graph, SSDATA (ENCODE_UTF_8 (id)));
+  if (idx < 0) return Qnil;
+  emit = cmacs_secondbrain_scene_emit_index (ctx, (guint) idx);
+  return (emit >= 0) ? make_fixnum (emit) : Qnil;
+}
+
+DEFUN ("cmacs-secondbrain-node-id-at", Fcmacs_secondbrain_node_id_at,
+       Scmacs_secondbrain_node_id_at, 2, 2, 0,
+       doc: /* Return the id string of the node at scene INDEX in BUFFER.
+
+The inverse of `cmacs-secondbrain-scene-index', and the reason the
+libregnum navigation calls are usable from here at all: they answer in
+scene indices, and everything on the Lisp side keys on ids.  */)
+  (Lisp_Object buffer, Lisp_Object index)
+{
+  SbState *st;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  guint n, i;
+  gint want;
+
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNUM (index);
+  st = state_for_buffer (buffer, NULL, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  want = (gint) XFIXNUM (index);
+  if (want < 0) return Qnil;
+
+  /* Walk the graph asking each node for its emission index rather than
+     indexing an emission-ordered table: the mapping is owned by the
+     scene, and duplicating it here is how the two drift apart. */
+  n = cmacs_graph_n_nodes (st->graph);
+  for (i = 0; i < n; i++)
+    if (cmacs_secondbrain_scene_emit_index (ctx, i) == want)
+      {
+        CmacsGraphNode *nd = cmacs_graph_node (st->graph, i);
+        return (nd && nd->id) ? build_string (nd->id) : Qnil;
+      }
+  return Qnil;
+}
+
+DEFUN ("cmacs-secondbrain-set-match-set", Fcmacs_secondbrain_set_match_set,
+       Scmacs_secondbrain_set_match_set, 2, 3, 0,
+       doc: /* Mark node IDS in BUFFER as search matches, dimming the rest.
+
+IDS is a list or vector of id STRINGS; nil clears the set.  With non-nil
+DIM-REST every other node is de-emphasised, which is what makes a
+handful of matches readable on a crowded map.
+
+This exists rather than calling `cmacs-libregnum-set-match-set' directly
+because that one takes SCENE indices, and ids are the only stable key
+here: emission order changes on every rebuild, and a collapsed
+department is not emitted at all.  Passing it strings silently matched
+NOTHING -- it keeps the integers and drops the rest -- so search
+highlighted nothing while reporting a match count.
+
+A match inside a COLLAPSED department flags that department instead --
+the map opens collapsed, so without that a fresh view highlights
+nothing at all.  Duplicates that fold onto the same hub count once, and
+ids that are unknown are skipped, so the return -- the number of scene
+nodes actually flagged -- is <= (length IDS).  */)
+  (Lisp_Object buffer, Lisp_Object ids, Lisp_Object dim_rest)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  Lisp_Object vec;
+  ptrdiff_t n, i;
+  gint *emit;
+  gsize k = 0;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  if (NILP (ids))
+    {
+      cmacs_libregnum_render_ctx_set_match_set (ctx, NULL, 0, FALSE);
+      cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+      if (v) cmacs_libregnum_view_request_redraw (v);
+      return make_fixnum (0);
+    }
+
+  vec = VECTORP (ids) ? ids : Fvconcat (1, &ids);
+  n = ASIZE (vec);
+  emit = (n > 0) ? xnmalloc (n, sizeof *emit) : NULL;
+
+  for (i = 0; i < n; i++)
+    {
+      Lisp_Object e = AREF (vec, i);
+      gint idx, em, guard = 0;
+      gsize j;
+
+      if (!STRINGP (e)) continue;
+      idx = cmacs_graph_index_of (st->graph, SSDATA (ENCODE_UTF_8 (e)));
+      if (idx < 0) continue;
+
+      /* A match inside a collapsed department has no drawable of its
+         own, so flag the nearest VISIBLE ancestor instead: the
+         department lights up saying "your hits are in here".
+         Without this the whole feature is dead on the map people
+         actually see -- it opens fully collapsed, so on a fresh view
+         every single match resolves to nothing and the search
+         highlights an empty screen.  Expanding everything instead is
+         not the answer: two thousand hits would bury the answer in
+         the noise it is meant to cut through. */
+      em = cmacs_secondbrain_scene_emit_index (ctx, (guint) idx);
+      while (em < 0 && guard++ < 64)
+        {
+          CmacsGraphNode *nd = cmacs_graph_node (st->graph, (guint) idx);
+          if (!nd || nd->parent < 0) break;
+          idx = nd->parent;
+          em = cmacs_secondbrain_scene_emit_index (ctx, (guint) idx);
+        }
+      if (em < 0) continue;           /* nothing on screen to stand for it */
+
+      /* Many members of one collapsed department collapse onto the same
+         hub, and flagging it twenty times would only cost time. */
+      for (j = 0; j < k; j++)
+        if (emit[j] == em) break;
+      if (j == k) emit[k++] = em;
+    }
+
+  cmacs_libregnum_render_ctx_set_match_set (ctx, emit, k, !NILP (dim_rest));
+  xfree (emit);
+  /* Repaint from the flags just written: the flags decide the colours,
+     and nothing else is going to run apply_flags on our behalf. */
+  cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return make_fixnum ((EMACS_INT) k);
+}
+
 DEFUN ("cmacs-secondbrain-set-shading", Fcmacs_secondbrain_set_shading,
        Scmacs_secondbrain_set_shading, 1, 2, 0,
        doc: /* Draw a specular highlight on each node in BUFFER (ON nil off).
@@ -1391,6 +1545,9 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_visible_count);
   defsubr (&Scmacs_secondbrain_focus);
   defsubr (&Scmacs_secondbrain_select);
+  defsubr (&Scmacs_secondbrain_scene_index);
+  defsubr (&Scmacs_secondbrain_node_id_at);
+  defsubr (&Scmacs_secondbrain_set_match_set);
   defsubr (&Scmacs_secondbrain_set_shading);
   defsubr (&Scmacs_secondbrain_set_glow);
   defsubr (&Scmacs_secondbrain_set_isolate);

@@ -1581,6 +1581,171 @@ right of where it was drawn."
         (should (< (abs (- (/ (+ minx maxx) 2.0) sx)) 3.0))
         (should (< (abs (- (/ (+ miny maxy) 2.0) sy)) 3.0))))))
 
+(ert-deftest cmacs-secondbrain-test-match-set-takes-ids ()
+  "The match set is addressed by id string, and actually flags nodes.
+
+The regression this pins: the libregnum setter keeps only the FIXNUMS
+it is handed and silently drops everything else, so passing it ids --
+which is what every caller here has -- flagged zero nodes while the
+caller reported a match count.  Search highlighted nothing, confidently."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-match-set))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "alpha" :title "Alpha" :kind 'file :ring 'memory)
+                 (list :id "beta"  :title "Beta"  :kind 'file :ring 'memory))
+     (vector) 2)
+    ;; One id in, one node flagged.
+    (should (= 1 (cmacs-secondbrain-set-match-set buf '("alpha") t)))
+    ;; A vector works too, and both ids resolve.
+    (should (= 2 (cmacs-secondbrain-set-match-set buf ["alpha" "beta"] t)))
+    ;; An unknown id is skipped rather than counted.
+    (should (= 1 (cmacs-secondbrain-set-match-set buf '("alpha" "nope") t)))
+    ;; nil clears.
+    (should (= 0 (cmacs-secondbrain-set-match-set buf nil nil)))))
+
+(ert-deftest cmacs-secondbrain-test-match-set-changes-the-frame ()
+  "Flagging a match visibly changes the picture.
+
+Counting flagged nodes proves the ids resolved; only the frame proves
+the colour reached the screen."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-match-set))
+  (let ((p0 (make-temp-file "sb-ms-" nil ".png"))
+        (p1 (make-temp-file "sb-ms-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph
+           buf (vector (list :id "alpha" :title "Alpha" :kind 'file :ring 'memory)
+                       (list :id "beta"  :title "Beta"  :kind 'file :ring 'memory))
+           (vector) 2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-libregnum-snapshot buf p0)
+          (cmacs-secondbrain-set-match-set buf '("alpha") t)
+          (cmacs-libregnum-snapshot buf p1)
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read p0) (funcall read p1)))))
+      (ignore-errors (delete-file p0))
+      (ignore-errors (delete-file p1)))))
+
+(ert-deftest cmacs-secondbrain-test-scene-index-round-trips ()
+  "An id maps to a scene index and back, and a hidden node has none.
+
+The two halves of the id<->index bridge the keyboard navigation stands
+on: libregnum answers in scene indices, everything here keys on ids."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-scene-index))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "hub" :title "Hub" :kind 'hub :ring 'memory)
+                 (list :id "kid" :title "Kid" :kind 'file :ring 'memory
+                       :parent "hub"))
+     (vector) 2)
+    (let ((i (cmacs-secondbrain-scene-index buf "hub")))
+      (should (integerp i))
+      (should (equal "hub" (cmacs-secondbrain-node-id-at buf i))))
+    ;; Unknown ids have no index, and neither does a collapsed member.
+    (should-not (cmacs-secondbrain-scene-index buf "nope"))
+    (cmacs-secondbrain-set-collapsed buf "hub" t 0)
+    (should-not (cmacs-secondbrain-scene-index buf "kid"))
+    ;; Expanding brings it back -- which is what `--nav-reveal' relies on.
+    (cmacs-secondbrain-set-collapsed buf "hub" nil 0)
+    (should (integerp (cmacs-secondbrain-scene-index buf "kid")))))
+
+(ert-deftest cmacs-secondbrain-test-nav-reveals-before-selecting ()
+  "Jumping to a node inside a collapsed department expands it first.
+
+Without this a keyboard jump into the default (fully collapsed) map
+selects something with no scene entry: no halo, no camera move, no
+error -- indistinguishable from the key doing nothing."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain--nav-goto))
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (cmacs-secondbrain-mode)
+      (setq cmacs-secondbrain--graph
+            (list :nodes (list (list :id "hub" :title "Hub" :kind 'hub
+                                     :ring 'memory)
+                               (list :id "kid" :title "Kid" :kind 'file
+                                     :ring 'memory :parent "hub"))
+                  :edges nil))
+      (cmacs-secondbrain-set-graph
+       buf (vector (list :id "hub" :title "Hub" :kind 'hub :ring 'memory)
+                   (list :id "kid" :title "Kid" :kind 'file :ring 'memory
+                         :parent "hub"))
+       (vector) 2)
+      (cmacs-secondbrain-set-collapsed buf "hub" t 0)
+      (should-not (cmacs-secondbrain-scene-index buf "kid"))
+      (cmacs-secondbrain--nav-goto "kid")
+      ;; Revealed, and really selected in the scene.
+      (should (cmacs-secondbrain-scene-index buf "kid"))
+      (should (equal "kid" cmacs-secondbrain--selected)))))
+
+(ert-deftest cmacs-secondbrain-test-nav-siblings-and-links ()
+  "Sibling and link walks are ordered, deduplicated and undirected."
+  (skip-unless (fboundp 'cmacs-secondbrain--nav-siblings))
+  (with-temp-buffer
+    (setq-local cmacs-secondbrain--graph
+                (list :nodes (list (list :id "hub" :title "Hub")
+                                   (list :id "b" :title "Beta" :parent "hub")
+                                   (list :id "a" :title "Alpha" :parent "hub")
+                                   (list :id "c" :title "Gamma" :parent "hub"))
+                      :edges (list (list :from "hub" :to "a")
+                                   (list :from "b" :to "a")
+                                   ;; A duplicate, and the reverse direction.
+                                   (list :from "a" :to "b"))))
+    ;; Siblings come back in TITLE order, not insertion order.
+    (should (equal '("a" "b" "c") (cmacs-secondbrain--nav-siblings "a")))
+    ;; Links are undirected and deduplicated: a is linked to hub and b once.
+    (should (equal '("b" "hub")
+                   (sort (copy-sequence (cmacs-secondbrain--nav-links "a"))
+                         (lambda (x y) (string-lessp x y)))))
+    ;; A top-level node's peers are the other top-level nodes.
+    (should (equal '("hub") (cmacs-secondbrain--nav-siblings "hub")))))
+
+(ert-deftest cmacs-secondbrain-test-nav-search-matches ()
+  "The incremental matcher honours its style and orders hits by title."
+  (skip-unless (fboundp 'cmacs-secondbrain--matches-for))
+  (with-temp-buffer
+    (setq-local cmacs-secondbrain--graph
+                (list :nodes (list (list :id "1" :title "Zeta project"
+                                         :file "/n/01_projects/zeta.org")
+                                   (list :id "2" :title "Alpha project"
+                                         :file "/n/01_projects/alpha.org")
+                                   (list :id "3" :title "Notes"
+                                         :file "/n/02_areas/notes.org"))
+                      :edges nil))
+    (cmacs-secondbrain--build-haystacks)
+    (let ((cmacs-secondbrain-search-style 'literal))
+      ;; Alphabetical by title, so cycling is stable across rebuilds.
+      (should (equal ["2" "1"] (cmacs-secondbrain--matches-for "project"))))
+    (let ((cmacs-secondbrain-search-style 'orderless))
+      ;; Words may appear in any order, and the path is part of the hay.
+      (should (equal ["2"] (cmacs-secondbrain--matches-for "alpha proj"))))
+    ;; An empty needle is not a match-everything.
+    (should-not (cmacs-secondbrain--matches-for ""))))
+
+(ert-deftest cmacs-secondbrain-test-every-key-is-bound-to-a-command ()
+  "Every key in the map runs a real, interactive command.
+
+A keymap entry naming a function that never got defined -- or that
+lives in a file nobody requires -- fails only when a user presses that
+key, which is the worst possible time to find out."
+  (skip-unless (boundp 'cmacs-secondbrain-mode-map))
+  (require 'cmacs-secondbrain-nav)
+  (let ((missing nil))
+    (map-keymap
+     (lambda (_event def)
+       (when (and (symbolp def) def (not (keymapp def)))
+         (unless (commandp def) (push def missing))))
+     cmacs-secondbrain-mode-map)
+    (should-not missing)))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

@@ -6989,6 +6989,14 @@ off --- provides per-node halos: additive can only brighten and sums
 where it overlaps, so it needs no sorting, and the tint's alpha channel
 scales its intensity.
 
+@item cmacs-libregnum-pick-at
+The same ray-pick the mouse uses, at a view pixel (VW/VH default to the
+view's own framebuffer).  It exists because the projection and the pick
+can each be self-consistent and still disagree with each other, and
+nothing else can see that gap: paired with @code{cmacs-libregnum-project}
+it asserts that the node drawn at a pixel is the node a click there
+selects, which is how the paint/pick/FBO rectangle mismatch was found.
+
 @item cmacs-libregnum-set-drag-nodes
 Off by default.  Dragging used to be reachable only through the editor,
 whose drag path also selects into the editor's own model and builds undo

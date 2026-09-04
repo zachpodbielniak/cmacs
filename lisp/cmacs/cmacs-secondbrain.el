@@ -30,6 +30,30 @@
 (require 'cmacs-para)
 (require 'cmacs-secondbrain-sources)
 
+;; cmacs-secondbrain-nav.el requires THIS file, so the dependency is
+;; one-way: name its commands here (the keymap below binds them) and let
+;; the mode body load it.  Same rule as the search, ai and panes files.
+(declare-function cmacs-secondbrain-move-left "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-move-right "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-move-up "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-move-down "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-follow-link "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-back "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-next-sibling "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-prev-sibling "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-goto-link "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-up "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-down "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-find "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-jump "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-search-next "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-search-prev "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-search-clear "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-reset-view "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-help "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-set-match-set "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-supported-p "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-attach "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-detach "cmacs-secondbrain-defuns")
@@ -999,43 +1023,24 @@ nothing at all -- the departments are what should read as alive."
 
 ;;;; Search -----------------------------------------------------------
 
-(defun cmacs-secondbrain--match-ids (query)
-  "Return ids whose title or path contains QUERY, case-insensitively."
-  (let ((needle (downcase query)) (out nil))
-    (dolist (n (plist-get cmacs-secondbrain--graph :nodes))
-      (let ((hay (downcase (concat (or (plist-get n :title) "") " "
-                                   (or (plist-get n :file) "")))))
-        (when (string-search needle hay)
-          (push (plist-get n :id) out))))
-    (nreverse out)))
-
-(defun cmacs-secondbrain-search (query)
-  "Highlight nodes matching QUERY, dimming the rest.
-
-Substring first, always: most of what you look for you already know the
-name of, and a name match costs nothing.  `cmacs-secondbrain-search-semantic'
-is the tier above."
-  (interactive "sSearch: ")
-  (setq cmacs-secondbrain--search (and (not (string-empty-p query)) query))
-  (let ((ids (if cmacs-secondbrain--search
-                 (cmacs-secondbrain--match-ids query)
-               nil)))
-    (cmacs-secondbrain--flag-ids ids)
-    (message "%d match%s" (length ids) (if (= 1 (length ids)) "" "es"))))
-
 (defun cmacs-secondbrain--flag-ids (ids)
-  "Mark IDS as matches, dimming everything else."
-  (when (fboundp 'cmacs-libregnum-set-match-set)
-    ;; One bulk call, not one per node: the difference between a usable
-    ;; incremental search and an unusable one.
-    (cmacs-libregnum-set-match-set (current-buffer) ids (and ids t)))
-  (cmacs-secondbrain-apply-flags (current-buffer)))
+  "Mark IDS (id strings) as search matches, dimming everything else.
 
-(defun cmacs-secondbrain-search-clear ()
-  "Clear the search highlight."
-  (interactive)
-  (setq cmacs-secondbrain--search nil)
-  (cmacs-secondbrain--flag-ids nil))
+The shared primitive: incremental search, semantic search, similarity
+and the hover highlight all end up here, so there is one place that
+decides what \"matched\" looks like.
+
+Through the subsystem\'s own setter, NOT `cmacs-libregnum-set-match-set\'.
+That one takes SCENE indices and silently keeps only the integers it is
+given -- so handing it id strings flagged nothing at all, while the
+caller happily reported a match count.  Ids are the only stable key
+here anyway: emission order churns on every rebuild, and a collapsed
+department is not emitted at all."
+  (if (fboundp 'cmacs-secondbrain-set-match-set)
+      ;; One bulk call, not one per node: the difference between a
+      ;; usable incremental search and an unusable one.
+      (cmacs-secondbrain-set-match-set (current-buffer) ids (and ids t))
+    (cmacs-secondbrain-apply-flags (current-buffer))))
 
 ;;;; Visiting ---------------------------------------------------------
 
@@ -1128,6 +1133,26 @@ sources."
 
 (defvar-keymap cmacs-secondbrain-mode-map
   :doc "Keymap for `cmacs-secondbrain-mode'."
+  ;; Spatial tier: the nearest node in that screen direction.
+  "h" #'cmacs-secondbrain-move-left
+  "j" #'cmacs-secondbrain-move-down
+  "k" #'cmacs-secondbrain-move-up
+  "l" #'cmacs-secondbrain-move-right
+  "<left>"  #'cmacs-secondbrain-move-left
+  "<down>"  #'cmacs-secondbrain-move-down
+  "<up>"    #'cmacs-secondbrain-move-up
+  "<right>" #'cmacs-secondbrain-move-right
+  ;; Topological tier: links, and the department you are standing in.
+  "]" #'cmacs-secondbrain-follow-link
+  "[" #'cmacs-secondbrain-back
+  ">" #'cmacs-secondbrain-next-sibling
+  "<" #'cmacs-secondbrain-prev-sibling
+  "M-n" #'cmacs-secondbrain-next-sibling
+  "M-p" #'cmacs-secondbrain-prev-sibling
+  "o" #'cmacs-secondbrain-goto-link
+  ;; Hierarchical tier: the ARMS one.
+  "^" #'cmacs-secondbrain-up
+  "m" #'cmacs-secondbrain-down
   "1" #'cmacs-secondbrain-layout-force
   "2" #'cmacs-secondbrain-layout-circle
   "3" #'cmacs-secondbrain-layout-hex
@@ -1135,9 +1160,13 @@ sources."
   "TAB" #'cmacs-secondbrain-toggle-collapse
   "e" #'cmacs-secondbrain-expand-all
   "c" #'cmacs-secondbrain-collapse-all-cmd
-  "/" #'cmacs-secondbrain-search
-  "?" #'cmacs-secondbrain-search-semantic
-  "n" #'cmacs-secondbrain-search-clear
+  "/" #'cmacs-secondbrain-find
+  "J" #'cmacs-secondbrain-jump
+  "n" #'cmacs-secondbrain-search-next
+  "N" #'cmacs-secondbrain-search-prev
+  "z" #'cmacs-secondbrain-reset-view
+  "?" #'cmacs-secondbrain-help
+  "M-/" #'cmacs-secondbrain-search-semantic
   "~" #'cmacs-secondbrain-find-similar
   "RET" #'cmacs-secondbrain-visit
   "O" (lambda () (interactive) (cmacs-secondbrain-visit t))
@@ -1161,6 +1190,7 @@ sources."
   "x" #'cmacs-secondbrain-toggle-isolate
   "F" #'cmacs-secondbrain-cycle-ring-filter
   "a" #'cmacs-secondbrain-toggle-age-fade
+  "C-h m" #'describe-mode
   "q" #'quit-window)
 
 (defun cmacs-secondbrain-toggle-hover-highlight ()
@@ -1225,6 +1255,10 @@ teardown, the Evil `C-w' handoff and `<escape>'.
   ;; reads this file's buffer-locals, so the dependency has to resolve
   ;; after this file has finished loading.
   (require 'cmacs-secondbrain-search)
+  ;; Keyboard navigation.  Runtime require for the same reason as the
+  ;; others: it reads this file's buffer-locals, so it can only load
+  ;; once this file has finished.
+  (require 'cmacs-secondbrain-nav)
   ;; Registers the AI actions.  Runtime require for the same reason, and
   ;; because an action registry that is only populated once someone opens
   ;; the view is exactly when it is needed.
@@ -1236,7 +1270,7 @@ teardown, the Evil `C-w' handoff and `<escape>'.
               '(" second brain  "
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
-                "  [1-4]layout [TAB]expand [/]find [i]nspect [RET]open [g]refresh"))
+                "  [?]keys [hjkl]move [/]find [J]jump [TAB]expand [RET]open"))
   (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t)
   (add-hook 'window-size-change-functions #'cmacs-secondbrain--on-size-change))
 
@@ -1399,6 +1433,25 @@ See `cmacs-secondbrain-3d' for the free three-dimensional view."
 Drag to orbit, scroll to zoom."
   (interactive)
   (cmacs-secondbrain--open 3))
+
+;;;; Evil ------------------------------------------------------------
+
+;; Without this, the second brain is a MOUSE-ONLY tool under Doom.
+;;
+;; `cmacs-libregnum-mode' puts its viewports in Evil *emacs state* so
+;; their single-key bindings reach the major-mode keymap at all -- in
+;; normal/motion state `h', `j', `k', `l', `n', `a', `e', `c' and the
+;; rest are Evil motions and operators, so every one of them does
+;; something else (famously `j' -> `evil-next-line' -> "end of buffer").
+;; `evil-set-initial-state' is looked up per mode, so a derived mode has
+;; to say so for itself; roamgraph and gnuseye each do.  This one never
+;; did, which is exactly why it was only usable by clicking.
+;;
+;; <escape> and `C-w' come from the parent keymap, so Evil window
+;; management and the way back to normal state still work.
+(with-eval-after-load 'evil
+  (when (fboundp 'evil-set-initial-state)
+    (evil-set-initial-state 'cmacs-secondbrain-mode 'emacs)))
 
 (provide 'cmacs-secondbrain)
 

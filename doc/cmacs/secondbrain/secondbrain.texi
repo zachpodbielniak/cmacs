@@ -94,34 +94,114 @@ state change, no way to get lost.  It is suppressed while a search is
 active, because a search is a deliberate question and a stray pointer
 movement must not silently answer a different one.  @kbd{H} toggles it.
 
+Press @kbd{?} in the map for this table plus the legend, without
+leaving the buffer.
+
 @multitable @columnfractions .22 .78
-@headitem Key @tab Does
-@item @kbd{1} @kbd{2} @kbd{3} @kbd{4} @tab Force / Circle / Hex / Rings layout
-@item @key{TAB} @tab expand or collapse the selected node
-@item @kbd{e} / @kbd{c} @tab expand all / collapse all
-@item @kbd{/} @tab substring search
-@item @kbd{?} @tab semantic search
-@item @kbd{~} @tab find nodes similar to the selection
-@item @kbd{n} @tab clear the search
+@headitem Key @tab Moving around
+@item @kbd{h} @kbd{j} @kbd{k} @kbd{l} @tab nearest node left / down / up / right
+@item arrows @tab the same
+@item @kbd{]} @tab follow a link out of the selection
+@item @kbd{[} @tab go back the way you came
+@item @kbd{>} @kbd{<} @tab next / previous node in this department
+@item @kbd{M-n} @kbd{M-p} @tab the same
+@item @kbd{^} @tab up to the department this belongs to
+@item @kbd{m} @tab down into it (opens it, selects the first member)
+@item @kbd{o} @tab jump to a link of the selection, by name
+@item @kbd{J} @tab jump to @emph{any} node, by name
+@end multitable
+
+@multitable @columnfractions .22 .78
+@headitem Key @tab Finding things
+@item @kbd{/} @tab incremental search; matches light, the rest dims
+@item @kbd{n} @kbd{N} @tab next / previous match
+@item @kbd{M-/} @tab semantic search (embeddings)
+@item @kbd{~} @tab nodes similar to the selection
+@item @kbd{z} @tab reset: clears search, ring filter and isolate
+@end multitable
+
+@multitable @columnfractions .22 .78
+@headitem Key @tab Everything else
+@item @kbd{?} @tab every key, and how to read the map
 @item @key{RET} / @kbd{O} @tab open the node's file, here or in another window
 @item @kbd{y} @tab copy the node's path
+@item @kbd{i} / @kbd{p} / @kbd{W} @tab inspector / preview / close the panes
+@item @key{TAB} @tab expand or collapse the selected node
+@item @kbd{e} / @kbd{c} @tab expand all / collapse all
+@item @kbd{1} @kbd{2} @kbd{3} @kbd{4} @tab Force / Circle / Hex / Rings layout
+@item @kbd{x} @tab isolate the selection's neighbourhood
+@item @kbd{F} @tab cycle the ring filter
+@item @kbd{a} @tab age fade: colour Memory by how recently it changed
 @item @kbd{s} / @kbd{S} @tab spin the rings
-@item @kbd{v} @tab toggle flat / 3D
-@item @kbd{0} @tab frame the whole graph
-@item @kbd{g} @tab re-read every source
-@item @kbd{f} @tab fly the camera to the selection
 @item @kbd{R} @tab slow auto-rotation on/off
-@item @kbd{u} @tab unpin the selection
-@item @kbd{U} @tab unpin everything
+@item @kbd{u} / @kbd{U} @tab unpin the selection / everything
+@item @kbd{f} @tab fly the camera to the selection
+@item @kbd{0} @tab frame the whole graph
+@item @kbd{v} @tab toggle flat / 3D
 @item @kbd{b} @tab pick the background (or a wallpaper image)
+@item @kbd{G} @tab node glow on/off
 @item @kbd{P} @tab particle effects on/off
 @item @kbd{H} @tab hover department-highlighting on/off
-@item @kbd{G} @tab node glow on/off
-@item @kbd{x} @tab isolate the selection's neighbourhood
-@item @kbd{F} @tab cycle the ring filter (all @arrow{} each ring alone)
-@item @kbd{a} @tab age fade: colour Memory by how recently it changed
+@item @kbd{g} @tab re-read every source
 @item @kbd{q} @tab quit
 @end multitable
+
+@subsection Why single keys work here at all
+
+These viewports sit in Evil @emph{emacs state}, which is set per major
+mode.  In normal or motion state @kbd{h}, @kbd{j}, @kbd{k}, @kbd{l},
+@kbd{n}, @kbd{a}, @kbd{e} and @kbd{c} are Evil motions and operators, so
+every one of them would do something else --- famously @kbd{j} going to
+@code{evil-next-line} and reporting ``end of buffer''.  @key{escape}
+leaves for normal state, @kbd{C-z} comes back, and @kbd{C-w} keeps
+Evil's window commands throughout.
+
+Each mode has to declare this for itself: @code{evil-set-initial-state}
+is looked up per mode, and inheriting from a parent that declares it is
+not enough.  Until it did, the second brain was a mouse-only tool under
+Doom --- every key silently did something else.
+
+@subsection Navigating
+
+Four tiers, mirroring @code{cmacs-roamgraph} so the siblings feel like
+one tool.
+
+@table @asis
+@item Spatial (@kbd{h j k l}, arrows)
+The nearest node inside a screen-space cone in that direction.  Moves
+are @emph{exactly reversible}: a cone metric is not self-inverse, so
+going back the way you came is replayed from a trail rather than
+recomputed, and @kbd{l} then @kbd{h} returns you rather than landing
+somewhere new.  The cone is wider than roamgraph's
+(@code{cmacs-secondbrain-cone-degrees}, 50 degrees) because a ring
+layout puts your neighbour at an angle from you rather than beside you.
+
+@item Topological (@kbd{]} @kbd{[} @kbd{>} @kbd{<} @kbd{o})
+Walk links, and walk the department you are standing in.  Links are
+treated as undirected --- the hub-to-member edges point one way and the
+org-roam links the other, and someone tracing connections does not care
+which end the data happened to store first.  @kbd{]} will not
+immediately walk back the way you arrived, so it cannot degenerate into
+a two-node oscillation.
+
+@item Hierarchical (@kbd{^} @kbd{m})
+The ARMS tier, which roamgraph has no equivalent of: a node belongs to a
+department, which belongs to a ring.
+
+@item Search (@kbd{/} @kbd{n} @kbd{N} @kbd{J} @kbd{o})
+See @ref{Secondbrain Search}.
+@end table
+
+@subsection Navigation reveals
+
+The map opens collapsed, so most of what you can search for is not on
+screen --- and selecting a node with no drawable sets no scene
+selection, draws no halo and moves no camera.  That is
+indistinguishable from the key having done nothing.
+
+So every keyboard jump goes through one choke point that expands the
+ancestors it needs first, outermost first, then flies the camera.  It is
+a single function precisely so that no individual command can forget.
 
 @subsection Mouse
 
@@ -418,6 +498,18 @@ figure sliding.
 
 @node Secondbrain Search
 @section Search
+
+Search never re-lays-out the map: it recolours in place, so the shape
+you were reading stays the shape you are reading.
+
+@strong{A match inside a collapsed department lights the department.}
+Without that the feature is dead on the map people actually see: it
+opens fully collapsed, so every hit resolves to a node with no drawable
+and the search highlights an empty screen.  Expanding everything
+instead is not the answer either --- two thousand hits would bury the
+answer in the noise the search exists to cut through.  So the
+departments holding your matches light up, and @kbd{n} walks into them
+one at a time, expanding as it goes.
 
 Three tiers, cheapest first.  The ordering is the point: most of a
 lookup needs no intelligence at all, so spend none.

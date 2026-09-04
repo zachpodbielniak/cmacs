@@ -398,6 +398,12 @@ Two traps:
 
 =cmacs_libregnum_render_ctx_add_billboard_glow= adds to the second layer: a shared radial-falloff texture drawn *after* the normal layer with additive blending and the depth mask off (depth testing stays on). Additive is what makes it a glow rather than a smudge — it can only brighten, overlapping glows sum instead of occluding, and draw order stops mattering, so this layer needs no sorting. The tint's alpha channel scales intensity, because with =GL_SRC_ALPHA, GL_ONE= what lands in the framebuffer is =rgb * alpha=. Same index space as the normal layer: move/recolour/resize and =clear-billboards= all apply.
 
+** Picking from Lisp
+
+=cmacs-libregnum-pick-at= — BUFFER VX VY &optional VW VH.  The same ray-pick the mouse uses, at a view pixel; VW/VH default to the view's own framebuffer.
+
+It exists because the projection and the pick can each be self-consistent and still disagree with each other, and nothing else can see that gap.  Pair it with =cmacs-libregnum-project= to assert that the node drawn at a pixel is the node a click there selects — which is how the paint/pick/FBO rectangle mismatch was found, having survived every test that only checked one side.
+
 ** Node dragging
 
 =cmacs-libregnum-set-drag-nodes= — BUFFER &optional ON. Off by default.

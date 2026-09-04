@@ -52,33 +52,64 @@ Once open, a department's members occupy a contiguous *wedge* of the ring sized 
 
 ** Keys
 
+Press =?= in the map for this table plus the legend, without leaving the buffer.
+
+*** Moving around
+
 | Key | Does |
 |-----+------|
-| =1= =2= =3= =4= | Force / Circle / Hex / Rings layout |
-| =TAB= | expand or collapse the selected node |
-| =e= / =c= | expand all / collapse all |
-| =/= | substring search |
-| =?= | semantic search |
-| =~= | find nodes similar to the selection |
-| =n= | clear the search |
+| =h= =j= =k= =l= | the nearest node left / down / up / right |
+| arrows | the same |
+| =]= | follow a link out of the selection |
+| =[= | go back the way you came |
+| =>= =<= (=M-n= =M-p=) | next / previous node in this department |
+| =^= | up to the department this belongs to |
+| =m= | down into it — opens it, selects its first member |
+| =o= | jump to a link of the selection, by name |
+| =J= | jump to *any* node, by name |
+
+*** Finding things
+
+| Key | Does |
+|-----+------|
+| =/= | incremental search: matches light, everything else dims |
+| =n= =N= | next / previous match |
+| =M-/= | semantic search (embeddings) |
+| =~= | nodes similar to the selection |
+| =z= | reset — clears the search, the ring filter and isolate |
+
+*** Everything else
+
+| Key | Does |
+|-----+------|
+| =?= | every key, and how to read the map |
 | =RET= / =O= | open the node's file, here or in another window |
 | =y= | copy the node's path |
+| =i= / =p= / =W= | inspector / preview / close the panes |
+| =TAB= | expand or collapse the selection |
+| =e= / =c= | expand all / collapse all |
+| =1= =2= =3= =4= | Force / Circle / Hex / Rings layout |
+| =x= | isolate the selection's neighbourhood |
+| =F= | cycle the ring filter |
+| =a= | age fade: colour Memory by staleness |
 | =s= / =S= | spin the rings |
-| =v= | toggle flat / 3D |
-| =f= | fly the camera to the selection |
 | =R= | slow auto-rotation on/off |
-| =u= | unpin the selection |
-| =U= | unpin everything |
+| =u= / =U= | unpin the selection / everything |
+| =f= | fly the camera to the selection |
 | =0= | frame the whole graph |
-| =g= | re-read every source |
+| =v= | toggle flat / 3D |
 | =b= | pick the background (or a wallpaper image) |
+| =G= | node glow on/off |
 | =P= | particle effects on/off |
 | =H= | hover department-highlighting on/off |
-| =G= | node glow on/off |
-| =x= | isolate the selection's neighbourhood |
-| =F= | cycle the ring filter (all → each ring alone) |
-| =a= | age fade: colour Memory by how recently it changed |
+| =g= | re-read every source |
 | =q= | quit |
+
+*** Why single keys work here at all
+
+These viewports sit in Evil *emacs state*, set per major mode. In normal or motion state =h=, =j=, =k=, =l=, =n=, =a=, =e= and =c= are Evil motions and operators, so every one of them would do something else — famously =j= → =evil-next-line= → "end of buffer". =<escape>= leaves for normal state and =C-z= comes back; =C-w= keeps Evil's window commands throughout.
+
+This has to be declared by each mode: `evil-set-initial-state` is looked up per mode, and inheriting from a parent that declares it is not enough. Until it was, the second brain was a mouse-only tool under Doom — every key silently did something else.
 
 ** Mouse
 
@@ -210,9 +241,28 @@ Four, switchable at any time, and every switch *animates* rather than teleportin
 
 Ring spin (=s= / =S=) rotates the bands. Alternate bands counter-rotate, so the motion reads as depth rather than as the whole figure sliding.
 
+* Navigating from the keyboard
+
+Four tiers, mirroring =cmacs-roamgraph= so the siblings feel like one tool.
+
+- *Spatial* (=h j k l=, arrows) — the nearest node inside a screen-space cone in that direction. What you reach for when you can see where you want to be. Moves are *exactly reversible*: a cone metric is not self-inverse, so going back the way you came is replayed from a trail rather than recomputed, and =l= then =h= returns you rather than landing somewhere new. The cone is wider here than in roamgraph (=cmacs-secondbrain-cone-degrees=, 50°) because a ring layout puts your neighbour at an angle from you rather than beside you.
+- *Topological* (=]= =[= =>= =<= =o=) — walk links, and walk the department you are standing in. Links are treated as undirected: the hub→member edges point one way and the org-roam links the other, and someone tracing connections does not care which end the data happened to store first. =]= will not immediately walk back the way you arrived, so it cannot degenerate into a two-node oscillation.
+- *Hierarchical* (=^= =m=) — the ARMS tier, which roamgraph has no equivalent of: a node belongs to a department, which belongs to a ring.
+- *Search* (=/= =n= =N= =J= =o=) — below.
+
+** Navigation reveals
+
+The map opens collapsed, so most of what you can search for is not on screen — and selecting a node with no drawable sets no scene selection, draws no halo and moves no camera. That is indistinguishable from the key having done nothing.
+
+So every keyboard jump goes through one choke point that *expands the ancestors it needs first*, outermost first, then flies the camera. It is a single function precisely so that no individual command can forget.
+
 * Search
 
 Three tiers, cheapest first. The ordering is the point: most of a lookup needs no intelligence at all, so spend none.
+Search never re-lays-out the map: it recolours in place, so the shape you were reading stays the shape you are reading. =/= matches as you type — see the hits appear and disappear across the rings, which is the thing a completion list cannot tell you and the entire reason to have a visualiser. RET keeps the highlight so =n= and =N= stay live in the viewport; =C-g= clears it and restores the selection you started from.
+
+*A match inside a collapsed department lights the department.* Without that the feature is dead on the map people actually see: it opens fully collapsed, so every hit resolves to a node with no drawable and the search highlights an empty screen. Expanding everything instead is not the answer either — two thousand hits would bury the answer in the noise the search exists to cut through. So the departments holding your matches light up, and =n= walks into them one at a time, expanding as it goes.
+
 
 1. *Substring* (=/=) — instant, over the loaded node set. Most of what you look for you already know the name of.
 2. *Semantic* (=?=) — embeds the query once and ranks against the brigade notes index. Reach for it when you do not know the name.
