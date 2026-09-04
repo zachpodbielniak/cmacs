@@ -50,6 +50,15 @@
 (declare-function cmacs-secondbrain-apply-flags "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-fit "cmacs-secondbrain-defuns")
 (declare-function cmacs-libregnum-set-animated "cmacs-libregnum")
+(declare-function cmacs-libregnum-resize "cmacs-libregnum")
+(declare-function cmacs-libregnum-default-font-file "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-label-font "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-label-style "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-label-decor "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-right-drag-pans "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-wheel-up-zooms-in "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-selection-style "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-inscene-labels "cmacs-libregnum")
 (declare-function cmacs-libregnum-popup-menu "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-match-set "cmacs-libregnum")
 (declare-function cmacs-libregnum-focus-node "cmacs-libregnum")
@@ -81,6 +90,21 @@ where, which is the whole reason to have a map."
   :type 'integer
   :group 'cmacs-secondbrain)
 
+(defcustom cmacs-secondbrain-label-size 13
+  "On-screen height, in pixels, of an in-scene node label."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-max-labels 160
+  "How many labels to draw at once.
+
+A cap rather than \"all of them\": with every department expanded this
+graph is over a thousand nodes, and a thousand labels is an unreadable
+grey mat that also costs a screen-space pass each.  The nearest N to the
+camera are drawn, so zooming in is what reveals names."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
 (defcustom cmacs-secondbrain-default-layout 'rings
   "Layout used when the view opens.
 
@@ -102,6 +126,72 @@ where, which is the whole reason to have a map."
   "Current ring spin, in radians.")
 (defvar-local cmacs-secondbrain--search nil
   "Active search string, or nil.")
+(defvar-local cmacs-secondbrain--resize-timer nil
+  "Idle timer coalescing window size changes.")
+
+;;;; View setup -------------------------------------------------------
+
+(defun cmacs-secondbrain--fit-window-now (buf)
+  "Resize BUF's framebuffer to its window's pixel size.
+
+Mandatory, not cosmetic.  The framebuffer is blitted 1:1 across the
+window rectangle, so a mismatch stretches the picture -- and, worse,
+puts every click somewhere other than where it was aimed, because the
+pick maps view pixels against the framebuffer's dimensions.  A view
+that never fits its window is a view where nothing is clickable."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (setq cmacs-secondbrain--resize-timer nil)
+      (let ((win (get-buffer-window buf t)))
+        (when (window-live-p win)
+          (let ((w (window-pixel-width win)) (h (window-pixel-height win)))
+            (when (and (> w 1) (> h 1))
+              (ignore-errors (cmacs-libregnum-resize buf w h))
+              (ignore-errors (cmacs-secondbrain-fit buf)))))))))
+
+(defun cmacs-secondbrain--on-size-change (&optional _frame)
+  "Coalesce window size changes into one refit."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (and (derived-mode-p 'cmacs-secondbrain-mode)
+                   (not cmacs-secondbrain--resize-timer))
+          (setq cmacs-secondbrain--resize-timer
+                (run-with-idle-timer
+                 0.06 nil #'cmacs-secondbrain--fit-window-now buf)))))))
+
+(defun cmacs-secondbrain--configure-view ()
+  "Set up labels, selection marker and navigation for this buffer.
+
+In-scene labels rather than the cairo overlay, because the overlay only
+exists under pgtk and a map with no names under `emacs --lrg' would be
+useless."
+  (let ((buf (current-buffer)))
+    (when (fboundp 'cmacs-libregnum-set-label-font)
+      (let ((ff (and (fboundp 'cmacs-libregnum-default-font-file)
+                     (cmacs-libregnum-default-font-file))))
+        ;; Baked large and drawn smaller: downscaling through the
+        ;; bilinear filter is what makes the text look right.
+        (when ff (ignore-errors (cmacs-libregnum-set-label-font buf ff 32)))))
+    (when (fboundp 'cmacs-libregnum-set-label-style)
+      (cmacs-libregnum-set-label-style buf cmacs-secondbrain-label-size
+                                       t t cmacs-secondbrain-max-labels))
+    (when (fboundp 'cmacs-libregnum-set-label-decor)
+      ;; A plate behind the text -- edges run straight through it
+      ;; otherwise -- and screen-space rings on selection and hover.
+      (cmacs-libregnum-set-label-decor buf t t))
+    (when (fboundp 'cmacs-libregnum-set-right-drag-pans)
+      ;; Map profile: left-drag orbits (in 3D), right-drag moves the
+      ;; view.  The default CAD profile puts panning on the middle
+      ;; button, which plenty of pointing devices do not have.
+      (cmacs-libregnum-set-right-drag-pans buf t))
+    (when (fboundp 'cmacs-libregnum-set-wheel-up-zooms-in)
+      (cmacs-libregnum-set-wheel-up-zooms-in buf t))
+    (when (fboundp 'cmacs-libregnum-set-selection-style)
+      ;; A halo, not the default wireframe cube: these are round.
+      (cmacs-libregnum-set-selection-style buf 'halo))
+    (when (fboundp 'cmacs-libregnum-set-inscene-labels)
+      (cmacs-libregnum-set-inscene-labels buf t))))
 
 ;;;; Animation --------------------------------------------------------
 
@@ -151,6 +241,7 @@ itself -- and drops the libregnum animation clock with it."
            (nodes (plist-get g :nodes))
            (edges (plist-get g :edges)))
       (setq cmacs-secondbrain--graph g)
+      (cmacs-secondbrain--configure-view)
       (cmacs-secondbrain-set-graph buf (vconcat nodes) (vconcat edges)
                                    (if cmacs-secondbrain--3d 3 2))
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
@@ -390,7 +481,8 @@ teardown, the Evil `C-w' handoff and `<escape>'.
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
                 "  [1-4]layout [TAB]expand [/]find [i]nspect [RET]open [g]refresh"))
-  (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t))
+  (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t)
+  (add-hook 'window-size-change-functions #'cmacs-secondbrain--on-size-change))
 
 (defun cmacs-secondbrain--on-kill ()
   "Tear the view down with the buffer."
@@ -400,11 +492,20 @@ teardown, the Evil `C-w' handoff and `<escape>'.
 ;;;; Pick dispatch ----------------------------------------------------
 
 (defun cmacs-secondbrain--on-pick (buffer _id _vx _vy path)
-  "Handle a click on node PATH in BUFFER."
+  "Handle a click on node PATH in BUFFER.
+
+Clicking a department expands it, because that is the whole
+interaction: the rings show you what exists and a click shows you what
+is inside.  Making expand a second, separate keystroke would mean the
+obvious gesture on the obvious target does nothing."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (cmacs-secondbrain--select
-       (and (stringp path) (> (length path) 0) path)))))
+      (let ((id (and (stringp path) (> (length path) 0) path)))
+        (cmacs-secondbrain--select id)
+        (when id
+          (let ((node (cmacs-secondbrain-node-at buffer id)))
+            (when (eq (plist-get node :kind) 'hub)
+              (cmacs-secondbrain-toggle-collapse))))))))
 
 ;;;; Context menu -----------------------------------------------------
 
@@ -509,6 +610,8 @@ routine it is when it runs, for a file it is open it."
     ;; Reuse the current window rather than splitting: the viewport is a
     ;; picture that wants all the room it can get.
     (pop-to-buffer-same-window buf)
+    ;; And fit the framebuffer to it, or nothing is clickable.
+    (cmacs-secondbrain--fit-window-now buf)
     buf))
 
 ;;;###autoload

@@ -484,6 +484,89 @@ test_place_rings_bands_by_ring (void)
 }
 
 static void
+test_place_children_fan_around_their_parent (void)
+{
+  /* Two hubs on the same band, four children each.  What an expanded
+     department has to look like: a child must sit by the hub it came
+     from.  Spreading every band member evenly on the circle instead --
+     which is what a naive "one ring, all members" pass does -- puts a
+     child next to a sibling of the OTHER hub and destroys exactly the
+     relationship the expand was asking about. */
+  CmacsGraph *g = mk_nodes (10);
+  CmacsGraphLayout *l = cmacs_graph_layout_new ();
+  guint i, c;
+  double hx[2], hy[2];
+
+  for (i = 0; i < 10; i++)
+    cmacs_graph_node (g, i)->ring = 1;
+  for (c = 2; c < 10; c++)
+    cmacs_graph_set_parent (g, c, (c < 6) ? 0 : 1);
+
+  cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+  assert_placed_sanely (g);
+
+  for (i = 0; i < 2; i++)
+    {
+      hx[i] = (double) cmacs_graph_node (g, i)->tx;
+      hy[i] = (double) cmacs_graph_node (g, i)->ty;
+    }
+
+  for (c = 2; c < 10; c++)
+    {
+      const CmacsGraphNode *nd = cmacs_graph_node (g, c);
+      guint mine = (c < 6) ? 0 : 1, other = 1 - mine;
+      double dm = hypot ((double) nd->tx - hx[mine],
+                         (double) nd->ty - hy[mine]);
+      double dow = hypot ((double) nd->tx - hx[other],
+                          (double) nd->ty - hy[other]);
+
+      /* Nearer its own hub than the other one, and actually offset from
+         it rather than stacked on top of it. */
+      g_assert_cmpfloat (dm, <, dow);
+      g_assert_cmpfloat (dm, >, 1e-3);
+    }
+
+  /* And distinct from each other: a fan that collapses to one point is
+     no more legible than the band it replaced. */
+  for (c = 2; c < 9; c++)
+    {
+      const CmacsGraphNode *a = cmacs_graph_node (g, c);
+      const CmacsGraphNode *b = cmacs_graph_node (g, c + 1);
+      if ((c < 5) || (c > 5))
+        g_assert_cmpfloat (hypot ((double) a->tx - b->tx,
+                                  (double) a->ty - b->ty), >, 1e-3);
+    }
+
+  cmacs_graph_layout_free (l);
+  cmacs_graph_free (g);
+}
+
+static void
+test_place_children_of_collapsed_parent_stay_hidden (void)
+{
+  /* The fan pass must respect collapse: a hub that is shut has no
+     children to fan, and placing them anyway would scatter invisible
+     nodes through the band that the next expand then animates FROM. */
+  CmacsGraph *g = mk_nodes (6);
+  CmacsGraphLayout *l = cmacs_graph_layout_new ();
+  guint c;
+
+  for (c = 0; c < 6; c++) cmacs_graph_node (g, c)->ring = 1;
+  for (c = 1; c < 6; c++) cmacs_graph_set_parent (g, c, 0);
+  cmacs_graph_set_collapsed (g, 0, TRUE);
+  for (c = 0; c < 6; c++) cmacs_graph_node (g, c)->placed = 0;
+
+  cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+
+  g_assert_cmpuint (cmacs_graph_node (g, 0)->placed, ==, 1);
+  for (c = 1; c < 6; c++)
+    g_assert_cmpuint (cmacs_graph_node (g, c)->placed, ==, 0);
+
+  cmacs_graph_layout_free (l);
+  cmacs_graph_free (g);
+}
+
+static void
 test_place_skips_invisible (void)
 {
   CmacsGraph *g = mk_tree (3, 4);
@@ -739,6 +822,10 @@ main (int argc, char **argv)
   g_test_add_func ("/graphcore/place/circle-groups-by-radius", test_place_circle_groups_by_radius);
   g_test_add_func ("/graphcore/place/hex-is-a-lattice", test_place_hex_is_a_lattice);
   g_test_add_func ("/graphcore/place/rings-bands-by-ring", test_place_rings_bands_by_ring);
+  g_test_add_func ("/graphcore/place/children-fan-around-parent",
+                   test_place_children_fan_around_their_parent);
+  g_test_add_func ("/graphcore/place/collapsed-children-stay-hidden",
+                   test_place_children_of_collapsed_parent_stay_hidden);
   g_test_add_func ("/graphcore/place/skips-invisible", test_place_skips_invisible);
   g_test_add_func ("/graphcore/place/deterministic", test_place_is_deterministic);
   g_test_add_func ("/graphcore/place/spin-rotates", test_place_spin_rotates_without_reshaping);

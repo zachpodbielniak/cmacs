@@ -32,6 +32,8 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+
+(declare-function cmacs-brigade-registry-get "cmacs-brigade-registry")
 (require 'cmacs-para)
 
 (defgroup cmacs-secondbrain nil
@@ -547,14 +549,30 @@ should cost one ring member, not the graph."
                              :collapsed t)
                    hubs))))
 
-    (let ((hub-nodes (hash-table-values hubs))
+    (let ((hub-nodes nil)
+          (counts (make-hash-table :test 'equal))
           (parented nil))
       (dolist (n nodes)
         (let* ((ring (plist-get n :ring))
                (dept (or (plist-get n :department) "Other"))
                (key (format "%s/%s" ring dept)))
+          (puthash key (1+ (gethash key counts 0)) counts)
           (push (plist-put (copy-sequence n) :parent (concat "hub:" key))
                 parented)))
+      ;; The count IS the headline: a collapsed department that only says
+      ;; its name tells you nothing about whether it holds four files or
+      ;; four thousand, which is the first thing you want to know when
+      ;; deciding whether to open it.  It rides in the title because the
+      ;; label is what renders in-scene, and in :count so the inspector
+      ;; and the AI target can read it without parsing the title back.
+      (maphash
+       (lambda (key h)
+         (let ((c (gethash key counts 0)))
+           (push (plist-put
+                  (plist-put (copy-sequence h) :count c)
+                  :title (format "%s  %d" (plist-get h :title) c))
+                 hub-nodes)))
+       hubs)
       (list :nodes (append
                     (list (list :id cmacs-secondbrain-centre-id
                                 :title cmacs-secondbrain-centre-title

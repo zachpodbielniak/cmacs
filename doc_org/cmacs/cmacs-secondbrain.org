@@ -44,7 +44,7 @@ A file browser shows you the same bytes and answers none of that.
 (cmacs-secondbrain-3d)       ; free camera
 #+end_src
 
-Departments arrive *collapsed*: a ring holding four thousand notes is not a map. Each department is one hub sized by how much it is hiding, and =TAB= on a selected hub unfolds it — animated outward, so you can see where its contents came from.
+Departments arrive *collapsed*: a ring holding four thousand notes is not a map. Each department is one hub, labelled with how many notes it holds and sized by the same number, and *clicking it* — or =TAB= on it once selected — unfolds it. The children fan out /around the hub they came from/ rather than spreading along the ring, so the relationship the expand was asking about stays legible; =e= opens every department at once and =c= shuts them again.
 
 ** Keys
 
@@ -65,7 +65,24 @@ Departments arrive *collapsed*: a ring holding four thousand notes is not a map.
 | =g= | re-read every source |
 | =q= | quit |
 
-Mouse: left-click selects, hover highlights, right-drag pans, the wheel zooms, and right-click opens a context menu that adapts to what you clicked.
+** Mouse
+
+| Gesture | Effect |
+|---------+--------|
+| left click on a department | select it *and expand or fold it* |
+| left click on a leaf | select it; the inspector follows |
+| left drag | orbit (3D); no effect in the locked 2D view |
+| right drag | pan |
+| wheel | zoom, wheel-up towards the scene |
+| right click | the context menu for that kind, AI section last |
+
+Clicking a department expands it because that is the whole interaction: the rings tell you what exists, and a click tells you what is inside. Making expand a separate keystroke would mean the obvious gesture on the obvious target does nothing.
+
+*** The framebuffer must match its window
+
+=cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's pixel size, and =window-size-change-functions= re-runs it — coalesced through a 0.06 s idle timer — whenever the window changes.
+
+This is not cosmetic. The framebuffer is blitted 1:1 across the window rectangle, and a pick maps view pixels against the /framebuffer's/ dimensions, so a mismatch does not merely stretch the picture: it puts every click somewhere other than where it was aimed. A view that never fits its window is a view where nothing is clickable, which is exactly how this failed before the hook existed.
 
 * Layouts
 

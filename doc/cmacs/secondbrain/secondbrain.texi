@@ -76,9 +76,12 @@ A file browser shows you the same bytes and answers none of that.
 @section Getting started
 
 Departments arrive @strong{collapsed}: a ring holding four thousand
-notes is not a map.  Each department is one hub sized by how much it is
-hiding, and @key{TAB} on a selected hub unfolds it --- animated outward,
-so you can see where its contents came from.
+notes is not a map.  Each department is one hub, labelled with how many
+notes it holds and sized by the same number, and @strong{clicking it}
+--- or @key{TAB} on it once selected --- unfolds it.  The children fan
+out @emph{around the hub they came from} rather than spreading along the
+ring, so the relationship the expand was asking about stays legible;
+@kbd{e} opens every department at once and @kbd{c} shuts them again.
 
 @multitable @columnfractions .22 .78
 @headitem Key @tab Does
@@ -98,9 +101,37 @@ so you can see where its contents came from.
 @item @kbd{q} @tab quit
 @end multitable
 
-Mouse: left-click selects, hover highlights, right-drag pans, the wheel
-zooms, and right-click opens a context menu that adapts to what you
-clicked.
+@subsection Mouse
+
+@multitable @columnfractions .38 .62
+@headitem Gesture @tab Effect
+@item left click on a department
+  @tab select it @strong{and expand or fold it}
+@item left click on a leaf @tab select it; the inspector follows
+@item left drag @tab orbit (3D); no effect in the locked 2D view
+@item right drag @tab pan
+@item wheel @tab zoom, wheel-up towards the scene
+@item right click @tab the context menu for that kind, AI section last
+@end multitable
+
+Clicking a department expands it because that is the whole interaction:
+the rings tell you what exists, and a click tells you what is inside.
+Making expand a separate keystroke would mean the obvious gesture on the
+obvious target does nothing.
+
+@subsection The framebuffer must match its window
+
+@code{cmacs-secondbrain--fit-window-now} resizes the framebuffer to the
+window's pixel size, and @code{window-size-change-functions} re-runs it
+--- coalesced through a 0.06 second idle timer --- whenever the window
+changes.
+
+This is not cosmetic.  The framebuffer is blitted 1:1 across the window
+rectangle, and a pick maps view pixels against the @emph{framebuffer's}
+dimensions, so a mismatch does not merely stretch the picture: it puts
+every click somewhere other than where it was aimed.  A view that never
+fits its window is a view where nothing is clickable, which is exactly
+how this failed before the hook existed.
 
 @node Secondbrain Layouts
 @section Layouts

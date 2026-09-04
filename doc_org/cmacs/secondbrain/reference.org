@@ -91,6 +91,8 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-transition-frames= | 24 | 0 switches instantly |
 | =cmacs-secondbrain-fps= | 30 | while animating |
 | =cmacs-secondbrain-default-layout= | =rings= | |
+| =cmacs-secondbrain-label-size= | 13 | on-screen pixel height of a label |
+| =cmacs-secondbrain-max-labels= | 160 | nearest N to the camera; zoom in to reveal more |
 | =cmacs-secondbrain-enabled-sources= | =t= | =t= or a list of names |
 | =cmacs-secondbrain-claude-dir= | ="~/.claude"= | |
 | =cmacs-secondbrain-centre-title= | ="CLAUDE.md"= | |
@@ -106,6 +108,25 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 * Keys
 
 See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving from =cmacs-libregnum-mode-map=.
+
+* Mouse
+
+| Gesture | Effect |
+|---------+--------|
+| Left click on a department | select it *and expand or fold it* |
+| Left click on a leaf | select it; the inspector follows |
+| Left drag | orbit (3D); no effect in the locked 2D view |
+| Right drag | pan |
+| Wheel | zoom, wheel-up towards the scene |
+| Right click | the context menu for that node's kind, AI section last |
+
+Clicking a department expands it because that is the whole interaction: the rings tell you what exists, and a click tells you what is inside.  Making expand a separate keystroke would mean the obvious gesture on the obvious target does nothing.
+
+** The framebuffer must match its window
+
+=cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's pixel size, and =window-size-change-functions= re-runs it (coalesced through a 0.06 s idle timer) whenever the window changes.
+
+This is not cosmetic.  The framebuffer is blitted 1:1 across the window rectangle, and a pick maps view pixels against the *framebuffer's* dimensions -- so a mismatch does not merely stretch the picture, it puts every click somewhere other than where it was aimed.  A view that never fits its window is a view where nothing is clickable, which is exactly how this failed before the hook existed.
 
 * MCP tools
 

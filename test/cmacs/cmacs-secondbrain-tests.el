@@ -491,6 +491,64 @@ noise."
      (ignore-errors (cmacs-secondbrain-detach buf))
      (kill-buffer buf))))
 
+(ert-deftest cmacs-secondbrain-test-hubs-carry-their-count ()
+  "A collapsed department reports how much it is hiding.
+
+Without it a folded hub says only its name, which answers none of the
+question you fold for: whether it holds four notes or four thousand.
+The count rides in `:count' so the inspector and the AI target can read
+it, and in `:title' because the title is what renders in-scene."
+  (cmacs-secondbrain-tests--with-sources
+      (list (cmacs-secondbrain-tests--fixture 'a 'memory '("m1" "m2" "m3")))
+    (let ((hub (cl-find-if (lambda (n) (eq (plist-get n :kind) 'hub))
+                           (plist-get (cmacs-secondbrain-collect) :nodes))))
+      (should hub)
+      (should (= 3 (plist-get hub :count)))
+      (should (string-match-p "3\\'" (plist-get hub :title))))))
+
+(ert-deftest cmacs-secondbrain-test-hub-counts-are-per-department ()
+  "Counts are per hub, not a single total sprayed across every hub."
+  (cmacs-secondbrain-tests--with-sources
+      (list (cmacs-secondbrain-tests--fixture 'a 'memory '("m1" "m2"))
+            (cmacs-secondbrain-tests--fixture 'b 'skills '("n1")))
+    (let* ((hubs (cl-remove-if-not
+                  (lambda (n) (eq (plist-get n :kind) 'hub))
+                  (plist-get (cmacs-secondbrain-collect) :nodes)))
+           (counts (sort (mapcar (lambda (h) (plist-get h :count)) hubs) #'<)))
+      (should (equal '(1 2) counts)))))
+
+(ert-deftest cmacs-secondbrain-test-view-configuration-is-applied ()
+  "Every call `cmacs-secondbrain--configure-view' makes must resolve.
+
+Each is wrapped in `fboundp', which is right -- libregnum may be built
+without them -- but it also means a renamed DEFUN degrades to silence:
+labels, the halo and the map-style navigation would simply not happen,
+with no error to notice.  This test is what turns that back into a
+failure."
+  (cmacs-secondbrain-tests--skip)
+  (dolist (f '(cmacs-libregnum-resize
+               cmacs-libregnum-set-label-font
+               cmacs-libregnum-set-label-style
+               cmacs-libregnum-set-label-decor
+               cmacs-libregnum-set-right-drag-pans
+               cmacs-libregnum-set-wheel-up-zooms-in
+               cmacs-libregnum-set-selection-style
+               cmacs-libregnum-set-inscene-labels))
+    (should (fboundp f))))
+
+(ert-deftest cmacs-secondbrain-test-fit-window-survives-no-window ()
+  "Refitting a buffer nobody is displaying is a no-op, not an error.
+
+The refit runs off an idle timer, so it routinely fires after the
+window it was scheduled for has gone."
+  (cmacs-secondbrain-tests--skip)
+  (let ((buf (get-buffer-create " *sb-fit-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cmacs-secondbrain-mode)
+          (should-not (cmacs-secondbrain--fit-window-now buf)))
+      (kill-buffer buf))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

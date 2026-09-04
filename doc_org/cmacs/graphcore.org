@@ -98,6 +98,14 @@ cmacs_graph_layout_tween_begin (l, g, 24);   /* or _snap (g) */
 - =HEX= — axial hex lattice spiralling out from the origin. Ring /r/ holds 6/r/ cells; the traversal starts at the ring's =DIR[2]= corner and walks from =DIR[4]=. Starting from =DIR[0]= instead re-visits cells and lands two nodes on the same point — the lattice test catches exactly that.
 - =RINGS= — concentric bands taken from =node->ring=, members spread by angle, groups kept contiguous so a department reads as one wedge. Alternate bands counter-rotate under spin so the motion reads as depth. This is the ARMS layout.
 
+*** Children fan around their parent
+
+Under =CIRCLE= and =RINGS=, a node whose parent is visible is skipped by the band pass and placed by a second pass that fans it out of that parent: a phyllotaxis spiral (golden angle, radius growing as the square root of rank so the density stays even), offset outward along the direction the parent already sits in.
+
+This is what an expanded department has to look like. Spreading every band member evenly on the circle instead — which is what a naive "one ring, all members" pass does — drops a child next to a sibling of a different hub, buries the hub among its own contents, and loses exactly the relationship the expand was asking about.
+
+A collapsed parent's children are invisible and so are not placed at all; the next expand therefore animates them out of the hub's own position rather than out of wherever a stale placement had scattered them.
+
 *Placement writes to =tx/ty/tz= and moves nothing.* Separating "decide where things go" from "move them there" is what lets one code path serve both an instant switch and an animated one, and it keeps the layouts testable without running an animation.
 
 Only *visible* nodes are placed. A collapsed subtree has no position to occupy, and including it would leave gaps in every ring.

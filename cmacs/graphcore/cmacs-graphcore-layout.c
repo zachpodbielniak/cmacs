@@ -879,6 +879,97 @@ place_set (CmacsGraphNode *nd, double x, double y, double z, int dims)
   nd->placed = 1;
 }
 
+/* Place every visible node that has a VISIBLE parent in a disc around
+ * that parent, biased outward from the origin.
+ *
+ * This is what an expanded department looks like: the children fan out
+ * of the hub they came from, so the relationship is legible.  Spreading
+ * them along the band instead -- which is what a naive "one ring, all
+ * members" pass does -- loses exactly the information the expand was
+ * asking for, and buries the hub among its own contents.
+ *
+ * Phyllotaxis (golden angle, radius as sqrt of the index) rather than
+ * concentric rows: it packs evenly at any count without the caller
+ * choosing a row size, and it degrades gracefully from three children
+ * to three thousand.
+ *
+ * Returns the number of nodes it placed. */
+static guint
+place_children_around_parents (CmacsGraph *g, GArray *order, int dims,
+                               double gap)
+{
+  guint n = order->len, i, placed = 0;
+  GHashTable *counts;   /* parent index -> how many placed so far */
+  GHashTable *totals;   /* parent index -> total children */
+
+  counts = g_hash_table_new (g_direct_hash, g_direct_equal);
+  totals = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+  /* Count first: the spread has to know the total before placing any,
+     or the first child sits where the last one should. */
+  for (i = 0; i < n; i++)
+    {
+      guint idx = g_array_index (order, guint, i);
+      CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, idx);
+      if (nd->parent < 0) continue;
+      {
+        CmacsGraphNode *pn =
+          &g_array_index (g->nodes, CmacsGraphNode, (guint) nd->parent);
+        if (!pn->visible) continue;
+      }
+      g_hash_table_insert (totals, GINT_TO_POINTER (nd->parent),
+                           GUINT_TO_POINTER (GPOINTER_TO_UINT (
+                             g_hash_table_lookup (totals,
+                               GINT_TO_POINTER (nd->parent))) + 1));
+    }
+
+  for (i = 0; i < n; i++)
+    {
+      guint idx = g_array_index (order, guint, i);
+      CmacsGraphNode *nd = &g_array_index (g->nodes, CmacsGraphNode, idx);
+      CmacsGraphNode *pn;
+      guint seen, total;
+      double px, py, len, dirx, diry, spread, a, r;
+
+      if (nd->parent < 0) continue;
+      pn = &g_array_index (g->nodes, CmacsGraphNode, (guint) nd->parent);
+      if (!pn->visible) continue;
+
+      total = GPOINTER_TO_UINT (g_hash_table_lookup (totals,
+                                  GINT_TO_POINTER (nd->parent)));
+      if (total == 0) total = 1;
+      seen = GPOINTER_TO_UINT (g_hash_table_lookup (counts,
+                                 GINT_TO_POINTER (nd->parent)));
+      g_hash_table_insert (counts, GINT_TO_POINTER (nd->parent),
+                           GUINT_TO_POINTER (seen + 1));
+
+      /* Grow the disc with the count, but sub-linearly: a department of
+         three should not be a dot and one of three thousand should not
+         swallow its neighbours. */
+      spread = gap * 0.45 * (0.6 + sqrt ((double) total) / 6.0);
+
+      /* Outward from the origin, so a fan opens away from the centre
+         rather than back across the rings it came from. */
+      px = (double) pn->tx; py = (double) pn->ty;
+      len = sqrt (px * px + py * py);
+      if (len < 1e-6) { dirx = 1.0; diry = 0.0; }
+      else            { dirx = px / len; diry = py / len; }
+
+      a = (double) seen * 2.39996322972865332;   /* golden angle */
+      r = spread * sqrt (((double) seen + 0.5) / (double) total);
+
+      place_set (nd,
+                 px + dirx * spread * 0.75 + r * cos (a),
+                 py + diry * spread * 0.75 + r * sin (a),
+                 0.0, dims);
+      placed++;
+    }
+
+  g_hash_table_destroy (counts);
+  g_hash_table_destroy (totals);
+  return placed;
+}
+
 /* CIRCLE: one concentric circle per distinct group, in first-appearance
  * order, each node evenly spaced around its own circle. */
 static void
@@ -915,6 +1006,11 @@ place_circle (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
             &g_array_index (g->nodes, CmacsGraphNode,
                             g_array_index (order, guint, i));
           double a = step * (double) (i - start) + l->spin;
+          /* Children are placed around their parent afterwards. */
+          if (nd->parent >= 0
+              && g_array_index (g->nodes, CmacsGraphNode,
+                                (guint) nd->parent).visible)
+            continue;
           place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
         }
 
@@ -1015,6 +1111,13 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
              every ring the same way and the motion reads as depth. */
           double dir = (band & 1) ? -1.0 : 1.0;
           double a   = step * (double) (i - start) + l->spin * dir;
+          /* A node whose parent is visible belongs in a fan around that
+             parent, not spread along the band -- see
+             place_children_around_parents. */
+          if (nd->parent >= 0
+              && g_array_index (g->nodes, CmacsGraphNode,
+                                (guint) nd->parent).visible)
+            continue;
           place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
         }
 
@@ -1056,6 +1159,13 @@ cmacs_graph_layout_place (CmacsGraphLayout *l, CmacsGraph *g,
     case CMACS_GRAPH_LAYOUT_RINGS:  place_rings  (l, g, order, l->dims); break;
     default: break;
     }
+
+  /* Second pass for the band layouts: anything with a visible parent
+     fans out of it.  HEX is a lattice by definition -- everything is a
+     cell -- so it is left alone. */
+  if (kind == CMACS_GRAPH_LAYOUT_RINGS || kind == CMACS_GRAPH_LAYOUT_CIRCLE)
+    place_children_around_parents (g, order, l->dims, l->ring_gap);
+
   g_array_free (order, TRUE);
 
   /* A closed-form layout is final by definition; leaving the solver
