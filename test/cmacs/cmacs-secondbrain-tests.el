@@ -984,6 +984,119 @@ blue, and blue means the frame's mean blue beats its mean red."
             (should (> (nth 2 mean) (nth 0 mean)))))
       (ignore-errors (cmacs-screensaver-detach-background buf)))))
 
+(ert-deftest cmacs-secondbrain-test-pin-survives-a-relayout ()
+  "A dragged node stays where it was dropped, through a re-layout.
+
+`pinned' used to mean only \"the force solver must not move this\", which
+was enough while the solver was the only thing that moved anything.  The
+closed-form layouts re-place every node from scratch, so a drag was
+silently undone by the next layout switch -- or by anything else that
+re-placed.  Unpinning must hand the node back."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-move-node))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'memory))
+     (vector) 2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (let ((home (cmacs-secondbrain-node-position buf "a")))
+      (should home)
+      (should (cmacs-secondbrain-move-node buf "a" 5.0 6.0 0.0 t))
+      (should (equal '(5.0 6.0 0.0) (cmacs-secondbrain-node-position buf "a")))
+      ;; The pin holds through a re-place.
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (equal '(5.0 6.0 0.0) (cmacs-secondbrain-node-position buf "a")))
+      ;; And releasing it gives the node back to the layout.
+      (should (= 1 (cmacs-secondbrain-set-pinned buf "a" nil)))
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (equal home (cmacs-secondbrain-node-position buf "a"))))))
+
+(ert-deftest cmacs-secondbrain-test-unpin-all ()
+  "`cmacs-secondbrain-set-pinned' with a nil id reaches every node."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-pinned))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'memory))
+     (vector) 2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-move-node buf "a" 1.0 1.0 0.0 t)
+    (cmacs-secondbrain-move-node buf "b" 2.0 2.0 0.0 t)
+    (should (= 2 (cmacs-secondbrain-set-pinned buf nil nil)))
+    ;; Idempotent: nothing left to change.
+    (should (= 0 (cmacs-secondbrain-set-pinned buf nil nil)))))
+
+(ert-deftest cmacs-secondbrain-test-select-reaches-the-scene ()
+  "Selecting from Lisp sets the SCENE's selection, not just a variable.
+
+The halo and the lit links come from the scene's own selection, which a
+click sets in C.  Keyboard navigation, search and the inspector all
+select from Lisp, and used to leave the scene none the wiser -- so those
+paths got no halo and no lit links at all."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-select))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory))
+     (vector) 2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (should (equal "a" (cmacs-secondbrain-select buf "a")))
+    (should-not (cmacs-secondbrain-select buf "no-such-node"))
+    (should-not (cmacs-secondbrain-select buf nil))))
+
+(ert-deftest cmacs-secondbrain-test-link-pulse-changes-the-frame ()
+  "Advancing the link phase repaints the selected node's links.
+
+Asserts the picture, not the setter: the whole point is that the light
+moves, and a phase stored but never used would pass any check that only
+looked at return values."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-link-phase))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'memory)
+                 (list :id "c" :title "C" :kind 'file :ring 'memory))
+     (vector (list :from "a" :to "b") (list :from "a" :to "c"))
+     2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-fit buf)
+    (should (cmacs-secondbrain-select buf "a"))
+    (cmacs-secondbrain-set-link-phase buf 0.0)
+    (cmacs-secondbrain-apply-flags buf)
+    (let ((a (cmacs-libregnum-mean-color buf)))
+      ;; Half a cycle: every lit edge is at the other end of its swing.
+      (cmacs-secondbrain-set-link-phase buf float-pi)
+      (cmacs-secondbrain-apply-flags buf)
+      (should-not (equal a (cmacs-libregnum-mean-color buf))))))
+
+(ert-deftest cmacs-secondbrain-test-auto-rotate-turns-the-rings ()
+  "Auto-rotation moves the nodes, rather than only the camera.
+
+Picking follows the nodes precisely because it is the layout that turns;
+a camera trick would look the same and leave every pick box behind."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain--rotate-step))
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (cmacs-secondbrain-mode)
+      (cmacs-secondbrain-set-graph
+       buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                   (list :id "b" :title "B" :kind 'file :ring 'memory))
+       (vector) 2)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (let ((before (cmacs-secondbrain-node-position buf "a"))
+            (cmacs-secondbrain-auto-rotate 90.0))
+        (cmacs-secondbrain--rotate-step buf 1.0)
+        (should-not (equal before (cmacs-secondbrain-node-position buf "a"))))
+      ;; Off means off.
+      (let ((now (cmacs-secondbrain-node-position buf "a"))
+            (cmacs-secondbrain-auto-rotate 0.0))
+        (cmacs-secondbrain--rotate-step buf 1.0)
+        (should (equal now (cmacs-secondbrain-node-position buf "a")))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

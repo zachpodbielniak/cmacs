@@ -93,6 +93,11 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-default-layout= | =rings= | |
 | =cmacs-secondbrain-start-collapsed= | =t= | =nil= opens every file on load |
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
+| =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
+| =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
+| =cmacs-secondbrain-rotate-speed= | 3.0 | what =R= turns on |
+| =cmacs-secondbrain-link-pulse= | =t= | light travels along lit links |
+| =cmacs-secondbrain-link-pulse-speed= | 2.4 | radians/second |
 | =cmacs-secondbrain-background= | =nebula= | =none/solid/gradient/starfield/nebula/image/screensaver= |
 | =cmacs-secondbrain-screensaver= | =helios-blue= | config from =cmacs-screensaver-configs= |
 | =cmacs-secondbrain-background-colors= | =(#x2A3A6BFF . #x05050AFF)= | top . bottom, 0xRRGGBBAA |
@@ -127,6 +132,7 @@ See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving fr
 |---------+--------|
 | Left click on a department | select it *and expand or fold it* |
 | Left click on a leaf | select it; the inspector follows |
+| Left drag a node | move it; it pins where you drop it |
 | (no click moves the camera) | =f= flies deliberately, keeping context |
 | Hover anything | light up its whole department, dim the rest |
 | Left drag | orbit (3D); no effect in the locked 2D view |
@@ -152,6 +158,7 @@ Generic, on =cmacs-libregnum=, so any libregnum scene can use them.
 |-------+-----------|
 | =cmacs-libregnum-set-background= | BUFFER KIND &optional TOP BOTTOM PATH |
 | =cmacs-libregnum-set-focus-policy= | BUFFER ON-CLICK &optional CONTEXT |
+| =cmacs-libregnum-set-drag-nodes= | BUFFER &optional ON |
 | =cmacs-libregnum-particles-enable= | BUFFER &optional ON |
 | =cmacs-libregnum-particles-clear= | BUFFER |
 | =cmacs-libregnum-particles-emitter= | BUFFER X Y Z &optional RADIUS RATE COLOR SIZE |

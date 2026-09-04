@@ -61,6 +61,7 @@
 (declare-function cmacs-libregnum-set-inscene-labels "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-background "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-focus-policy "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-drag-nodes "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-enable "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-clear "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-emitter "cmacs-libregnum")
@@ -177,6 +178,44 @@ slideshow.  It is a standing cost on an otherwise idle buffer, which is
 the honest price of the effect -- turn particles off and the clock stops
 with them."
   :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-drag-nodes t
+  "Whether a node can be dragged with the left button.
+
+A dragged node is pinned where you drop it, so the force layout leaves
+it alone -- a node the next solver step quietly pulls back is worse than
+one you cannot move.  `u' unpins the selection, `U' unpins everything."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-auto-rotate 0.0
+  "Degrees per second the rings turn on their own, or 0 for still.
+
+The rotation is the layout's own spin, so the nodes really do move and
+picking follows them; it is not a camera trick.  That also means it
+costs a layout pass per tick, which is why it is off unless you ask."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-link-pulse t
+  "Whether the selected node's links animate as travelling light.
+
+Selecting a note lights its connections and dims the rest, which is the
+part that makes them legible; the motion is what separates one lit link
+from the bundle beside it.  Costs a recolour pass over the edges per
+frame while something is selected."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-link-pulse-speed 2.4
+  "Radians per second the link light travels."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-rotate-speed 3.0
+  "Degrees per second `cmacs-secondbrain-toggle-rotate' turns at."
+  :type 'number
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-fly-context 0.4
@@ -350,6 +389,11 @@ useless."
       (cmacs-libregnum-set-selection-style buf 'halo))
     (when (fboundp 'cmacs-libregnum-set-inscene-labels)
       (cmacs-libregnum-set-inscene-labels buf t))
+    (when (fboundp 'cmacs-libregnum-set-drag-nodes)
+      ;; Nodes are draggable: this is a map you arrange, not only one
+      ;; you read.  Empty space still orbits and pans, so the camera
+      ;; controls are unchanged.
+      (cmacs-libregnum-set-drag-nodes buf cmacs-secondbrain-drag-nodes))
     (when (fboundp 'cmacs-libregnum-set-focus-policy)
       ;; A click must NOT fly the camera here.  Clicking a department
       ;; starts an animation worth watching, and the default behaviour
@@ -555,7 +599,16 @@ itself -- and drops the libregnum animation clock with it."
              (if (not (buffer-live-p buf))
                  (ignore)
                (with-current-buffer buf
-                 (when (cmacs-secondbrain-tween-step buf)
+                 (cmacs-secondbrain--rotate-step buf 0.03)
+                 (cmacs-secondbrain--pulse-step buf 0.03)
+                 ;; Rotation has no end state, so it must not let the
+                 ;; tween's completion stop the clock.
+                 (when (and (cmacs-secondbrain-tween-step buf)
+                            (or (not (numberp cmacs-secondbrain-auto-rotate))
+                                (= cmacs-secondbrain-auto-rotate 0.0))
+                            ;; A pulse has no end state either.
+                            (not (and cmacs-secondbrain-link-pulse
+                                      cmacs-secondbrain--selected)))
                    (cmacs-secondbrain--stop-animation)))))))))
 
 ;;;; Data -------------------------------------------------------------
@@ -643,7 +696,16 @@ itself -- and drops the libregnum animation clock with it."
 (defun cmacs-secondbrain--select (id)
   "Select node ID, report it, and refresh any open pane."
   (setq cmacs-secondbrain--selected id)
+  ;; Tell the SCENE too.  A click sets its selection in C; selecting from
+  ;; Lisp -- keyboard navigation, search, the inspector -- has to say so
+  ;; as well, or the halo and the lit links only ever follow the mouse.
+  (ignore-errors (cmacs-secondbrain-select (current-buffer) id))
   (cmacs-secondbrain--burst-at id)
+  ;; Light the new selection's links, and start the clock that moves the
+  ;; light along them.
+  (when cmacs-secondbrain-link-pulse
+    (ignore-errors (cmacs-secondbrain-apply-flags (current-buffer)))
+    (when id (cmacs-secondbrain--animate)))
   ;; An inspector showing the previous node is worse than no inspector:
   ;; it is confidently wrong about what you just clicked.
   (when (and (fboundp 'cmacs-secondbrain-inspector-render)
@@ -686,6 +748,95 @@ itself -- and drops the libregnum animation clock with it."
   (cmacs-secondbrain-collapse-all (current-buffer) t
                                   cmacs-secondbrain-transition-frames)
   (cmacs-secondbrain--animate))
+
+;;;; Dragging ---------------------------------------------------------
+
+(defvar-local cmacs-secondbrain--dragging nil
+  "Id of the node currently being dragged, or nil.")
+
+(defun cmacs-secondbrain--on-drag (buffer path x y z phase)
+  "Move node PATH in BUFFER to the world point X Y Z.
+
+PHASE is 0 begin, 1 update, 2 end.  Dropping pins the node, so the force
+layout leaves it where you put it.
+
+The drag runs on the pointer's hot path, so this does one C call and
+nothing else -- no pane refresh, no message, no re-layout."
+  (when (and (buffer-live-p buffer) (stringp path))
+    (with-current-buffer buffer
+      (pcase phase
+        (0 (setq cmacs-secondbrain--dragging path)
+           (cmacs-secondbrain--select path))
+        (2 (setq cmacs-secondbrain--dragging nil)))
+      (ignore-errors (cmacs-secondbrain-move-node buffer path x y z t)))))
+
+(defun cmacs-secondbrain-unpin ()
+  "Unpin the selected node, letting the layout place it again."
+  (interactive)
+  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
+  (cmacs-secondbrain-set-pinned (current-buffer)
+                                cmacs-secondbrain--selected nil)
+  (message "Unpinned %s" cmacs-secondbrain--selected))
+
+(defun cmacs-secondbrain-unpin-all ()
+  "Unpin every node."
+  (interactive)
+  (cmacs-secondbrain-set-pinned (current-buffer) nil nil)
+  ;; Re-place with the layout the view is actually using, so the
+  ;; just-unpinned nodes get somewhere to go.
+  (cmacs-secondbrain-set-layout (current-buffer)
+                                (or (cmacs-secondbrain-layout-kind
+                                     (current-buffer))
+                                    cmacs-secondbrain-default-layout)
+                                cmacs-secondbrain-transition-frames)
+  (cmacs-secondbrain--animate)
+  (message "Unpinned everything"))
+
+;;;; Auto-rotation ------------------------------------------------------
+
+(defvar-local cmacs-secondbrain--spin 0.0
+  "Current auto-rotation angle, in radians.")
+(defvar-local cmacs-secondbrain--link-phase 0.0
+  "Current travelling-light phase, in radians.")
+
+(defun cmacs-secondbrain--pulse-step (buf secs)
+  "Advance BUF's link light by SECS seconds' worth of travel."
+  (when (and (buffer-live-p buf) cmacs-secondbrain-link-pulse)
+    (with-current-buffer buf
+      (when cmacs-secondbrain--selected
+        (setq cmacs-secondbrain--link-phase
+              (+ cmacs-secondbrain--link-phase
+                 (* secs cmacs-secondbrain-link-pulse-speed)))
+        (ignore-errors
+          (cmacs-secondbrain-set-link-phase buf cmacs-secondbrain--link-phase)
+          (cmacs-secondbrain-apply-flags buf))))))
+
+(defun cmacs-secondbrain--rotate-step (buf secs)
+  "Advance BUF's auto-rotation by SECS seconds' worth of turn."
+  (when (and (buffer-live-p buf)
+             (numberp cmacs-secondbrain-auto-rotate)
+             (/= cmacs-secondbrain-auto-rotate 0.0))
+    (with-current-buffer buf
+      (setq cmacs-secondbrain--spin
+            (+ cmacs-secondbrain--spin
+               (* secs (degrees-to-radians cmacs-secondbrain-auto-rotate))))
+      (ignore-errors
+        (cmacs-secondbrain-set-spin buf cmacs-secondbrain--spin)))))
+
+(defun cmacs-secondbrain-toggle-rotate ()
+  "Turn the slow auto-rotation on or off."
+  (interactive)
+  (setq-local cmacs-secondbrain-auto-rotate
+              (if (and (numberp cmacs-secondbrain-auto-rotate)
+                       (/= cmacs-secondbrain-auto-rotate 0.0))
+                  0.0
+                cmacs-secondbrain-rotate-speed))
+  (if (/= cmacs-secondbrain-auto-rotate 0.0)
+      (cmacs-secondbrain--animate)
+    ;; Drop back to whatever clock the rest of the view needs.
+    (cmacs-secondbrain--stop-animation))
+  (message "Rotation %s"
+           (if (/= cmacs-secondbrain-auto-rotate 0.0) "on" "off")))
 
 ;;;; Hover ------------------------------------------------------------
 
@@ -881,6 +1032,9 @@ is the tier above."
   "p" #'cmacs-secondbrain-preview
   "W" #'cmacs-secondbrain-close-panes
   "v" #'cmacs-secondbrain-toggle-view
+  "R" #'cmacs-secondbrain-toggle-rotate
+  "u" #'cmacs-secondbrain-unpin
+  "U" #'cmacs-secondbrain-unpin-all
   "f" #'cmacs-secondbrain-fly-to-selected
   "b" #'cmacs-secondbrain-set-background-interactive
   "P" #'cmacs-secondbrain-toggle-particles

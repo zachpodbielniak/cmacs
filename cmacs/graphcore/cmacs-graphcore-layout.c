@@ -881,6 +881,20 @@ place_order (CmacsGraph *g)
 static void
 place_set (CmacsGraphNode *nd, double x, double y, double z, int dims)
 {
+  /* A pinned node keeps where it is.  `pinned' used to mean only "the
+     force solver must not move this", which was enough while the solver
+     was the only thing that moved anything -- but a closed-form layout
+     re-places every node from scratch, so switching layout (or any
+     re-place at all) silently undid a drag.  Aiming the tween at the
+     current position is what makes the pin hold through both. */
+  if (nd->pinned)
+    {
+      nd->tx = nd->x;
+      nd->ty = nd->y;
+      nd->tz = nd->z;
+      nd->placed = 1;
+      return;
+    }
   nd->tx = (float) x;
   nd->ty = (float) y;
   nd->tz = (dims == 2) ? 0.0f : (float) z;

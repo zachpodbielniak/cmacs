@@ -458,6 +458,7 @@ struct CmacsLibregnumRenderCtx
    * behaviour: click flies the camera, no scene-scale floor. */
   gboolean           click_focus;
   double             focus_context;
+  gboolean           drag_nodes;
 
   /* Background layer (see the header).  `bg_tex' is regenerated only
    * when the kind, colours, path or viewport size change. */
@@ -3234,6 +3235,19 @@ gboolean
 cmacs_libregnum_render_ctx_click_focuses (CmacsLibregnumRenderCtx *r)
 {
   return r && r->click_focus;
+}
+
+void
+cmacs_libregnum_render_ctx_set_drag_nodes (CmacsLibregnumRenderCtx *r,
+                                           gboolean on)
+{
+  if (r) r->drag_nodes = on;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_drag_nodes (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->drag_nodes;
 }
 
 void

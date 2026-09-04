@@ -75,6 +75,7 @@ typedef struct
   GArray    *edge_emit;     /* gint32, one per graph edge */
 
   gboolean   flat;
+  double     link_phase;   /* travelling-light phase, radians */
 } SceneState;
 
 static GHashTable *s_states;    /* CmacsLibregnumRenderCtx* -> SceneState* */
@@ -485,6 +486,7 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
   SceneState *st = scene_state (r, FALSE);
   guint n, m, i, node_i = 0;
   gboolean any_match = FALSE;
+  gint sel_emit, sel_graph = -1;
 
   if (!st || !g) return;
 
@@ -494,6 +496,16 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
   for (i = 0; i < n; i++)
     if (emitted_node_flags (r, st, i) & CMACS_LIBREGNUM_NODE_MATCH)
       { any_match = TRUE; break; }
+
+  /* The selection is a SCENE index; edges are indexed by GRAPH index,
+     and emission order is not graph order once anything is collapsed --
+     so map back rather than comparing the two directly. */
+  sel_emit = cmacs_libregnum_render_ctx_get_selected (r);
+  if (sel_emit >= 0 && st->node_emit)
+    for (i = 0; i < st->node_emit->len; i++)
+      if (g_array_index (st->node_emit, gint32, i) == sel_emit)
+        { sel_graph = i; break; }
+  if (sel_graph < 0) sel_emit = -1;
 
   for (i = 0; i < n && node_i < st->node_shapes->len; i++)
     {
@@ -568,6 +580,22 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       if (any_match)
         alpha = ((fa | fb) & CMACS_LIBREGNUM_NODE_MATCH) ? 160 : 18;
 
+      /* A link touching the selection is THE thing you asked about, so
+         it is lit and the rest recede.  At rest every link is drawn the
+         same, which is honest but useless once there are more than a few
+         hundred of them: the answer to "what is this note connected to"
+         is invisible inside its own hairball.
+         The light travels rather than merely brightening -- each edge
+         offset by its own index -- because a bundle of static bright
+         lines still reads as one mass, while motion separates them. */
+      if (sel_emit >= 0 && (e->a == sel_graph || e->b == sel_graph))
+        {
+          double w = 0.55 + 0.45 * sin (st->link_phase + (double) i * 0.7);
+          alpha = (guint8) CLAMP (110.0 + 145.0 * w, 0.0, 255.0);
+        }
+      else if (sel_emit >= 0 && !any_match)
+        alpha = 14;                 /* recede, but do not vanish */
+
       col = edge_base_color (e, ea, eb, alpha);
       lrg_shape_set_color (LRG_SHAPE (line), col);
     }
@@ -615,6 +643,14 @@ cmacs_secondbrain_scene_flat_p (CmacsLibregnumRenderCtx *r)
 {
   SceneState *st = scene_state (r, FALSE);
   return st ? st->flat : FALSE;
+}
+
+void
+cmacs_secondbrain_scene_set_link_phase (CmacsLibregnumRenderCtx *r,
+                                        double phase)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (st) st->link_phase = phase;
 }
 
 gint

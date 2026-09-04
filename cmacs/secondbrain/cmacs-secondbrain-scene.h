@@ -82,6 +82,11 @@ extern void cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r);
 extern void cmacs_secondbrain_scene_apply_flags
                         (CmacsLibregnumRenderCtx *r, CmacsGraph *g);
 
+/* Phase, in radians, of the travelling light on the selected node's
+ * links.  Advanced by the caller each frame; see apply_flags. */
+extern void cmacs_secondbrain_scene_set_link_phase
+                        (CmacsLibregnumRenderCtx *r, double phase);
+
 /* Scene index for graph node I, or -1 when it was not emitted (a
  * collapsed subtree, or past the drawable budget).  Emission order is
  * NOT graph order, so anything addressing the scene by index -- the

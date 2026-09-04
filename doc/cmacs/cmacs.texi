@@ -6964,6 +6964,16 @@ reason: a check that can only ask whether pixels @emph{changed} cannot
 catch a frame drawn in the wrong palette, which is what a swapped
 red/blue channel produces.
 
+@item cmacs-libregnum-set-drag-nodes
+Off by default.  Dragging used to be reachable only through the editor,
+whose drag path also selects into the editor's own model and builds undo
+entries --- neither of which a graph view wants.  With this on a
+left-press on a node starts a drag and motion reports the world point
+under the cursor to Lisp; empty space still falls through to the camera.
+The scene does the moving, because the position that matters lives in
+its own model: moving only the drawable looks right until the next
+layout pass puts it back.
+
 @item cmacs-libregnum-set-focus-policy
 How the camera responds to picking.  @code{ON-CLICK} (default @code{t},
 the historical behaviour) flies the camera to whatever a left click

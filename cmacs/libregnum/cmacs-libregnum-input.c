@@ -35,6 +35,8 @@ typedef struct
   bool          dragging_right;
   bool          dragging_middle;    /* middle-drag pans (CAD nav profile) */
   bool          dragging_object;    /* editor: moving the picked node */
+  bool          dragging_scene;     /* non-editor: moving a scene node */
+  gint          scene_drag_id;      /* the node being dragged, or -1 */
   bool          dragging_gizmo;     /* editor: dragging a transform handle */
 } DragState;
 
@@ -118,6 +120,55 @@ defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   a->vx = vx;
   a->vy = vy;
   g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
+}
+
+/* ── Scene node drag → deferred Elisp callback ──────────────────────
+ *
+ * Reports the world point under the cursor for the node being dragged.
+ * Lisp does the moving, because the authoritative position lives in the
+ * scene's own graph: moving the drawable here would look right until the
+ * next layout pass quietly put it back. */
+typedef struct
+{
+  Lisp_Object buffer;
+  gchar      *path;
+  double      x, y, z;
+  int         phase;          /* 0 begin, 1 update, 2 end */
+} SceneDrag;
+
+static gboolean
+scene_drag_idle (gpointer user)
+{
+  SceneDrag *d = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-dragged"),
+                             d->buffer,
+                             list5 ((d->path && d->path[0])
+                                      ? build_string (d->path) : Qnil,
+                                    make_float (d->x),
+                                    make_float (d->y),
+                                    make_float (d->z),
+                                    make_fixnum (d->phase)));
+  g_free (d->path);
+  g_free (d);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_scene_drag (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
+                  gint id, double wx, double wy, double wz, int phase)
+{
+  const gchar *path = NULL;
+  SceneDrag *d;
+
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          NULL, NULL, NULL);
+  d = g_new0 (SceneDrag, 1);
+  d->buffer = cmacs_libregnum_view_get_buffer (v);
+  d->path = (path && path[0]) ? g_strdup (path) : NULL;
+  d->x = wx; d->y = wy; d->z = wz;
+  d->phase = phase;
+  g_main_context_invoke (cmacs_glib_get_context (), scene_drag_idle, d);
 }
 
 /* ── Hover → deferred Elisp callback ────────────────────────────────
@@ -599,6 +650,7 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
                       && (drag_state.dragging_left || drag_state.dragging_right
                           || drag_state.dragging_middle
                           || drag_state.dragging_object
+                          || drag_state.dragging_scene
                           || drag_state.dragging_gizmo));
   CmacsLibregnumView *v = drag_active ? drag_state.view
                                       : pointer_view_for_frame (f, x, y, NULL);
@@ -682,6 +734,23 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
           cmacs_libregnum_render_ctx_editor_gizmo_drag (ctx, vx, vy, vw, vh);
           cmacs_libregnum_view_request_redraw (v);
         }
+      drag_state.last_x = x;
+      drag_state.last_y = y;
+      return true;
+    }
+
+  /* Non-editor scene: dragging a node reports the world point under the
+   * cursor, and the scene moves it.  Checked before the editor path
+   * because the two are mutually exclusive and this one is cheaper. */
+  if (drag_state.frame == f && drag_state.dragging_scene)
+    {
+      double vx, vy, wx, wy, wz;
+      int vw, vh;
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh)
+          && cmacs_libregnum_render_ctx_editor_screen_to_ground
+               (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
+        defer_scene_drag (v, ctx, drag_state.scene_drag_id, wx, wy, wz, 1);
       drag_state.last_x = x;
       drag_state.last_y = y;
       return true;
@@ -772,6 +841,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                       && (drag_state.dragging_left || drag_state.dragging_right
                           || drag_state.dragging_middle
                           || drag_state.dragging_object
+                          || drag_state.dragging_scene
                           || drag_state.dragging_gizmo));
   CmacsLibregnumView *v = ending_drag ? drag_state.view
                                       : pointer_view_for_frame (f, x, y, NULL);
@@ -797,6 +867,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
     gboolean drag_active = drag_state.dragging_left || drag_state.dragging_right
                            || drag_state.dragging_middle
                            || drag_state.dragging_object
+                           || drag_state.dragging_scene
                            || drag_state.dragging_gizmo;
     if (!capture_all && !in_view && !(press == 0 && drag_active))
       return FALSE;
@@ -921,6 +992,8 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
           drag_state.press_x = x;
           drag_state.press_y = y;
           drag_state.dragging_object = false;
+          drag_state.dragging_scene = false;
+          drag_state.scene_drag_id = -1;
           drag_state.dragging_gizmo = false;
           /* Editor press priority: a gizmo handle (axis transform) beats an
            * object body (free move) beats empty space (camera orbit). */
@@ -953,10 +1026,49 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                     }
                 }
             }
+          /* Non-editor scene that asked for draggable nodes: a press on
+           * a node grabs it.  Empty space still falls through to the
+           * camera, so orbit and pan are unaffected. */
+          if (!cmacs_libregnum_render_ctx_editor_active (ctx)
+              && cmacs_libregnum_render_ctx_drag_nodes (ctx))
+            {
+              double vx, vy, wx, wy, wz;
+              int vw, vh;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                {
+                  gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy,
+                                                             vw, vh);
+                  if (id >= 0
+                      && cmacs_libregnum_render_ctx_editor_screen_to_ground
+                           (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
+                    {
+                      drag_state.dragging_scene = true;
+                      drag_state.scene_drag_id = id;
+                      defer_scene_drag (v, ctx, id, wx, wy, wz, 0);
+                      return true;
+                    }
+                }
+            }
           drag_state.dragging_left = true;
         }
       else
         {
+          /* Button up after moving a scene node: tell the scene the drag
+           * is over so it can settle (re-solve, unpin, whatever it does). */
+          if (drag_state.dragging_scene)
+            {
+              double vx, vy, wx, wy, wz;
+              int vw, vh;
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh)
+                  && cmacs_libregnum_render_ctx_editor_screen_to_ground
+                       (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
+                defer_scene_drag (v, ctx, drag_state.scene_drag_id,
+                                  wx, wy, wz, 2);
+              drag_state.dragging_scene = false;
+              drag_state.scene_drag_id = -1;
+              cmacs_libregnum_view_request_redraw (v);
+              return true;
+            }
           /* Button up after dragging a gizmo handle: commit one undo step. */
           if (drag_state.dragging_gizmo)
             {

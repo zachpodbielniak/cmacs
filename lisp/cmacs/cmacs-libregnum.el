@@ -404,6 +404,22 @@ never prompt.  Called on the cmacs GMainContext."
                (derived-mode-p 'cmacs-secondbrain-mode))
           (cmacs-secondbrain--on-hover buffer id path)))))))
 
+(defun cmacs-libregnum--node-dragged (buffer info)
+  "Dispatch a node drag in BUFFER.
+INFO is (PATH X Y Z PHASE), where PHASE is 0 begin, 1 update, 2 end and
+X/Y/Z is the world point under the cursor.  The scene does the moving:
+the authoritative position lives in its own model, and moving only the
+drawable would look right until the next layout pass put it back.
+Called on the cmacs GMainContext."
+  (when (buffer-live-p buffer)
+    (let ((path (nth 0 info)) (x (nth 1 info)) (y (nth 2 info))
+          (z (nth 3 info)) (phase (nth 4 info)))
+      (with-current-buffer buffer
+        (cond
+         ((and (fboundp 'cmacs-secondbrain--on-drag)
+               (derived-mode-p 'cmacs-secondbrain-mode))
+          (cmacs-secondbrain--on-drag buffer path x y z phase)))))))
+
 (defun cmacs-libregnum--node-context-menu (buffer info)
   "Dispatch a viewport RIGHT-click in BUFFER to the mode's context menu.
 INFO is (ID PATH IS-DIR VX VY) like `cmacs-libregnum--node-clicked'.

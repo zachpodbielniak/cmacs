@@ -108,6 +108,9 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item @kbd{0} @tab frame the whole graph
 @item @kbd{g} @tab re-read every source
 @item @kbd{f} @tab fly the camera to the selection
+@item @kbd{R} @tab slow auto-rotation on/off
+@item @kbd{u} @tab unpin the selection
+@item @kbd{U} @tab unpin everything
 @item @kbd{b} @tab pick the background (or a wallpaper image)
 @item @kbd{P} @tab particle effects on/off
 @item @kbd{H} @tab hover department-highlighting on/off
@@ -121,6 +124,7 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item left click on a department
   @tab select it @strong{and expand or fold it}
 @item left click on a leaf @tab select it; the inspector follows
+@item left drag a node @tab move it, and pin it where you drop it
 @item left drag @tab orbit (3D); no effect in the locked 2D view
 @item right drag @tab pan
 @item wheel @tab zoom, wheel-up towards the scene
@@ -199,6 +203,35 @@ avoids.  The plate behind each label is opaque: it exists for the case
 where the scene behind the text is a ring of hundreds of nodes with a
 thousand links over it, and any translucency there puts that texture
 straight through the glyphs.
+
+@subsection Connections
+
+Selecting a note @strong{lights its links and dims everything else}.
+That is the part that makes them legible: at rest every link is drawn
+the same, which is honest and useless once there are a few hundred ---
+the answer to ``what is this note connected to'' is invisible inside its
+own hairball.
+
+The light also @emph{travels}, each link offset by its own index,
+because a bundle of static bright lines still reads as one mass while
+motion separates them.  @code{cmacs-secondbrain-link-pulse} turns it
+off; @code{-link-pulse-speed} sets how fast.
+
+Selecting from Lisp --- keyboard navigation, search, the inspector ---
+tells the scene too, so those get the halo and the lit links exactly as
+a click does.
+
+@subsection Dragging and rotation
+
+Left-drag a node to move it.  It is @strong{pinned} where you drop it,
+so the layout leaves it alone; @kbd{u} unpins the selection and @kbd{U}
+unpins everything.  Empty space still orbits and pans, so the camera
+controls are unchanged.
+
+@kbd{R} turns on a slow rotation.  It is the layout's own spin, so the
+nodes really move and picking follows them --- not a camera trick, which
+would look the same and leave every pick box behind.  It costs a layout
+pass per tick, which is why it is off unless you ask.
 
 @subsection Particles
 

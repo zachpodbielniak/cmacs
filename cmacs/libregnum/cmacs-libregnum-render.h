@@ -328,6 +328,21 @@ extern void  cmacs_libregnum_render_ctx_set_match_set
                                const gint *ids, gsize n,
                                gboolean dim_rest);
 
+/* ── Node dragging (non-editor scenes) ───────────────────────────
+ *
+ * Off by default.  Dragging used to be reachable only through the
+ * editor, whose drag path also selects into the editor's own model and
+ * builds undo entries -- neither of which a graph view wants.  With this
+ * on, a left-press on a node starts a drag, motion reports the world
+ * point under the cursor to Lisp, and the scene decides what that means.
+ *
+ * The scene decides, and not this layer, because the position that
+ * matters lives in the graph: moving only the drawable would look right
+ * until the next layout pass silently put it back. */
+extern void     cmacs_libregnum_render_ctx_set_drag_nodes
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_drag_nodes (CmacsLibregnumRenderCtx *r);
+
 /* ── Focus policy ────────────────────────────────────────────────
  * How the camera responds to picking.
  *

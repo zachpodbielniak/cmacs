@@ -593,6 +593,158 @@ emission order and churn on every rebuild.  */)
   return id;
 }
 
+DEFUN ("cmacs-secondbrain-select", Fcmacs_secondbrain_select,
+       Scmacs_secondbrain_select, 2, 2, 0,
+       doc: /* Mark node ID as selected in BUFFER's scene (nil clears it).
+
+The scene keeps its own selection -- that is what draws the halo and
+what lights a node's links -- and a click sets it in C.  Selecting from
+Lisp (keyboard navigation, search, the inspector) has to say so too, or
+those only ever respond to the mouse.
+
+Takes the id STRING: scene indices are emission order and churn on every
+rebuild.  Returns ID, or nil if it is not on screen.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  gint idx, emit;
+  Lisp_Object enc;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  if (NILP (id))
+    {
+      cmacs_libregnum_render_ctx_set_selected (ctx, -1);
+      if (v) cmacs_libregnum_view_request_redraw (v);
+      return Qnil;
+    }
+
+  CHECK_STRING (id);
+  enc = ENCODE_UTF_8 (id);
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
+  if (idx < 0) return Qnil;
+  emit = cmacs_secondbrain_scene_emit_index (ctx, (guint) idx);
+  if (emit < 0) return Qnil;          /* collapsed, or past the budget */
+
+  cmacs_libregnum_render_ctx_set_selected (ctx, emit);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return id;
+}
+
+DEFUN ("cmacs-secondbrain-set-link-phase",
+       Fcmacs_secondbrain_set_link_phase,
+       Scmacs_secondbrain_set_link_phase, 2, 2, 0,
+       doc: /* Set the travelling-light PHASE, in radians, for BUFFER.
+
+Advance it each frame and the selected node's links read as light
+running along them.  Every link drawn identically is honest and useless
+once there are a few hundred: the answer to "what is this connected to"
+is invisible inside its own hairball.  */)
+  (Lisp_Object buffer, Lisp_Object phase)
+{
+  SbState *st;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, NULL, &ctx);
+  if (!st || !ctx) return Qnil;
+  cmacs_secondbrain_scene_set_link_phase
+    (ctx, NUMBERP (phase) ? XFLOATINT (phase) : 0.0);
+  return phase;
+}
+
+DEFUN ("cmacs-secondbrain-set-pinned", Fcmacs_secondbrain_set_pinned,
+       Scmacs_secondbrain_set_pinned, 2, 3, 0,
+       doc: /* Pin or unpin node ID in BUFFER (nil ID means every node).
+
+A pinned node is one the force layout must not move -- that is what
+makes a dragged node stay where it was dropped.  Returns the number of
+nodes changed.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object pinned)
+{
+  SbState *st;
+  guint8 want = NILP (pinned) ? 0 : 1;
+  EMACS_INT n = 0;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, NULL, NULL);
+  if (!st) return make_fixnum (0);
+
+  if (NILP (id))
+    {
+      guint i, cnt = cmacs_graph_n_nodes (st->graph);
+      for (i = 0; i < cnt; i++)
+        {
+          CmacsGraphNode *nd = cmacs_graph_node (st->graph, i);
+          if (nd && nd->pinned != want) { nd->pinned = want; n++; }
+        }
+    }
+  else
+    {
+      Lisp_Object enc;
+      gint idx;
+      CHECK_STRING (id);
+      enc = ENCODE_UTF_8 (id);
+      idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
+      if (idx >= 0)
+        {
+          CmacsGraphNode *nd = cmacs_graph_node (st->graph, (guint) idx);
+          if (nd && nd->pinned != want) { nd->pinned = want; n = 1; }
+        }
+    }
+  return make_fixnum (n);
+}
+
+DEFUN ("cmacs-secondbrain-move-node", Fcmacs_secondbrain_move_node,
+       Scmacs_secondbrain_move_node, 5, 6, 0,
+       doc: /* Move node ID in BUFFER to X Y Z.  Returns nil if unknown.
+
+With PIN non-nil (the default) the node is pinned, so the force solver
+leaves it where you put it.  A dragged node that the next solver step
+quietly pulls back is worse than one you cannot drag at all.
+
+Writes the position into the graph and syncs the scene from it, so the
+move survives a re-layout -- moving only the drawable would look right
+until the next layout pass.  */)
+  (Lisp_Object buffer, Lisp_Object id, Lisp_Object x, Lisp_Object y,
+   Lisp_Object z, Lisp_Object pin)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  CmacsGraphNode *nd;
+  gint idx;
+  Lisp_Object enc;
+
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (id);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  enc = ENCODE_UTF_8 (id);
+  idx = cmacs_graph_index_of (st->graph, SSDATA (enc));
+  if (idx < 0) return Qnil;
+  nd = cmacs_graph_node (st->graph, (guint) idx);
+  if (!nd) return Qnil;
+
+  nd->x = (float) (NUMBERP (x) ? XFLOATINT (x) : 0.0);
+  nd->y = (float) (NUMBERP (y) ? XFLOATINT (y) : 0.0);
+  nd->z = (float) (NUMBERP (z) ? XFLOATINT (z) : 0.0);
+  /* Aim the tween at where it now is, or a tween still in flight would
+     drag it straight back out from under the pointer. */
+  nd->tx = nd->x; nd->ty = nd->y; nd->tz = nd->z;
+  nd->placed = 1;
+  nd->pinned = NILP (pin) ? 0 : 1;
+
+  cmacs_secondbrain_scene_sync_positions (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return id;
+}
+
 DEFUN ("cmacs-secondbrain-node-position", Fcmacs_secondbrain_node_position,
        Scmacs_secondbrain_node_position, 2, 2, 0,
        doc: /* Return (X Y Z) for node ID in BUFFER, or nil.  */)
@@ -1126,6 +1278,10 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_edge_count);
   defsubr (&Scmacs_secondbrain_visible_count);
   defsubr (&Scmacs_secondbrain_focus);
+  defsubr (&Scmacs_secondbrain_select);
+  defsubr (&Scmacs_secondbrain_set_link_phase);
+  defsubr (&Scmacs_secondbrain_set_pinned);
+  defsubr (&Scmacs_secondbrain_move_node);
   defsubr (&Scmacs_secondbrain_node_position);
   defsubr (&Scmacs_secondbrain_set_layout);
   defsubr (&Scmacs_secondbrain_layout_kind);

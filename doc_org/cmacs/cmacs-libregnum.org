@@ -379,6 +379,14 @@ It is a fallback, not a second clock: if the private context presented recently 
 
 Both exist for tests, and the second exists because the first is not enough: a check that can only ask whether pixels /changed/ cannot catch a frame drawn in the wrong palette, which is exactly what a swapped red/blue channel produces.
 
+** Node dragging
+
+=cmacs-libregnum-set-drag-nodes= — BUFFER &optional ON. Off by default.
+
+Dragging used to be reachable only through the editor, whose drag path also selects into the editor's own model and builds undo entries — neither of which a graph view wants. With this on, a left-press on a node starts a drag, motion reports the world point under the cursor to =cmacs-libregnum--node-dragged=, and the scene decides what that means. Empty space still falls through to the camera, so orbit and pan are unaffected.
+
+The scene decides, and not this layer, because the position that matters lives in the scene's own model: moving only the drawable looks right until the next layout pass silently puts it back.
+
 ** Focus policy
 
 How the camera responds to picking. =cmacs-libregnum-set-focus-policy= — BUFFER ON-CLICK &optional CONTEXT.
