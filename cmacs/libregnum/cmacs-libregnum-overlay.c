@@ -176,11 +176,22 @@ cmacs_libregnum__walk_windows (struct frame *f, cairo_t *cr, Lisp_Object w)
           CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (contents);
           if (v)
             {
-              int px = WINDOW_LEFT_PIXEL_EDGE (win);
-              int py = WINDOW_TOP_PIXEL_EDGE  (win);
-              int pw = WINDOW_PIXEL_WIDTH     (win);
-              int ph = WINDOW_PIXEL_HEIGHT    (win);
+              /* Blit into the window's TEXT AREA, not its full pixel
+               * rect.  This is one half of a contract whose other half
+               * is frame_to_view_coords in cmacs-libregnum-input.c:
+               * clicks are mapped against window_box TEXT_AREA, so the
+               * picture must be painted there too.  When this used the
+               * full WINDOW_PIXEL_* rect the image sat left of and
+               * above where the click mapping believed it was -- by the
+               * fringe width and, far worse, by the mode line's share
+               * of the height -- so every node had to be clicked above
+               * and to the right of where it was drawn.  The full rect
+               * also painted the scene over the fringes and mode line,
+               * which are Emacs's, not ours. */
+              int px, py, pw, ph;
               int vw = 0, vh = 0;
+              window_box (win, TEXT_AREA, &px, &py, &pw, &ph);
+              if (pw <= 0 || ph <= 0) { w = win->next; continue; }
               cmacs_libregnum_view_get_size (v, &vw, &vh);
               if (vw > 0 && vh > 0)
                 {

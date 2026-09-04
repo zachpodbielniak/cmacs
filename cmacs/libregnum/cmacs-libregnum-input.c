@@ -477,11 +477,16 @@ frame_to_view_coords (struct frame *f, CmacsLibregnumView *v,
   if (!f || !FRAME_LIVE_P (f)) return false;
   struct window *win = window_showing_view (FRAME_ROOT_WINDOW (f), v);
   if (!win) return false;
-  /* Map against the window BODY (text area), matching the paint rect
-     (window_box TEXT_AREA in the lrg/pgtk compositors) and the FBO size
-     (window-body).  Using the full WINDOW_PIXEL_* rect here -- which includes
-     the mode line -- both stretched the mapping and let clicks on the modeline
-     fall through to the view instead of Emacs. */
+  /* Map against the window BODY (text area).  This is one half of a
+     contract: the pgtk overlay (cmacs-libregnum-overlay.c) and the lrg
+     backend (cmacs-lrgterm.c) paint the view into this same window_box
+     TEXT_AREA rect, and the Elisp fit hooks size the FBO to the body.
+     All three must agree.  When paint used the full WINDOW_PIXEL_*
+     rect against this mapping, every node had to be clicked above and
+     to the right of where it was drawn -- offset by the fringes and by
+     the mode line's share of the window height.  Using the full rect
+     HERE instead would let clicks on the mode line fall through to the
+     view instead of Emacs. */
   int px, py, pw, ph;
   window_box (win, TEXT_AREA, &px, &py, &pw, &ph);
   int w = 0, h = 0;

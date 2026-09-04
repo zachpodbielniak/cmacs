@@ -785,10 +785,14 @@ lrg_paint_libregnum_window (struct frame *f, LrgFrameSurface *surf, Lisp_Object 
             cmacs_libregnum_view_get_size (v, &vw, &vh);
           if (tex != NULL && vw > 0 && vh > 0)
             {
-              int px = WINDOW_LEFT_PIXEL_EDGE (win);
-              int py = WINDOW_TOP_PIXEL_EDGE  (win);
-              int pw = WINDOW_PIXEL_WIDTH     (win);
-              int ph = WINDOW_PIXEL_HEIGHT    (win);
+              /* The TEXT AREA, not the full window rect -- the same
+                 contract as the pgtk overlay: frame_to_view_coords maps
+                 clicks against window_box TEXT_AREA, so the picture
+                 must be painted there or every pick lands offset by the
+                 fringes and the mode line's share of the height.  */
+              int px, py, pw, ph;
+              window_box (win, TEXT_AREA, &px, &py, &pw, &ph);
+              if (pw <= 0 || ph <= 0) { w = win->next; continue; }
               /* The FBO colour texture is bottom-up (GL origin lower-left);
                  a negative source height flips it (raylib DrawTexturePro
                  convention), matching the pgtk cairo Y-flip.  The dst rect

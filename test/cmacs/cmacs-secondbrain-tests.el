@@ -1542,6 +1542,45 @@ test exists to prevent."
       ;; Fade off: the hub is left colourless for the ring default.
       (should-not (plist-get (funcall hub-of plain) :color)))))
 
+(ert-deftest cmacs-secondbrain-test-pick-agrees-with-projection ()
+  "A pick at a node's projected centre selects that node, and the pick
+region is centred on the projection rather than offset into a quadrant.
+
+The projection and the pick can each be self-consistent and still
+disagree with each other -- and the window-layer bug this guards
+against (paint at the full window rect, pick at the text area) lived
+exactly in that gap: every node had to be clicked above and to the
+right of where it was drawn."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-pick-at))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory))
+     (vector) 2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-fit buf)
+    (let* ((pos (cmacs-secondbrain-node-position buf "a"))
+           (proj (apply #'cmacs-libregnum-project
+                        buf (append pos (list 400 300))))
+           (sx (car proj)) (sy (cadr proj)))
+      ;; Dead centre must hit.
+      (should (cmacs-libregnum-pick-at buf sx sy))
+      ;; And the hit region must be symmetric about the projection: find
+      ;; its extent along each axis and require the centre to sit within
+      ;; a couple of pixels of the projected point.
+      (let ((minx sx) (maxx sx) (miny sy) (maxy sy))
+        (cl-loop for d from 2 to 120 by 2 do
+          (when (cmacs-libregnum-pick-at buf (- sx d) sy)
+            (setq minx (- sx d)))
+          (when (cmacs-libregnum-pick-at buf (+ sx d) sy)
+            (setq maxx (+ sx d)))
+          (when (cmacs-libregnum-pick-at buf sx (- sy d))
+            (setq miny (- sy d)))
+          (when (cmacs-libregnum-pick-at buf sx (+ sy d))
+            (setq maxy (+ sy d))))
+        (should (< (abs (- (/ (+ minx maxx) 2.0) sx)) 3.0))
+        (should (< (abs (- (/ (+ miny maxy) 2.0) sy)) 3.0))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

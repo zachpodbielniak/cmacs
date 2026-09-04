@@ -2264,8 +2264,11 @@ into an oval.  No-ops when the size is unchanged (the C side guards)."
              (fboundp 'cmacs-libregnum-resize))
     (let ((win (get-buffer-window cmacs-gnuseye-buffer t)))
       (when (window-live-p win)
-        (let ((w (window-pixel-width win))
-              (h (window-pixel-height win)))
+        ;; BODY pixels: the pgtk blit and the click mapping both use
+        ;; the text area, so a full-rect FBO is painted squeezed and
+        ;; every pick lands offset.
+        (let ((w (window-body-width win t))
+              (h (window-body-height win t)))
           (when (and (> w 1) (> h 1))
             (ignore-errors
               (cmacs-libregnum-resize cmacs-gnuseye-buffer w h))))))))

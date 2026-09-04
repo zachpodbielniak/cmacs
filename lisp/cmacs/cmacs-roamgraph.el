@@ -856,7 +856,10 @@ and resamples the in-scene label text into mush."
       (setq cmacs-roamgraph--resize-timer nil)
       (let ((win (get-buffer-window buf t)))
         (when (window-live-p win)
-          (let ((w (window-pixel-width win)) (h (window-pixel-height win)))
+          ;; BODY pixels: the pgtk blit and the click mapping both use
+          ;; the text area, so a full-rect FBO is painted squeezed and
+          ;; every pick lands offset.
+          (let ((w (window-body-width win t)) (h (window-body-height win t)))
             (when (and (> w 1) (> h 1))
               (ignore-errors (cmacs-libregnum-resize buf w h)))))))))
 

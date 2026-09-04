@@ -357,13 +357,18 @@ Mandatory, not cosmetic.  The framebuffer is blitted 1:1 across the
 window rectangle, so a mismatch stretches the picture -- and, worse,
 puts every click somewhere other than where it was aimed, because the
 pick maps view pixels against the framebuffer's dimensions.  A view
-that never fits its window is a view where nothing is clickable."
+that never fits its window is a view where nothing is clickable.
+
+The BODY size, not the full window size: the pgtk blit and the click
+mapping both use the text area (fringes, margins and the mode line
+excluded), so an FBO cut to the full rect is painted squeezed and every
+pick lands offset -- the click-above-and-right-of-every-node bug."
   (when (buffer-live-p buf)
     (with-current-buffer buf
       (setq cmacs-secondbrain--resize-timer nil)
       (let ((win (get-buffer-window buf t)))
         (when (window-live-p win)
-          (let ((w (window-pixel-width win)) (h (window-pixel-height win)))
+          (let ((w (window-body-width win t)) (h (window-body-height win t)))
             (when (and (> w 1) (> h 1))
               (ignore-errors (cmacs-libregnum-resize buf w h))
               ;; The viewport just changed, so the scaled label size did
@@ -452,7 +457,7 @@ framebuffer is resized to match the window and the window is the thing
 that exists first.  Falls back to the configured framebuffer height for
 a buffer nobody is displaying yet."
   (let ((win (get-buffer-window buf t)))
-    (or (and (window-live-p win) (window-pixel-height win))
+    (or (and (window-live-p win) (window-body-height win t))
         (cdr cmacs-secondbrain-default-size)
         cmacs-secondbrain-label-reference-height)))
 
@@ -513,9 +518,9 @@ using the nebula background")
         (setq-local cmacs-secondbrain-background 'nebula)
         (cmacs-secondbrain--apply-texture-background buf))
     (let* ((win (get-buffer-window buf t))
-           (w (if (window-live-p win) (window-pixel-width win)
+           (w (if (window-live-p win) (window-body-width win t)
                 (car cmacs-secondbrain-default-size)))
-           (h (if (window-live-p win) (window-pixel-height win)
+           (h (if (window-live-p win) (window-body-height win t)
                 (cdr cmacs-secondbrain-default-size))))
       (condition-case err
           (progn

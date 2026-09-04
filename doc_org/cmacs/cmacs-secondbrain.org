@@ -195,9 +195,9 @@ The honest cost: particles advance on wall-clock time inside the render pass, so
 
 *** The framebuffer must match its window
 
-=cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's pixel size, and =window-size-change-functions= re-runs it — coalesced through a 0.06 s idle timer — whenever the window changes.
+=cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's *body* pixel size — the text area, with fringes, margins and the mode line excluded — and =window-size-change-functions= re-runs it, coalesced through a 0.06 s idle timer, whenever the window changes.
 
-This is not cosmetic. The framebuffer is blitted 1:1 across the window rectangle, and a pick maps view pixels against the /framebuffer's/ dimensions, so a mismatch does not merely stretch the picture: it puts every click somewhere other than where it was aimed. A view that never fits its window is a view where nothing is clickable, which is exactly how this failed before the hook existed.
+This is not cosmetic, and neither is the word /body/. The picture, the click mapping and the framebuffer are a three-party contract: the pgtk overlay and the =--lrg= backend paint the view into =window_box TEXT_AREA=, the input layer maps clicks against that same box, and this hook sizes the FBO to match. Any party on a different rect puts every click somewhere other than where it was aimed. Both failure modes have shipped: before the hook existed nothing was clickable at all, and later the /paint/ used the full window rect against a text-area click mapping — offset by the fringes and the mode line's share of the height — so every node had to be clicked above and to the right of where it was drawn.
 
 * Layouts
 

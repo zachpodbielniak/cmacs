@@ -2026,6 +2026,34 @@ a VW-by-VH viewport.  Returns (SX SY) floats, or nil if behind the camera.  */)
   return list2 (make_float (sx), make_float (sy));
 }
 
+DEFUN ("cmacs-libregnum-pick-at", Fcmacs_libregnum_pick_at,
+       Scmacs_libregnum_pick_at, 3, 5, 0,
+       doc: /* Ray-pick the node under view pixel (VX, VY) in BUFFER.
+
+VW and VH default to the view's own framebuffer size; pass them only to
+model a viewport of a different size.  Returns the scene node id, or nil.
+
+This is the same pick the mouse uses, exposed so a test can prove that
+the node drawn at a pixel is the node a click at that pixel selects --
+the projection and the pick can each be self-consistent and still
+disagree with each other.  */)
+  (Lisp_Object buffer, Lisp_Object vx, Lisp_Object vy,
+   Lisp_Object vw, Lisp_Object vh)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (!v) return Qnil;
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+  int w = 0, h = 0;
+  cmacs_libregnum_view_get_size (v, &w, &h);
+  if (!NILP (vw)) w = (int) XFIXNUM (vw);
+  if (!NILP (vh)) h = (int) XFIXNUM (vh);
+  gint id = cmacs_libregnum_render_ctx_pick
+    (ctx, cmacs_libregnum__to_double (vx),
+     cmacs_libregnum__to_double (vy), w, h);
+  return (id >= 0) ? make_fixnum (id) : Qnil;
+}
+
 DEFUN ("cmacs-libregnum-editor-set-tool", Fcmacs_libregnum_editor_set_tool,
        Scmacs_libregnum_editor_set_tool, 2, 2, 0,
        doc: /* Set BUFFER's gizmo TOOL: 0 select, 1 translate, 2 rotate,
@@ -3128,6 +3156,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_editor_set_name);
   defsubr (&Scmacs_libregnum_set_mouse_capture);
   defsubr (&Scmacs_libregnum_project);
+  defsubr (&Scmacs_libregnum_pick_at);
   defsubr (&Scmacs_libregnum_editor_set_tool);
   defsubr (&Scmacs_libregnum_editor_get_tool);
   defsubr (&Scmacs_libregnum_editor_gizmo_begin);
