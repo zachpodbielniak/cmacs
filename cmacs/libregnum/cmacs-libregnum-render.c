@@ -3046,13 +3046,24 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
          plate behind each label costs one quad and fixes it. */
       if (r->label_backdrop)
         {
+          /* Padding scales with the text: at a 22px label the old flat
+             4px inset left the glyphs touching the plate edge, so the
+             plate stopped reading as a plate and the text stopped
+             separating from what was behind it. */
+          float padx = 4.0f + (float) fs * 0.18f;
+          float pady = 2.0f + (float) fs * 0.10f;
           g_autoptr (GrlRectangle) rect =
-            grl_rectangle_new (lx - 4.0f, y_fbo - 2.0f,
-                               tw + 8.0f, th + 4.0f);
+            grl_rectangle_new (lx - padx, y_fbo - pady,
+                               tw + padx * 2.0f, th + pady * 2.0f);
+          /* Opaque.  The plate exists precisely for the case where the
+             scene behind the text is bright and busy -- a ring of a
+             few hundred nodes with a thousand links over it -- and any
+             translucency there puts that texture straight through the
+             glyphs.  Legibility is the whole job; subtlety is not. */
           g_autoptr (GrlColor) bgc =
             (r->selected == (gint) c->id)
-            ? grl_color_new (58, 52, 20, 215)
-            : grl_color_new (12, 13, 18, 185);
+            ? grl_color_new (62, 55, 20, 255)
+            : grl_color_new (10, 11, 16, 250);
           grl_draw_rectangle_rounded (rect, 0.45f, 6, bgc);
         }
 
@@ -3060,8 +3071,8 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
         g_autoptr (GrlColor) sh = grl_color_new (0, 0, 0, 200);
         g_autoptr (GrlColor) fg =
           (r->selected == (gint) c->id)
-          ? grl_color_new (255, 235, 120, 255)
-          : grl_color_new (235, 238, 245, 255);
+          ? grl_color_new (255, 240, 150, 255)
+          : grl_color_new (248, 250, 255, 255);
 
         if (r->label_font != NULL)
           {

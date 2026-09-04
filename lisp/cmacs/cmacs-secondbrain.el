@@ -190,9 +190,28 @@ ownership of should look alive, and off is one setq away."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-label-size 13
-  "On-screen height, in pixels, of an in-scene node label."
+(defcustom cmacs-secondbrain-label-size 15
+  "Base on-screen height, in pixels, of an in-scene node label.
+
+A base, not the final size: it is what you get in a viewport
+`cmacs-secondbrain-label-reference-height' tall, and the drawn size
+scales with the actual viewport from there.  A fixed pixel size cannot
+be right for both a half-screen window and a maximised one on a large
+display -- and since the framebuffer now tracks the window exactly, the
+same number that reads well in one is unreadably small in the other."
   :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-label-reference-height 800
+  "Viewport height, in pixels, at which labels are drawn at their base size."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-label-scale-max 2.2
+  "Most that viewport size may enlarge a label.
+A cap, because past a point bigger labels stop adding legibility and
+start hiding the graph behind them."
+  :type 'number
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-max-labels 160
@@ -255,6 +274,9 @@ that never fits its window is a view where nothing is clickable."
           (let ((w (window-pixel-width win)) (h (window-pixel-height win)))
             (when (and (> w 1) (> h 1))
               (ignore-errors (cmacs-libregnum-resize buf w h))
+              ;; The viewport just changed, so the scaled label size did
+              ;; too -- this is the only place that knows that.
+              (cmacs-secondbrain--apply-label-size buf h)
               (ignore-errors (cmacs-secondbrain-fit buf)))))))))
 
 (defun cmacs-secondbrain--on-size-change (&optional _frame)
@@ -279,11 +301,12 @@ useless."
       (let ((ff (and (fboundp 'cmacs-libregnum-default-font-file)
                      (cmacs-libregnum-default-font-file))))
         ;; Baked large and drawn smaller: downscaling through the
-        ;; bilinear filter is what makes the text look right.
-        (when ff (ignore-errors (cmacs-libregnum-set-label-font buf ff 32)))))
-    (when (fboundp 'cmacs-libregnum-set-label-style)
-      (cmacs-libregnum-set-label-style buf cmacs-secondbrain-label-size
-                                       t t cmacs-secondbrain-max-labels))
+        ;; bilinear filter is what makes the text look right.  Baked at
+        ;; 48 rather than 32 because the drawn size now scales with the
+        ;; viewport, and a label drawn ABOVE the baked size is upscaled
+        ;; -- which is exactly the blur this is meant to avoid.
+        (when ff (ignore-errors (cmacs-libregnum-set-label-font buf ff 48)))))
+    (cmacs-secondbrain--apply-label-size buf)
     (when (fboundp 'cmacs-libregnum-set-label-decor)
       ;; A plate behind the text -- edges run straight through it
       ;; otherwise -- and screen-space rings on selection and hover.
@@ -312,6 +335,37 @@ useless."
       (cmacs-libregnum-set-focus-policy
        buf nil cmacs-secondbrain-fly-context))
     (cmacs-secondbrain--apply-background buf)))
+
+(defun cmacs-secondbrain--viewport-height (buf)
+  "Return BUF's viewport height in pixels.
+
+Read off the window rather than the render context, because the
+framebuffer is resized to match the window and the window is the thing
+that exists first.  Falls back to the configured framebuffer height for
+a buffer nobody is displaying yet."
+  (let ((win (get-buffer-window buf t)))
+    (or (and (window-live-p win) (window-pixel-height win))
+        (cdr cmacs-secondbrain-default-size)
+        cmacs-secondbrain-label-reference-height)))
+
+(defun cmacs-secondbrain--label-px (&optional buf height)
+  "Return the label pixel height to draw in BUF, scaled to its viewport.
+HEIGHT overrides the measured viewport height."
+  (let* ((buf (or buf (current-buffer)))
+         (h (or height (cmacs-secondbrain--viewport-height buf)))
+         (ref (max 1 cmacs-secondbrain-label-reference-height))
+         (k (max 1.0 (min cmacs-secondbrain-label-scale-max
+                          (/ (float h) ref)))))
+    (max 8 (round (* cmacs-secondbrain-label-size k)))))
+
+(defun cmacs-secondbrain--apply-label-size (&optional buf height)
+  "Set BUF's label size from its viewport height (or HEIGHT)."
+  (let ((buf (or buf (current-buffer))))
+    (when (fboundp 'cmacs-libregnum-set-label-style)
+      (ignore-errors
+        (cmacs-libregnum-set-label-style
+         buf (cmacs-secondbrain--label-px buf height)
+         t t cmacs-secondbrain-max-labels)))))
 
 (defun cmacs-secondbrain--apply-background (&optional buf)
   "Push the configured background into BUF's viewport."

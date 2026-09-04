@@ -835,6 +835,40 @@ filling the view."
               (if near (setq far d) (setq near d))))
           (should (> far near)))))))
 
+(ert-deftest cmacs-secondbrain-test-label-size-scales-with-viewport ()
+  "Label size tracks the viewport, clamped at both ends.
+
+A fixed pixel size cannot be right for both a half-screen window and a
+maximised one on a large display, and since the framebuffer now tracks
+the window exactly, the number that reads well in one is unreadably
+small in the other."
+  (skip-unless (fboundp 'cmacs-secondbrain--label-px))
+  (with-temp-buffer
+    (let ((cmacs-secondbrain-label-size 15)
+          (cmacs-secondbrain-label-reference-height 800)
+          (cmacs-secondbrain-label-scale-max 2.2))
+      ;; At the reference height it is exactly the base.
+      (should (= 15 (cmacs-secondbrain--label-px nil 800)))
+      ;; Bigger viewport, bigger text.
+      (should (> (cmacs-secondbrain--label-px nil 1300)
+                 (cmacs-secondbrain--label-px nil 800)))
+      ;; Never SMALLER than the base, however short the window: a
+      ;; split-window viewport is where legibility matters most.
+      (should (= 15 (cmacs-secondbrain--label-px nil 200)))
+      ;; And capped, because past a point bigger labels stop adding
+      ;; legibility and start hiding the graph behind them.
+      (should (= (cmacs-secondbrain--label-px nil 100000)
+                 (round (* 15 2.2)))))))
+
+(ert-deftest cmacs-secondbrain-test-apply-label-size-without-a-window ()
+  "Applying the label size is safe for a buffer nobody is displaying.
+
+It runs from an idle timer, so it routinely fires for a buffer whose
+window has gone."
+  (skip-unless (fboundp 'cmacs-secondbrain--apply-label-size))
+  (with-temp-buffer
+    (should-not (cmacs-secondbrain--apply-label-size (current-buffer)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

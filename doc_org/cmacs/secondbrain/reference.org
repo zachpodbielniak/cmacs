@@ -100,7 +100,9 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-hover-highlights-group= | =t= | hover lights the whole department |
 | =cmacs-secondbrain-particles= | =t= | ambient drift + event bursts |
 | =cmacs-secondbrain-particle-fps= | 24 | standing redraw clock while particles are on |
-| =cmacs-secondbrain-label-size= | 13 | on-screen pixel height of a label |
+| =cmacs-secondbrain-label-size= | 15 | base label height, at the reference viewport |
+| =cmacs-secondbrain-label-reference-height= | 800 | viewport height where the base applies |
+| =cmacs-secondbrain-label-scale-max= | 2.2 | most the viewport may enlarge a label |
 | =cmacs-secondbrain-max-labels= | 160 | nearest N to the camera; zoom in to reveal more |
 | =cmacs-secondbrain-enabled-sources= | =t= | =t= or a list of names |
 | =cmacs-secondbrain-claude-dir= | ="~/.claude"= | |
