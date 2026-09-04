@@ -192,6 +192,27 @@ extern void  cmacs_libregnum_render_ctx_set_billboard_size
                               (CmacsLibregnumRenderCtx *r, gint idx,
                                float size);
 
+/* A soft additive glow at (X, Y, Z): a camera-facing quad carrying a
+ * shared radial-falloff texture, drawn AFTER the normal billboards with
+ * additive blending and the depth mask off.
+ *
+ * Additive is what makes it a glow rather than a smudge: it can only
+ * brighten what is under it, overlapping glows sum instead of
+ * occluding, and draw order stops mattering entirely -- which is why
+ * this layer needs no sorting.  The depth mask stays off for the same
+ * reason as particles: a translucent quad that writes depth punches an
+ * invisible hole other glows behind it cannot draw through.  Depth
+ * TESTING stays on, so a glow behind real geometry is still hidden.
+ *
+ * RGBA tints the shared texture; the alpha channel scales intensity.
+ * Returns an index in the same space as add_billboard_full, usable with
+ * move_billboard / set_billboard_color / set_billboard_size until the
+ * next clear, or -1 on failure. */
+extern gint  cmacs_libregnum_render_ctx_add_billboard_glow
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z,
+                               float size, guint32 rgba);
+
 /* A shared, lazily built texture of a lit sphere: ambient + diffuse +
  * a tight specular + a rim term, with a soft circular alpha mask.
  *

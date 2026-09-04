@@ -203,7 +203,30 @@ typedef struct
   float       x, y, z, size;
   guint32     rgba;      /* tint; 0 means opaque white */
   GrlTexture *tex;       /* owned */
+  guint8      layer;     /* 0 = alpha-blended, depth-sorted;
+                            1 = additive glow, drawn after, unsorted */
 } CmacsBillboard;
+
+/* Draw-order entry for the sorted billboard pass. */
+typedef struct
+{
+  float key;             /* squared distance to the camera */
+  guint idx;
+} CmacsBillboardOrder;
+
+/* Farther first: alpha-blended quads must draw back-to-front, or a
+   near quad's translucent texels write depth and clip every quad
+   behind them into rectangles. */
+static int
+cmacs_billboard_order_cmp (const void *pa, const void *pb)
+{
+  const CmacsBillboardOrder *a = pa;
+  const CmacsBillboardOrder *b = pb;
+
+  if (a->key > b->key) return -1;
+  if (a->key < b->key) return 1;
+  return 0;
+}
 
 static void
 cmacs_billboard_clear (gpointer p)
@@ -453,6 +476,8 @@ struct CmacsLibregnumRenderCtx
   GArray           *billboards;       /* CmacsBillboard */
   /* Shared lit-sphere impostor texture; see orb_texture(). */
   GrlTexture       *orb_tex;          /* owned */
+  /* Shared radial-falloff glow texture; see ctx_glow_texture(). */
+  GrlTexture       *glow_tex;         /* owned */
 
   /* Particles.  Created lazily -- a view that never asks pays
    * nothing -- and stepped inside the 3D pass, which is the only
@@ -643,6 +668,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
   g_clear_object (&r->orb_tex);
+  g_clear_object (&r->glow_tex);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
   if (r->bg_src_notify && r->bg_src_data) r->bg_src_notify (r->bg_src_data);
   g_free (r->bg_src_rgba);
@@ -2033,6 +2059,92 @@ cmacs_libregnum_render_ctx_orb_texture (CmacsLibregnumRenderCtx *r)
 
   r->orb_tex = grl_texture_new_from_handle (&tex);
   return r->orb_tex;
+}
+
+/* ── The glow ────────────────────────────────────────────────────── */
+
+#define CMACS_GLOW_PX 128
+
+/* A white radial falloff: a wide soft skirt plus a hot core.
+ *
+ * White on purpose -- the tint supplies the colour, so one texture
+ * serves every node.  The profile lives in the ALPHA channel because
+ * the glow pass blends additively (GL_SRC_ALPHA, GL_ONE): what lands in
+ * the framebuffer is rgb * alpha, so alpha IS the intensity curve.
+ *
+ * The two-term shape matters.  A single power falloff is either all
+ * skirt (a colour wash with no centre to anchor it to the node) or all
+ * core (a dot indistinguishable from the node itself); the sum gives a
+ * bright centre that visibly belongs to the node and a wide skirt that
+ * reads as light bleeding off it. */
+static GrlTexture *
+ctx_glow_texture (CmacsLibregnumRenderCtx *r)
+{
+  const int N = CMACS_GLOW_PX;
+  Color *px;
+  Image img = { 0 };
+  Texture2D tex;
+  int x, y;
+
+  if (!r) return NULL;
+  if (r->glow_tex) return r->glow_tex;
+
+  px = g_new0 (Color, (gsize) N * N);
+  for (y = 0; y < N; y++)
+    for (x = 0; x < N; x++)
+      {
+        double u = (2.0 * ((double) x + 0.5) / N) - 1.0;
+        double v = (2.0 * ((double) y + 0.5) / N) - 1.0;
+        double d = sqrt (u * u + v * v);
+        double skirt, core, a;
+
+        skirt = (d >= 1.0) ? 0.0 : pow (1.0 - d, 2.6);
+        core  = (d >= 0.38) ? 0.0 : pow (1.0 - d / 0.38, 2.0);
+        a = 0.72 * skirt + 0.28 * core;
+        px[y * N + x] =
+          (Color){ 255, 255, 255,
+                   (unsigned char) CLAMP (a * 255.0, 0.0, 255.0) };
+      }
+
+  img.data = px;
+  img.width = N;
+  img.height = N;
+  img.mipmaps = 1;
+  img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+  tex = LoadTextureFromImage (img);
+  g_free (px);
+  if (tex.id == 0) return NULL;
+
+  /* Same reasoning as the orb: glows minify to a few pixels, and an
+     unmipped texture shimmers there on every camera move. */
+  GenTextureMipmaps (&tex);
+  SetTextureFilter (tex, TEXTURE_FILTER_TRILINEAR);
+
+  r->glow_tex = grl_texture_new_from_handle (&tex);
+  return r->glow_tex;
+}
+
+gint
+cmacs_libregnum_render_ctx_add_billboard_glow (CmacsLibregnumRenderCtx *r,
+                                               float x, float y, float z,
+                                               float size, guint32 rgba)
+{
+  CmacsBillboard b = { 0 };
+  GrlTexture *tex;
+
+  if (!r || !r->billboards) return -1;
+  tex = ctx_glow_texture (r);
+  if (!tex) return -1;
+
+  b.x = x; b.y = y; b.z = z;
+  b.size = size;
+  b.rgba = rgba;
+  /* The entry owns a ref; the context keeps its own in glow_tex. */
+  b.tex = g_object_ref (tex);
+  b.layer = 1;
+  g_array_append_val (r->billboards, b);
+  return (gint) r->billboards->len - 1;
 }
 
 void
@@ -4121,15 +4233,44 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (!globe || cdist < 13.0)
               {
                 Color bw = (Color){ 255, 255, 255, 255 };
+                CmacsBillboardOrder *order =
+                  g_new (CmacsBillboardOrder, r->billboards->len);
+                guint n_norm = 0, n_glow = 0, oi;
                 (void) bw;
+
+                /* Split the layers and depth-sort the normal one.
+                 * Alpha-blended quads MUST draw back-to-front: a quad's
+                 * translucent texels still write depth, so drawn in
+                 * insertion order a near quad's soft edge clips every
+                 * quad behind it into a rectangle -- an artefact that
+                 * only appears once the camera orbits and two nodes
+                 * overlap, which is exactly when you are looking. */
                 for (guint i = 0; i < r->billboards->len; i++)
                   {
                     CmacsBillboard *bb =
                       &g_array_index (r->billboards, CmacsBillboard, i);
+                    float dx, dy, dz;
+
                     if (!bb->tex) continue;
                     /* Skip flags on the far side of the globe. */
                     if (!ctx_point_near_side (r, bb->x, bb->y, bb->z))
                       continue;
+                    if (bb->layer != 0) { n_glow++; continue; }
+                    dx = bb->x - bcam.position.x;
+                    dy = bb->y - bcam.position.y;
+                    dz = bb->z - bcam.position.z;
+                    order[n_norm].key = dx * dx + dy * dy + dz * dz;
+                    order[n_norm].idx = i;
+                    n_norm++;
+                  }
+                qsort (order, n_norm, sizeof *order,
+                       cmacs_billboard_order_cmp);
+
+                for (oi = 0; oi < n_norm; oi++)
+                  {
+                    CmacsBillboard *bb =
+                      &g_array_index (r->billboards, CmacsBillboard,
+                                      order[oi].idx);
                     Texture2D *t = grl_texture_get_handle (bb->tex);
                     if (t && t->id)
                       {
@@ -4156,6 +4297,50 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                        (Vector3){ bb->x, bb->y, bb->z },
                                        esize, tint);
                       }
+                  }
+                g_free (order);
+
+                /* The glow layer: additive, depth mask off, unsorted --
+                 * addition commutes, so order cannot matter, and a glow
+                 * must never punch a depth hole in front of another.
+                 * Depth TESTING stays on: a glow behind real geometry
+                 * is hidden, which is what anchors it to its node.
+                 * Same bracket discipline as the particle pass: flush
+                 * the batch before touching the depth mask, because
+                 * rlgl applies mask changes immediately while quads sit
+                 * batched. */
+                if (n_glow > 0)
+                  {
+                    rlDrawRenderBatchActive ();
+                    rlDisableDepthMask ();
+                    BeginBlendMode (BLEND_ADDITIVE);
+                    for (guint i = 0; i < r->billboards->len; i++)
+                      {
+                        CmacsBillboard *bb =
+                          &g_array_index (r->billboards, CmacsBillboard, i);
+                        Texture2D *t;
+
+                        if (!bb->tex || bb->layer != 1) continue;
+                        if (!ctx_point_near_side (r, bb->x, bb->y, bb->z))
+                          continue;
+                        t = grl_texture_get_handle (bb->tex);
+                        if (t && t->id)
+                          {
+                            Color tint =
+                              bb->rgba
+                              ? (Color){ (unsigned char) ((bb->rgba >> 24) & 0xFF),
+                                         (unsigned char) ((bb->rgba >> 16) & 0xFF),
+                                         (unsigned char) ((bb->rgba >>  8) & 0xFF),
+                                         (unsigned char) ( bb->rgba        & 0xFF) }
+                              : bw;
+                            DrawBillboard (bcam, *t,
+                                           (Vector3){ bb->x, bb->y, bb->z },
+                                           bb->size, tint);
+                          }
+                      }
+                    EndBlendMode ();
+                    rlDrawRenderBatchActive ();
+                    rlEnableDepthMask ();
                   }
               }
           }
