@@ -394,6 +394,10 @@ Two traps:
 - *The tint is a ceiling, not an addition.* The texture is multiplied by it, so the brightest a texel can be is the tint. A specular that should read as light needs the tint lifted toward white to have anywhere to go.
 - *=clear-drawables= does not clear billboards.* A scene adding them per node must clear them itself on rebuild, or they accumulate one per node per refresh. =cmacs-libregnum-billboard-count= exists so a test can see that happening; a screenshot cannot, because the newest billboards are drawn in the right places.
 
+*Two layers, two disciplines.* The normal (alpha-blended) layer is depth-sorted back-to-front every frame — a translucent quad's texels still write depth, so drawn in insertion order a near quad's soft edge clips every quad behind it into a rectangle, an artefact that only appears once the camera orbits and two quads overlap. The sort is over a scratch index list, never the array itself, so the indices handed out by =-add-billboard-full= stay valid.
+
+=cmacs_libregnum_render_ctx_add_billboard_glow= adds to the second layer: a shared radial-falloff texture drawn *after* the normal layer with additive blending and the depth mask off (depth testing stays on). Additive is what makes it a glow rather than a smudge — it can only brighten, overlapping glows sum instead of occluding, and draw order stops mattering, so this layer needs no sorting. The tint's alpha channel scales intensity, because with =GL_SRC_ALPHA, GL_ONE= what lands in the framebuffer is =rgb * alpha=. Same index space as the normal layer: move/recolour/resize and =clear-billboards= all apply.
+
 ** Node dragging
 
 =cmacs-libregnum-set-drag-nodes= — BUFFER &optional ON. Off by default.

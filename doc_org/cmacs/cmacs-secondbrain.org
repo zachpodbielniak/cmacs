@@ -74,6 +74,10 @@ Once open, a department's members occupy a contiguous *wedge* of the ring sized 
 | =b= | pick the background (or a wallpaper image) |
 | =P= | particle effects on/off |
 | =H= | hover department-highlighting on/off |
+| =G= | node glow on/off |
+| =x= | isolate the selection's neighbourhood |
+| =F= | cycle the ring filter (all → each ring alone) |
+| =a= | age fade: colour Memory by how recently it changed |
 | =q= | quit |
 
 ** Mouse
@@ -171,6 +175,16 @@ Skills and applications keep their real geometry: a gem must show facets and a p
 
 =cmacs-secondbrain-node-shading= turns the whole thing off.
 
+** Glow
+
+Every node also carries a soft additive halo in its own colour, drawn by a dedicated renderer pass after everything else: additive blending, depth writes off, depth testing on. Each of those three is load-bearing. /Additive/ means a halo can only brighten what is under it, overlapping halos sum instead of occluding, and draw order stops mattering — which is why the pass needs no sorting. /Depth writes off/ is the particle lesson: a translucent quad that writes depth punches an invisible hole nothing behind it can draw through. /Depth testing on/ is what anchors a halo to its node — a glow behind real geometry is hidden, so it reads as light bleeding off the node rather than as a sprite pasted over the scene.
+
+The halo is what seats the map in a dark background: against the nebula a flat-lit glyph reads as a sticker, a glowing one as a light source. It also carries state, in intensity rather than in colour — hubs and the centre glow wider and brighter (they are the wayfinding), search matches glow gold, dimmed nodes barely at all, and the /selection breathes/: its halo swells and settles on the same clock as the travelling link light, which is what makes "this one" unmistakable in a field of steady lights.
+
+The same change fixed a latent artefact in the billboard pass itself: alpha-blended camera-facing quads were drawn in insertion order, and a quad's translucent texels still write depth — so once the camera orbited and two nodes overlapped, the nearer quad's soft edge clipped the farther one into a rectangle. The normal billboard layer is now depth-sorted back-to-front every frame.
+
+=cmacs-secondbrain-node-glow= (default =t=) and the =G= key control it. Like shading, it is decided when the scene is built, so the toggle re-reads the sources.
+
 ** Particles
 
 Ambient particles drift from every department hub, coloured by its PARA bucket and breathing wider and faster the more it holds, so the motion carries the same information the size does. Selecting a node and expanding a department each fire a burst — the expand's is bigger and bluer, because it moves the whole department and the burst marks where from.
@@ -209,6 +223,18 @@ Matching nodes take an accent colour and everything else dims, in place — reco
 ** Similarity edges, in roamgraph too
 
 =M-x cmacs-roamgraph-similarity-edges= does the same for the knowledge graph. roamgraph has carried the =sim= edge kind since before anything emitted one: parsed, weighted 0.35 in the solver so it nudges without competing with real structure, rendered violet so it is never mistaken for a link you wrote, and excluded from =[= / =]= navigation.
+
+* Focusing the view
+
+Three ways to make the map answer one question at a time, all composable with search and with each other:
+
+- *Isolate* (=x=) — while a node is selected, only it, its subtree and its direct neighbours keep their colour; the rest recedes to a third and its links go near-invisible. Selecting a /department/ isolates the department and everything it reaches — which is "show me what this connects to" as one keystroke. The mode follows the selection as it moves, and with nothing selected it is armed but inert.
+- *Ring filter* (=F=) — cycles all → Applications → Routines → Memory → Skills → all. Everything outside the kept ring dims. The centre stays lit: it belongs to every ring, and a filtered map with its own centre dimmed looks broken rather than filtered.
+- *Age fade* (=a=) — recolours Memory by modification time: a note touched today keeps its full PARA colour, one untouched for =cmacs-secondbrain-age-fade-days= (180) fades most of the way to a cold grey — toward grey, not black, because against a dark background black is /gone/ and stale should read as /faded/. Department hubs wear their members' *mean* age, which matters because the default map is fully collapsed: a fade that only touched leaves would render the default view pixel-identical with the feature on and off. A whole department gone grey is a department you have stopped tending.
+
+Two design rules keep these honest. First, isolate and the ring filter are /paint-time decisions/, not flag writes: the DIM flag belongs to the search machinery, and a second writer would have to agree with it about when to clear — the classic two-owners bug. Second, a search MATCH lights up through both — you searched for it, so a filter never hides it.
+
+The mode line shows =[ring]=, =[isolate]= and =[age]= while any of them is active, so a filtered map cannot be mistaken for the whole map.
 
 * AI actions
 
@@ -319,7 +345,10 @@ get on =M-x cmacs-secondbrain=.
       cmacs-secondbrain-max-labels 160)
 
 ;; Interaction.
-(setq cmacs-secondbrain-node-shading t
+(setq cmacs-secondbrain-node-glow t        ; additive halos (G toggles)
+      cmacs-secondbrain-age-fade nil       ; colour Memory by staleness (a)
+      cmacs-secondbrain-age-fade-days 180.0
+      cmacs-secondbrain-node-shading t
       cmacs-secondbrain-drag-nodes t
       cmacs-secondbrain-hover-highlights-group t
       cmacs-secondbrain-fly-context 0.4)

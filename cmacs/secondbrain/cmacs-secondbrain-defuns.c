@@ -657,6 +657,96 @@ Read when the scene is built, so it takes effect on the next refresh.  */)
   return NILP (on) ? Qnil : Qt;
 }
 
+DEFUN ("cmacs-secondbrain-set-glow", Fcmacs_secondbrain_set_glow,
+       Scmacs_secondbrain_set_glow, 1, 2, 0,
+       doc: /* Draw an additive halo behind each node in BUFFER (ON nil off).
+
+The halo is what seats the map in a dark background: against the nebula
+a flat-lit glyph reads as a sticker, a glowing one as a light source.
+Landmarks (hubs and the centre) glow wider and brighter, matches glow
+gold, dimmed nodes barely at all, and the selection's halo breathes on
+the same clock as the link light.
+
+Read when the scene is built, so it takes effect on the next refresh.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  SbState *st;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, NULL, &ctx);
+  if (!st || !ctx) return Qnil;
+  cmacs_secondbrain_scene_set_glow (ctx, !NILP (on));
+  return NILP (on) ? Qnil : Qt;
+}
+
+DEFUN ("cmacs-secondbrain-set-isolate", Fcmacs_secondbrain_set_isolate,
+       Scmacs_secondbrain_set_isolate, 1, 2, 0,
+       doc: /* Dim everything outside BUFFER's selection neighbourhood (ON nil off).
+
+While a node is selected, only it, its subtree and its direct
+neighbours keep their colour; the rest of the map recedes.  With no
+selection this is inert.  A search MATCH still lights up through it --
+you searched for it.
+
+Repaints immediately; the mode then follows the selection as it moves.
+Returns the new state.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+  cmacs_secondbrain_scene_set_isolate (ctx, !NILP (on));
+  cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return NILP (on) ? Qnil : Qt;
+}
+
+DEFUN ("cmacs-secondbrain-set-ring-filter", Fcmacs_secondbrain_set_ring_filter,
+       Scmacs_secondbrain_set_ring_filter, 1, 2, 0,
+       doc: /* Keep only RING at full strength in BUFFER; nil shows every ring.
+
+RING is one of the symbols from `cmacs-secondbrain-ring-names' (or its
+name as a string).  Everything outside it is painted dim and its links
+near-invisible, so one ring can be read without the other three's
+clutter.  The centre is exempt -- it belongs to every ring -- and a
+search MATCH still lights up through the filter.
+
+Repaints immediately.  Returns the ring kept, or nil.  */)
+  (Lisp_Object buffer, Lisp_Object ring)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  gint want = -1;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  if (!NILP (ring))
+    {
+      Lisp_Object name = SYMBOLP (ring) ? SYMBOL_NAME (ring) : ring;
+      CmacsSbRing rv;
+
+      CHECK_STRING (name);
+      if (!cmacs_sb_ring_from_name (SSDATA (ENCODE_UTF_8 (name)), &rv))
+        xsignal2 (Qerror, build_string ("Unknown ring"), ring);
+      want = (gint) rv;
+    }
+
+  cmacs_secondbrain_scene_set_ring_filter (ctx, want);
+  cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return (want >= 0)
+         ? intern (cmacs_sb_ring_name ((CmacsSbRing) want))
+         : Qnil;
+}
+
 DEFUN ("cmacs-secondbrain-set-link-phase",
        Fcmacs_secondbrain_set_link_phase,
        Scmacs_secondbrain_set_link_phase, 2, 2, 0,
@@ -1302,6 +1392,9 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_focus);
   defsubr (&Scmacs_secondbrain_select);
   defsubr (&Scmacs_secondbrain_set_shading);
+  defsubr (&Scmacs_secondbrain_set_glow);
+  defsubr (&Scmacs_secondbrain_set_isolate);
+  defsubr (&Scmacs_secondbrain_set_ring_filter);
   defsubr (&Scmacs_secondbrain_set_link_phase);
   defsubr (&Scmacs_secondbrain_set_pinned);
   defsubr (&Scmacs_secondbrain_move_node);

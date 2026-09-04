@@ -71,6 +71,9 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-flat-p BUFFER= | |
 | =cmacs-secondbrain-set-band-guides BUFFER ON= | the ring circles |
 | =cmacs-secondbrain-apply-flags BUFFER= | recolour from search flags, in place |
+| =cmacs-secondbrain-set-glow BUFFER ON= | halos; read at build time |
+| =cmacs-secondbrain-set-isolate BUFFER ON= | dim outside the selection's neighbourhood |
+| =cmacs-secondbrain-set-ring-filter BUFFER RING= | keep one ring; =nil= keeps all |
 | =cmacs-secondbrain-fit BUFFER= | |
 | =cmacs-secondbrain-ring-names= | innermost first |
 
@@ -94,6 +97,9 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-start-collapsed= | =t= | =nil= opens every file on load |
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
 | =cmacs-secondbrain-node-shading= | =t= | specular highlight per node |
+| =cmacs-secondbrain-node-glow= | =t= | additive halo per node |
+| =cmacs-secondbrain-age-fade= | =nil= | fade Memory toward grey by mtime |
+| =cmacs-secondbrain-age-fade-days= | 180.0 | days to full fade |
 | =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
 | =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
 | =cmacs-secondbrain-rotate-speed= | 3.0 | what =R= turns on |

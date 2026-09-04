@@ -79,7 +79,12 @@ typedef struct
   GPtrArray *spark_shapes; /* LrgLine3D pool, repositioned each frame */
   GPtrArray *node_hilite;  /* LrgSphere3D*, one per emitted node */
   GArray    *node_orb;     /* gint32 billboard index, or -1, per node */
+  GArray    *node_glow;    /* gint32 glow billboard index, or -1 */
   gboolean   shading;      /* light the nodes */
+  gboolean   glow;         /* halo billboard behind each node */
+  gboolean   isolate;      /* dim everything outside the selection's
+                              neighbourhood */
+  gint       ring_filter;  /* CmacsSbRing to keep, or -1 for all */
 } SceneState;
 
 /* A node is a flat disc without one.  raylib draws an unlit sphere in a
@@ -164,6 +169,7 @@ scene_state_free (gpointer p)
   if (st->spark_shapes) g_ptr_array_free (st->spark_shapes, TRUE);
   if (st->node_hilite) g_ptr_array_free (st->node_hilite, TRUE);
   if (st->node_orb) g_array_free (st->node_orb, TRUE);
+  if (st->node_glow) g_array_free (st->node_glow, TRUE);
   if (st->node_emit)   g_array_free (st->node_emit, TRUE);
   if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
   g_free (st);
@@ -190,7 +196,10 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
       st->spark_shapes = g_ptr_array_new ();
       st->node_hilite = g_ptr_array_new ();
       st->node_orb = g_array_new (FALSE, FALSE, sizeof (gint32));
+      st->node_glow = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->shading = TRUE;
+      st->glow = TRUE;
+      st->ring_filter = -1;
       st->node_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->edge_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       g_hash_table_insert (s_states, r, st);
@@ -209,6 +218,7 @@ cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r)
   g_ptr_array_set_size (st->spark_shapes, 0);
   g_ptr_array_set_size (st->node_hilite, 0);
   g_array_set_size (st->node_orb, 0);
+  g_array_set_size (st->node_glow, 0);
   g_array_set_size (st->node_emit, 0);
   g_array_set_size (st->edge_emit, 0);
 }
@@ -346,6 +356,7 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   g_ptr_array_set_size (st->spark_shapes, 0);
   g_ptr_array_set_size (st->node_hilite, 0);
   g_array_set_size (st->node_orb, 0);
+  g_array_set_size (st->node_glow, 0);
 
   n = cmacs_graph_n_nodes (g);
   m = cmacs_graph_n_edges (g);
@@ -540,6 +551,33 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
           g_ptr_array_add (st->node_hilite, NULL);
       }
 
+      /* The glow: a soft additive halo in the node's own colour, drawn
+         by the renderer's glow layer.  This is what seats the map in
+         its background -- against the nebula a flat-lit glyph reads as
+         a sticker, a glowing one as a light source.  The halo uses the
+         RAW node colour, not the lifted impostor tint: additive
+         blending can only brighten, so there is no specular to buy
+         headroom for, and the halo's job is to say the category as
+         loudly as the node does.  Landmarks glow wider and brighter --
+         they are the wayfinding.  Alpha scales the additive intensity;
+         these rest values leave room above for the flag states. */
+      {
+        gint32 glow = -1;
+
+        if (st->glow)
+          {
+            gboolean landmark = (kind == CMACS_SB_KIND_HUB
+                                 || kind == CMACS_SB_KIND_CENTRE);
+            float gsize = nd->radius * (landmark ? 4.6f : 3.2f);
+            guint32 grgba = ((guint32) cr << 24) | ((guint32) cg << 16)
+                            | ((guint32) cb << 8)
+                            | (guint32) (landmark ? 64 : 44);
+            glow = cmacs_libregnum_render_ctx_add_billboard_glow
+                     (r, nd->x, nd->y, nd->z, gsize, grgba);
+          }
+        g_array_append_val (st->node_glow, glow);
+      }
+
       n_nodes_drawn++;
 
       id = cmacs_libregnum_render_ctx_add_node (r, nd->id, nd->title,
@@ -654,6 +692,16 @@ cmacs_secondbrain_scene_sync_positions (CmacsLibregnumRenderCtx *r,
                                                        nd->x, nd->y, nd->z);
         }
 
+      /* And the glow: a halo left behind is a ghost light where the
+         node used to be. */
+      if (st->node_glow && node_i < st->node_glow->len)
+        {
+          gint32 glow = g_array_index (st->node_glow, gint32, node_i);
+          if (glow >= 0)
+            cmacs_libregnum_render_ctx_move_billboard (r, glow,
+                                                       nd->x, nd->y, nd->z);
+        }
+
       /* The specular travels with its node.  Left behind, it stops
          being a highlight and becomes a second, smaller node hanging in
          space -- and a tween moves every node every frame. */
@@ -702,6 +750,33 @@ emitted_node_flags (CmacsLibregnumRenderCtx *r, SceneState *st, guint i)
   return cmacs_libregnum_render_ctx_get_node_flags (r, e);
 }
 
+/* Is graph node I excluded by the ring filter or by isolate mode?
+ *
+ * These are COLOUR decisions, not flag writes, on purpose.  The DIM
+ * flag belongs to the search machinery (set_match_set), and a second
+ * writer would have to agree with it about when to clear -- the classic
+ * two-owners bug.  Deciding at paint time costs one comparison per node
+ * per repaint and owns nothing.
+ *
+ * The centre is exempt from the ring filter: it belongs to every ring,
+ * and a map filtered to Routines with its own centre dimmed looks
+ * broken rather than filtered. */
+static gboolean
+node_filtered_out (SceneState *st, CmacsGraph *g, const guint8 *near,
+                   guint i)
+{
+  CmacsGraphNode *nd = cmacs_graph_node (g, i);
+
+  if (!nd) return FALSE;
+  if (st->ring_filter >= 0
+      && kind_of (nd) != CMACS_SB_KIND_CENTRE
+      && (gint) nd->ring != st->ring_filter)
+    return TRUE;
+  if (st->isolate && near && near[i] == 0)
+    return TRUE;
+  return FALSE;
+}
+
 void
 cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
                                      CmacsGraph *g)
@@ -710,6 +785,7 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
   guint n, m, i, node_i = 0;
   gboolean any_match = FALSE;
   gint sel_emit, sel_graph = -1;
+  guint8 *near = NULL;
 
   if (!st || !g) return;
 
@@ -730,22 +806,82 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
         { sel_graph = i; break; }
   if (sel_graph < 0) sel_emit = -1;
 
+  /* The selection's neighbourhood, computed ONCE and up front: 2 for
+     the selection subtree, 1 for a node one visible edge away.  Both
+     the colouring below and the NEIGHBOUR labels read from this, which
+     is also what fixes a subtle latency the old order had -- flags were
+     written after the colouring loop had already read them, so every
+     repaint coloured from the PREVIOUS selection's neighbourhood and
+     converged a frame late. */
+  if (sel_graph >= 0)
+    {
+      near = g_new0 (guint8, n ? n : 1);
+      for (i = 0; i < n; i++)
+        if (node_in_selection (g, sel_graph, i))
+          near[i] = 2;
+      for (i = 0; i < m; i++)
+        {
+          CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+          CmacsGraphNode *ea, *eb;
+          guint other;
+
+          if (!e) continue;
+          ea = cmacs_graph_node (g, e->a);
+          eb = cmacs_graph_node (g, e->b);
+          if (!ea || !eb || !ea->visible || !eb->visible) continue;
+          if ((near[e->a] == 2) == (near[e->b] == 2)) continue;
+          other = (near[e->a] == 2) ? e->b : e->a;
+          if (near[other] == 0) near[other] = 1;
+        }
+    }
+
+  /* Flag the selection's neighbours, which is what gets their names
+     drawn: a lit rope running off to an unlabelled dot says something is
+     connected without saying what, which is half an answer.
+     Cleared first, so a previous selection's neighbours do not keep
+     their labels after the selection moves. */
+  cmacs_libregnum_render_ctx_clear_node_flags
+    (r, CMACS_LIBREGNUM_NODE_NEIGHBOUR);
+  if (near)
+    for (i = 0; i < n; i++)
+      if (near[i] == 1)
+        {
+          gint oe = cmacs_secondbrain_scene_emit_index (r, i);
+          if (oe >= 0)
+            cmacs_libregnum_render_ctx_set_node_flags
+              (r, oe,
+               cmacs_libregnum_render_ctx_get_node_flags (r, oe)
+               | CMACS_LIBREGNUM_NODE_NEIGHBOUR);
+        }
+
   for (i = 0; i < n && node_i < st->node_shapes->len; i++)
     {
       CmacsGraphNode *nd = cmacs_graph_node (g, i);
       LrgShape3D *shape;
       guint flags;
       guint8 cr, cg, cb, ca;
-      gint32 orb;
+      gint32 orb, glow;
+      gboolean fdim, dimmed;
+      CmacsSbKind kind;
 
       if (!nd || !nd->visible) continue;
       shape = g_ptr_array_index (st->node_shapes, node_i);
       orb = (st->node_orb && node_i < st->node_orb->len)
               ? g_array_index (st->node_orb, gint32, node_i) : -1;
+      glow = (st->node_glow && node_i < st->node_glow->len)
+               ? g_array_index (st->node_glow, gint32, node_i) : -1;
       node_i++;
-      if (!shape && orb < 0) continue;
+      if (!shape && orb < 0 && glow < 0) continue;
 
+      kind = kind_of (nd);
       flags = emitted_node_flags (r, st, i);
+      /* A filtered-out node is painted dim, not flagged dim: the DIM
+         flag belongs to search, and a match beats a filter -- a search
+         hit outside the filtered ring should still light up, because
+         you searched for it. */
+      fdim = node_filtered_out (st, g, near, i);
+      dimmed = (fdim || (flags & CMACS_LIBREGNUM_NODE_DIM))
+               && !(flags & CMACS_LIBREGNUM_NODE_MATCH);
       unpack_rgba (nd->rgba ? nd->rgba
                             : cmacs_sb_ring_color ((CmacsSbRing) nd->ring),
                    &cr, &cg, &cb, &ca);
@@ -761,18 +897,49 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
 
           if (flags & CMACS_LIBREGNUM_NODE_MATCH)
             { tr = 255; tg = 210; tb = 74; ta = 255; }
-          else if (flags & CMACS_LIBREGNUM_NODE_DIM)
+          else if (dimmed)
             { tr = (guint8) (cr / 3); tg = (guint8) (cg / 3);
               tb = (guint8) (cb / 3); ta = 90; }
           else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
             { tr = bump (cr); tg = bump (cg); tb = bump (cb); ta = 255; }
 
-          if (!(flags & CMACS_LIBREGNUM_NODE_DIM))
+          if (!dimmed)
             { tr = orb_tint (tr); tg = orb_tint (tg); tb = orb_tint (tb); }
           cmacs_libregnum_render_ctx_set_billboard_color
             (r, orb,
              ((guint32) tr << 24) | ((guint32) tg << 16)
              | ((guint32) tb << 8) | (guint32) ta);
+        }
+
+      /* The glow answers to the same states, in intensity: additive
+         blending means alpha IS brightness here.  The selection
+         breathes -- its halo swells and settles on the same clock as
+         the rope light, which is what makes "this one" unmistakable in
+         a field of steady lights.  apply_flags runs every pulse frame
+         while a selection exists, so the clock is already ticking. */
+      if (glow >= 0)
+        {
+          gboolean landmark = (kind == CMACS_SB_KIND_HUB
+                               || kind == CMACS_SB_KIND_CENTRE);
+          guint8 gr = cr, gg = cg, gb = cb;
+          guint8 galpha = landmark ? 64 : 44;
+
+          if (flags & CMACS_LIBREGNUM_NODE_MATCH)
+            { gr = 255; gg = 210; gb = 74; galpha = 110; }
+          else if (dimmed)
+            galpha = 6;
+          else if (near && near[i] == 2)
+            {
+              double pulse = 0.5 + 0.5 * sin (st->link_phase * 2.0);
+              galpha = (guint8) (70.0 + 60.0 * pulse);
+            }
+          else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
+            galpha = 84;
+
+          cmacs_libregnum_render_ctx_set_billboard_color
+            (r, glow,
+             ((guint32) gr << 24) | ((guint32) gg << 16)
+             | ((guint32) gb << 8) | (guint32) galpha);
         }
       if (!shape) continue;
 
@@ -782,7 +949,7 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
           g_autoptr (GrlColor) col = grl_color_new (255, 210, 74, 255);
           lrg_shape_set_color (LRG_SHAPE (shape), col);
         }
-      else if (flags & CMACS_LIBREGNUM_NODE_DIM)
+      else if (dimmed)
         {
           g_autoptr (GrlColor) col =
             grl_color_new ((guint8) (cr / 3), (guint8) (cg / 3),
@@ -863,44 +1030,20 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       if (sel_graph >= 0 && !any_match)
         alpha = 10;                 /* recede, but do not vanish */
 
+      /* An edge with a filtered-out endpoint is part of what the filter
+         asked to remove; leaving it at full strength redraws the very
+         clutter the filter exists to cut.  Near-invisible rather than
+         skipped, so the structure is still faintly there. */
+      if (node_filtered_out (st, g, near, e->a)
+          || node_filtered_out (st, g, near, e->b))
+        alpha = MIN (alpha, 4);
+
       col = edge_base_color (e, ea, eb, alpha);
       lrg_shape_set_color (LRG_SHAPE (line), col);
     }
 
-  /* Flag the selection's neighbours, which is what gets their names
-     drawn: a lit rope running off to an unlabelled dot says something is
-     connected without saying what, which is half an answer.
-     Cleared first, so a previous selection's neighbours do not keep
-     their labels after the selection moves. */
-  cmacs_libregnum_render_ctx_clear_node_flags
-    (r, CMACS_LIBREGNUM_NODE_NEIGHBOUR);
-  if (sel_graph >= 0)
-    for (i = 0; i < m; i++)
-      {
-        CmacsGraphEdge *e = cmacs_graph_edge (g, i);
-        CmacsGraphNode *ea, *eb;
-        gboolean a_in, b_in;
-        gint oe;
-
-        if (!e) continue;
-        ea = cmacs_graph_node (g, e->a);
-        eb = cmacs_graph_node (g, e->b);
-        if (!ea || !eb || !ea->visible || !eb->visible) continue;
-
-        a_in = node_in_selection (g, sel_graph, e->a);
-        b_in = node_in_selection (g, sel_graph, e->b);
-        if (a_in == b_in) continue;         /* neither, or wholly inside */
-
-        /* The end that is NOT the selection is the neighbour. */
-        oe = cmacs_secondbrain_scene_emit_index (r, a_in ? e->b : e->a);
-        if (oe >= 0)
-          cmacs_libregnum_render_ctx_set_node_flags
-            (r, oe,
-             cmacs_libregnum_render_ctx_get_node_flags (r, oe)
-             | CMACS_LIBREGNUM_NODE_NEIGHBOUR);
-      }
-
   scene_step_sparks (r, st, g, sel_graph);
+  g_free (near);
 }
 
 /* Is node I the selection, or inside it?
@@ -1108,6 +1251,43 @@ cmacs_secondbrain_scene_set_shading (CmacsLibregnumRenderCtx *r, gboolean on)
 {
   SceneState *st = scene_state (r, TRUE);
   if (st) st->shading = on;
+}
+
+void
+cmacs_secondbrain_scene_set_glow (CmacsLibregnumRenderCtx *r, gboolean on)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (st) st->glow = on;
+}
+
+void
+cmacs_secondbrain_scene_set_isolate (CmacsLibregnumRenderCtx *r, gboolean on)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (st) st->isolate = on;
+}
+
+gboolean
+cmacs_secondbrain_scene_isolate_p (CmacsLibregnumRenderCtx *r)
+{
+  SceneState *st = scene_state (r, FALSE);
+  return st ? st->isolate : FALSE;
+}
+
+void
+cmacs_secondbrain_scene_set_ring_filter (CmacsLibregnumRenderCtx *r,
+                                         gint ring)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (!st) return;
+  st->ring_filter = (ring >= 0 && ring < CMACS_SB_RING_COUNT) ? ring : -1;
+}
+
+gint
+cmacs_secondbrain_scene_ring_filter (CmacsLibregnumRenderCtx *r)
+{
+  SceneState *st = scene_state (r, FALSE);
+  return st ? st->ring_filter : -1;
 }
 
 void

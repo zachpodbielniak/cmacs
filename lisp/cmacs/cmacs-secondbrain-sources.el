@@ -354,6 +354,55 @@ when there is no database yet."
            (ignore-errors (cmacs-roamgraph-db-fetch)))
       (cmacs-secondbrain--scan-org-tree)))
 
+(defcustom cmacs-secondbrain-age-fade nil
+  "When non-nil, fade Memory notes toward grey by modification age.
+
+A note touched today keeps its full PARA colour; one untouched for
+`cmacs-secondbrain-age-fade-days' days (or longer) drops most of the
+way to a cold grey.  The map then answers \='what is stale here?\='
+at a glance: the bright spots are where the thinking currently lives.
+
+Baked into the node colours when the sources are read, so changing it
+takes a refresh (`a' toggles and refreshes in one step)."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-age-fade-days 180.0
+  "Days of inactivity at which a note reaches full fade."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
+(defun cmacs-secondbrain--age-factor (mtime)
+  "Return 0.0 (fresh) .. 1.0 (fully stale) for MTIME, a `float-time'.
+Nil MTIME -- a node with no file behind it -- counts as fresh: fading
+what cannot be dated would punish it for being undatable."
+  (if (not mtime)
+      0.0
+    (let* ((age-days (/ (max 0.0 (- (float-time) mtime)) 86400.0))
+           (horizon (max 1.0 (float cmacs-secondbrain-age-fade-days))))
+      (min 1.0 (/ age-days horizon)))))
+
+(defun cmacs-secondbrain--age-blend (rgba factor)
+  "Fade RGBA (0xRRGGBBAA) toward a cold grey by FACTOR (0.0 .. 1.0).
+
+Not toward black: against a dark background black is invisible, and a
+stale note should read as faded, not gone.  65% of the distance at full
+fade keeps the hue faintly legible, so a grey-green is still guessable
+as Areas."
+  (let* ((f (min 1.0 (max 0.0 factor)))
+         (keep (- 1.0 (* 0.65 f)))
+         (r (logand (ash rgba -24) #xFF))
+         (g (logand (ash rgba -16) #xFF))
+         (b (logand (ash rgba -8) #xFF))
+         (a (logand rgba #xFF))
+         (grey 64.0)
+         (mix (lambda (c)
+                (round (+ (* c keep) (* grey (- 1.0 keep)))))))
+    (logior (ash (funcall mix r) 24)
+            (ash (funcall mix g) 16)
+            (ash (funcall mix b) 8)
+            a)))
+
 (defun cmacs-secondbrain--enumerate-notes ()
   "Nodes for the Memory ring, from the PARA notes tree.
 
@@ -374,7 +423,17 @@ easy to get subtly wrong."
     (dolist (node kept)
       (let* ((file (plist-get node :file))
              (class (and file (cmacs-para-classify file)))
-             (bucket (or (plist-get class :bucket) "notes")))
+             (bucket (or (plist-get class :bucket) "notes"))
+             ;; The stat is only paid when the fade is on: 4000 notes
+             ;; means 4000 of them, and the default view has no use for
+             ;; the answer.
+             (mtime (and cmacs-secondbrain-age-fade file
+                         (cmacs-secondbrain--file-mtime file)))
+             (color (cmacs-para-color bucket))
+             (color (if cmacs-secondbrain-age-fade
+                        (cmacs-secondbrain--age-blend
+                         color (cmacs-secondbrain--age-factor mtime))
+                      color)))
         (push (list :id (plist-get node :id)
                     :title (plist-get node :title)
                     :kind 'file
@@ -384,7 +443,8 @@ easy to get subtly wrong."
                     ;; anything else would be inventing a second one.
                     :department bucket
                     :ring 'memory
-                    :color (cmacs-para-color bucket))
+                    :mtime mtime
+                    :color color)
               nodes)))
     (nreverse nodes)))
 
@@ -551,12 +611,25 @@ should cost one ring member, not the graph."
 
     (let ((hub-nodes nil)
           (counts (make-hash-table :test 'equal))
+          (agesum (make-hash-table :test 'equal))
+          (agen (make-hash-table :test 'equal))
           (parented nil))
       (dolist (n nodes)
         (let* ((ring (plist-get n :ring))
                (dept (or (plist-get n :department) "Other"))
                (key (format "%s/%s" ring dept)))
           (puthash key (1+ (gethash key counts 0)) counts)
+          ;; Each dated member contributes to its department's mean age,
+          ;; so the age fade still says something on a fully collapsed
+          ;; map -- which is the DEFAULT map.  Faded leaves behind a
+          ;; full-colour hub answer "what is stale here?" with "nothing,
+          ;; apparently" until every department has been opened by hand.
+          (when (and cmacs-secondbrain-age-fade (plist-get n :mtime))
+            (puthash key (+ (gethash key agesum 0.0)
+                            (cmacs-secondbrain--age-factor
+                             (plist-get n :mtime)))
+                     agesum)
+            (puthash key (1+ (gethash key agen 0)) agen))
           (push (plist-put (copy-sequence n) :parent (concat "hub:" key))
                 parented)))
       ;; The count IS the headline: a collapsed department that only says
@@ -567,10 +640,23 @@ should cost one ring member, not the graph."
       ;; and the AI target can read it without parsing the title back.
       (maphash
        (lambda (key h)
-         (let ((c (gethash key counts 0)))
+         (let ((c (gethash key counts 0))
+               (an (gethash key agen 0))
+               (hub (copy-sequence h)))
+           ;; A memory department's hub wears its members' mean age over
+           ;; its PARA colour.  Memory only: the PARA palette is the only
+           ;; base colour a hub actually has, and the staleness question
+           ;; is being asked of the notes.
+           (when (and cmacs-secondbrain-age-fade (> an 0)
+                      (eq (plist-get hub :ring) 'memory))
+             (setq hub (plist-put hub :color
+                                  (cmacs-secondbrain--age-blend
+                                   (cmacs-para-color
+                                    (plist-get hub :department))
+                                   (/ (gethash key agesum 0.0) an)))))
            (push (plist-put
-                  (plist-put (copy-sequence h) :count c)
-                  :title (format "%s  %d" (plist-get h :title) c))
+                  (plist-put hub :count c)
+                  :title (format "%s  %d" (plist-get hub :title) c))
                  hub-nodes)))
        hubs)
       (list :nodes (append

@@ -1368,6 +1368,180 @@ completely because the newest ones are drawn in the right places."
       (should (= 1 (length (delete-dups (copy-sequence counts)))))
       (should (> (car counts) 0)))))
 
+(ert-deftest cmacs-secondbrain-test-glow-adds-halo-billboards ()
+  "With glow on, every node carries a halo billboard; with it off, none.
+
+Counted, not screenshotted: an additive halo at rest alpha moves a
+frame mean by almost nothing, but each one is an entry in the billboard
+list, and the delta must be exactly one per node -- a delta of zero
+means the feature is dead, more means something else leaked in with it."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-glow)
+                    (fboundp 'cmacs-libregnum-billboard-count)))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                         (list :id "b" :title "B" :kind 'file :ring 'memory)
+                         (list :id "c" :title "C" :kind 'skill :ring 'skills)))
+          with without)
+      (cmacs-secondbrain-set-glow buf t)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+      (setq with (cmacs-libregnum-billboard-count buf))
+      (cmacs-secondbrain-set-glow buf nil)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+      (setq without (cmacs-libregnum-billboard-count buf))
+      ;; One halo per visible node -- including the skill gem, which
+      ;; keeps its geometry but still glows.
+      (should (= (- with without) 3))
+      (should (> without 0)))))
+
+(ert-deftest cmacs-secondbrain-test-glow-does-not-accumulate ()
+  "Rebuilding with glow on keeps the billboard count flat.
+
+The same trap the impostors fell into: billboards are not cleared by
+`clear-drawables', so every per-node addition must be cleared by the
+build itself or it stacks one copy per refresh."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-glow)
+                    (fboundp 'cmacs-libregnum-billboard-count)))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)))
+          counts)
+      (cmacs-secondbrain-set-glow buf t)
+      (dotimes (_ 4)
+        (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+        (push (cmacs-libregnum-billboard-count buf) counts))
+      (should (= 1 (length (delete-dups (copy-sequence counts))))))))
+
+(ert-deftest cmacs-secondbrain-test-isolate-dims-the-far-field ()
+  "Isolate mode visibly recedes everything outside the neighbourhood.
+
+Snapshot-compared, because isolate is a paint-time decision that writes
+no flags: a check on `get-node-flags' would pass with the feature
+entirely disconnected from the framebuffer."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-isolate))
+  (let ((p0 (make-temp-file "sb-iso-" nil ".png"))
+        (p1 (make-temp-file "sb-iso-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph
+           buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                       (list :id "b" :title "B" :kind 'file :ring 'memory)
+                       (list :id "far" :title "Far" :kind 'file :ring 'skills))
+           (vector (list :from "a" :to "b"))
+           2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (should (cmacs-secondbrain-select buf "a"))
+          (cmacs-secondbrain-apply-flags buf)
+          (cmacs-libregnum-snapshot buf p0)
+          (cmacs-secondbrain-set-isolate buf t)
+          (cmacs-libregnum-snapshot buf p1)
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read p0) (funcall read p1)))))
+      (ignore-errors (delete-file p0))
+      (ignore-errors (delete-file p1)))))
+
+(ert-deftest cmacs-secondbrain-test-ring-filter-round-trips ()
+  "The ring filter dims the other rings, and nil restores them.
+
+The off state is asserted byte-for-byte: \='looks about the same\=' is
+exactly how a filter that never fully clears would slip through."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-ring-filter))
+  (let ((p0 (make-temp-file "sb-rf-" nil ".png"))
+        (p1 (make-temp-file "sb-rf-" nil ".png"))
+        (p2 (make-temp-file "sb-rf-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph
+           buf (vector (list :id "m" :title "M" :kind 'file :ring 'memory)
+                       (list :id "s" :title "S" :kind 'skill :ring 'skills))
+           (vector)
+           2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-libregnum-snapshot buf p0)
+          (should (eq 'memory (cmacs-secondbrain-set-ring-filter buf 'memory)))
+          (cmacs-libregnum-snapshot buf p1)
+          (should-not (cmacs-secondbrain-set-ring-filter buf nil))
+          (cmacs-libregnum-snapshot buf p2)
+          (should-error (cmacs-secondbrain-set-ring-filter buf 'nonsense))
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read p0) (funcall read p1)))
+            (should (equal (funcall read p0) (funcall read p2)))))
+      (ignore-errors (delete-file p0))
+      (ignore-errors (delete-file p1))
+      (ignore-errors (delete-file p2)))))
+
+(ert-deftest cmacs-secondbrain-test-age-fade-math ()
+  "The fade curve: fresh keeps the colour, undatable counts as fresh,
+stale lands most of the way to grey with alpha untouched."
+  (skip-unless (fboundp 'cmacs-secondbrain--age-blend))
+  ;; Undatable is fresh, not stale.
+  (should (= 0.0 (cmacs-secondbrain--age-factor nil)))
+  ;; Fresh: mtime of right now.
+  (should (< (cmacs-secondbrain--age-factor (float-time)) 0.01))
+  ;; Past the horizon it clamps.
+  (let ((cmacs-secondbrain-age-fade-days 10.0))
+    (should (= 1.0 (cmacs-secondbrain--age-factor
+                    (- (float-time) (* 400 86400))))))
+  ;; Factor 0 is the identity.
+  (should (= #x40C080FF (cmacs-secondbrain--age-blend #x40C080FF 0.0)))
+  ;; Factor 1 moves every channel toward grey 64 and leaves alpha alone.
+  (let* ((faded (cmacs-secondbrain--age-blend #x00FF00FF 1.0))
+         (r (logand (ash faded -24) #xFF))
+         (g (logand (ash faded -16) #xFF))
+         (b (logand (ash faded -8) #xFF))
+         (a (logand faded #xFF)))
+    (should (> r 0))                    ; lifted off black, toward grey
+    (should (< g 255))                  ; pulled down from full
+    (should (> b 0))
+    (should (= a #xFF))
+    ;; Hue survives: green stays the strongest channel.
+    (should (> g r))
+    (should (> g b))))
+
+(ert-deftest cmacs-secondbrain-test-age-fade-reaches-the-hubs ()
+  "With the fade on, a department hub wears its members' mean age.
+
+The default map is fully collapsed, so a fade that only touched leaf
+nodes would render the DEFAULT view pixel-identical with the feature on
+and off -- which is exactly how it first shipped, and exactly what this
+test exists to prevent."
+  (skip-unless (fboundp 'cmacs-secondbrain-collect))
+  (cmacs-secondbrain-tests--with-sources
+      (list (list :name 'stale-fixture :ring 'memory :label "stale"
+                  :enumerate
+                  (lambda ()
+                    (list (list :id "old" :title "Old" :kind 'file
+                                :department "02_areas"
+                                :mtime (- (float-time) (* 400 86400)))))))
+    (let* ((faded (let ((cmacs-secondbrain-age-fade t))
+                    (cmacs-secondbrain-collect)))
+           (plain (let ((cmacs-secondbrain-age-fade nil))
+                    (cmacs-secondbrain-collect)))
+           (hub-of (lambda (g)
+                     (seq-find (lambda (n)
+                                 (equal (plist-get n :id)
+                                        "hub:memory/02_areas"))
+                               (plist-get g :nodes)))))
+      ;; Fade on: the hub carries an explicit, blended colour.
+      (should (plist-get (funcall hub-of faded) :color))
+      ;; And it is not the raw PARA colour -- 400 days is fully stale.
+      (should-not (equal (plist-get (funcall hub-of faded) :color)
+                         (cmacs-para-color "02_areas")))
+      ;; Fade off: the hub is left colourless for the ring default.
+      (should-not (plist-get (funcall hub-of plain) :color)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

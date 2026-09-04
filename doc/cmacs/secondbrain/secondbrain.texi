@@ -24,6 +24,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain Getting Started:: Opening it, and the keys.
 * Secondbrain Layouts::         Four layouts, all animated.
 * Secondbrain Search::          Three tiers, cheapest first.
+* Secondbrain Focusing::        Isolate, ring filter and age fade.
 * Secondbrain AI::              Questions the rings make askable.
 * Secondbrain Panes::           The inspector, the preview, and icons.
 * Secondbrain Sources::         Where the data comes from.
@@ -115,6 +116,10 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item @kbd{b} @tab pick the background (or a wallpaper image)
 @item @kbd{P} @tab particle effects on/off
 @item @kbd{H} @tab hover department-highlighting on/off
+@item @kbd{G} @tab node glow on/off
+@item @kbd{x} @tab isolate the selection's neighbourhood
+@item @kbd{F} @tab cycle the ring filter (all @arrow{} each ring alone)
+@item @kbd{a} @tab age fade: colour Memory by how recently it changed
 @item @kbd{q} @tab quit
 @end multitable
 
@@ -313,6 +318,34 @@ there are tens of them rather than thousands.
 
 @code{cmacs-secondbrain-node-shading} turns the whole thing off.
 
+@subsection Glow
+
+Every node also carries a soft additive halo in its own colour, drawn by
+a dedicated renderer pass after everything else: additive blending,
+depth writes off, depth testing on.  Each of those three is
+load-bearing.  @emph{Additive} means a halo can only brighten what is
+under it, overlapping halos sum instead of occluding, and draw order
+stops mattering --- which is why the pass needs no sorting.
+@emph{Depth writes off} is the particle lesson: a translucent quad that
+writes depth punches an invisible hole nothing behind it can draw
+through.  @emph{Depth testing on} is what anchors a halo to its node.
+
+The halo carries state in intensity rather than in colour --- hubs and
+the centre glow wider and brighter, search matches glow gold, dimmed
+nodes barely at all, and the @emph{selection breathes}: its halo swells
+and settles on the same clock as the travelling link light.
+
+The same change fixed a latent artefact in the billboard pass itself:
+alpha-blended camera-facing quads were drawn in insertion order, and a
+quad's translucent texels still write depth --- so once the camera
+orbited and two nodes overlapped, the nearer quad's soft edge clipped
+the farther one into a rectangle.  The normal billboard layer is now
+depth-sorted back-to-front every frame.
+
+@code{cmacs-secondbrain-node-glow} (default @code{t}) and the @kbd{G}
+key control it.  Like shading, it is decided when the scene is built, so
+the toggle re-reads the sources.
+
 @subsection Particles
 
 Ambient particles drift from every department hub, coloured by its PARA
@@ -405,6 +438,48 @@ before anything emitted one: parsed, weighted 0.35 in the solver so it
 nudges without competing with real structure, rendered violet so it is
 never mistaken for a link you wrote, and excluded from @kbd{[} / @kbd{]}
 navigation.
+
+@node Secondbrain Focusing
+@section Focusing the view
+
+Three ways to make the map answer one question at a time, all composable
+with search and with each other:
+
+@table @asis
+@item Isolate (@kbd{x})
+While a node is selected, only it, its subtree and its direct
+neighbours keep their colour; the rest recedes to a third and its links
+go near-invisible.  Selecting a @emph{department} isolates the
+department and everything it reaches --- ``show me what this connects
+to'' as one keystroke.  The mode follows the selection as it moves, and
+with nothing selected it is armed but inert.
+
+@item Ring filter (@kbd{F})
+Cycles all @arrow{} Applications @arrow{} Routines @arrow{} Memory
+@arrow{} Skills @arrow{} all.  Everything outside the kept ring dims.
+The centre stays lit: it belongs to every ring, and a filtered map with
+its own centre dimmed looks broken rather than filtered.
+
+@item Age fade (@kbd{a})
+Recolours Memory by modification time: a note touched today keeps its
+full PARA colour, one untouched for
+@code{cmacs-secondbrain-age-fade-days} (180) fades most of the way to a
+cold grey --- toward grey, not black, because against a dark background
+black is @emph{gone} and stale should read as @emph{faded}.  Department
+hubs wear their members' @strong{mean} age, which matters because the
+default map is fully collapsed: a fade that only touched leaves would
+render the default view pixel-identical with the feature on and off.
+@end table
+
+Two design rules keep these honest.  First, isolate and the ring filter
+are @emph{paint-time decisions}, not flag writes: the DIM flag belongs
+to the search machinery, and a second writer would have to agree with it
+about when to clear --- the classic two-owners bug.  Second, a search
+MATCH lights up through both --- you searched for it, so a filter never
+hides it.
+
+The mode line shows @code{[ring]}, @code{[isolate]} and @code{[age]}
+while any of them is active.
 
 @node Secondbrain AI
 @section AI actions
@@ -544,7 +619,10 @@ defaults are what @kbd{M-x cmacs-secondbrain} gives you.
       cmacs-secondbrain-max-labels 160)
 
 ;; Interaction.
-(setq cmacs-secondbrain-node-shading t
+(setq cmacs-secondbrain-node-glow t        ; additive halos (G toggles)
+      cmacs-secondbrain-age-fade nil       ; colour Memory by staleness (a)
+      cmacs-secondbrain-age-fade-days 180.0
+      cmacs-secondbrain-node-shading t
       cmacs-secondbrain-drag-nodes t
       cmacs-secondbrain-hover-highlights-group t
       cmacs-secondbrain-fly-context 0.4)

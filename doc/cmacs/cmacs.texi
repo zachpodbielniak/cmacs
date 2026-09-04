@@ -6979,6 +6979,16 @@ angle rather than from one.  Note that @code{clear-drawables} does
 them itself, or they accumulate one per node per refresh, which
 @code{billboard-count} makes visible and a screenshot does not.
 
+The layer is depth-sorted back-to-front every frame (over a scratch
+index list, so handed-out indices stay valid): a translucent quad's
+texels still write depth, so insertion order clips overlapping quads
+into rectangles once the camera orbits.  A second, additive layer ---
+@code{cmacs_libregnum_render_ctx_add_billboard_glow}, a shared
+radial-falloff texture drawn after the normal layer with the depth mask
+off --- provides per-node halos: additive can only brighten and sums
+where it overlaps, so it needs no sorting, and the tint's alpha channel
+scales its intensity.
+
 @item cmacs-libregnum-set-drag-nodes
 Off by default.  Dragging used to be reachable only through the editor,
 whose drag path also selects into the editor's own model and builds undo

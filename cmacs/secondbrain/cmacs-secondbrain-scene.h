@@ -87,6 +87,28 @@ extern void cmacs_secondbrain_scene_apply_flags
 extern void cmacs_secondbrain_scene_set_shading
                         (CmacsLibregnumRenderCtx *r, gboolean on);
 
+/* Draw a soft additive halo behind each node in its own colour.  Read
+ * at build time, like shading: it decides what gets emitted. */
+extern void cmacs_secondbrain_scene_set_glow
+                        (CmacsLibregnumRenderCtx *r, gboolean on);
+
+/* Isolate mode: while a selection exists, everything outside its
+ * subtree and direct neighbours is painted dim.  A paint-time decision,
+ * not a flag write -- takes effect on the next apply_flags. */
+extern void cmacs_secondbrain_scene_set_isolate
+                        (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_secondbrain_scene_isolate_p
+                        (CmacsLibregnumRenderCtx *r);
+
+/* Keep only RING (a CmacsSbRing value) at full strength; -1 shows all.
+ * The centre is exempt -- it belongs to every ring.  Composes with
+ * isolate and with search: a search MATCH still lights up through a
+ * filter.  Takes effect on the next apply_flags. */
+extern void cmacs_secondbrain_scene_set_ring_filter
+                        (CmacsLibregnumRenderCtx *r, gint ring);
+extern gint cmacs_secondbrain_scene_ring_filter
+                        (CmacsLibregnumRenderCtx *r);
+
 /* Phase, in radians, of the travelling light on the selected node's
  * links.  Advanced by the caller each frame; see apply_flags. */
 extern void cmacs_secondbrain_scene_set_link_phase

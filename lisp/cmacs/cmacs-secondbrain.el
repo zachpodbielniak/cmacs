@@ -192,6 +192,19 @@ one extra small sphere per visible node."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
+(defcustom cmacs-secondbrain-node-glow t
+  "When non-nil, draw a soft additive halo behind every node.
+
+The halo is what seats the map in a dark background: against the
+nebula a flat-lit glyph reads as a sticker, a glowing one as a light
+source.  Hubs and the centre glow wider and brighter, search matches
+glow gold, dimmed nodes barely at all, and the selection's halo
+breathes on the same clock as the travelling link light.
+
+Takes effect on the next refresh (`g') or toggle (`G')."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
 (defcustom cmacs-secondbrain-drag-nodes t
   "Whether a node can be dragged with the left button.
 
@@ -318,6 +331,12 @@ camera are drawn, so zooming in is what reveals names."
   "Current ring spin, in radians.")
 (defvar-local cmacs-secondbrain--search nil
   "Active search string, or nil.")
+(defvar-local cmacs-secondbrain--isolate nil
+  "Non-nil while isolate mode dims everything outside the selection.")
+
+(defvar-local cmacs-secondbrain--ring-filter nil
+  "Ring symbol the view is filtered to, or nil for all rings.")
+
 (defvar-local cmacs-secondbrain--resize-timer nil
   "Idle timer coalescing window size changes.")
 (defvar-local cmacs-secondbrain--groups nil
@@ -404,6 +423,9 @@ useless."
     (when (fboundp 'cmacs-secondbrain-set-shading)
       (ignore-errors
         (cmacs-secondbrain-set-shading buf cmacs-secondbrain-node-shading)))
+    (when (fboundp 'cmacs-secondbrain-set-glow)
+      (ignore-errors
+        (cmacs-secondbrain-set-glow buf cmacs-secondbrain-node-glow)))
     (when (fboundp 'cmacs-libregnum-set-drag-nodes)
       ;; Nodes are draggable: this is a map you arrange, not only one
       ;; you read.  Empty space still orbits and pans, so the camera
@@ -1034,6 +1056,71 @@ is the tier above."
 
 ;;;; Mode -------------------------------------------------------------
 
+(defun cmacs-secondbrain-toggle-glow ()
+  "Turn the node halos on or off for this buffer.
+
+Glow is decided when the scene is built, so this re-reads the sources
+-- the same work as `cmacs-secondbrain-refresh'."
+  (interactive)
+  (setq-local cmacs-secondbrain-node-glow (not cmacs-secondbrain-node-glow))
+  (when (fboundp 'cmacs-secondbrain-set-glow)
+    (ignore-errors
+      (cmacs-secondbrain-set-glow (current-buffer)
+                                  cmacs-secondbrain-node-glow)))
+  (cmacs-secondbrain-refresh)
+  (message "Glow %s" (if cmacs-secondbrain-node-glow "on" "off")))
+
+(defun cmacs-secondbrain-toggle-isolate ()
+  "Dim everything outside the selection's neighbourhood, or stop.
+
+With nothing selected the mode is armed but inert; it starts biting the
+moment a node is selected, and follows the selection as it moves.  A
+search match still lights up through it."
+  (interactive)
+  (setq cmacs-secondbrain--isolate (not cmacs-secondbrain--isolate))
+  (when (fboundp 'cmacs-secondbrain-set-isolate)
+    (ignore-errors
+      (cmacs-secondbrain-set-isolate (current-buffer)
+                                     cmacs-secondbrain--isolate)))
+  (message (cond ((not cmacs-secondbrain--isolate) "Isolate off")
+                 (cmacs-secondbrain--selected "Isolating the selection")
+                 (t "Isolate armed; select a node"))))
+
+(defun cmacs-secondbrain-cycle-ring-filter ()
+  "Cycle the view through: all rings, then each ring alone.
+
+Everything outside the kept ring is painted dim and its links
+near-invisible.  The centre stays lit -- it belongs to every ring --
+and a search match still shows through."
+  (interactive)
+  (let* ((rings (and (fboundp 'cmacs-secondbrain-ring-names)
+                     (cmacs-secondbrain-ring-names)))
+         (cycle (cons nil rings))
+         (next (or (cadr (memq cmacs-secondbrain--ring-filter cycle))
+                   nil)))
+    (setq cmacs-secondbrain--ring-filter next)
+    (when (fboundp 'cmacs-secondbrain-set-ring-filter)
+      (ignore-errors
+        (cmacs-secondbrain-set-ring-filter (current-buffer) next)))
+    (force-mode-line-update)
+    (message "Ring filter: %s" (if next (symbol-name next) "off"))))
+
+(defun cmacs-secondbrain-toggle-age-fade ()
+  "Colour Memory notes by how recently they changed, or stop.
+
+A fresh note keeps its full PARA colour; one untouched for
+`cmacs-secondbrain-age-fade-days' days fades most of the way to grey.
+This is the \='what is stale here?\=' question asked visually: the
+bright spots are where the thinking currently lives, and a whole
+department gone grey is a department you have stopped tending.
+
+Baked into the node colours at read time, so toggling re-reads the
+sources."
+  (interactive)
+  (setq-local cmacs-secondbrain-age-fade (not cmacs-secondbrain-age-fade))
+  (cmacs-secondbrain-refresh)
+  (message "Age fade %s" (if cmacs-secondbrain-age-fade "on" "off")))
+
 (defvar-keymap cmacs-secondbrain-mode-map
   :doc "Keymap for `cmacs-secondbrain-mode'."
   "1" #'cmacs-secondbrain-layout-force
@@ -1065,6 +1152,10 @@ is the tier above."
   "b" #'cmacs-secondbrain-set-background-interactive
   "P" #'cmacs-secondbrain-toggle-particles
   "H" #'cmacs-secondbrain-toggle-hover-highlight
+  "G" #'cmacs-secondbrain-toggle-glow
+  "x" #'cmacs-secondbrain-toggle-isolate
+  "F" #'cmacs-secondbrain-cycle-ring-filter
+  "a" #'cmacs-secondbrain-toggle-age-fade
   "q" #'quit-window)
 
 (defun cmacs-secondbrain-toggle-hover-highlight ()
@@ -1108,9 +1199,14 @@ moving the camera at the same time hides it."
   "Mode-line fragment: node counts."
   (let ((buf (current-buffer)))
     (condition-case nil
-        (format "  %d/%d"
-                (or (cmacs-secondbrain-visible-count buf) 0)
-                (or (cmacs-secondbrain-node-count buf) 0))
+        (concat
+         (format "  %d/%d"
+                 (or (cmacs-secondbrain-visible-count buf) 0)
+                 (or (cmacs-secondbrain-node-count buf) 0))
+         (when cmacs-secondbrain--ring-filter
+           (format "  [%s]" cmacs-secondbrain--ring-filter))
+         (when cmacs-secondbrain--isolate "  [isolate]")
+         (when cmacs-secondbrain-age-fade "  [age]"))
       (error ""))))
 
 (define-derived-mode cmacs-secondbrain-mode cmacs-libregnum-mode "SecondBrain"
