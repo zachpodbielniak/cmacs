@@ -40,23 +40,105 @@ detect_platform () {
 	if [[ -f /etc/os-release ]]; then
 		# shellcheck source=/dev/null
 		. /etc/os-release
-		case "${ID}" in
-			fedora|rhel|centos|rocky|alma)
-				echo "fedora"
-				;;
-			ubuntu|debian|linuxmint|pop)
-				echo "debian"
-				;;
-			arch|manjaro|endeavouros)
-				echo "arch"
-				;;
-			*)
-				echo "unknown"
-				;;
-		esac
+		local id
+		# ID first, then each word of ID_LIKE.  Distros derived from the
+		# big three are legion (Omarchy, CachyOS, Garuda, Nobara,
+		# Bazzite, Zorin, elementary, ...) and they all set ID to their
+		# own name while declaring the parent in ID_LIKE.  Matching ID
+		# alone reports "Unsupported platform" on every one of them.
+		for id in "${ID:-}" ${ID_LIKE:-}; do
+			[[ -n "${id}" ]] || continue
+			case "${id}" in
+				fedora|rhel|centos|rocky|alma)
+					echo "fedora"
+					return
+					;;
+				ubuntu|debian|linuxmint|pop)
+					echo "debian"
+					return
+					;;
+				arch|archlinux|manjaro|endeavouros)
+					echo "arch"
+					return
+					;;
+			esac
+		done
+		# Last resort: identify by the package manager actually present,
+		# so an unlisted derivative still installs rather than aborting.
+		if command -v pacman  >/dev/null 2>&1; then echo "arch";    return; fi
+		if command -v apt-get >/dev/null 2>&1; then echo "debian";  return; fi
+		if command -v dnf     >/dev/null 2>&1; then echo "fedora";  return; fi
+		echo "unknown"
 		return
 	fi
 	echo "unknown"
+}
+
+# ── Package availability ─────────────────────────────────────────────
+#
+# Every one of these package managers aborts the ENTIRE transaction when
+# a single name is unknown (apt: "Unable to locate package"; pacman:
+# "target not found"; dnf: "No match for argument").  A distro renaming
+# or versioning one package would then leave the machine with none of the
+# ~90 packages it could have installed, and the user bisecting the list
+# by hand.  So: probe first, install what exists, report the rest.
+#
+# Probes read the LOCAL package index -- no network, no sudo.
+
+pkg_available () {
+	local platform="$1" pkg="$2"
+	case "${platform}" in
+		fedora)  [[ -n "$(dnf -q repoquery --qf '%{name}' -- "${pkg}" 2>/dev/null)" ]] ;;
+		debian)  apt-cache show "${pkg}" >/dev/null 2>&1 ;;
+		arch)    pacman -Si "${pkg}" >/dev/null 2>&1 ;;
+		macos)   brew info "${pkg}" >/dev/null 2>&1 ;;
+		freebsd) pkg search -e "${pkg}" >/dev/null 2>&1 ;;
+		*)       return 1 ;;
+	esac
+}
+
+# Echo the first candidate this host can actually install.  Used where a
+# distro versions a package name (wlroots0.20 / wlroots0.19 / wlroots) so
+# the list adapts instead of hard-coding one release's spelling.  When
+# none match, echo the first candidate anyway -- partition_packages will
+# then report it as missing rather than silently dropping the dependency.
+pick_first_available () {
+	local platform="$1"; shift
+	local p
+	for p in "$@"; do
+		if pkg_available "${platform}" "${p}"; then
+			echo "${p}"
+			return 0
+		fi
+	done
+	echo "$1"
+}
+
+# Split "$@" into the globals AVAIL and MISSING.
+AVAIL=()
+MISSING=()
+partition_packages () {
+	local platform="$1"; shift
+	local p known=""
+	AVAIL=(); MISSING=()
+
+	# dnf repoquery costs ~0.3s per invocation, so batch the whole list
+	# into one call.  Anything the batch does not confirm is re-probed
+	# individually below, so a batch miss can never wrongly drop a
+	# package -- it only makes the slow path rare.
+	if [[ "${platform}" == "fedora" ]]; then
+		known="$(dnf -q repoquery --qf '%{name}\n' -- "$@" 2>/dev/null | sort -u || true)"
+	fi
+
+	for p in "$@"; do
+		if [[ -n "${known}" ]] && grep -qxF -- "${p}" <<<"${known}"; then
+			AVAIL+=("${p}")
+		elif pkg_available "${platform}" "${p}"; then
+			AVAIL+=("${p}")
+		else
+			MISSING+=("${p}")
+		fi
+	done
 }
 
 # ── Package lists per platform ───────────────────────────────────────
@@ -105,10 +187,13 @@ set_packages_fedora () {
 	# (libopcodes) is used by cpatch for prologue probe.
 	PKGS_INTROSPECT=(elfutils-devel elfutils-debuginfod-client-devel
 	                 binutils-devel)
+	# readline-devel: crispy + bacon REPLs.  libgudev-devel: podomation's
+	# gudev-1.0 (device module).  girepository-2.0.pc ships inside
+	# glib2-devel on Fedora, so it needs no separate package here.
 	PKGS_GLIB=(glib2-devel gobject-introspection-devel json-glib-devel
 	           libsoup3-devel libdex-devel libetpan-devel libpq-devel
-	           libssh2-devel libvirt-devel libyaml-devel
-	           sqlite-devel cmark-devel)
+	           libssh2-devel libvirt-devel libyaml-devel libgudev-devel
+	           readline-devel sqlite-devel cmark-devel)
 	# wlroots: gowl builds against 0.19 OR 0.20 (newest present wins;
 	# see deps/gowl/config.mk).  Prefer 0.20 -- it unlocks per-window
 	# screencast capture (the "share a specific window" portal option);
@@ -118,13 +203,24 @@ set_packages_fedora () {
 	# everywhere -- it resolves to whatever that release's latest
 	# wlroots is.  (The wlroots0.19-devel compat package is only needed
 	# to FORCE 0.19 on a 44+ host, which we no longer do by default.)
+	#
+	# Deliberately NOT probed the way Arch and Debian are: on those two
+	# the unversioned name is either absent (Arch has no `wlroots') or
+	# too old (Ubuntu 24.04's libwlroots-dev is 0.17).  On Fedora the
+	# bare package always resolves to that release's newest wlroots,
+	# which is exactly what gowl wants, and preferring a wlroots0.NN
+	# compat package over it would install a different package than the
+	# one that works today.
 	local wlroots_pkg="wlroots-devel"
 	# libxcb-devel + xcb-util-wm-devel provide the xcb/xcb-icccm
 	# pkg-configs gowl's XWayland support needs at build time (else it
 	# silently compiles out); xorg-x11-server-Xwayland is the rootless
 	# X server gowl launches so X11 apps (e.g. raylib/GLFW) get a DISPLAY.
+	# libdecor-devel (libdecor-0) is an optional gowl dep -- CSD when gowl
+	# runs nested; pixman-devel is a direct wlroots build dep.
 	PKGS_GOWL=("${wlroots_pkg}" wayland-devel wayland-protocols-devel
 	           libinput-devel libxkbcommon-devel pango-devel cairo-devel
+	           pixman-devel libdecor-devel
 	           libxcb-devel xcb-util-wm-devel xorg-x11-server-Xwayland
 	           libeis-devel            # EIS server for the InputCapture/RemoteDesktop portal (deskflow KVM)
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
@@ -182,7 +278,11 @@ set_packages_fedora () {
 	# Xlib + the four input-related X11 libs even when we run it
 	# in FLAG_WINDOW_HIDDEN mode -- raylib's InitWindow still
 	# initialises X11 to construct the offscreen GL context.
-	PKGS_LIBREGNUM=(mesa-libGL-devel libX11-devel libXrandr-devel
+	# mesa-libEGL-devel: gowl links egl.pc directly (mesa-libGL-devel
+	# only carries gl.pc).  libpng-devel: required by gowl's MCP
+	# screenshot path and by libregnum.
+	PKGS_LIBREGNUM=(mesa-libGL-devel mesa-libEGL-devel libpng-devel
+	                libX11-devel libXrandr-devel
 	                libXcursor-devel libXinerama-devel libXi-devel)
 	# libregnum scripting backends for the in-Emacs level editor: luajit-devel
 	# (Lua), python3-devel (Python), gjs-devel (JavaScript; pulls mozjsNN-devel).
@@ -223,7 +323,28 @@ set_packages_debian () {
 	PKGS_BUILD=(autoconf automake gcc make pkg-config texinfo)
 	PKGS_CORE=(libgnutls28-dev libncurses-dev zlib1g-dev)
 	PKGS_GUI=(libgtk-3-dev libwebkit2gtk-4.1-dev)
-	PKGS_NCOMP=(libgccjit-13-dev)
+	# libgccjit is versioned per GCC release on Debian/Ubuntu
+	# (libgccjit-13-dev on 24.04, -14 on trixie, -15 on newer).  Pinning
+	# one number breaks native-compilation on every other release, so
+	# match the compiler this machine will actually use, then walk
+	# newest-down.  On a fresh host gcc is not installed yet (it arrives
+	# in PKGS_BUILD, in this same transaction), so fall back to asking
+	# apt which gcc-NN the `gcc' metapackage pulls in -- otherwise we
+	# would pick a libgccjit from a different GCC release than the one
+	# about to be installed.
+	local gcc_major
+	gcc_major="$(gcc -dumpversion 2>/dev/null | cut -d. -f1)"
+	if [[ -z "${gcc_major}" ]]; then
+		gcc_major="$(apt-cache depends gcc 2>/dev/null \
+		             | sed -n 's/.*Depends: gcc-\([0-9][0-9]*\)$/\1/p' \
+		             | head -1)"
+	fi
+	local ncomp_pkg
+	ncomp_pkg="$(pick_first_available debian \
+	             ${gcc_major:+"libgccjit-${gcc_major}-dev"} \
+	             libgccjit-16-dev libgccjit-15-dev libgccjit-14-dev \
+	             libgccjit-13-dev libgccjit-12-dev libgccjit-dev)"
+	PKGS_NCOMP=("${ncomp_pkg}")
 	PKGS_IMAGE=(libxpm-dev libjpeg-dev libgif-dev libtiff-dev
 	            librsvg2-dev libwebp-dev libmagickwand-dev
 	            wl-clipboard)  # imgedit clipboard fallback (--lrg/tty sessions)
@@ -241,11 +362,33 @@ set_packages_debian () {
 	PKGS_GLIB=(libglib2.0-dev libgirepository1.0-dev libgirepository-2.0-dev
 	           libjson-glib-dev libsoup-3.0-dev libdex-dev libetpan-dev
 	           libpq-dev libssh2-1-dev libvirt-dev libyaml-dev
+	           libgudev-1.0-dev libreadline-dev
 	           libsqlite3-dev libcmark-dev)
 	# libxcb1-dev + libxcb-icccm4-dev: XWayland build deps (xcb/xcb-icccm);
 	# xwayland: the rootless X server gowl spawns for X11 clients.
-	PKGS_GOWL=(libwlroots-dev libwayland-dev wayland-protocols
+	# Debian/Ubuntu version the wlroots -dev package per soname.  gowl
+	# needs 0.19 or 0.20; the unversioned libwlroots-dev is 0.17 on
+	# Ubuntu 24.04 (too old) but is the right name on releases that
+	# ship a supported one, so probe newest-first and fall back.
+	local wlroots_pkg
+	wlroots_pkg="$(pick_first_available debian libwlroots-0.20-dev \
+	                                    libwlroots-0.19-dev libwlroots-dev)"
+	# Say so up front when this release carries no wlroots gowl can use.
+	# Ubuntu 24.04's libwlroots-dev is 0.17: it installs cleanly and then
+	# fails deep in the gowl build, which reads as a cmacs bug rather
+	# than a too-old distro.
+	if [[ "${wlroots_pkg}" == "libwlroots-dev" ]]; then
+		echo "NOTE: no libwlroots-0.19/0.20-dev on this release."
+		echo "      If libwlroots-dev is older than 0.19, gowl will not build:"
+		echo "      build wlroots from source, or configure --without-cmacs-gowl."
+		echo "      See doc_org/cmacs/build.org, \"Building on Ubuntu 24.04\"."
+	fi
+	# libwayland-bin carries wayland-scanner, which gowl runs to generate
+	# its protocol sources (libwayland-dev usually pulls it in; name it so
+	# a release that stops depending on it still works).
+	PKGS_GOWL=("${wlroots_pkg}" libwayland-dev libwayland-bin wayland-protocols
 	           libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev
+	           libpixman-1-dev libdecor-0-dev libei-dev
 	           libxcb1-dev libxcb-icccm4-dev xwayland
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
 	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
@@ -254,7 +397,10 @@ set_packages_debian () {
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
 	PKGS_AUDIO=(libpipewire-0.3-dev libpulse-dev cmake g++
 	            python3-venv pipx espeak-ng)
-	PKGS_LIBREGNUM=(libgl1-mesa-dev libx11-dev libxrandr-dev
+	# libegl1-mesa-dev: gowl links egl.pc (libgl1-mesa-dev is gl.pc only).
+	# libpng-dev: gowl's MCP screenshot path and libregnum both need it.
+	PKGS_LIBREGNUM=(libgl1-mesa-dev libegl1-mesa-dev libpng-dev
+	                libx11-dev libxrandr-dev
 	                libxcursor-dev libxinerama-dev libxi-dev)
 	# cmacs-cad: OCCT splits into per-module -dev packages on Debian.
 	PKGS_CAD=(libocct-foundation-dev libocct-modeling-data-dev
@@ -284,20 +430,39 @@ set_packages_arch () {
 	PKGS_TEXT=(libotf m17n-lib)
 	PKGS_JSON=(jansson)
 	PKGS_TS=(tree-sitter)
-	PKGS_INTROSPECT=(elfutils debuginfod)
-	PKGS_GLIB=(glib2 gobject-introspection json-glib libsoup3 libdex
-	           libetpan postgresql-libs libssh2 libvirt libyaml
-	           sqlite cmark)
+	PKGS_INTROSPECT=(elfutils debuginfod binutils)
+	# libgirepository: gobject-introspection-1.0.pc lives here on Arch
+	# (gobject-introspection itself is the compiler/scanner).  readline:
+	# crispy and bacon both link it for their REPLs.  libgudev: podomation's
+	# gudev-1.0 (device module).  cmark -> libcmark.pc for libreclaw.
+	PKGS_GLIB=(glib2 gobject-introspection libgirepository json-glib
+	           libsoup3 libdex libetpan postgresql-libs libssh2 libvirt
+	           libyaml libgudev readline sqlite cmark)
+	# Arch has NO unversioned `wlroots' package -- only versioned ones
+	# (wlroots0.19, wlroots0.20, ...).  gowl builds against 0.19 or 0.20
+	# and prefers 0.20 (per-window screencast capture), so resolve the
+	# newest supported one that this mirror actually carries.
+	local wlroots_pkg
+	wlroots_pkg="$(pick_first_available arch wlroots0.20 wlroots0.19 wlroots)"
 	# libxcb + xcb-util-wm: XWayland build deps (xcb/xcb-icccm);
 	# xorg-xwayland: the rootless X server gowl spawns for X11 clients.
-	PKGS_GOWL=(wlroots wayland wayland-protocols libinput libxkbcommon pango cairo
+	# libdecor + libei: optional gowl deps (libdecor-0 / libeis-1.0) --
+	# CSD for nested sessions and the EIS InputCapture portal.  pixman is
+	# a direct wlroots build dep.
+	PKGS_GOWL=("${wlroots_pkg}"
+	           wayland wayland-protocols libinput libxkbcommon pango cairo
+	           pixman libdecor libei
 	           libxcb xcb-util-wm xorg-xwayland
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
 	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
 	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)
-	PKGS_LIBREGNUM=(mesa libx11 libxrandr libxcursor libxinerama libxi)
+	# libglvnd supplies gl.pc/egl.pc (mesa depends on it, but gowl and
+	# libregnum link them directly, so name it).  libpng: gowl's MCP
+	# screenshot path and libregnum both require libpng.pc.
+	PKGS_LIBREGNUM=(mesa libglvnd libx11 libxrandr libxcursor libxinerama
+	                libxi libpng)
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
@@ -391,40 +556,82 @@ all_packages () {
 
 # ── Install system packages ──────────────────────────────────────────
 
-# apt aborts the whole transaction if *any* named package is unknown in
-# the configured repos --- e.g. a package gated behind the 'universe'
-# component that is not enabled, or one that has not landed in this
-# Ubuntu/Debian release yet.  That single failure would otherwise leave
-# nothing installed (including the packages apt *can* provide, like
-# libcmark-dev).  Partition the list into available vs. unavailable so
-# the available ones still install, and tell the user what to do about
-# the rest.  apt-cache reads the local package index (offline, fast).
-install_debian_packages () {
-	local avail=() missing=() p
-	for p in "$@"; do
-		if apt-cache show "${p}" >/dev/null 2>&1; then
-			avail+=("${p}")
-		else
-			missing+=("${p}")
-		fi
-	done
-	if [[ ${#avail[@]} -gt 0 ]]; then
-		sudo apt-get install -y "${avail[@]}"
+# Install the packages this host actually carries, and say plainly which
+# ones it does not.  See the pkg_available comment for why filtering is
+# not optional: one unknown name otherwise aborts the whole transaction
+# and installs nothing.
+install_packages () {
+	local platform="$1"; shift
+
+	partition_packages "${platform}" "$@"
+
+	if [[ ${#AVAIL[@]} -gt 0 ]]; then
+		# shellcheck disable=SC2086
+		${PKG_CMD} "${AVAIL[@]}"
 	fi
-	if [[ ${#missing[@]} -gt 0 ]]; then
-		echo ""
-		echo "WARNING: these packages are not in your apt repositories and were skipped:"
-		echo "         ${missing[*]}"
-		echo "         If one lives in 'universe', enable it and re-run:"
-		echo "             sudo add-apt-repository universe && sudo apt-get update"
-		echo "         Otherwise build it from source --- see doc_org/cmacs/build.org"
-		echo "         \"Building on Ubuntu 24.04 / older hosts\"."
+
+	if [[ ${#MISSING[@]} -eq 0 ]]; then
+		return 0
 	fi
+
+	echo ""
+	echo "WARNING: these packages are not in your configured repositories"
+	echo "         and were skipped:"
+	echo "         ${MISSING[*]}"
+	case "${platform}" in
+		debian)
+			echo "         If one lives in 'universe', enable it and re-run:"
+			echo "             sudo add-apt-repository universe && sudo apt-get update"
+			;;
+		arch)
+			echo "         Some cmacs deps live in the AUR; install those with"
+			echo "         an AUR helper, e.g.:  yay -S ${MISSING[*]}"
+			;;
+		fedora)
+			echo "         Some may need RPM Fusion:"
+			echo "             sudo dnf install \\"
+			echo "               https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-\$(rpm -E %fedora).noarch.rpm"
+			;;
+	esac
+	echo "         Otherwise build from source --- see doc_org/cmacs/build.org."
+	echo "         Run './install-deps --check' to see which build"
+	echo "         dependencies are still unsatisfied."
 }
 
 install_system_deps () {
 	local platform
 	platform="$(detect_platform)"
+
+	echo "==> Platform: ${platform}"
+
+	if [[ "${platform}" == "macos" ]]; then
+		if ! command -v brew &>/dev/null; then
+			echo "ERROR: Homebrew not found. Install from https://brew.sh" >&2
+			exit 1
+		fi
+	fi
+
+	# Refresh the package index BEFORE building the lists, not just
+	# before installing: set_packages_* probes that index to choose
+	# between versioned package names (wlroots, libgccjit).  On a fresh
+	# container /var/lib/apt/lists is empty, so probing first would find
+	# nothing and silently pick the wrong fallback for every one of them.
+	if [[ "${platform}" == "debian" ]]; then
+		echo "==> Refreshing package index..."
+		sudo apt-get update || true
+	fi
+
+	# Same problem on a bare Arch container, where /var/lib/pacman/sync
+	# is empty until the first -Sy.  Refresh ONLY in that case: on a
+	# normal Arch install the databases are already there, and a bare
+	# `pacman -Sy' before installing is the classic partial-upgrade
+	# footgun, so we must not do it routinely.
+	if [[ "${platform}" == "arch" ]]; then
+		if ! compgen -G "/var/lib/pacman/sync/*.db" >/dev/null 2>&1; then
+			echo "==> Empty pacman sync database; refreshing..."
+			sudo pacman -Sy --noconfirm || true
+		fi
+	fi
 
 	case "${platform}" in
 		fedora)  set_packages_fedora ;;
@@ -435,6 +642,7 @@ install_system_deps () {
 		*)
 			echo "ERROR: Unsupported platform." >&2
 			echo "Supported: Fedora/RHEL, Ubuntu/Debian, Arch, macOS, FreeBSD" >&2
+			echo "(Derivatives are matched via ID_LIKE in /etc/os-release.)" >&2
 			exit 1
 			;;
 	esac
@@ -442,23 +650,10 @@ install_system_deps () {
 	local pkgs
 	pkgs="$(all_packages)"
 
-	echo "==> Platform: ${platform}"
 	echo "==> Installing system packages..."
 
-	if [[ "${platform}" == "macos" ]]; then
-		if ! command -v brew &>/dev/null; then
-			echo "ERROR: Homebrew not found. Install from https://brew.sh" >&2
-			exit 1
-		fi
-	fi
-
-	if [[ "${platform}" == "debian" ]]; then
-		# shellcheck disable=SC2086
-		install_debian_packages ${pkgs}
-	else
-		# shellcheck disable=SC2086
-		${PKG_CMD} ${pkgs}
-	fi
+	# shellcheck disable=SC2086
+	install_packages "${platform}" ${pkgs}
 
 	if [[ ${#PKGS_GOWL[@]} -eq 0 ]]; then
 		echo ""
@@ -471,6 +666,107 @@ install_system_deps () {
 		echo "NOTE: libgccjit not available on ${platform}."
 		echo "      Configure without --with-native-compilation on this platform."
 	fi
+
+	# Report every still-unsatisfied dependency now, as one list, rather
+	# than letting the build surface them one per 20-minute run.  Only
+	# advisory here: a missing optional dep must not fail the install.
+	if [[ "${platform}" != "macos" && "${platform}" != "freebsd" ]]; then
+		echo ""
+		check_build_deps || true
+	fi
+}
+
+# ── Verify the build's actual dependencies ───────────────────────────
+#
+# Package names drift between releases; what the build genuinely cares
+# about is the pkg-config modules.  Checking those directly turns "the
+# build dies on a different missing dep every 20 minutes" into one list,
+# up front.  Keep in sync with configure.ac's PKG_CHECK_MODULES and the
+# DEPS_REQUIRED / PKG_DEPS lines in deps/*/config.mk.
+
+# Modules whose absence fails the default (`just bootstrap') flag set.
+CHECK_REQUIRED=(
+	glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
+	gobject-introspection-1.0
+	json-glib-1.0 yaml-0.1 readline libsoup-3.0 libdex-1 libcmark
+	sqlite3 libetpan libpq libssh2 libxml-2.0 libpng libzip gudev-1.0
+	gnutls harfbuzz freetype2 fontconfig jansson tree-sitter
+	gtk+-3.0 webkit2gtk-4.1 javascriptcoregtk-4.1
+	wayland-server wayland-client wayland-protocols xkbcommon libinput
+	cairo pango pixman-1 egl gl
+)
+
+# Absent -> a feature narrows or compiles out; the build still succeeds.
+# xcb/xcb-icccm gate gowl's XWayland support, which otherwise compiles
+# out *silently* -- X11 clients then get no DISPLAY under gowl.  Listing
+# them here is what makes that visible.  girepository-2.0, luajit,
+# python3-embed and gjs-1.0 are libregnum's optional scripting backends
+# (configure.ac probes them in a loop); elisp scripting needs none of them.
+CHECK_OPTIONAL=(
+	xcb xcb-icccm girepository-2.0
+	libdecor-0 libeis-1.0 libvirt libdw libelf libdebuginfod
+	gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0
+	libpipewire-0.3 libpulse eigen3 luajit python3-embed gjs-1.0
+)
+
+check_build_deps () {
+	local m missing_req=() missing_opt=() missing_bin=() b
+	local rc=0
+
+	echo "==> Checking build dependencies (pkg-config modules + tools)..."
+
+	if ! command -v pkg-config >/dev/null 2>&1 && \
+	   ! command -v pkgconf >/dev/null 2>&1; then
+		echo "ERROR: pkg-config/pkgconf not installed --- run './install-deps --system' first." >&2
+		return 1
+	fi
+
+	for b in autoconf automake make gcc git makeinfo cmake; do
+		command -v "${b}" >/dev/null 2>&1 || missing_bin+=("${b}")
+	done
+
+	for m in "${CHECK_REQUIRED[@]}"; do
+		pkg-config --exists "${m}" 2>/dev/null || missing_req+=("${m}")
+	done
+
+	# gowl accepts either wlroots ABI, so neither alone is required.
+	if ! pkg-config --exists wlroots-0.20 2>/dev/null && \
+	   ! pkg-config --exists wlroots-0.19 2>/dev/null; then
+		missing_req+=("wlroots-0.20 (or wlroots-0.19)")
+	fi
+
+	for m in "${CHECK_OPTIONAL[@]}"; do
+		pkg-config --exists "${m}" 2>/dev/null || missing_opt+=("${m}")
+	done
+
+	if [[ ${#missing_bin[@]} -gt 0 ]]; then
+		echo ""
+		echo "MISSING build tools:"
+		printf '    %s\n' "${missing_bin[@]}"
+		rc=1
+	fi
+
+	if [[ ${#missing_req[@]} -gt 0 ]]; then
+		echo ""
+		echo "MISSING required dependencies (${#missing_req[@]}):"
+		printf '    %s\n' "${missing_req[@]}"
+		rc=1
+	fi
+
+	if [[ ${#missing_opt[@]} -gt 0 ]]; then
+		echo ""
+		echo "Missing OPTIONAL dependencies (${#missing_opt[@]}) --- the build will"
+		echo "succeed; these features narrow or compile out:"
+		printf '    %s\n' "${missing_opt[@]}"
+	fi
+
+	if [[ ${rc} -eq 0 ]]; then
+		echo "==> All required build dependencies satisfied."
+	else
+		echo ""
+		echo "Run './install-deps --system' to install them." >&2
+	fi
+	return ${rc}
 }
 
 # ── From-source CMacs dependencies ──────────────────────────────────
@@ -624,6 +920,8 @@ usage () {
 	echo "                 podomation, libreclaw from deps/"
 	echo "  --ldconfig     Configure library path (Linux/FreeBSD)"
 	echo "  --list         Print package list for detected platform (dry run)"
+	echo "  --check        Verify build deps (pkg-config modules + tools);"
+	echo "                 exits non-zero if a REQUIRED one is missing"
 	echo ""
 	echo "Supported platforms:"
 	echo "  Fedora / RHEL / CentOS Stream    (dnf)"
@@ -668,8 +966,15 @@ list_packages () {
 	echo "Text rendering:  ${PKGS_TEXT[*]}"
 	echo "JSON:            ${PKGS_JSON[*]}"
 	echo "Tree-sitter:     ${PKGS_TS[*]}"
+	echo "Introspect:      ${PKGS_INTROSPECT[*]:-N/A}"
 	echo "GLib/GI:         ${PKGS_GLIB[*]}"
 	echo "Gowl (Wayland):  ${PKGS_GOWL[*]:-N/A}"
+	echo "Video:           ${PKGS_VIDEO[*]:-N/A}"
+	echo "Audio/STT/TTS:   ${PKGS_AUDIO[*]:-N/A}"
+	echo "libregnum:       ${PKGS_LIBREGNUM[*]:-N/A}"
+	echo "CAD:             ${PKGS_CAD[*]:-N/A}"
+	echo "Office:          ${PKGS_OFFICE[*]:-N/A}"
+	echo "dbexplorer:      ${PKGS_DBEXPLORER[*]:-N/A}"
 	echo ""
 	echo "From source (deps/): mcp-glib, crispy, bacon, gowl, podomation, libreclaw"
 }
@@ -686,6 +991,9 @@ main () {
 			;;
 		--ldconfig)
 			configure_ldconfig
+			;;
+		--check)
+			check_build_deps
 			;;
 		--list)
 			list_packages

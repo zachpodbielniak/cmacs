@@ -147,6 +147,47 @@ show-configure-flags:
 # Bootstrap & build
 # ──────────────────────────────────────────────────────────────────────
 
+# Wrapper over `./install-deps --system' so `just bootstrap' can depend on
+# it.  The script detects the distro from /etc/os-release ID, then ID_LIKE
+# (so derivatives -- Omarchy, CachyOS, Nobara, Pop!_OS, ... -- work), and
+# probes versioned package names (wlroots0.20, libgccjit-NN-dev) against
+# the local index rather than hard-coding one release's spelling.
+
+# This step needs sudo, which `just bootstrap' otherwise would not.  Set
+# CMACS_SKIP_INSTALL_DEPS=1 to skip it where that is a problem (CI without
+# passwordless sudo, an immutable host, a container whose packages are
+# already baked in); the rest of bootstrap then runs unattended.
+
+# Install every system package cmacs needs (sudo; auto-detects the distro).
+[group('build')]
+install-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${CMACS_SKIP_INSTALL_DEPS:-}" ]]; then
+        echo "==> CMACS_SKIP_INSTALL_DEPS set; skipping system packages."
+        echo "==> Verifying what is already present instead:"
+        ./install-deps --check || true
+        exit 0
+    fi
+    ./install-deps --system
+
+# Checks the pkg-config modules and tools the build actually uses, not
+# package names, and separates "the build fails" from "a feature narrows".
+# Use this instead of rebuilding to discover missing deps one at a time.
+
+# Report every unsatisfied build dependency at once (pkg-config + tools).
+[group('build')]
+check-deps:
+    ./install-deps --check
+
+# The top-level `make' builds deps/ in-tree, so a fresh clone cannot build
+# without them.  Idempotent: a no-op once they are at the right commit.
+
+# Populate deps/ submodules (crispy, bacon, gowl, libregnum, ...).
+[group('build')]
+submodules:
+    git submodule update --init --recursive
+
 # Run autogen.sh.  Required after editing configure.ac.
 [group('build')]
 autogen:
@@ -166,9 +207,16 @@ configure *EXTRA:
 # stale version-baked .elc (e.g. the Tramp version-mismatch warning after
 # an upstream version bump).  On a fresh clone there is nothing to delete,
 # so it is a no-op there.
-# Initial setup from a fresh clone: autogen + configure + build.
+# This is THE from-scratch entry point on a machine that has never built
+# cmacs, so it must install the system packages and populate deps/ too --
+# without those steps every missing dependency surfaced one at a time,
+# each after a long configure/build, which is exactly the loop this
+# ordering exists to prevent.  install-deps and submodules are both
+# idempotent, so re-running bootstrap on an already-built tree is cheap.
+
+# Fresh clone -> working cmacs: packages, submodules, configure, build.
 [group('build')]
-bootstrap: autogen configure clean-stale-lisp build
+bootstrap: install-deps submodules autogen configure clean-stale-lisp build
 
 # Build cmacs (auto-detects parallelism).
 [group('build')]

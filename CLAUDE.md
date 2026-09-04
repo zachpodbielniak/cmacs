@@ -48,6 +48,22 @@ is marked `/* CMACS: ... */`; the full catalogue with rationale is
 
 ## Build
 
+From a fresh clone, `just bootstrap` is the whole thing — it runs `install-deps`
+(system packages), `git submodule update --init --recursive`, `autogen`,
+`configure` with the flag set below, `clean-stale-lisp`, and `make`. It is
+idempotent, so re-running it on a built tree is cheap. Distro detection reads
+`ID` then `ID_LIKE` from `/etc/os-release` (so Omarchy/CachyOS/Nobara/Pop!_OS
+derivatives work), then falls back to whichever package manager is on `PATH`.
+Versioned package names (`wlroots0.20` — Arch has no unversioned `wlroots`;
+`libwlroots-0.NN-dev`; `libgccjit-NN-dev`) are probed against the local index,
+never hard-coded, and an unknown name is skipped with a warning rather than
+aborting the whole transaction. **`just check-deps` (`./install-deps --check`)
+reports every unsatisfied build dep at once** — use it instead of rebuilding to
+discover them one at a time. The package step is the only part needing sudo;
+`CMACS_SKIP_INSTALL_DEPS=1 just bootstrap` skips it for CI/immutable hosts.
+
+The steps by hand:
+
 ```bash
 ./install-deps            # system deps (Fedora, Ubuntu, Arch, macOS, FreeBSD)
 ./autogen.sh              # first time only

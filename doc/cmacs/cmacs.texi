@@ -9610,6 +9610,73 @@ never on a buffer, so two views can be open on one connection at once.
 @node Build Configuration
 @chapter Build Configuration
 
+@section Bootstrapping From a Fresh Clone
+
+One command does everything --- system packages, @file{deps/}
+submodules, @command{autogen.sh}, @command{configure} with the full
+cmacs flag set, and the build:
+
+@example
+just bootstrap
+just run
+@end example
+
+@command{just bootstrap} is idempotent, so re-running it on an
+already-built tree is cheap.  The package step is the only one needing
+@command{sudo}; set @env{CMACS_SKIP_INSTALL_DEPS=1} to skip it (CI
+without passwordless sudo, an immutable host, or a container with the
+packages already baked in) and bootstrap runs unattended, reporting
+what is present instead.
+
+The equivalent by hand:
+
+@example
+./install-deps --system
+git submodule update --init --recursive
+./autogen.sh
+./configure   # see the flag set below
+make -j$(nproc)
+@end example
+
+If a build fails on a missing library, ask for the whole list at once
+rather than rebuilding to discover them one at a time:
+
+@example
+just check-deps       # or: ./install-deps --check
+@end example
+
+That checks the pkg-config modules and tools the build actually uses
+--- not package names, which drift between releases --- and separates
+the ones that fail the build from the ones that merely narrow a
+feature.
+
+@subsection Distro Detection
+
+@file{install-deps} picks its package list from @file{/etc/os-release}:
+@code{ID} first, then each word of @code{ID_LIKE}, then (as a last
+resort) whichever of @command{pacman}, @command{apt-get} or
+@command{dnf} is on @env{PATH}.  Derivatives therefore work without
+being named explicitly --- Omarchy, CachyOS, Garuda and EndeavourOS
+resolve to Arch; Nobara and Bazzite to Fedora; Pop!_OS, Mint and Zorin
+to Debian.
+
+Package @emph{names} are resolved against the local package index
+before anything is installed, for two reasons:
+
+@itemize @bullet
+@item
+Where a distro versions a name, the newest supported one wins.  Arch
+has no unversioned @code{wlroots} package at all (only
+@code{wlroots0.20}, @code{wlroots0.19}, @dots{}), Debian versions
+@code{libwlroots-0.NN-dev}, and @code{libgccjit-NN-dev} tracks the
+default GCC.  These are probed, not hard-coded.
+@item
+A name this release does not carry is skipped with a warning instead
+of aborting.  @command{apt}, @command{pacman} and @command{dnf} all
+fail the entire transaction on one unknown package, which would
+otherwise install none of the ~90 packages that were fine.
+@end itemize
+
 @section Configure Flags
 
 CMacs features are auto-detected at configure time.  For a

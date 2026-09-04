@@ -398,7 +398,36 @@ the print spooler.  =install-deps= picks them up.
 
 * Building
 
-** Quick Start (Fedora)
+** Quick Start (any distro)
+
+From a fresh clone, one command does everything — system packages,
+=deps/= submodules, =autogen.sh=, =configure= with the full cmacs flag
+set, and the build:
+
+#+begin_src bash
+git clone --recursive git@git-ssh.podbielniak.com:zachpodbielniak/cmacs.git
+cd cmacs
+just bootstrap           # packages + submodules + configure + build
+just run
+#+end_src
+
+=just bootstrap= is idempotent, so re-running it on an already-built
+tree is cheap.  It auto-detects Fedora, Ubuntu/Debian and Arch — and
+their derivatives (Omarchy, CachyOS, Nobara, Pop!_OS, Mint, …) via
+=ID_LIKE=.
+
+If a build fails on a missing library, ask for the whole list at once
+instead of rebuilding to discover them one at a time:
+
+#+begin_src bash
+just check-deps          # or: ./install-deps --check
+#+end_src
+
+It reports the pkg-config modules and tools the build actually uses —
+not package names, which drift between releases — and separates the
+ones that fail the build from the ones that merely narrow a feature.
+
+** Quick Start (explicit steps)
 
 #+begin_src bash
 git clone --recursive git@git-ssh.podbielniak.com:zachpodbielniak/cmacs.git
@@ -508,12 +537,32 @@ everything:
 # List what would be installed (dry run)
 ./install-deps --list
 
+# Verify build deps (pkg-config modules + tools); non-zero if one is missing
+./install-deps --check
+
 # Set up /usr/local/lib64 in ldconfig (Linux, needed after from-source)
 sudo ./install-deps --ldconfig
 #+end_src
 
 Supported platforms: Fedora/RHEL, Ubuntu/Debian, Arch Linux, macOS
-(Homebrew), FreeBSD.
+(Homebrew), FreeBSD — plus their derivatives, which are detected via
+=ID_LIKE= in =/etc/os-release= (Omarchy, CachyOS, Garuda and
+EndeavourOS resolve to Arch; Nobara and Bazzite to Fedora; Pop!_OS,
+Mint and Zorin to Debian).  If =ID_LIKE= is absent too, the script
+falls back to whichever of =pacman=, =apt-get= or =dnf= is on =PATH=.
+
+Package /names/ are resolved against the local package index before
+anything is installed:
+
+- Where a distro versions a name, the newest supported one wins.  Arch
+  has no unversioned =wlroots= package at all (only =wlroots0.20=,
+  =wlroots0.19=, …), Debian versions =libwlroots-0.NN-dev=, and
+  =libgccjit-NN-dev= tracks the default GCC.  These are probed, not
+  hard-coded.
+- A name this release does not carry is skipped with a warning instead
+  of aborting.  =apt=, =pacman= and =dnf= all fail the entire
+  transaction on one unknown package, which would otherwise install
+  none of the ~90 packages that were fine.
 
 On Fedora Silverblue or other immutable systems, install inside a
 distrobox:

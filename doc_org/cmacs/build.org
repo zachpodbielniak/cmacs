@@ -4,18 +4,68 @@
 
 * Quick Start
 
+From a fresh clone, one command does everything — system packages,
+=deps/= submodules, =autogen.sh=, =configure= with the full cmacs flag
+set, and the build:
+
 #+begin_example
-./install-deps            # system dependencies (Fedora, Ubuntu, Arch, macOS, FreeBSD)
+just bootstrap            # system packages + submodules + configure + build
+just run                  # run it (sets CMACS_MODULE_DIR for cmacsgi)
+#+end_example
+
+=just bootstrap= is idempotent, so re-running it on an already-built
+tree is cheap.  The package step is the only one needing =sudo=; set
+=CMACS_SKIP_INSTALL_DEPS=1= to skip it (CI without passwordless sudo,
+an immutable host, or a container with the packages already baked in)
+and bootstrap runs unattended, reporting what is present instead.
+
+The equivalent by hand:
+
+#+begin_example
+./install-deps --system   # system packages (Fedora, Ubuntu, Arch, macOS, FreeBSD)
+git submodule update --init --recursive   # populate deps/
 ./autogen.sh              # first time only
 ./configure               # auto-detects bundled deps in deps/
 make -j$(nproc)           # builds deps + emacs
-just run                  # run it (sets CMACS_MODULE_DIR for cmacsgi)
 #+end_example
+
+If a build fails on a missing library, ask for the whole list at once
+rather than rebuilding to discover them one at a time:
+
+#+begin_example
+just check-deps           # or: ./install-deps --check
+#+end_example
+
+That checks the *pkg-config modules and tools the build actually uses*
+(not package names, which drift between releases), and separates the
+ones that fail the build from the ones that merely narrow a feature.
 
 =just run= is preferred over =src/emacs= directly: it exports
 =CMACS_MODULE_DIR= so the =cmacsgi= bacon builtin loads when you do
 =M-x bacon=.  Bare =src/emacs= still works for plain editing; it
 just won't have =cmacsgi= available in the bacon shell.
+
+** Distro detection
+
+=install-deps= picks its package list from =/etc/os-release=: =ID=
+first, then each word of =ID_LIKE=, then (as a last resort) whichever
+of =pacman=, =apt-get= or =dnf= is on =PATH=.  Derivatives therefore
+work without being named explicitly — Omarchy, CachyOS, Garuda and
+EndeavourOS resolve to Arch; Nobara and Bazzite to Fedora; Pop!_OS,
+Mint and Zorin to Debian.
+
+Package *names* are resolved against the local package index before
+anything is installed, for two reasons:
+
+- Where a distro versions a name, the newest supported one wins.
+  Arch has no unversioned =wlroots= package at all (only =wlroots0.20=,
+  =wlroots0.19=, …), Debian versions =libwlroots-0.NN-dev=, and
+  =libgccjit-NN-dev= tracks the default GCC.  These are probed, not
+  hard-coded.
+- A name this release does not carry is *skipped with a warning*
+  instead of aborting.  =apt=, =pacman= and =dnf= all fail the entire
+  transaction on one unknown package, which would otherwise install
+  none of the ~90 packages that were fine.
 
 * Configure Flags
 
