@@ -66,6 +66,10 @@
 (declare-function cmacs-libregnum-particles-emitter "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-burst "cmacs-libregnum")
 (declare-function cmacs-para-color "cmacs-para")
+(declare-function cmacs-screensaver-attach-background "cmacs-screensaver")
+(declare-function cmacs-screensaver-detach-background "cmacs-screensaver")
+(declare-function cmacs-screensaver-background-resize "cmacs-screensaver")
+(declare-function cmacs-screensaver-supported-p "cmacs-screensaver")
 (declare-function cmacs-libregnum-popup-menu "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-match-set "cmacs-libregnum")
 (declare-function cmacs-ai-menu-scene-items "cmacs-ai-menu")
@@ -122,7 +126,23 @@ they cost one blit per frame and nothing else.  They are also
 deterministic: the same viewport gives the same sky every session, which
 is both less distracting and what makes them testable."
   :type '(choice (const none) (const solid) (const gradient)
-                 (const starfield) (const nebula) (const image))
+                 (const starfield) (const nebula) (const image)
+                 (const screensaver))
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-screensaver 'blackhole-cool-orbit
+  "Screensaver config drawn behind the graph when the background is
+`screensaver'.
+
+A name from `cmacs-screensaver-configs'.  It renders in the same
+out-of-process renderer the animated wallpaper uses -- so none of its GL
+runs on Emacs's thread -- and needs no gowl.
+
+Pick a dark one.  The graph is drawn over the top of it, and a
+screensaver that fills the frame with bright detail leaves the nodes
+nowhere to be read against; `blackhole-cool-orbit' is pulled far enough
+back to be mostly dark field."
+  :type 'symbol
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-background-colors '(#x2A3A6BFF . #x05050AFF)
@@ -277,6 +297,11 @@ that never fits its window is a view where nothing is clickable."
               ;; The viewport just changed, so the scaled label size did
               ;; too -- this is the only place that knows that.
               (cmacs-secondbrain--apply-label-size buf h)
+              ;; A screensaver renders at a fixed size in another
+              ;; process, so it has to be told the new one or it stays
+              ;; at whatever the window was when it started.
+              (when (cmacs-secondbrain--screensaver-running-p)
+                (ignore-errors (cmacs-screensaver-background-resize w h)))
               (ignore-errors (cmacs-secondbrain-fit buf)))))))))
 
 (defun cmacs-secondbrain--on-size-change (&optional _frame)
@@ -367,8 +392,61 @@ HEIGHT overrides the measured viewport height."
          buf (cmacs-secondbrain--label-px buf height)
          t t cmacs-secondbrain-max-labels)))))
 
+(defun cmacs-secondbrain--screensaver-available-p ()
+  "Return non-nil when a screensaver background can be started."
+  (and (fboundp 'cmacs-screensaver-supported-p)
+       (cmacs-screensaver-supported-p)
+       (fboundp 'cmacs-screensaver-attach-background)))
+
 (defun cmacs-secondbrain--apply-background (&optional buf)
   "Push the configured background into BUF's viewport."
+  (let ((buf (or buf (current-buffer))))
+    ;; The screensaver background is a live frame source rather than a
+    ;; texture, so it goes through its own subsystem instead of
+    ;; `cmacs-libregnum-set-background'.
+    (if (eq cmacs-secondbrain-background 'screensaver)
+        (cmacs-secondbrain--apply-screensaver-background buf)
+      (when (cmacs-secondbrain--screensaver-running-p)
+        (ignore-errors (cmacs-screensaver-detach-background buf)))
+      (cmacs-secondbrain--apply-texture-background buf))))
+
+(defvar-local cmacs-secondbrain--screensaver-on nil
+  "Non-nil when this buffer has a screensaver background attached.")
+
+(defun cmacs-secondbrain--screensaver-running-p ()
+  "Return non-nil when this buffer has a screensaver background."
+  (and cmacs-secondbrain--screensaver-on
+       (fboundp 'cmacs-screensaver-detach-background)))
+
+(defun cmacs-secondbrain--apply-screensaver-background (buf)
+  "Start the configured screensaver behind BUF."
+  (setq-local cmacs-secondbrain--screensaver-on nil)
+  (if (not (cmacs-secondbrain--screensaver-available-p))
+      (progn
+        ;; Fall back rather than leaving a blank viewport: a missing
+        ;; optional subsystem is not a reason to show nothing.
+        (message "cmacs-secondbrain: screensaver support is not built; \
+using the nebula background")
+        (setq-local cmacs-secondbrain-background 'nebula)
+        (cmacs-secondbrain--apply-texture-background buf))
+    (let* ((win (get-buffer-window buf t))
+           (w (if (window-live-p win) (window-pixel-width win)
+                (car cmacs-secondbrain-default-size)))
+           (h (if (window-live-p win) (window-pixel-height win)
+                (cdr cmacs-secondbrain-default-size))))
+      (condition-case err
+          (progn
+            (cmacs-screensaver-attach-background
+             buf cmacs-secondbrain-screensaver (max 16 w) (max 16 h))
+            (setq-local cmacs-secondbrain--screensaver-on t))
+        (error
+         (message "cmacs-secondbrain: %s; using the nebula background"
+                  (error-message-string err))
+         (setq-local cmacs-secondbrain-background 'nebula)
+         (cmacs-secondbrain--apply-texture-background buf))))))
+
+(defun cmacs-secondbrain--apply-texture-background (buf)
+  "Push a non-screensaver background into BUF's viewport."
   (let ((buf (or buf (current-buffer))))
     (when (fboundp 'cmacs-libregnum-set-background)
       (unless (cmacs-libregnum-set-background
@@ -404,10 +482,19 @@ type."
   (interactive
    (list (intern (completing-read
                   "Background: "
-                  '("nebula" "starfield" "gradient" "solid" "image" "none")
+                  '("nebula" "starfield" "gradient" "solid" "screensaver"
+                    "image" "none")
                   nil t nil nil
                   (symbol-name cmacs-secondbrain-background)))))
   (setq-local cmacs-secondbrain-background kind)
+  (when (eq kind 'screensaver)
+    (setq-local cmacs-secondbrain-screensaver
+                (intern (completing-read
+                         "Screensaver: "
+                         (mapcar (lambda (c) (symbol-name (car c)))
+                                 (bound-and-true-p cmacs-screensaver-configs))
+                         nil nil
+                         (symbol-name cmacs-secondbrain-screensaver)))))
   (when (eq kind 'image)
     (let* ((found (cmacs-secondbrain--wallpapers))
            (pick (completing-read
@@ -873,6 +960,11 @@ teardown, the Evil `C-w' handoff and `<escape>'.
 (defun cmacs-secondbrain--on-kill ()
   "Tear the view down with the buffer."
   (cmacs-secondbrain--stop-animation t)
+  ;; The screensaver is a separate process rendering for this buffer;
+  ;; killing the buffer without stopping it leaves it rendering frames
+  ;; nobody will ever read.
+  (when (cmacs-secondbrain--screensaver-running-p)
+    (ignore-errors (cmacs-screensaver-detach-background (current-buffer))))
   (ignore-errors (cmacs-secondbrain-detach (current-buffer))))
 
 ;;;; Pick dispatch ----------------------------------------------------

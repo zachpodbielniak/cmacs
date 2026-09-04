@@ -12,7 +12,12 @@
 
 #include "lisp.h"
 #include "coding.h"
+#include "buffer.h"   /* CHECK_BUFFER, for the background DEFUNs */
 #include "cmacs-screensaver.h"
+#ifdef HAVE_CMACS_LIBREGNUM
+#include "cmacs-libregnum-render.h"
+#include "cmacs-libregnum.h"
+#endif
 
 #include <glib.h>
 
@@ -81,6 +86,134 @@ Signals an error on failure.  */)
     }
   return Qt;
 }
+
+/* ── Screensaver as a libregnum scene background ────────────────────
+ *
+ * The coupling lives HERE, in the optional subsystem, rather than in
+ * libregnum: libregnum takes a generic frame-source function pointer
+ * and knows nothing about screensavers, so it still builds and links
+ * with --with-cmacs-screensaver off.  This file is the one place that
+ * sees both. */
+
+#ifdef HAVE_CMACS_LIBREGNUM
+
+/* Adapter matching CmacsLibregnumFrameSource. */
+static int
+cmacs_screensaver__frame_source (gpointer user, const void **px,
+                                 int *w, int *h, unsigned long long *gen)
+{
+  (void) user;
+  return cmacs_screensaver_peek_frame (px, w, h, gen);
+}
+
+DEFUN ("cmacs-screensaver--attach-background",
+       Fcmacs_screensaver__attach_background,
+       Scmacs_screensaver__attach_background, 4, 6, 0,
+       doc: /* Render screensaver SO-PATH behind BUFFER's libregnum scene.
+
+WIDTH and HEIGHT are the frame size to render, normally the viewport's.
+ARGV is a list of strings passed verbatim to the module (its CLI flags);
+FPS bounds the shared frame pump (default 30).
+
+The screensaver runs in the same out-of-process renderer the animated
+wallpaper uses, so none of its GL ever runs on Emacs's thread, and it
+needs no gowl -- this works in a plain pgtk Emacs.  Signals an error if
+the module will not load.  */)
+  (Lisp_Object buffer, Lisp_Object so_path, Lisp_Object width,
+   Lisp_Object height, Lisp_Object argv, Lisp_Object fps)
+{
+  CmacsLibregnumRenderCtx *ctx;
+  CmacsLibregnumView *v;
+  char **cargv;
+  char *err;
+  int w, h, ifps;
+
+  CHECK_BUFFER (buffer);
+  CHECK_STRING (so_path);
+  CHECK_FIXNAT (width);
+  CHECK_FIXNAT (height);
+
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v == NULL)
+    error ("cmacs-screensaver: no libregnum view attached to that buffer");
+  ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (ctx == NULL)
+    error ("cmacs-screensaver: that view has no render context");
+
+  w = (int) XFIXNAT (width);
+  h = (int) XFIXNAT (height);
+  ifps = FIXNUMP (fps) ? (int) XFIXNUM (fps) : 30;
+
+  {
+    Lisp_Object enc = ENCODE_FILE (so_path);
+    cargv = cmacs_screensaver__argv_from_list (argv);
+    err = cmacs_screensaver_start_texture (SSDATA (enc),
+                                           (const char *const *) cargv,
+                                           ifps, w, h);
+    g_strfreev (cargv);
+  }
+  if (err != NULL)
+    {
+      Lisp_Object msg = build_string (err);
+      g_free (err);
+      error ("cmacs-screensaver: %s", SSDATA (msg));
+    }
+
+  /* Register the source BEFORE selecting the kind: set_background
+     refuses SOURCE with nothing to pull from, which is what keeps a
+     mis-ordered caller from getting a permanently blank viewport. */
+  cmacs_libregnum_render_ctx_set_background_source
+    (ctx, cmacs_screensaver__frame_source, NULL, NULL);
+  cmacs_libregnum_render_ctx_set_background
+    (ctx, CMACS_LIBREGNUM_BG_SOURCE, 0, 0, NULL);
+  cmacs_libregnum_view_request_redraw (v);
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--detach-background",
+       Fcmacs_screensaver__detach_background,
+       Scmacs_screensaver__detach_background, 1, 1, 0,
+       doc: /* Stop the screensaver background in BUFFER.
+The viewport falls back to its flat clear colour; the caller is expected
+to set whatever background it wants next.  */)
+  (Lisp_Object buffer)
+{
+  CmacsLibregnumView *v;
+
+  CHECK_BUFFER (buffer);
+  cmacs_screensaver_stop (CMACS_SCREENSAVER_TEXTURE);
+
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v != NULL)
+    {
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (ctx != NULL)
+        {
+          cmacs_libregnum_render_ctx_set_background_source (ctx, NULL,
+                                                            NULL, NULL);
+          cmacs_libregnum_render_ctx_set_background
+            (ctx, CMACS_LIBREGNUM_BG_NONE, 0, 0, NULL);
+        }
+      cmacs_libregnum_view_request_redraw (v);
+    }
+  return Qt;
+}
+
+DEFUN ("cmacs-screensaver--background-resize",
+       Fcmacs_screensaver__background_resize,
+       Scmacs_screensaver__background_resize, 2, 2, 0,
+       doc: /* Re-render the screensaver background at WIDTH x HEIGHT.
+A no-op when it is not running or the size is unchanged.  */)
+  (Lisp_Object width, Lisp_Object height)
+{
+  CHECK_FIXNAT (width);
+  CHECK_FIXNAT (height);
+  cmacs_screensaver_texture_resize ((int) XFIXNAT (width),
+                                    (int) XFIXNAT (height));
+  return Qt;
+}
+
+#endif /* HAVE_CMACS_LIBREGNUM */
 
 DEFUN ("cmacs-screensaver--stop-wallpaper", Fcmacs_screensaver__stop_wallpaper,
        Scmacs_screensaver__stop_wallpaper, 0, 0, 0,
@@ -229,6 +362,11 @@ syms_of_cmacs_screensaver_defuns (void)
   defsubr (&Scmacs_screensaver_supported_p);
   defsubr (&Scmacs_screensaver__start_wallpaper);
   defsubr (&Scmacs_screensaver__stop_wallpaper);
+#ifdef HAVE_CMACS_LIBREGNUM
+  defsubr (&Scmacs_screensaver__attach_background);
+  defsubr (&Scmacs_screensaver__detach_background);
+  defsubr (&Scmacs_screensaver__background_resize);
+#endif
   defsubr (&Scmacs_screensaver__start_lock_bg);
   defsubr (&Scmacs_screensaver__stop_lock_bg);
   defsubr (&Scmacs_screensaver__wallpaper_active_p);

@@ -160,6 +160,24 @@ its feedback.  Leave the variable =nil= to keep the plain static lock screen
 unchanged.  The animation stops automatically the moment the session unlocks
 (whether through PAM success or =gowl-unlock=).
 
+* As a libregnum scene background
+
+A third frame sink, =CMACS_SCREENSAVER_TEXTURE=, hands frames to an in-process consumer instead of the compositor. That is what puts a screensaver behind a libregnum scene — the second-brain graph, for instance:
+
+#+begin_src elisp
+(cmacs-screensaver-attach-background BUFFER 'blackhole-cool-orbit WIDTH HEIGHT)
+(cmacs-screensaver-background-resize WIDTH HEIGHT)
+(cmacs-screensaver-detach-background BUFFER)
+#+end_src
+
+Three things make this different from the wallpaper and lock sinks:
+
+- *No gowl.* Wallpaper and lock take their geometry from the monitors gowl reports and push pixels into its frame sinks. TEXTURE takes its size from the caller and is pulled rather than pushed, so it needs no compositor and works in a plain pgtk Emacs.
+- *The consumer pulls.* =cmacs_screensaver_peek_frame= borrows the newest complete frame; it returns false for "no frame yet" and for "writer mid-write" alike, both of which mean /nothing new/ rather than an error, and the previous frame keeps being drawn.
+- *libregnum knows nothing about screensavers.* It exposes a generic =CmacsLibregnumFrameSource= function pointer and a =CMACS_LIBREGNUM_BG_SOURCE= background kind. The coupling lives in this subsystem, which is the optional one, so libregnum still builds and links with =--with-cmacs-screensaver= off.
+
+The size is the caller's responsibility: the screensaver renders at a fixed size in another process, so a viewport that resizes must call =cmacs-screensaver-background-resize= or the background stays at whatever size it started with and gets scaled.
+
 * Module discovery, build & install
 
 The screensaver =.so= modules are searched for in:

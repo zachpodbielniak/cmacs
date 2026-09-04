@@ -468,6 +468,11 @@ struct CmacsLibregnumRenderCtx
   gboolean           bg_tex_ok;
   int                bg_tex_w, bg_tex_h;
   gboolean           bg_dirty;
+  CmacsLibregnumFrameSource bg_src;
+  gpointer           bg_src_data;
+  GDestroyNotify     bg_src_notify;
+  unsigned long long bg_src_gen;       /* last frame uploaded */
+  gboolean           bg_src_have;      /* a frame has been uploaded */
 
   LrgParticlePool   *particle_pool;    /* every live particle */
   GArray            *particle_emitters;/* LrgParticleEmitter *, owned */
@@ -632,6 +637,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
+  if (r->bg_src_notify && r->bg_src_data) r->bg_src_notify (r->bg_src_data);
   g_free (r->bg_path);
   g_clear_object (&r->particle_pool);
   g_clear_object (&r->burst_emitter);
@@ -2029,6 +2035,72 @@ bg_generate (CmacsLibregnumRenderCtx *r, int w, int h)
   g_free (px);
 }
 
+void
+cmacs_libregnum_render_ctx_set_background_source (CmacsLibregnumRenderCtx *r,
+                                                  CmacsLibregnumFrameSource fn,
+                                                  gpointer user_data,
+                                                  GDestroyNotify notify)
+{
+  if (!r) return;
+  if (r->bg_src_notify && r->bg_src_data && r->bg_src_data != user_data)
+    r->bg_src_notify (r->bg_src_data);
+  r->bg_src = fn;
+  r->bg_src_data = user_data;
+  r->bg_src_notify = notify;
+  /* Force the next frame to upload rather than trusting a generation
+     counter from a source that has just been replaced. */
+  r->bg_src_gen = 0;
+  r->bg_src_have = FALSE;
+}
+
+/* Pull the newest frame from the registered source into `bg_tex'.
+ *
+ * UpdateTexture when the dimensions match, which is the common case and
+ * costs one upload; a size change reallocates.  Returns FALSE when
+ * there is nothing to draw yet -- the source has not produced a first
+ * frame -- as opposed to nothing NEW, where the existing texture stands.
+ *
+ * The frame is ARGB8888 from the producer's point of view, which is
+ * exactly raylib's UNCOMPRESSED_R8G8B8A8 byte order on a little-endian
+ * host; this is the same assumption gowl's frame sink makes about the
+ * same pixels. */
+static gboolean
+bg_pull_source (CmacsLibregnumRenderCtx *r)
+{
+  const void *px = NULL;
+  int w = 0, h = 0;
+  unsigned long long gen = 0;
+
+  if (!r->bg_src) return r->bg_src_have;
+  if (!r->bg_src (r->bg_src_data, &px, &w, &h, &gen) || !px || w <= 0 || h <= 0)
+    return r->bg_src_have;
+  if (r->bg_src_have && gen == r->bg_src_gen)
+    return TRUE;                       /* already have this one */
+
+  if (!r->bg_tex_ok || r->bg_tex_w != w || r->bg_tex_h != h)
+    {
+      Image img = { 0 };
+      img.data = (void *) px;
+      img.width = w;
+      img.height = h;
+      img.mipmaps = 1;
+      img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+      if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
+      r->bg_tex = LoadTextureFromImage (img);   /* copies; img not owned */
+      r->bg_tex_ok = (r->bg_tex.id != 0);
+      if (r->bg_tex_ok) SetTextureFilter (r->bg_tex, TEXTURE_FILTER_BILINEAR);
+      r->bg_tex_w = w;
+      r->bg_tex_h = h;
+    }
+  else
+    UpdateTexture (r->bg_tex, px);
+
+  if (!r->bg_tex_ok) return FALSE;
+  r->bg_src_gen = gen;
+  r->bg_src_have = TRUE;
+  return TRUE;
+}
+
 static void
 bg_load_image (CmacsLibregnumRenderCtx *r)
 {
@@ -2057,6 +2129,8 @@ cmacs_libregnum_render_ctx_set_background (CmacsLibregnumRenderCtx *r,
 
   if (kind == CMACS_LIBREGNUM_BG_IMAGE && (!path || !path[0]))
     return FALSE;
+  if (kind == CMACS_LIBREGNUM_BG_SOURCE && !r->bg_src)
+    return FALSE;      /* nothing would ever be drawn */
 
   r->bg_kind = kind;
   r->bg_top = top;
@@ -2093,10 +2167,17 @@ ctx_draw_background (CmacsLibregnumRenderCtx *r, int w, int h)
 
   if (!r || r->bg_kind == CMACS_LIBREGNUM_BG_NONE) return;
 
-  if (r->bg_dirty
-      || !r->bg_tex_ok
-      || (r->bg_kind != CMACS_LIBREGNUM_BG_IMAGE
-          && (r->bg_tex_w != w || r->bg_tex_h != h)))
+  if (r->bg_kind == CMACS_LIBREGNUM_BG_SOURCE)
+    {
+      /* Re-pulled every frame: that is the whole point of a live
+         source, and the generation check makes a repeat cheap. */
+      if (!bg_pull_source (r)) return;
+      r->bg_dirty = FALSE;
+    }
+  else if (r->bg_dirty
+           || !r->bg_tex_ok
+           || (r->bg_kind != CMACS_LIBREGNUM_BG_IMAGE
+               && (r->bg_tex_w != w || r->bg_tex_h != h)))
     {
       if (r->bg_kind == CMACS_LIBREGNUM_BG_IMAGE) bg_load_image (r);
       else bg_generate (r, w, h);
@@ -2104,7 +2185,8 @@ ctx_draw_background (CmacsLibregnumRenderCtx *r, int w, int h)
     }
   if (!r->bg_tex_ok) return;
 
-  if (r->bg_kind == CMACS_LIBREGNUM_BG_IMAGE)
+  if (r->bg_kind == CMACS_LIBREGNUM_BG_IMAGE
+      || r->bg_kind == CMACS_LIBREGNUM_BG_SOURCE)
     {
       /* Cover fit: crop the longer axis rather than squashing it.  A
          wallpaper stretched to the viewport's aspect looks broken in a

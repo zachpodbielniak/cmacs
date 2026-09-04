@@ -112,7 +112,11 @@ typedef struct
 
 /* ---- globals ------------------------------------------------------------- */
 
-static ScrSession   sessions[2];
+static ScrSession   sessions[CMACS_SCREENSAVER_N_SINKS];
+/* The TEXTURE sink has no monitors, so it has exactly one target under a
+   fixed key, and the caller owns its size. */
+#define SCR_TEXTURE_MON "texture"
+static int texture_w, texture_h;
 static GHashTable  *targets;            /* "sink:mon" -> ScrTarget* */
 static ScrChild     child_proc;
 static ScrHandshake handshake;
@@ -483,7 +487,11 @@ scr_child_on_readable (GSocket *sock, GIOCondition cond, gpointer data)
 static int
 scr_any_session_active (void)
 {
-  return sessions[0].active || sessions[1].active;
+  int i;
+  for (i = 0; i < CMACS_SCREENSAVER_N_SINKS; i++)
+    if (sessions[i].active)
+      return 1;
+  return 0;
 }
 
 static void scr_child_schedule_respawn (void);
@@ -885,18 +893,53 @@ scr_sync_sink (int sink, GowlCompositor *comp)
 #endif /* HAVE_CMACS_GOWL */
 
 /* Re-send every active session's targets after a (re)spawn. */
+/* Ask the child to render the TEXTURE sink at the requested size.  No
+   gowl, no monitor list: one target, one size, given by the caller. */
+static void
+scr_sync_texture (void)
+{
+  ScrSession *s = &sessions[CMACS_SCREENSAVER_TEXTURE];
+  gchar *k;
+  ScrTarget *t;
+
+  if (!s->active || texture_w <= 0 || texture_h <= 0)
+    return;
+
+  k = target_key (CMACS_SCREENSAVER_TEXTURE, SCR_TEXTURE_MON);
+  t = g_hash_table_lookup (targets_table (), k);
+  g_free (k);
+
+  if (t == NULL)
+    scr_child_send_set_target (CMACS_SCREENSAVER_TEXTURE, SCR_TEXTURE_MON,
+                               s->so_path, s->argv, texture_w, texture_h, 0);
+  else if (t->w != texture_w || t->h != texture_h)
+    {
+      /* Drop the stale-size mapping rather than handing a consumer a
+         frame whose dimensions no longer match what it asked for. */
+      target_unmap (t);
+      t->w = texture_w;
+      t->h = texture_h;
+      scr_child_send_set_target (CMACS_SCREENSAVER_TEXTURE, SCR_TEXTURE_MON,
+                                 s->so_path, s->argv,
+                                 texture_w, texture_h, 0);
+    }
+}
+
+/* Re-send every active session's targets after a (re)spawn. */
 static void
 scr_resync_all (void)
 {
 #ifdef HAVE_CMACS_GOWL
-  GowlCompositor *comp = cmacs_gowl_get_compositor ();
-  int i;
-  if (comp == NULL)
-    return;
-  for (i = 0; i < 2; i++)
-    if (sessions[i].active)
-      scr_sync_sink (i, comp);
+  {
+    GowlCompositor *comp = cmacs_gowl_get_compositor ();
+    int i;
+    if (comp != NULL)
+      for (i = 0; i < 2; i++)
+        if (sessions[i].active)
+          scr_sync_sink (i, comp);
+  }
 #endif
+  scr_sync_texture ();
 }
 
 /* ---- pump (drain shm -> gowl) -------------------------------------------- */
@@ -944,6 +987,15 @@ scr_pump_tick (gpointer data)
   }
 done:
 #endif
+
+  /* The TEXTURE sink needs no gowl and no push: the consumer pulls with
+     cmacs_screensaver_peek_frame.  All the pump owes it is keeping the
+     target in sync and the source alive. */
+  if (sessions[CMACS_SCREENSAVER_TEXTURE].active)
+    {
+      any = 1;
+      scr_sync_texture ();
+    }
 
   if (!any)
     {
@@ -1078,6 +1130,100 @@ scr_wait_first_load (int sink)
 /* ---- public API ---------------------------------------------------------- */
 
 char *
+cmacs_screensaver_start_texture (const char *so_path, const char *const *argv,
+                                 int fps, int w, int h)
+{
+  ScrSession *s;
+  char *serr;
+
+  if (so_path == NULL)
+    return g_strdup ("invalid screensaver module");
+  if (!scr_shm_dims_valid ((uint32_t) w, (uint32_t) h))
+    return g_strdup_printf ("invalid screensaver size %dx%d", w, h);
+
+  if (fps > 0)
+    pump_fps = fps;
+
+  child_proc.gave_up = FALSE;
+  if (child_proc.pid == 0 && child_proc.respawn_source == 0)
+    {
+      char *serr2 = NULL;
+      if (!scr_child_spawn (&serr2))
+        return serr2 ? serr2 : g_strdup ("could not start render child");
+    }
+
+  s = &sessions[CMACS_SCREENSAVER_TEXTURE];
+  if (s->active)
+    scr_targets_remove_sink (CMACS_SCREENSAVER_TEXTURE);
+  g_clear_pointer (&s->so_path, g_free);
+  g_clear_pointer (&s->argv, g_strfreev);
+  s->active = 1;
+  s->is_lock = 0;
+  s->pause_covered = 0;
+  s->so_path = g_strdup (so_path);
+  s->argv = (argv != NULL) ? g_strdupv ((char **) argv) : NULL;
+  texture_w = w;
+  texture_h = h;
+
+  scr_child_send_str (scr_proto_build_set_fps (pump_fps));
+  scr_sync_texture ();
+
+  /* Same synchronous error UX as the other sinks: a module that will
+     not load should say so now, not fail silently into a blank
+     background. */
+  serr = scr_wait_first_load (CMACS_SCREENSAVER_TEXTURE);
+  if (serr != NULL)
+    {
+      cmacs_screensaver_stop (CMACS_SCREENSAVER_TEXTURE);
+      return serr;
+    }
+
+  scr_ensure_pump ();
+  return NULL;
+}
+
+void
+cmacs_screensaver_texture_resize (int w, int h)
+{
+  if (!sessions[CMACS_SCREENSAVER_TEXTURE].active)
+    return;
+  if (!scr_shm_dims_valid ((uint32_t) w, (uint32_t) h))
+    return;
+  if (w == texture_w && h == texture_h)
+    return;
+  texture_w = w;
+  texture_h = h;
+  scr_sync_texture ();
+}
+
+int
+cmacs_screensaver_peek_frame (const void **pixels, int *w, int *h,
+                              unsigned long long *generation)
+{
+  ScrTarget *t;
+  ScrShmFrame f;
+  gchar *k;
+
+  if (!sessions[CMACS_SCREENSAVER_TEXTURE].active || targets == NULL)
+    return 0;
+
+  k = target_key (CMACS_SCREENSAVER_TEXTURE, SCR_TEXTURE_MON);
+  t = g_hash_table_lookup (targets, k);
+  g_free (k);
+
+  if (t == NULL || t->map == NULL)
+    return 0;
+  if (!scr_shm_read_acquire (t->map, &f))
+    return 0;                        /* no frame yet, or writer mid-write */
+
+  if (pixels)     *pixels = f.pixels;
+  if (w)          *w = t->w;
+  if (h)          *h = t->h;
+  if (generation) *generation = (unsigned long long) f.generation;
+  return 1;
+}
+
+char *
 cmacs_screensaver_start (int sink, const char *so_path,
                          const char *const *argv, int fps, int pause_covered)
 {
@@ -1142,7 +1288,7 @@ cmacs_screensaver_start (int sink, const char *so_path,
 void
 cmacs_screensaver_stop (int sink)
 {
-  if (sink < 0 || sink > 1)
+  if (sink < 0 || sink >= CMACS_SCREENSAVER_N_SINKS)
     return;
   if (!sessions[sink].active)
     return;
@@ -1161,7 +1307,7 @@ cmacs_screensaver_stop (int sink)
 int
 cmacs_screensaver_active (int sink)
 {
-  if (sink < 0 || sink > 1)
+  if (sink < 0 || sink >= CMACS_SCREENSAVER_N_SINKS)
     return 0;
   return sessions[sink].active;
 }

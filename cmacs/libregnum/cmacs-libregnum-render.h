@@ -368,8 +368,34 @@ typedef enum
   CMACS_LIBREGNUM_BG_GRADIENT,
   CMACS_LIBREGNUM_BG_STARFIELD,
   CMACS_LIBREGNUM_BG_NEBULA,
-  CMACS_LIBREGNUM_BG_IMAGE
+  CMACS_LIBREGNUM_BG_IMAGE,
+  /* Pixels pulled from a registered frame source each frame -- see
+   * cmacs_libregnum_render_ctx_set_background_source. */
+  CMACS_LIBREGNUM_BG_SOURCE
 } CmacsLibregnumBackgroundKind;
+
+/* A live source of ARGB8888 frames for the SOURCE background.
+ *
+ * Returns non-zero and fills the out params when a frame is available.
+ * PIXELS is borrowed and must stay valid for the duration of the call;
+ * GENERATION identifies the frame so the same one is not re-uploaded.
+ * Returning zero means "nothing new", never an error -- the previous
+ * frame keeps being drawn.
+ *
+ * A function pointer rather than a direct call into the screensaver
+ * subsystem on purpose: libregnum must not depend on an optional
+ * subsystem that may not be compiled in, and anything able to produce
+ * ARGB frames should be able to feed this. */
+typedef int (*CmacsLibregnumFrameSource) (gpointer user_data,
+                                          const void **pixels,
+                                          int *w, int *h,
+                                          unsigned long long *generation);
+
+extern void cmacs_libregnum_render_ctx_set_background_source
+                              (CmacsLibregnumRenderCtx *r,
+                               CmacsLibregnumFrameSource fn,
+                               gpointer user_data,
+                               GDestroyNotify notify);
 
 /* Returns FALSE only for IMAGE with a file that cannot be loaded -- in
  * which case the background is left as it was, because a viewport that

@@ -164,13 +164,21 @@ frame.  They are deterministic --- the same viewport gives the same sky
 every session, which is both less distracting and what makes them
 testable.
 
-@strong{Screensavers are not yet available as a background.}  The
-@file{deps/screensavers} modules render out-of-process into a memfd ring
-whose only consumers are gowl's wallpaper and lock frame sinks, and the
-pump that drives them includes @file{gowl.h} directly.  Routing those
-frames into a libregnum viewport means adding a third sink and
-decoupling the pump from gowl --- worth doing, but a change to the
-screensaver subsystem rather than to this one.
+@strong{Screensavers} are a background too: set
+@code{cmacs-secondbrain-background} to @code{screensaver} and pick a
+config with @code{cmacs-secondbrain-screensaver} (default
+@code{blackhole-cool-orbit}).  They render in the same out-of-process
+renderer the animated wallpaper uses, so none of the screensaver's GL
+runs on Emacs's thread, and the sink they use needs no gowl --- this
+works in a plain pgtk Emacs.
+
+Pick a dark one.  The graph is drawn over the top, and a screensaver
+that fills the frame with bright detail leaves the nodes nowhere to be
+read against.
+
+If the screensaver subsystem is not built, or the module will not load,
+the background falls back to @code{nebula} and says so rather than
+leaving a blank viewport.
 
 @subsection Labels
 

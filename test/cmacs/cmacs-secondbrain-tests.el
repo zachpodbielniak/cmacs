@@ -869,6 +869,78 @@ window has gone."
   (with-temp-buffer
     (should-not (cmacs-secondbrain--apply-label-size (current-buffer)))))
 
+(ert-deftest cmacs-secondbrain-test-screensaver-background-falls-back ()
+  "An unavailable screensaver falls back instead of blanking the view.
+
+The subsystem is optional and off in many builds, and a background that
+silently renders nothing is worse than one that quietly picks another."
+  (skip-unless (fboundp 'cmacs-secondbrain--apply-screensaver-background))
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'cmacs-secondbrain--screensaver-available-p)
+               (lambda () nil))
+              (applied nil))
+      (cl-letf (((symbol-function 'cmacs-secondbrain--apply-texture-background)
+                 (lambda (_buf) (setq applied t))))
+        (setq-local cmacs-secondbrain-background 'screensaver)
+        (cmacs-secondbrain--apply-screensaver-background (current-buffer))
+        (should (eq 'nebula cmacs-secondbrain-background))
+        (should-not cmacs-secondbrain--screensaver-on)))))
+
+(ert-deftest cmacs-secondbrain-test-screensaver-start-error-falls-back ()
+  "A module that will not load falls back rather than propagating."
+  (skip-unless (fboundp 'cmacs-secondbrain--apply-screensaver-background))
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'cmacs-secondbrain--screensaver-available-p)
+               (lambda () t))
+              ((symbol-function 'cmacs-screensaver-attach-background)
+               (lambda (&rest _) (error "no such module")))
+              ((symbol-function 'cmacs-secondbrain--apply-texture-background)
+               #'ignore))
+      (setq-local cmacs-secondbrain-background 'screensaver)
+      (cmacs-secondbrain--apply-screensaver-background (current-buffer))
+      (should (eq 'nebula cmacs-secondbrain-background))
+      (should-not cmacs-secondbrain--screensaver-on))))
+
+(ert-deftest cmacs-secondbrain-test-screensaver-background-round-trip ()
+  "A screensaver really does render behind the graph, and detaches.
+
+The interesting assertion is that the frame CHANGES between two
+snapshots taken a moment apart: a static background would be identical,
+so this is what distinguishes a live frame source from a texture that
+was uploaded once."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-screensaver-supported-p)
+                    (cmacs-screensaver-supported-p)
+                    (fboundp 'cmacs-screensaver-attach-background)
+                    (getenv "CMACS_SCREENSAVER_MODULE_DIR")))
+  (let ((a (make-temp-file "sb-ss-" nil ".png"))
+        (b (make-temp-file "sb-ss-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph buf (vector) (vector) 2)
+          (condition-case err
+              (progn
+                (cmacs-screensaver-attach-background
+                 buf cmacs-secondbrain-screensaver 400 300)
+                ;; Give the child time to spawn, load and produce frames.
+                (dotimes (_ 60) (sleep-for 0.05)
+                         (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+                (cmacs-libregnum-snapshot buf a)
+                (dotimes (_ 20) (sleep-for 0.05)
+                         (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+                (cmacs-libregnum-snapshot buf b)
+                (let ((read (lambda (f)
+                              (with-temp-buffer
+                                (set-buffer-multibyte nil)
+                                (insert-file-contents-literally f)
+                                (buffer-string)))))
+                  (should-not (equal (funcall read a) (funcall read b))))
+                (cmacs-screensaver-detach-background buf))
+            (error (ignore-errors (cmacs-screensaver-detach-background buf))
+                   (signal (car err) (cdr err)))))
+      (ignore-errors (delete-file a))
+      (ignore-errors (delete-file b)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

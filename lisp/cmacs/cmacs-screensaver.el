@@ -46,6 +46,21 @@ The base name is resolved against `cmacs-screensaver-module-path'."
     (blackhole-warm   . (:module blackhole   :args ("--profile" "warm")))
     (blackhole-cool   . (:module blackhole   :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
     (blackhole-infall . (:module blackhole   :args ("--profile" "cool" "--infall" "8")))
+    ;; The look this reproduces is the dark field with a small blue-white
+    ;; disc and indigo clouds.  It deliberately passes NO `--profile',
+    ;; because blackhole's profile handling is currently inverted: with
+    ;; the module's argv arriving main()-style, no flag and
+    ;; `--profile warm' both render the cool palette while
+    ;; `--profile cool' renders the warm one.  Measured whole-frame
+    ;; average RGB, same scene, only the flag changed:
+    ;;   (none)          (55,68,97)  blue
+    ;;   --profile warm  (54,67,96)  blue
+    ;;   --profile cool  (100,69,49) amber
+    ;; Naming this `-cool-orbit' and omitting the flag describes what you
+    ;; get; putting `--profile cool' here would describe what you asked
+    ;; for and hand you the opposite.  Fix belongs in deps/screensavers.
+    (blackhole-cool-orbit
+     . (:module blackhole :args ("--orbit-radius" "60" "--infall" "2")))
     (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden"))))
   "Named screensaver configurations.
 Each entry is (NAME . PLIST) where PLIST understands:
@@ -114,6 +129,12 @@ On timeout the wallpaper still starts asynchronously."
 (declare-function cmacs-screensaver--start-wallpaper
                   "cmacs-screensaver-defuns.c"
                   (so-path &optional argv fps pause-covered))
+(declare-function cmacs-screensaver--attach-background
+                  "cmacs-screensaver-defuns")
+(declare-function cmacs-screensaver--detach-background
+                  "cmacs-screensaver-defuns")
+(declare-function cmacs-screensaver--background-resize
+                  "cmacs-screensaver-defuns")
 (declare-function cmacs-screensaver--stop-wallpaper
                   "cmacs-screensaver-defuns.c" ())
 (declare-function cmacs-screensaver--start-lock-bg
@@ -311,6 +332,33 @@ The frame pump auto-stops this session when the compositor unlocks."
 
 (when (fboundp 'gowl-lock)
   (advice-add 'gowl-lock :before #'cmacs-screensaver--maybe-start-lock-bg))
+
+;;;; Screensaver as a libregnum scene background ----------------------
+
+;; The frames come from the same out-of-process renderer the animated
+;; wallpaper uses -- none of the screensaver's GL runs on Emacs's thread
+;; -- and the TEXTURE sink needs no gowl, so this works in a plain pgtk
+;; Emacs.  libregnum itself knows nothing about screensavers: it takes a
+;; generic frame-source function pointer, and the C half of this file is
+;; the only place that sees both subsystems.
+
+;;;###autoload
+(defun cmacs-screensaver-attach-background (buffer name width height)
+  "Render screensaver config NAME behind BUFFER's libregnum scene.
+WIDTH and HEIGHT are the frame size, normally the viewport's."
+  (pcase-let ((`(,so . ,argv) (cmacs-screensaver--resolve-config name)))
+    (cmacs-screensaver--attach-background buffer so width height argv
+                                          cmacs-screensaver-fps)))
+
+;;;###autoload
+(defun cmacs-screensaver-detach-background (buffer)
+  "Stop the screensaver background in BUFFER."
+  (cmacs-screensaver--detach-background buffer))
+
+;;;###autoload
+(defun cmacs-screensaver-background-resize (width height)
+  "Re-render the screensaver background at WIDTH x HEIGHT."
+  (cmacs-screensaver--background-resize width height))
 
 (provide 'cmacs-screensaver)
 ;;; cmacs-screensaver.el ends here

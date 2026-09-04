@@ -8529,6 +8529,32 @@ See @file{doc_org/cmacs/cmacs-cad.org} for the living document.
 @node CMacs Screensaver
 @chapter CMacs Screensaver: libregnum Wallpaper, Lock Screen & Buffer
 
+@strong{As a libregnum scene background.}  A third frame sink,
+@code{CMACS_SCREENSAVER_TEXTURE}, hands frames to an in-process consumer
+instead of the compositor --- which is what puts a screensaver behind a
+libregnum scene such as the second-brain graph
+(@code{cmacs-screensaver-attach-background},
+@code{-background-resize}, @code{-detach-background}).
+
+Three things set it apart from the wallpaper and lock sinks.  It needs
+@strong{no gowl}: those two take their geometry from the monitors gowl
+reports and push pixels into its frame sinks, while this takes its size
+from the caller and is pulled rather than pushed, so it works in a plain
+pgtk Emacs.  The @strong{consumer pulls} ---
+@code{cmacs_screensaver_peek_frame} borrows the newest complete frame
+and returns false for ``no frame yet'' and ``writer mid-write'' alike,
+both meaning @emph{nothing new} rather than an error.  And
+@strong{libregnum knows nothing about screensavers}: it exposes a
+generic @code{CmacsLibregnumFrameSource} function pointer and a
+@code{CMACS_LIBREGNUM_BG_SOURCE} background kind, so the coupling lives
+in this optional subsystem and libregnum still builds with
+@option{--with-cmacs-screensaver} off.
+
+The size is the caller's responsibility: the screensaver renders at a
+fixed size in another process, so a viewport that resizes must call
+@code{cmacs-screensaver-background-resize} or the background stays at
+whatever size it started with.
+
 The @code{cmacs-screensaver} subsystem renders the GPU screensavers from the
 @file{deps/screensavers} dependency (@code{blackhole}, @code{singularity},
 @code{helios} --- libregnum game modules) and shows them as an animated
