@@ -82,6 +82,7 @@ Once open, a department's members occupy a contiguous *wedge* of the ring sized 
 |---------+--------|
 | left click on a department | select it *and expand or fold it* |
 | left click on a leaf | select it; the inspector follows |
+| double click a node | select it and fly the camera to it |
 | left drag a node | move it, and pin it where you drop it |
 | (a short drag is still a click) | the drag starts only past a few pixels |
 | left drag | orbit (3D); no effect in the locked 2D view |
@@ -151,6 +152,14 @@ Selecting from Lisp — keyboard navigation, search, the inspector — tells the
 Left-drag a node to move it. It is *pinned* where you drop it, so the layout leaves it alone; =u= unpins the selection and =U= unpins everything. Empty space still orbits and pans, so the camera controls are unchanged.
 
 =R= turns on a slow rotation. It is the layout's own spin, so the nodes really move and picking follows them — not a camera trick, which would look the same and leave every pick box behind. It costs a layout pass per tick, which is why it is off unless you ask.
+
+** Node shading
+
+raylib draws an unlit sphere in a single colour, so a node is a flat disc and size is the only depth cue the glyphs have. Each node therefore carries a small bright sphere set toward a fixed light — the specular that makes the eye read a ball.
+
+The offset matters more than it looks: at offset O and radius R, both fractions of the node radius, the highlight reaches O + R. Anything under 1.0 leaves it buried inside an opaque sphere — perfectly computed and completely invisible, which is exactly what the first attempt did.
+
+=cmacs-secondbrain-node-shading= turns it off. It costs one extra small sphere per visible node, and the highlight is moved with its node on every sync, or a tween leaves it behind as a second smaller node hanging in space.
 
 ** Particles
 
@@ -300,7 +309,8 @@ get on =M-x cmacs-secondbrain=.
       cmacs-secondbrain-max-labels 160)
 
 ;; Interaction.
-(setq cmacs-secondbrain-drag-nodes t
+(setq cmacs-secondbrain-node-shading t
+      cmacs-secondbrain-drag-nodes t
       cmacs-secondbrain-hover-highlights-group t
       cmacs-secondbrain-fly-context 0.4)
 

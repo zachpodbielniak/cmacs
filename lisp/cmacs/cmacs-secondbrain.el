@@ -183,6 +183,15 @@ with them."
   :type 'integer
   :group 'cmacs-secondbrain)
 
+(defcustom cmacs-secondbrain-node-shading t
+  "Whether nodes get a specular highlight.
+
+raylib draws an unlit sphere in a single colour, so without one a node
+is a flat disc and size is the only depth cue the glyphs have.  Costs
+one extra small sphere per visible node."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
 (defcustom cmacs-secondbrain-drag-nodes t
   "Whether a node can be dragged with the left button.
 
@@ -392,6 +401,9 @@ useless."
       (cmacs-libregnum-set-selection-style buf 'halo))
     (when (fboundp 'cmacs-libregnum-set-inscene-labels)
       (cmacs-libregnum-set-inscene-labels buf t))
+    (when (fboundp 'cmacs-secondbrain-set-shading)
+      (ignore-errors
+        (cmacs-secondbrain-set-shading buf cmacs-secondbrain-node-shading)))
     (when (fboundp 'cmacs-libregnum-set-drag-nodes)
       ;; Nodes are draggable: this is a map you arrange, not only one
       ;; you read.  Empty space still orbits and pans, so the camera
@@ -756,6 +768,17 @@ itself -- and drops the libregnum animation clock with it."
 
 (defvar-local cmacs-secondbrain--dragging nil
   "Id of the node currently being dragged, or nil.")
+
+(defun cmacs-secondbrain--on-double-click (buffer _id path)
+  "Fly the camera to node PATH in BUFFER.
+
+The single click has already selected it, so this is the second half of
+a gesture rather than a replacement for the first: double click means
+\"and take me there\"."
+  (when (and (buffer-live-p buffer) (stringp path))
+    (with-current-buffer buffer
+      (unless (cmacs-secondbrain-focus buffer path)
+        (message "That node is not on screen to fly to")))))
 
 (defun cmacs-secondbrain--on-drag (buffer path x y z phase)
   "Move node PATH in BUFFER to the world point X Y Z.

@@ -404,6 +404,20 @@ never prompt.  Called on the cmacs GMainContext."
                (derived-mode-p 'cmacs-secondbrain-mode))
           (cmacs-secondbrain--on-hover buffer id path)))))))
 
+(defun cmacs-libregnum--node-double-clicked (buffer info)
+  "Dispatch a viewport node DOUBLE click in BUFFER.
+INFO is (ID PATH).  The single click has already been dispatched: the
+two arrive in order, so a mode can select on the first and act on the
+second without either being suppressed.  Called on the cmacs
+GMainContext."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info)))
+      (with-current-buffer buffer
+        (cond
+         ((and (fboundp 'cmacs-secondbrain--on-double-click)
+               (derived-mode-p 'cmacs-secondbrain-mode))
+          (cmacs-secondbrain--on-double-click buffer id path)))))))
+
 (defun cmacs-libregnum--node-dragged (buffer info)
   "Dispatch a node drag in BUFFER.
 INFO is (PATH X Y Z PHASE), where PHASE is 0 begin, 1 update, 2 end and

@@ -635,6 +635,28 @@ rebuild.  Returns ID, or nil if it is not on screen.  */)
   return id;
 }
 
+DEFUN ("cmacs-secondbrain-set-shading", Fcmacs_secondbrain_set_shading,
+       Scmacs_secondbrain_set_shading, 1, 2, 0,
+       doc: /* Draw a specular highlight on each node in BUFFER (ON nil off).
+
+raylib draws an unlit sphere in a single colour, so without one a node
+is a flat disc and size is the only depth cue the glyphs have.  A small
+bright sphere set toward a fixed light gives the specular that makes the
+eye read a ball.
+
+Read when the scene is built, so it takes effect on the next refresh.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  SbState *st;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, NULL, &ctx);
+  if (!st || !ctx) return Qnil;
+  cmacs_secondbrain_scene_set_shading (ctx, !NILP (on));
+  return NILP (on) ? Qnil : Qt;
+}
+
 DEFUN ("cmacs-secondbrain-set-link-phase",
        Fcmacs_secondbrain_set_link_phase,
        Scmacs_secondbrain_set_link_phase, 2, 2, 0,
@@ -1279,6 +1301,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_visible_count);
   defsubr (&Scmacs_secondbrain_focus);
   defsubr (&Scmacs_secondbrain_select);
+  defsubr (&Scmacs_secondbrain_set_shading);
   defsubr (&Scmacs_secondbrain_set_link_phase);
   defsubr (&Scmacs_secondbrain_set_pinned);
   defsubr (&Scmacs_secondbrain_move_node);

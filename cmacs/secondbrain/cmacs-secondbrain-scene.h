@@ -82,6 +82,11 @@ extern void cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r);
 extern void cmacs_secondbrain_scene_apply_flags
                         (CmacsLibregnumRenderCtx *r, CmacsGraph *g);
 
+/* Draw a specular highlight on each node (default on).  Read at build
+ * time, so a change takes effect on the next scene build. */
+extern void cmacs_secondbrain_scene_set_shading
+                        (CmacsLibregnumRenderCtx *r, gboolean on);
+
 /* Phase, in radians, of the travelling light on the selected node's
  * links.  Advanced by the caller each frame; see apply_flags. */
 extern void cmacs_secondbrain_scene_set_link_phase

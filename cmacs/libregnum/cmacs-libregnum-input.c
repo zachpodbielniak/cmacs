@@ -39,6 +39,9 @@ typedef struct
   gint          scene_drag_id;      /* the node being dragged, or -1 */
   gint          scene_drag_cand;    /* node under the press, before the
                                        drag threshold is crossed */
+  gint64        last_click_us;      /* for double-click detection */
+  double        last_click_x, last_click_y;
+  gint          last_click_id;
   bool          dragging_gizmo;     /* editor: dragging a transform handle */
 } DragState;
 
@@ -124,6 +127,39 @@ defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
 }
 
+/* ── Double click → deferred Elisp callback ─────────────────────────*/
+
+static gboolean
+double_click_idle (gpointer user)
+{
+  ClickAction *a = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-double-clicked"),
+                             a->buffer,
+                             list2 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil));
+  g_free (a->path);
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_double_click (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
+                    gint id)
+{
+  const gchar *path = NULL;
+  ClickAction *a;
+
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          NULL, NULL, NULL);
+  a = g_new0 (ClickAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
+  a->id = id;
+  g_main_context_invoke (cmacs_glib_get_context (), double_click_idle, a);
+}
+
 /* ── Scene node drag → deferred Elisp callback ──────────────────────
  *
  * Reports the world point under the cursor for the node being dragged.
@@ -172,6 +208,12 @@ defer_scene_drag (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   d->phase = phase;
   g_main_context_invoke (cmacs_glib_get_context (), scene_drag_idle, d);
 }
+
+/* Two clicks on the same node, close together in time and place, are a
+ * double click.  GTK reports these as two ordinary press/release pairs,
+ * so the pairing is done here rather than being read off the event. */
+#define CMACS_DOUBLE_CLICK_US   (400 * 1000)
+#define CMACS_DOUBLE_CLICK_SLOP (6.0)
 
 /* ── Hover → deferred Elisp callback ────────────────────────────────
  *
@@ -1120,7 +1162,42 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                         + fabs (y - drag_state.press_y)) > 5.0;
           drag_state.dragging_left = false;
           if (!moved)
-            handle_click (f, v, x, y);
+            {
+              /* Pair it with the previous click before acting: a double
+                 click is two ordinary press/release pairs as far as GTK
+                 is concerned, so the pairing happens here.  The single
+                 click still fires -- selecting, then focusing, is the
+                 same order a user would expect from doing both. */
+              gint64 now = g_get_monotonic_time ();
+              double vx, vy;
+              int vw, vh;
+              gint id = -1;
+
+              if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
+                id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
+
+              handle_click (f, v, x, y);
+
+              if (id >= 0
+                  && id == drag_state.last_click_id
+                  && now - drag_state.last_click_us < CMACS_DOUBLE_CLICK_US
+                  && fabs (x - drag_state.last_click_x)
+                     + fabs (y - drag_state.last_click_y)
+                     < CMACS_DOUBLE_CLICK_SLOP)
+                {
+                  defer_double_click (v, ctx, id);
+                  /* Do not let a third click pair with the second. */
+                  drag_state.last_click_id = -1;
+                  drag_state.last_click_us = 0;
+                }
+              else
+                {
+                  drag_state.last_click_id = id;
+                  drag_state.last_click_us = now;
+                  drag_state.last_click_x = x;
+                  drag_state.last_click_y = y;
+                }
+            }
         }
       return true;
     }

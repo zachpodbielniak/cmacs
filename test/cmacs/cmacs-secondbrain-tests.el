@@ -1255,6 +1255,64 @@ grepping."
         (push sym missing)))
     (should (equal nil (nreverse missing)))))
 
+(ert-deftest cmacs-secondbrain-test-node-shading-changes-the-frame ()
+  "Shading actually reaches the picture, and can be turned off.
+
+The failure this guards is specific and was real: the highlight is a
+small sphere placed toward the light, and at any offset under 1.0 node
+radius it sits INSIDE an opaque sphere -- perfectly computed, completely
+invisible.  A test that only checked the setter returned t would have
+been happy with that."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-shading))
+  (let ((on (make-temp-file "sb-sh-" nil ".png"))
+        (off (make-temp-file "sb-sh-" nil ".png"))
+        (nodes (vector (list :id "a" :title "A" :kind 'hub :ring 'memory
+                             :count 40))))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (should (cmacs-secondbrain-set-shading buf t))
+          (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-libregnum-snapshot buf on)
+          ;; Read at build time, so rebuild after changing it.
+          (should-not (cmacs-secondbrain-set-shading buf nil))
+          (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-libregnum-snapshot buf off)
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read on) (funcall read off)))))
+      (ignore-errors (delete-file on))
+      (ignore-errors (delete-file off)))))
+
+(ert-deftest cmacs-secondbrain-test-double-click-flies-to-the-node ()
+  "A double click focuses the node it hit.
+
+The single click still fires first -- the two arrive in order, so
+selecting and then flying is one gesture rather than two competing
+ones."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain--on-double-click))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'memory))
+     (vector) 2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-fit buf)
+    (let ((before (cmacs-libregnum-camera-state buf)))
+      (cmacs-secondbrain--on-double-click buf 0 "a")
+      (dotimes (_ 40) (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+      (should-not (equal before (cmacs-libregnum-camera-state buf))))
+    ;; An id nobody has is reported, not an error.
+    (cmacs-secondbrain--on-double-click buf 0 "no-such-node")))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

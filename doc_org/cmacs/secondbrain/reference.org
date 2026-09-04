@@ -93,6 +93,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-default-layout= | =rings= | |
 | =cmacs-secondbrain-start-collapsed= | =t= | =nil= opens every file on load |
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
+| =cmacs-secondbrain-node-shading= | =t= | specular highlight per node |
 | =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
 | =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
 | =cmacs-secondbrain-rotate-speed= | 3.0 | what =R= turns on |
@@ -132,6 +133,7 @@ See the manual's key table; the map is =cmacs-secondbrain-mode-map=, deriving fr
 |---------+--------|
 | Left click on a department | select it *and expand or fold it* |
 | Left click on a leaf | select it; the inspector follows |
+| Double click a node | select it and fly the camera to it |
 | Left drag a node | move it; it pins where you drop it |
 | (no click moves the camera) | =f= flies deliberately, keeping context |
 | Hover anything | light up its whole department, dim the rest |

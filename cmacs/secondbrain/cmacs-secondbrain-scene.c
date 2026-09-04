@@ -77,7 +77,27 @@ typedef struct
   gboolean   flat;
   double     link_phase;   /* travelling-light phase, radians */
   GPtrArray *spark_shapes; /* LrgLine3D pool, repositioned each frame */
+  GPtrArray *node_hilite;  /* LrgSphere3D*, one per emitted node */
+  gboolean   shading;      /* draw the specular highlights */
 } SceneState;
+
+/* A node is a flat disc without one.  raylib draws an unlit sphere in a
+   single colour, so size is the only depth cue the glyphs have; a small
+   bright sphere set toward a fixed light gives the specular that makes
+   the eye read a ball.  Cheaper and far more robust than a shader: the
+   lighting path in this renderer only applies to MESH_ASSET models and
+   only inside the editor build. */
+#define SB_LIGHT_X (-0.45)
+#define SB_LIGHT_Y ( 0.60)
+#define SB_LIGHT_Z ( 0.65)
+/* The highlight has to break the SURFACE to be seen at all: at offset
+   O and radius R (both fractions of the node radius) it reaches O + R,
+   so anything under 1.0 leaves it buried inside an opaque sphere,
+   perfectly computed and completely invisible.  These put its cap just
+   proud of the surface, which is what reads as a specular rather than
+   as a bump. */
+#define SB_HILITE_R    0.34   /* highlight radius, as a fraction */
+#define SB_HILITE_OFF  0.78   /* how far toward the light, as a fraction */
 
 /* Beads are a fixed pool, not one drawable per lit edge: a note with a
    hundred links would otherwise add a hundred drawables on every
@@ -106,6 +126,7 @@ scene_state_free (gpointer p)
   if (st->node_shapes) g_ptr_array_free (st->node_shapes, TRUE);
   if (st->edge_shapes) g_ptr_array_free (st->edge_shapes, TRUE);
   if (st->spark_shapes) g_ptr_array_free (st->spark_shapes, TRUE);
+  if (st->node_hilite) g_ptr_array_free (st->node_hilite, TRUE);
   if (st->node_emit)   g_array_free (st->node_emit, TRUE);
   if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
   g_free (st);
@@ -130,6 +151,8 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
       st->node_shapes = g_ptr_array_new ();
       st->edge_shapes = g_ptr_array_new ();
       st->spark_shapes = g_ptr_array_new ();
+      st->node_hilite = g_ptr_array_new ();
+      st->shading = TRUE;
       st->node_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->edge_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       g_hash_table_insert (s_states, r, st);
@@ -146,6 +169,7 @@ cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r)
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
   g_ptr_array_set_size (st->spark_shapes, 0);
+  g_ptr_array_set_size (st->node_hilite, 0);
   g_array_set_size (st->node_emit, 0);
   g_array_set_size (st->edge_emit, 0);
 }
@@ -275,6 +299,7 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
   g_ptr_array_set_size (st->spark_shapes, 0);
+  g_ptr_array_set_size (st->node_hilite, 0);
 
   n = cmacs_graph_n_nodes (g);
   m = cmacs_graph_n_edges (g);
@@ -384,6 +409,35 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
       g_array_index (st->node_emit, gint32, i) = (gint32) n_nodes_drawn;
       g_ptr_array_add (st->node_shapes, shape);
       cmacs_libregnum_render_ctx_add_drawable (r, shape);
+
+      /* The specular.  One per emitted node, in the SAME order, so the
+         two arrays index alike and sync_positions can move both from one
+         loop.  A NULL entry keeps that alignment when shading is off --
+         a shorter array would silently pair a node with someone else's
+         highlight. */
+      if (st->shading)
+        {
+          double rad = (double) nd->radius;
+          double hr = rad * SB_HILITE_R;
+          double nx = (double) nd->x, ny = (double) nd->y;
+          double nz = (double) nd->z;
+          LrgSphere3D *hl =
+            lrg_sphere3d_new_at ((float) (nx + rad * SB_HILITE_OFF * SB_LIGHT_X),
+                                 (float) (ny + rad * SB_HILITE_OFF * SB_LIGHT_Y),
+                                 (float) (nz + rad * SB_HILITE_OFF * SB_LIGHT_Z),
+                                 (float) hr);
+          g_autoptr (GrlColor) hc =
+            grl_color_new ((guint8) (255 - (255 - (int) cr) * 35 / 100),
+                           (guint8) (255 - (255 - (int) cg) * 35 / 100),
+                           (guint8) (255 - (255 - (int) cb) * 35 / 100),
+                           ca);
+          lrg_shape_set_color (LRG_SHAPE (hl), hc);
+          g_ptr_array_add (st->node_hilite, hl);
+          cmacs_libregnum_render_ctx_add_drawable (r, hl);
+        }
+      else
+        g_ptr_array_add (st->node_hilite, NULL);
+
       n_nodes_drawn++;
 
       id = cmacs_libregnum_render_ctx_add_node (r, nd->id, nd->title,
@@ -486,6 +540,26 @@ cmacs_secondbrain_scene_sync_positions (CmacsLibregnumRenderCtx *r,
       shape = g_ptr_array_index (st->node_shapes, node_i);
       if (shape)
         lrg_shape3d_set_position_xyz (shape, nd->x, nd->y, nd->z);
+
+      /* The specular travels with its node.  Left behind, it stops
+         being a highlight and becomes a second, smaller node hanging in
+         space -- and a tween moves every node every frame. */
+      if (st->node_hilite && node_i < st->node_hilite->len)
+        {
+          LrgShape3D *hl = g_ptr_array_index (st->node_hilite, node_i);
+          if (hl)
+            {
+              double rad = (double) nd->radius;
+              double nx = (double) nd->x, ny = (double) nd->y;
+              double nz = (double) nd->z;
+              lrg_shape3d_set_position_xyz
+                (hl,
+                 (float) (nx + rad * SB_HILITE_OFF * SB_LIGHT_X),
+                 (float) (ny + rad * SB_HILITE_OFF * SB_LIGHT_Y),
+                 (float) (nz + rad * SB_HILITE_OFF * SB_LIGHT_Z));
+            }
+        }
+
       /* Keep the pick box under the glyph, or clicking lands on
          wherever the node used to be -- which during a tween is every
          frame. */
@@ -885,6 +959,13 @@ cmacs_secondbrain_scene_flat_p (CmacsLibregnumRenderCtx *r)
 {
   SceneState *st = scene_state (r, FALSE);
   return st ? st->flat : FALSE;
+}
+
+void
+cmacs_secondbrain_scene_set_shading (CmacsLibregnumRenderCtx *r, gboolean on)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (st) st->shading = on;
 }
 
 void

@@ -125,6 +125,7 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item left click on a department
   @tab select it @strong{and expand or fold it}
 @item left click on a leaf @tab select it; the inspector follows
+@item double click a node @tab select it and fly the camera to it
 @item left drag a node @tab move it, and pin it where you drop it
 @item a short drag @tab is still a click; dragging starts past a few pixels
 @item left drag @tab orbit (3D); no effect in the locked 2D view
@@ -263,6 +264,24 @@ controls are unchanged.
 nodes really move and picking follows them --- not a camera trick, which
 would look the same and leave every pick box behind.  It costs a layout
 pass per tick, which is why it is off unless you ask.
+
+@subsection Node shading
+
+raylib draws an unlit sphere in a single colour, so a node is a flat
+disc and size is the only depth cue the glyphs have.  Each node
+therefore carries a small bright sphere set toward a fixed light --- the
+specular that makes the eye read a ball.
+
+The offset matters more than it looks: at offset O and radius R, both
+fractions of the node radius, the highlight reaches O + R.  Anything
+under 1.0 leaves it buried inside an opaque sphere --- perfectly
+computed and completely invisible, which is exactly what the first
+attempt did.
+
+@code{cmacs-secondbrain-node-shading} turns it off.  It costs one extra
+small sphere per visible node, and the highlight is moved with its node
+on every sync, or a tween leaves it behind as a second smaller node
+hanging in space.
 
 @subsection Particles
 
@@ -495,7 +514,8 @@ defaults are what @kbd{M-x cmacs-secondbrain} gives you.
       cmacs-secondbrain-max-labels 160)
 
 ;; Interaction.
-(setq cmacs-secondbrain-drag-nodes t
+(setq cmacs-secondbrain-node-shading t
+      cmacs-secondbrain-drag-nodes t
       cmacs-secondbrain-hover-highlights-group t
       cmacs-secondbrain-fly-context 0.4)
 
