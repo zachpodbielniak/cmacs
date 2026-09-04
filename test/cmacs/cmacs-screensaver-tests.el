@@ -16,6 +16,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'cmacs-screensaver)
+(require 'cmacs-secondbrain nil 'noerror)
 
 (defmacro cmacs-screensaver-tests--with-fake-modules (names &rest body)
   "Run BODY with `cmacs-screensaver-module-path' bound to a temp dir holding
@@ -170,6 +171,53 @@ before reaching the C primitive."
   "`cmacs-screensaver-restart' errors cleanly in a build without the subsystem."
   (cl-letf (((symbol-function 'cmacs-screensaver-supported-p) (lambda () nil)))
     (should-error (cmacs-screensaver-restart) :type 'user-error)))
+
+(ert-deftest cmacs-screensaver-test-survives-a-blocked-main-loop ()
+  "A stalled Emacs main loop must not be mistaken for a wedged child.
+
+Heartbeats are read on the cmacs GMainContext, so anything running a
+nested loop on Emacs's thread -- a GTK context menu, a modal dialog, a
+long synchronous eval -- stops them being read while the child goes on
+sending them perfectly happily.  A watchdog that only measures
+\"time since the last heartbeat I saw\" then SIGKILLs a healthy child the
+moment the loop resumes.
+
+That was not theoretical: right-clicking the second-brain graph killed
+the screensaver behind it, and a few menus in a row exhausted
+SCR_RESTART_MAX and gave up for good.
+
+The assertion is the process identity.  Block the loop for twice the
+stale threshold, and the same child must still be there afterwards."
+  (skip-unless (and (fboundp 'cmacs-screensaver-supported-p)
+                    (cmacs-screensaver-supported-p)
+                    (fboundp 'cmacs-screensaver-attach-background)
+                    (fboundp 'cmacs-secondbrain-attach)
+                    (getenv "CMACS_SCREENSAVER_MODULE_DIR")
+                    (or (getenv "DISPLAY") (getenv "WAYLAND_DISPLAY"))))
+  (let ((buf (generate-new-buffer " *scr-stall-test*")))
+    (unwind-protect
+        (progn
+          (cmacs-secondbrain-attach buf 320 240)
+          (with-current-buffer buf
+            (cmacs-secondbrain-set-graph buf (vector) (vector) 2)
+            (cmacs-screensaver-attach-background buf 'helios-blue 320 240)
+            ;; Let it spawn and start producing.
+            (dotimes (_ 60) (sleep-for 0.05)
+                     (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+            (let ((before (plist-get (cmacs-screensaver--status) :pid)))
+              (should before)
+              ;; A busy wait, not `sleep-for': the point is that the
+              ;; GMainContext does not run at all, which is what a nested
+              ;; menu loop does to it.
+              (let ((deadline (+ (float-time) 6.0)))
+                (while (< (float-time) deadline) nil))
+              (dotimes (_ 60) (sleep-for 0.05)
+                       (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+              (should (equal before
+                             (plist-get (cmacs-screensaver--status) :pid))))))
+      (ignore-errors (cmacs-screensaver-detach-background buf))
+      (ignore-errors (cmacs-secondbrain-detach buf))
+      (kill-buffer buf))))
 
 (provide 'cmacs-screensaver-tests)
 ;;; cmacs-screensaver-tests.el ends here

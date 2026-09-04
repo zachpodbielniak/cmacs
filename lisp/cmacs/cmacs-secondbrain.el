@@ -100,16 +100,16 @@ where, which is the whole reason to have a map."
   :type 'integer
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-start-collapsed nil
+(defcustom cmacs-secondbrain-start-collapsed t
   "Whether departments start folded.
 
-Nil -- the default -- opens the whole map: every ring shows its files
-and the links between them, which is the view the thing exists to give
-you.  Folding is then something you reach for on a department too big to
-read, not the state you have to dig your way out of every time.
+T -- the default -- opens to the rings and their department hubs, each
+labelled with what it holds.  Click a hub, or `TAB' on it, to open one;
+`e' opens every department at once.
 
-Set it to t on a very large tree, where drawing everything at once costs
-more than it tells you."
+Set it to nil to open the whole map instead.  That shows every file and
+every link immediately, which is the fuller picture but a much busier
+one on a large tree."
   :type 'boolean
   :group 'cmacs-secondbrain)
 

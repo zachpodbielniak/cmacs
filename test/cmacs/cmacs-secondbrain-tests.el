@@ -794,7 +794,8 @@ it off, and this pins that it stays off."
     (cmacs-secondbrain-tests--with-view buf
       (with-current-buffer buf
         (cmacs-secondbrain-mode)
-        (cmacs-secondbrain-refresh)
+        (let ((cmacs-secondbrain-start-collapsed nil))
+          (cmacs-secondbrain-refresh))
         (let ((before (cmacs-libregnum-camera-state buf)))
           (cmacs-secondbrain--on-pick buf 1 0 0 "m1")
           (should (equal before (cmacs-libregnum-camera-state buf))))))))
@@ -813,7 +814,11 @@ filling the view."
     (cmacs-secondbrain-tests--with-view buf
       (with-current-buffer buf
         (cmacs-secondbrain-mode)
-        (cmacs-secondbrain-refresh)
+        ;; Flying to a node needs the node ON SCREEN, and departments now
+        ;; open folded -- so this asks for the open map explicitly rather
+        ;; than depending on whichever way the default happens to point.
+        (let ((cmacs-secondbrain-start-collapsed nil))
+          (cmacs-secondbrain-refresh))
         ;; An id nobody has is nil, not an error and not a camera move.
         (should-not (cmacs-secondbrain-focus buf "no-such-node"))
         (let ((before (cmacs-libregnum-camera-state buf)))

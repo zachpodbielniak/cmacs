@@ -92,6 +92,7 @@ typedef struct
   guint    watchdog_source;
   guint    respawn_source;   /* backoff timer, or 0 */
   gint64   last_heartbeat_us;
+  gint64   last_watchdog_us;   /* when the watchdog itself last ran */
   int      restart_count;    /* within the current window */
   gint64   restart_window_us;
   gboolean gave_up;
@@ -583,12 +584,42 @@ scr_child_schedule_respawn (void)
 }
 
 /* Periodic watchdog: a child that stops heartbeating while it should be running
- * is wedged -- kill it so the child_watch handler restarts it. */
+ * is wedged -- kill it so the child_watch handler restarts it.
+ *
+ * "Stops heartbeating" has to mean the CHILD went quiet, not that WE
+ * stopped listening.  Heartbeats are read on the cmacs GMainContext, and
+ * anything running a nested loop on Emacs's thread -- a GTK context
+ * menu, a modal dialog, a long synchronous eval -- stops that context
+ * dead.  The child keeps sending; nobody reads.  When the loop resumes,
+ * a naive staleness test sees a multi-second gap and SIGKILLs a
+ * perfectly healthy child.  Right-clicking the second-brain graph did
+ * exactly that, and a few menus in a row exhausted SCR_RESTART_MAX and
+ * gave up for good, so the background never came back.
+ *
+ * So the watchdog also times ITSELF.  A gap much longer than its own
+ * interval means our loop was blocked, and the child's silence across
+ * that window is no evidence at all -- forgive exactly that much and
+ * wait for the next honest interval. */
 static gboolean
 scr_child_watchdog_cb (gpointer data)
 {
   gint64 now = g_get_monotonic_time ();
+  gint64 since_tick;
   (void) data;
+
+  since_tick = (child_proc.last_watchdog_us != 0)
+                 ? now - child_proc.last_watchdog_us : 0;
+  child_proc.last_watchdog_us = now;
+
+  /* Twice the interval: ordinary jitter is well under that, and a
+     nested loop is normally far over it. */
+  if (since_tick > 2 * SCR_WATCHDOG_MS * 1000)
+    {
+      child_proc.last_heartbeat_us += since_tick;
+      if (child_proc.last_heartbeat_us > now)
+        child_proc.last_heartbeat_us = now;
+      return G_SOURCE_CONTINUE;
+    }
 
   if (child_proc.alive && child_proc.pid != 0
       && !child_paused && scr_any_session_active ()
@@ -667,6 +698,9 @@ scr_child_spawn (char **err_out)
   child_proc.pid = pid;
   child_proc.alive = TRUE;
   child_proc.last_heartbeat_us = g_get_monotonic_time ();
+  /* Baseline the self-timer too, so the first watchdog tick after a
+     spawn is not mistaken for a stalled main loop. */
+  child_proc.last_watchdog_us = child_proc.last_heartbeat_us;
 
   child_proc.io_source = g_socket_create_source (
                            child_proc.sock,

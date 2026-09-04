@@ -179,6 +179,14 @@ Three things make this different from the wallpaper and lock sinks:
 
 The size is the caller's responsibility: the screensaver renders at a fixed size in another process, so a viewport that resizes must call =cmacs-screensaver-background-resize= or the background stays at whatever size it started with and gets scaled.
 
+** The watchdog and nested loops
+
+The child heartbeats over the control socket, and a watchdog kills it if those stop while it should be running. Heartbeats are *read* on the cmacs GMainContext, so anything that runs a nested loop on Emacs's thread — a GTK context menu, a modal dialog, a long synchronous eval — stops them being read while the child goes on sending them.
+
+So the watchdog also times itself. A gap much longer than its own interval means /our/ loop was blocked, and the child's silence across that window is no evidence about the child at all; it forgives exactly that much and waits for the next honest interval.
+
+Without that, right-clicking a graph with a screensaver background killed the screensaver, and a few menus in a row exhausted the restart budget and gave up for good.
+
 * Module discovery, build & install
 
 The screensaver =.so= modules are searched for in:

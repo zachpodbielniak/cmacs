@@ -8550,7 +8550,18 @@ from the caller and is pulled rather than pushed, so it works in a plain
 pgtk Emacs.  The @strong{consumer pulls} ---
 @code{cmacs_screensaver_peek_frame} borrows the newest complete frame
 and returns false for ``no frame yet'' and ``writer mid-write'' alike,
-both meaning @emph{nothing new} rather than an error.  @strong{Frames are BGRA}: the shm ring carries
+both meaning @emph{nothing new} rather than an error.  @strong{The watchdog also times itself.}  The child heartbeats over the
+control socket and a watchdog kills it if those stop, but heartbeats are
+@emph{read} on the cmacs GMainContext --- so a nested loop on Emacs's
+thread (a context menu, a modal dialog, a long synchronous eval) stops
+them being read while the child goes on sending them.  A gap much longer
+than the watchdog's own interval therefore means our loop was blocked,
+not that the child is wedged, and is forgiven.  Without that,
+right-clicking a graph with a screensaver background killed the
+screensaver, and a few menus in a row exhausted the restart budget for
+good.
+
+@strong{Frames are BGRA}: the shm ring carries
 @code{ARGB8888 == GL_BGRA} byte order, which is what gowl's frame sink
 wants, and raylib has no BGRA format --- so the libregnum background
 swizzles red and blue before upload.  Skipping that does not look
