@@ -707,6 +707,28 @@ the middle of the map."
   (interactive)
   (cmacs-secondbrain--zoom (- cmacs-secondbrain-zoom-step)))
 
+(defun cmacs-secondbrain-cycle-galaxy-tilt ()
+  "Cycle the 3D warp through flat, gentle, default and steep.
+
+Only does anything in `cmacs-secondbrain-3d\=': the flat view snaps every
+node to z = 0, so it says so rather than appearing to be broken."
+  (interactive)
+  (let* ((steps '(0.0 12.0 24.0 34.0))
+         (cur (or cmacs-secondbrain-galaxy-tilt 0.0))
+         (next (or (cadr (member (car (cl-member cur steps
+                                                 :test (lambda (a b)
+                                                         (< (abs (- a b))
+                                                            0.01))))
+                                 steps))
+                   (car steps))))
+    (setq-local cmacs-secondbrain-galaxy-tilt next)
+    (ignore-errors
+      (cmacs-secondbrain-set-galaxy-tilt
+       (current-buffer) next cmacs-secondbrain-transition-frames))
+    (cmacs-secondbrain--animate)
+    (message "Galaxy tilt %.0f°%s" next
+             (if cmacs-secondbrain--3d "" "  (flat view: no effect until v)"))))
+
 ;;;; Help -------------------------------------------------------------
 
 (defun cmacs-secondbrain-help ()
@@ -770,6 +792,7 @@ the middle of the map."
       (princ "Camera and looks\n----------------\n")
       (princ "  f          fly to the selection, and pivot around it\n")
       (princ "  + = -      zoom in / in / out, toward the camera target\n")
+      (princ "  T          galaxy tilt: flat / gentle / default / steep\n")
       (princ "  0          frame the whole map\n")
       (princ "  v          flat / 3D\n")
       (princ "  b          background (wallpaper or screensaver)\n")

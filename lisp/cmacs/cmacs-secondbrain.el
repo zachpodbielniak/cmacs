@@ -54,7 +54,9 @@
 (declare-function cmacs-secondbrain-recenter "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-zoom-in "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-zoom-out "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-cycle-galaxy-tilt "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-set-match-set "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-set-galaxy-tilt "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-supported-p "cmacs-secondbrain-defuns")
@@ -217,6 +219,28 @@ raylib draws an unlit sphere in a single colour, so without one a node
 is a flat disc and size is the only depth cue the glyphs have.  Costs
 one extra small sphere per visible node."
   :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-galaxy-tilt 24.0
+  "Maximum out-of-plane angle, in degrees, of the 3D rings.
+
+Concentric rings viewed in three dimensions are coplanar, so orbiting
+them only proves they are flat -- the third dimension buys nothing.
+This warps the disc the way a galaxy is warped: height grows with
+radius and varies with the azimuth, so one side of the map lifts and
+the opposite side drops, with a little per-node thickness so a
+department is not a perfectly flat sheet.
+
+The angle sets the warp: at its crest the disc sits exactly this far
+above the plane.  The small per-node thickness rides on top, so an
+individual node can sit a few degrees beyond it -- this is the shape of
+the disc, not a hard ceiling on any one node.  20-30 keeps the map
+readable as rings while giving it real depth; 0 is flat.
+
+Applies to the `rings' layout only, and only in
+`cmacs-secondbrain-3d' -- the flat view snaps every node to z = 0, so
+this setting is simply inert there."
+  :type 'number
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-node-glow t
@@ -458,6 +482,12 @@ useless."
     (when (fboundp 'cmacs-secondbrain-set-glow)
       (ignore-errors
         (cmacs-secondbrain-set-glow buf cmacs-secondbrain-node-glow)))
+    (when (fboundp 'cmacs-secondbrain-set-galaxy-tilt)
+      ;; Set in both views: the flat one zeroes z anyway, so there is no
+      ;; branch to get wrong and no state to restore when toggling with
+      ;; `v'.
+      (ignore-errors
+        (cmacs-secondbrain-set-galaxy-tilt buf cmacs-secondbrain-galaxy-tilt)))
     (when (fboundp 'cmacs-libregnum-set-drag-nodes)
       ;; Nodes are draggable: this is a map you arrange, not only one
       ;; you read.  Empty space still orbits and pans, so the camera
@@ -1198,6 +1228,7 @@ sources."
   "x" #'cmacs-secondbrain-toggle-isolate
   "F" #'cmacs-secondbrain-cycle-ring-filter
   "a" #'cmacs-secondbrain-toggle-age-fade
+  "T" #'cmacs-secondbrain-cycle-galaxy-tilt
   "C-h m" #'describe-mode
   "q" #'quit-window)
 

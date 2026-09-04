@@ -22,6 +22,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 @menu
 * Secondbrain ARMS::            The four layers, and why they matter.
 * Secondbrain Getting Started:: Opening it, and the keys.
+* Secondbrain Galaxy::          Why the 3D view is a warped disc.
 * Secondbrain Layouts::         Four layouts, all animated.
 * Secondbrain Search::          Three tiers, cheapest first.
 * Secondbrain Focusing::        Isolate, ring filter and age fade.
@@ -132,6 +133,7 @@ leaving the buffer.
 @item @kbd{x} @tab isolate the selection's neighbourhood
 @item @kbd{F} @tab cycle the ring filter
 @item @kbd{a} @tab age fade: colour Memory by how recently it changed
+@item @kbd{T} @tab galaxy tilt: flat / gentle / default / steep (3D)
 @item @kbd{s} / @kbd{S} @tab spin the rings
 @item @kbd{R} @tab slow auto-rotation on/off
 @item @kbd{u} / @kbd{U} @tab unpin the selection / everything
@@ -493,6 +495,53 @@ existed nothing was clickable at all, and later the @emph{paint} used
 the full window rect against a text-area click mapping --- offset by
 the fringes and the mode line's share of the height --- so every node
 had to be clicked above and to the right of where it was drawn.
+
+@node Secondbrain Galaxy
+@section The 3D view is a galaxy
+
+Concentric rings viewed in three dimensions are coplanar, so orbiting
+them only proves they are flat --- the third dimension buys nothing.
+So in 3D the disc is @emph{warped}, the way a galaxy is warped.
+
+Two terms, and the split is the design:
+
+@table @asis
+@item The warp
+A mode-1 bend --- the ``integral sign'' warp real galaxies have.
+Height grows with radius and varies with the azimuth, so one side of
+the map lifts and the opposite side drops.  Coherent rather than
+random: neighbours stay neighbours, a department stays a clump, and the
+eye reads a shape instead of scatter.
+
+@item The thickness
+A small per-node offset so one department's members are not perfectly
+coplanar.  Without it the map is a bent sheet; with it the disc has
+substance.  Deliberately well under a row gap --- crank it and the band
+structure the layout works hard to produce dissolves back into the
+smear it exists to prevent.
+@end table
+
+@code{cmacs-secondbrain-galaxy-tilt} (24 degrees) is the warp's crest:
+there a node sits exactly that far above the plane.  The thickness
+rides on top, so an individual node can sit a few degrees beyond it ---
+the number describes the shape of the disc, not a ceiling on any one
+node.  @kbd{T} cycles flat, gentle, default, steep.
+
+The height is computed from the node's @emph{final} azimuth, spin
+included, so the warp is fixed in world space and a spinning ring flows
+through it the way stars orbit through a real warped disc, rather than
+the whole sheet rotating rigidly.
+
+Two scope notes.  It applies to the @code{rings} layout only --- a hex
+lattice bent along an azimuth it does not have would just be crooked.
+And it needs no branch on the view: a 2D layout snaps every node to
+@math{z = 0}, so the setting is inert in the flat view and @kbd{v} can
+toggle back and forth with nothing to restore.
+
+The per-node thickness is hashed from the node's @emph{id}, not its
+index: index order churns on every rebuild, so hashing that would
+reshuffle every height on refresh and the map would twitch for no
+reason.
 
 @node Secondbrain Layouts
 @section Layouts

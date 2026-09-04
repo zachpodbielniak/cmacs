@@ -71,6 +71,14 @@ if (idx < 0) continue;   /* graph is full -- drop it */
 
 The return is *signed*. Returning =0= for "full" aliased every overflowing node onto node 0, which silently corrupted the graph rather than dropping the node. A caller that ignores the result will keep a payload for a node that does not exist.
 
+*** The galaxy warp (RINGS, 3D only)
+
+=cmacs_graph_layout_set_galaxy_tilt= bends the rings out of their plane: height grows with radius and varies as sine of the azimuth, so one side of the disc lifts and the opposite side drops, plus a small per-node thickness term so a group is not a perfectly flat sheet.
+
+Zero by default, so an existing consumer's picture does not change under it — roamgraph's rings stay coplanar unless it asks. The tilt is the warp's crest, where =atan(z/r)= equals it exactly; the thickness rides on top.
+
+The thickness is hashed from the node's *id* rather than its index, because index order churns on every rebuild and hashing that would reshuffle every height on refresh.
+
 * Layouts
 
 ** Force (the default)

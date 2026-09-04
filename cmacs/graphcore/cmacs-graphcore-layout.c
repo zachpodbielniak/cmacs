@@ -72,6 +72,10 @@
    band claims for its population. */
 #define GRAPHCORE_NODE_ARC (0.95)
 #define GRAPHCORE_ROW_GAP  (0.85)
+/* Disc thickness, as a multiple of the row gap: the per-node scatter
+   that stops one wedge's members being perfectly coplanar.  Deliberately
+   well under a row, so the warp never blurs the band structure. */
+#define GRAPHCORE_GALAXY_THICKNESS (0.6)
 #define GRAPHCORE_RING_GAP     6.0
 
 /* Centre-to-centre spacing of the hex lattice, in the same world units
@@ -114,6 +118,7 @@ struct CmacsGraphLayout
   CmacsGraphLayoutKind kind;
   double   spin;        /* RINGS angular offset, radians */
   double   ring_gap;    /* radial distance between bands */
+  double   galaxy_tilt; /* max out-of-plane angle, radians; 0 = flat */
   int      tween_frame; /* frames elapsed in the current tween */
   int      tween_frames;/* 0 = not tweening */
 };
@@ -128,6 +133,9 @@ cmacs_graph_layout_new (void)
   l->converged = TRUE;      /* nothing armed yet */
   l->kind      = CMACS_GRAPH_LAYOUT_FORCE;
   l->ring_gap  = GRAPHCORE_RING_GAP;
+  /* Flat by default, so an existing consumer's picture does not change
+     under it; a scene that wants the warp asks for it. */
+  l->galaxy_tilt = 0.0;
   l->cells     = g_array_new (FALSE, FALSE, sizeof (BhCell));
   l->disp      = g_array_new (FALSE, TRUE, sizeof (float));
   return l;
@@ -1102,6 +1110,72 @@ place_hex (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
 /* RINGS: concentric bands taken from node->ring, each band's members
  * spread by angle, groups kept contiguous so a department reads as one
  * wedge.  This is the ARMS layout. */
+/* ── The galaxy warp ───────────────────────────────────────────────
+ *
+ * Concentric rings viewed in 3D are a disappointment: they are coplanar,
+ * so orbiting them only proves they are flat, and the third dimension
+ * buys nothing.  Lifting each node out of the plane by a smooth function
+ * of WHERE IT SITS turns the same layout into a warped disc -- which is
+ * what a galaxy is, and why some of it reads as "higher" than the rest.
+ *
+ * Two terms, and the split is the whole design:
+ *
+ *   The WARP is a mode-1 (integral-sign) bend: z grows with radius and
+ *   varies as sin of the azimuth, so one side of the disc lifts and the
+ *   opposite side drops.  Coherent, not random -- neighbours stay
+ *   neighbours, a department stays a clump, and the eye reads a shape
+ *   rather than scatter.  Growing with radius is what keeps the middle
+ *   legible while the rim does the moving.
+ *
+ *   The THICKNESS is a small per-node offset so members of one wedge are
+ *   not perfectly coplanar.  Without it the map is a bent sheet; with it
+ *   the disc has substance.  Kept small on purpose: crank it and the
+ *   band structure the layout works hard to produce dissolves back into
+ *   the smear it exists to prevent.
+ *
+ * TILT is the elevation of the warp term at its crest, in radians, and
+ * there it is exact: z = r*tan(tilt) means atan(z/r) == tilt.  The
+ * thickness term rides on top, so a given node may sit a little beyond
+ * it; TILT is the shape of the disc, not a per-node ceiling.  The
+ * angle is the node's FINAL azimuth, spin included, so the warp is fixed
+ * in world space and a spinning ring flows through it the way stars orbit
+ * through a real warped disc, rather than the whole sheet rotating
+ * rigidly.
+ *
+ * Deterministic, and keyed on the node's ID rather than its index: index
+ * order churns whenever the graph is rebuilt, so hashing it would
+ * reshuffle every height on refresh, which reads as the map twitching.  */
+
+/* FNV-1a, folded to [-1, 1].  Any stable, well-mixed hash would do; this
+   one is four lines and has no dependency. */
+static double
+graphcore_id_jitter (const gchar *id)
+{
+  guint32 h = 2166136261u;
+
+  if (id == NULL) return 0.0;
+  for (const gchar *p = id; *p; p++)
+    {
+      h ^= (guint32) (guchar) *p;
+      h *= 16777619u;
+    }
+  return ((double) (h & 0xFFFFu) / 32767.5) - 1.0;
+}
+
+static double
+graphcore_galaxy_z (CmacsGraphLayout *l, CmacsGraphNode *nd,
+                    double r, double angle)
+{
+  double warp, thick;
+
+  if (l->galaxy_tilt <= 0.0) return 0.0;
+
+  warp  = r * tan (l->galaxy_tilt) * sin (angle);
+  thick = graphcore_id_jitter (nd->id) * GRAPHCORE_ROW_GAP
+            * GRAPHCORE_GALAXY_THICKNESS;
+  return warp + thick;
+}
+
 static void
 place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
 {
@@ -1266,7 +1340,8 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
 
           cursor += span;
 
-          place_set (hub, r * cos (mid), r * sin (mid), 0.0, dims);
+          place_set (hub, r * cos (mid), r * sin (mid),
+                     graphcore_galaxy_z (l, hub, r, mid), dims);
 
           /* Count this root's members (excluding itself) to shape the
              lattice they sit in. */
@@ -1319,7 +1394,8 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                    the gesture implies. */
                 rr = r + GRAPHCORE_ROW_GAP * 0.9
                        + thickness * (((double) row + 0.5) / (double) rows);
-                place_set (nd, rr * cos (a), rr * sin (a), 0.0, dims);
+                place_set (nd, rr * cos (a), rr * sin (a),
+                           graphcore_galaxy_z (l, nd, rr, a), dims);
               }
           }
         }
@@ -1422,6 +1498,21 @@ double
 cmacs_graph_layout_get_ring_gap (CmacsGraphLayout *l)
 {
   return l ? l->ring_gap : GRAPHCORE_RING_GAP;
+}
+
+void
+cmacs_graph_layout_set_galaxy_tilt (CmacsGraphLayout *l, double radians)
+{
+  if (!l) return;
+  /* Clamped below a right angle: at 90 degrees tan blows up and the
+     "disc" becomes a line through the pole. */
+  l->galaxy_tilt = CLAMP (radians, 0.0, G_PI * 0.45);
+}
+
+double
+cmacs_graph_layout_get_galaxy_tilt (CmacsGraphLayout *l)
+{
+  return l ? l->galaxy_tilt : 0.0;
 }
 
 CmacsGraphLayoutKind

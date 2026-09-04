@@ -92,6 +92,7 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =x= | isolate the selection's neighbourhood |
 | =F= | cycle the ring filter |
 | =a= | age fade: colour Memory by staleness |
+| =T= | galaxy tilt: flat / gentle / default / steep (3D) |
 | =s= / =S= | spin the rings |
 | =R= | slow auto-rotation on/off |
 | =u= / =U= | unpin the selection / everything |
@@ -230,6 +231,23 @@ The honest cost: particles advance on wall-clock time inside the render pass, so
 =cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's *body* pixel size — the text area, with fringes, margins and the mode line excluded — and =window-size-change-functions= re-runs it, coalesced through a 0.06 s idle timer, whenever the window changes.
 
 This is not cosmetic, and neither is the word /body/. The picture, the click mapping and the framebuffer are a three-party contract: the pgtk overlay and the =--lrg= backend paint the view into =window_box TEXT_AREA=, the input layer maps clicks against that same box, and this hook sizes the FBO to match. Any party on a different rect puts every click somewhere other than where it was aimed. Both failure modes have shipped: before the hook existed nothing was clickable at all, and later the /paint/ used the full window rect against a text-area click mapping — offset by the fringes and the mode line's share of the height — so every node had to be clicked above and to the right of where it was drawn.
+
+* The 3D view is a galaxy
+
+Concentric rings viewed in three dimensions are coplanar, so orbiting them only proves they are flat — the third dimension buys nothing. So in 3D the disc is *warped*, the way a galaxy is warped.
+
+Two terms, and the split is the design:
+
+- The *warp* is a mode-1 bend — the "integral sign" warp real galaxies have. Height grows with radius and varies with the azimuth, so one side of the map lifts and the opposite side drops. Coherent rather than random: neighbours stay neighbours, a department stays a clump, and the eye reads a shape instead of scatter. Growing with radius keeps the middle legible while the rim does the moving.
+- The *thickness* is a small per-node offset so one department's members are not perfectly coplanar. Without it the map is a bent sheet; with it the disc has substance. It is deliberately well under a row gap — crank it and the band structure the layout works hard to produce dissolves back into the smear it exists to prevent.
+
+=cmacs-secondbrain-galaxy-tilt= (24°) is the warp's crest: there a node sits exactly that far above the plane. The thickness rides on top, so an individual node can sit a few degrees beyond — the number describes the shape of the disc, not a ceiling on any one node. =T= cycles flat → gentle → default → steep.
+
+The height is computed from the node's *final* azimuth, spin included, so the warp is fixed in world space and a spinning ring flows through it the way stars orbit through a real warped disc, rather than the whole sheet rotating rigidly.
+
+Two scope notes. It applies to the *rings* layout only — a hex lattice bent along an azimuth it does not have would just be crooked. And it needs no branch on the view: a 2D layout snaps every node to =z = 0=, so the setting is simply inert in the flat view and =v= can toggle back and forth without anything to restore.
+
+The per-node thickness is hashed from the node's *id*, not its index: index order churns on every rebuild, so hashing that would reshuffle every height on refresh and the map would twitch for no reason.
 
 * Layouts
 

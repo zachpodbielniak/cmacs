@@ -56,6 +56,7 @@ typedef struct
   CmacsGraphLayout *layout;
   int               dims;
   double            ring_gap;
+  double            galaxy_tilt;   /* radians; 0 = coplanar rings */
   gboolean          band_guides;
   CmacsGraphLayoutKind kind;
 } SbState;
@@ -241,6 +242,10 @@ static void
 sb_relayout (SbState *st, CmacsLibregnumRenderCtx *ctx, int frames)
 {
   cmacs_graph_layout_set_ring_gap (st->layout, st->ring_gap);
+  /* Pushed here rather than only when it is set, for the same reason as
+     the ring gap: every relayout must re-state the shape it wants, so a
+     layout switch cannot quietly flatten the disc. */
+  cmacs_graph_layout_set_galaxy_tilt (st->layout, st->galaxy_tilt);
 
   if (st->kind == CMACS_GRAPH_LAYOUT_FORCE)
     {
@@ -1177,6 +1182,49 @@ wants to track the slider, not lag behind it.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-secondbrain-set-galaxy-tilt", Fcmacs_secondbrain_set_galaxy_tilt,
+       Scmacs_secondbrain_set_galaxy_tilt, 2, 3, 0,
+       doc: /* Bend BUFFER's rings out of the plane by up to DEGREES.
+
+Concentric rings viewed in three dimensions are coplanar, so orbiting
+them only proves they are flat and the third dimension buys nothing.
+This warps the disc the way a galaxy is warped: height grows with
+radius and varies with the azimuth, so one side of the map lifts and
+the opposite side drops, with a little per-node thickness so a
+department is not a perfectly flat sheet.
+
+DEGREES sets the warp: at its crest the disc sits exactly that far
+above the plane.  The small per-node thickness rides on top, so an
+individual node can sit a few degrees beyond it -- the number is the
+shape of the disc, not a hard ceiling on any one node.  20 to 30 keeps
+the map readable as rings while giving it real depth; 0 is flat.
+
+Affects the `rings' layout only, and only in 3D: a 2D layout flattens
+every node to z = 0, so this can be left set in both views.  With
+FRAMES, animate into the new shape over that many frames.
+
+Returns the degrees applied.  */)
+  (Lisp_Object buffer, Lisp_Object degrees, Lisp_Object frames)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  SbState *st;
+  double deg;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  deg = FLOATP (degrees) ? XFLOAT_DATA (degrees)
+        : FIXNUMP (degrees) ? (double) XFIXNUM (degrees) : 0.0;
+  if (deg < 0.0) deg = 0.0;
+
+  st->galaxy_tilt = deg * G_PI / 180.0;
+  sb_relayout (st, ctx, FIXNUMP (frames) ? (int) XFIXNUM (frames) : 0);
+  cmacs_libregnum_view_request_redraw (v);
+  return make_float (deg);
+}
+
 DEFUN ("cmacs-secondbrain-set-ring-gap", Fcmacs_secondbrain_set_ring_gap,
        Scmacs_secondbrain_set_ring_gap, 2, 2, 0,
        doc: /* Set the radial distance between BUFFER's rings to GAP.  */)
@@ -1562,6 +1610,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_tweening_p);
   defsubr (&Scmacs_secondbrain_layout_step);
   defsubr (&Scmacs_secondbrain_set_spin);
+  defsubr (&Scmacs_secondbrain_set_galaxy_tilt);
   defsubr (&Scmacs_secondbrain_set_ring_gap);
   defsubr (&Scmacs_secondbrain_set_collapsed);
   defsubr (&Scmacs_secondbrain_collapse_all);

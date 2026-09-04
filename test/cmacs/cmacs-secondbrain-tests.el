@@ -1859,6 +1859,128 @@ see, and every further step is blind."
                        cmacs-secondbrain--selected))))
         (ignore-errors (delete-file shot))))))
 
+(defun cmacs-secondbrain-tests--ring-nodes (n)
+  "N node plists spread over the four rings."
+  (cl-loop for i from 0 below n
+           collect (list :id (format "g%d" i) :title (format "G%d" i)
+                         :kind 'file
+                         :ring (nth (mod i 4)
+                                    '(skills memory routines applications)))))
+
+(defun cmacs-secondbrain-tests--zs (buf nodes)
+  "The z coordinate of every node in NODES."
+  (mapcar (lambda (n) (nth 2 (cmacs-secondbrain-node-position
+                              buf (plist-get n :id))))
+          nodes))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-tilt-lifts-the-rings ()
+  "In 3D the rings warp out of the plane; at tilt 0 they stay coplanar.
+
+The point of the feature: concentric rings viewed in 3D are coplanar,
+so orbiting them only proves they are flat."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 40)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      ;; Flat: every z is exactly zero.
+      (cmacs-secondbrain-set-galaxy-tilt buf 0 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (cl-every #'zerop (cmacs-secondbrain-tests--zs buf nodes)))
+      ;; Warped: heights spread out, and they are not all the same.
+      (cmacs-secondbrain-set-galaxy-tilt buf 24 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (let ((zs (cmacs-secondbrain-tests--zs buf nodes)))
+        (should (> (apply #'max (mapcar #'abs zs)) 1.0))
+        ;; Both signs: the warp lifts one side and drops the other, which
+        ;; is what makes it a warp rather than a cone.
+        (should (cl-some (lambda (z) (> z 0.5)) zs))
+        (should (cl-some (lambda (z) (< z -0.5)) zs))))))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-tilt-respects-the-angle ()
+  "The warp reaches about the requested elevation, and no more.
+
+Asserts a BOUND, not an exact value: the small per-node thickness rides
+on top of the warp crest, so a node may sit a little beyond the angle.
+The docstring says so; this pins how much \"a little\" is allowed to be."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 40)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 24 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (let ((elevations
+             (delq nil
+                   (mapcar
+                    (lambda (n)
+                      (let* ((p (cmacs-secondbrain-node-position
+                                 buf (plist-get n :id)))
+                             (r (sqrt (+ (* (nth 0 p) (nth 0 p))
+                                         (* (nth 1 p) (nth 1 p))))))
+                        (and (> r 0.01)
+                             (radians-to-degrees
+                              (atan (abs (nth 2 p)) r)))))
+                    nodes))))
+        (should elevations)
+        ;; It actually gets up there ...
+        (should (> (apply #'max elevations) 18.0))
+        ;; ... and does not run away past it.
+        (should (< (apply #'max elevations) 34.0))))))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-tilt-is-inert-in-2d ()
+  "The flat view stays flat however the tilt is set.
+
+`place_set\=' zeroes z for a 2D layout, which is what lets one setting be
+correct in both views instead of the caller branching on the view --
+and branching is how a toggle back to 2D ends up with a bent map."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 24)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 2)
+      (cmacs-secondbrain-set-galaxy-tilt buf 30 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (cl-every #'zerop (cmacs-secondbrain-tests--zs buf nodes))))))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-tilt-is-deterministic ()
+  "The same graph warps the same way every time it is rebuilt.
+
+The per-node thickness is hashed from the node ID rather than its
+index precisely for this: index order churns on every rebuild, so
+hashing it would reshuffle every height on refresh and the map would
+twitch for no reason."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 24)) first)
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 24 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (setq first (cmacs-secondbrain-tests--zs buf nodes))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (equal first (cmacs-secondbrain-tests--zs buf nodes))))))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-tilt-is-rings-only ()
+  "Only the rings layout warps; the other closed-form ones stay flat.
+
+Scope worth pinning: the warp is a property of a RING layout -- a hex
+lattice bent along an azimuth it does not have would just be crooked."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 24)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 24 0)
+      (dolist (kind '(circle hex))
+        (cmacs-secondbrain-set-layout buf kind 0)
+        (should (cl-every #'zerop (cmacs-secondbrain-tests--zs buf nodes))))
+      ;; ... and rings still does.
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (should (cl-some (lambda (z) (> (abs z) 1.0))
+                       (cmacs-secondbrain-tests--zs buf nodes))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here
