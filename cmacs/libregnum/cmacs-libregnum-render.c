@@ -3042,11 +3042,19 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
       cand[ncand].sy   = (float) sy;
       cand[ncand].rpx  = (float) fabs (ex - sx);
       cand[ncand].text = n->name;
-      /* Selection and hover always win; after that, bigger nodes (which
-         are the hubs) beat smaller ones, and nearer beats further. */
+      /* Selection and hover always win, then a match or a neighbour of
+         the selection, and only then size (which favours hubs) and
+         nearness.
+         The flagged tiers matter because of the cap: eligibility alone
+         is not enough.  A note linked to the selection is small, so on
+         size it loses to every hub in the scene and its label is
+         dropped -- which is a highlighted node whose name you still
+         cannot read, exactly what highlighting was for. */
       cand[ncand].priority =
         (r->selected == (gint) i) ? 1e9f
         : (r->hovered == (gint) i) ? 5e8f
+        : (n->flags & CMACS_LIBREGNUM_NODE_MATCH) ? 4e8f
+        : (n->flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR) ? 3e8f
         : (n->hw + n->hh + n->hd) * 1000.0f
           - (float) cmacs_libregnum_render_ctx_camera_distance (r);
       ncand++;

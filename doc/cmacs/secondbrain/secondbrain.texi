@@ -125,6 +125,7 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
   @tab select it @strong{and expand or fold it}
 @item left click on a leaf @tab select it; the inspector follows
 @item left drag a node @tab move it, and pin it where you drop it
+@item a short drag @tab is still a click; dragging starts past a few pixels
 @item left drag @tab orbit (3D); no effect in the locked 2D view
 @item right drag @tab pan
 @item wheel @tab zoom, wheel-up towards the scene
@@ -232,6 +233,13 @@ fewer beads each rather than most links getting none.
 @code{-link-pulse-speed} sets how fast.  Note the pattern repeats every
 bead-span: identical, evenly spaced beads advancing by exactly one span
 give a pixel-identical frame.
+
+@strong{The linked notes show their names.}  A lit rope running off to
+an unlabelled dot says something is connected without saying what.
+Selecting a note flags everything it links to, and a flagged node gets a
+label priority tier of its own --- eligibility alone is not enough,
+because labels are capped and the cap ranks by node size, so a small
+linked note loses to every hub in the scene.
 
 @strong{Selecting a department lights what the department connects to.}
 A hub carries no org-roam links of its own --- only its members do --- so

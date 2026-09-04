@@ -387,6 +387,8 @@ Dragging used to be reachable only through the editor, whose drag path also sele
 
 The scene decides, and not this layer, because the position that matters lives in the scene's own model: moving only the drawable looks right until the next layout pass silently puts it back.
 
+*The drag starts only once the pointer has travelled*, using the same few-pixel threshold a click already used. Grabbing on press makes every click on a node a drag, so the release returns early and the click never happens — no expand, and a view that feels like it demands pixel-perfect aim because most presses produce no visible response.
+
 ** Focus policy
 
 How the camera responds to picking. =cmacs-libregnum-set-focus-policy= — BUFFER ON-CLICK &optional CONTEXT.

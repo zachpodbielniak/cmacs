@@ -37,6 +37,8 @@ typedef struct
   bool          dragging_object;    /* editor: moving the picked node */
   bool          dragging_scene;     /* non-editor: moving a scene node */
   gint          scene_drag_id;      /* the node being dragged, or -1 */
+  gint          scene_drag_cand;    /* node under the press, before the
+                                       drag threshold is crossed */
   bool          dragging_gizmo;     /* editor: dragging a transform handle */
 } DragState;
 
@@ -739,6 +741,29 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
       return true;
     }
 
+  /* A press that has travelled far enough becomes a node drag.  Below
+   * that distance it stays a click in waiting, so ordinary clicking is
+   * exactly as forgiving as it was before dragging existed. */
+  if (drag_state.frame == f && !drag_state.dragging_scene
+      && drag_state.dragging_left && drag_state.scene_drag_cand >= 0
+      && (fabs (x - drag_state.press_x)
+          + fabs (y - drag_state.press_y)) > 5.0)
+    {
+      double vx, vy, wx, wy, wz;
+      int vw, vh;
+      CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_view_get_render_ctx (v);
+      if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh)
+          && cmacs_libregnum_render_ctx_editor_screen_to_ground
+               (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
+        {
+          drag_state.dragging_scene = true;
+          drag_state.scene_drag_id = drag_state.scene_drag_cand;
+          defer_scene_drag (v, ctx, drag_state.scene_drag_id,
+                            wx, wy, wz, 0);
+        }
+      drag_state.scene_drag_cand = -1;
+    }
+
   /* Non-editor scene: dragging a node reports the world point under the
    * cursor, and the scene moves it.  Checked before the editor path
    * because the two are mutually exclusive and this one is cheaper. */
@@ -994,6 +1019,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
           drag_state.dragging_object = false;
           drag_state.dragging_scene = false;
           drag_state.scene_drag_id = -1;
+          drag_state.scene_drag_cand = -1;
           drag_state.dragging_gizmo = false;
           /* Editor press priority: a gizmo handle (axis transform) beats an
            * object body (free move) beats empty space (camera orbit). */
@@ -1026,28 +1052,25 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                     }
                 }
             }
-          /* Non-editor scene that asked for draggable nodes: a press on
-           * a node grabs it.  Empty space still falls through to the
-           * camera, so orbit and pan are unaffected. */
+          /* Non-editor scene that asked for draggable nodes: remember
+           * what is under the press, but do NOT start dragging yet and
+           * do NOT consume the event.
+           *
+           * Grabbing on press makes every click on a node a drag, so the
+           * release returns early and the click never happens -- no
+           * expand, and a view that feels like it demands pixel-perfect
+           * aim because most presses produce no visible response.  The
+           * drag begins only once the pointer has actually travelled,
+           * which is the same threshold a click already used. */
+          drag_state.scene_drag_cand = -1;
           if (!cmacs_libregnum_render_ctx_editor_active (ctx)
               && cmacs_libregnum_render_ctx_drag_nodes (ctx))
             {
-              double vx, vy, wx, wy, wz;
+              double vx, vy;
               int vw, vh;
               if (frame_to_view_coords (f, v, x, y, &vx, &vy, &vw, &vh))
-                {
-                  gint id = cmacs_libregnum_render_ctx_pick (ctx, vx, vy,
-                                                             vw, vh);
-                  if (id >= 0
-                      && cmacs_libregnum_render_ctx_editor_screen_to_ground
-                           (ctx, vx, vy, vw, vh, &wx, &wy, &wz))
-                    {
-                      drag_state.dragging_scene = true;
-                      drag_state.scene_drag_id = id;
-                      defer_scene_drag (v, ctx, id, wx, wy, wz, 0);
-                      return true;
-                    }
-                }
+                drag_state.scene_drag_cand =
+                  cmacs_libregnum_render_ctx_pick (ctx, vx, vy, vw, vh);
             }
           drag_state.dragging_left = true;
         }
@@ -1066,6 +1089,8 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                                   wx, wy, wz, 2);
               drag_state.dragging_scene = false;
               drag_state.scene_drag_id = -1;
+              drag_state.scene_drag_cand = -1;
+              drag_state.dragging_left = false;
               cmacs_libregnum_view_request_redraw (v);
               return true;
             }

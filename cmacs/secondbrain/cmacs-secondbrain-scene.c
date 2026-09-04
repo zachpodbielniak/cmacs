@@ -651,6 +651,39 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       lrg_shape_set_color (LRG_SHAPE (line), col);
     }
 
+  /* Flag the selection's neighbours, which is what gets their names
+     drawn: a lit rope running off to an unlabelled dot says something is
+     connected without saying what, which is half an answer.
+     Cleared first, so a previous selection's neighbours do not keep
+     their labels after the selection moves. */
+  cmacs_libregnum_render_ctx_clear_node_flags
+    (r, CMACS_LIBREGNUM_NODE_NEIGHBOUR);
+  if (sel_graph >= 0)
+    for (i = 0; i < m; i++)
+      {
+        CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+        CmacsGraphNode *ea, *eb;
+        gboolean a_in, b_in;
+        gint oe;
+
+        if (!e) continue;
+        ea = cmacs_graph_node (g, e->a);
+        eb = cmacs_graph_node (g, e->b);
+        if (!ea || !eb || !ea->visible || !eb->visible) continue;
+
+        a_in = node_in_selection (g, sel_graph, e->a);
+        b_in = node_in_selection (g, sel_graph, e->b);
+        if (a_in == b_in) continue;         /* neither, or wholly inside */
+
+        /* The end that is NOT the selection is the neighbour. */
+        oe = cmacs_secondbrain_scene_emit_index (r, a_in ? e->b : e->a);
+        if (oe >= 0)
+          cmacs_libregnum_render_ctx_set_node_flags
+            (r, oe,
+             cmacs_libregnum_render_ctx_get_node_flags (r, oe)
+             | CMACS_LIBREGNUM_NODE_NEIGHBOUR);
+      }
+
   scene_step_sparks (r, st, g, sel_graph);
 }
 

@@ -83,6 +83,7 @@ Once open, a department's members occupy a contiguous *wedge* of the ring sized 
 | left click on a department | select it *and expand or fold it* |
 | left click on a leaf | select it; the inspector follows |
 | left drag a node | move it, and pin it where you drop it |
+| (a short drag is still a click) | the drag starts only past a few pixels |
 | left drag | orbit (3D); no effect in the locked 2D view |
 | right drag | pan |
 | wheel | zoom, wheel-up towards the scene |
@@ -138,6 +139,8 @@ That colouring is the other half of making links legible: a lit link says /whose
 It is a fixed pool of beads repositioned every frame, not one drawable per link — a note with a hundred links would otherwise add a hundred drawables on every selection change, and removing them again means a rebuild. The pool is shared out over the lit links, so many links get fewer beads each rather than most links getting none.
 
 =cmacs-secondbrain-link-pulse= turns it off; =-link-pulse-speed= sets how fast. Note the pattern repeats every bead-span: identical, evenly spaced beads advancing by exactly one span give a pixel-identical frame.
+
+*The linked notes show their names.* A lit rope running off to an unlabelled dot says something is connected without saying what. Selecting a note flags everything it links to, and a flagged node gets a label priority tier of its own — eligibility alone is not enough, because labels are capped and the cap ranks by node size, so a small linked note loses to every hub in the scene.
 
 *Selecting a department lights what the department connects to.* A hub carries no org-roam links of its own — only its members do — so matching the selected node alone lit nothing at all. Membership walks the parent chain, so a note nested below a folder below a hub still counts.
 

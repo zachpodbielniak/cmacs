@@ -1156,6 +1156,57 @@ chain, so a note nested below a folder below a hub still counts."
       (ignore-errors (delete-file p0))
       (ignore-errors (delete-file p1)))))
 
+(ert-deftest cmacs-secondbrain-test-neighbours-are-flagged-for-labelling ()
+  "A selected node's linked nodes are flagged, so their names are drawn.
+
+Eligibility alone was not enough: labels are capped, and the cap ranks
+by node SIZE, so a linked note loses to every hub in the scene and its
+label is dropped.  A lit rope running off to an unlabelled dot says
+something is connected without saying what.  The flag buys the label a
+priority tier of its own.
+
+Also asserts the flag is CLEARED when the selection moves -- stale
+neighbours keeping their labels is its own kind of wrong answer."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-node-flags))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                 (list :id "b" :title "B" :kind 'file :ring 'memory)
+                 (list :id "c" :title "C" :kind 'file :ring 'memory))
+     (vector (list :from "a" :to "b"))
+     2)
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (let* ((emit (lambda (id)
+                   ;; Scene indices are emission order; find each node's.
+                   (cl-loop for i from 0 below (cmacs-secondbrain-node-count buf)
+                            when (equal id (plist-get
+                                            (cmacs-secondbrain-node-at buf id)
+                                            :id))
+                            return i)))
+           (nbr 8))                     ; CMACS_LIBREGNUM_NODE_NEIGHBOUR
+      (ignore emit)
+      (should (cmacs-secondbrain-select buf "a"))
+      (cmacs-secondbrain-apply-flags buf)
+      ;; Exactly one node is a neighbour of "a": "b".
+      (let ((flagged
+             (cl-loop for i from 0 below 8
+                      when (and (cmacs-libregnum-node-flags buf i)
+                                (/= 0 (logand nbr
+                                              (cmacs-libregnum-node-flags buf i))))
+                      count 1)))
+        (should (= 1 flagged)))
+      ;; Selecting the unconnected node leaves nobody flagged.
+      (should (cmacs-secondbrain-select buf "c"))
+      (cmacs-secondbrain-apply-flags buf)
+      (let ((flagged
+             (cl-loop for i from 0 below 8
+                      when (and (cmacs-libregnum-node-flags buf i)
+                                (/= 0 (logand nbr
+                                              (cmacs-libregnum-node-flags buf i))))
+                      count 1)))
+        (should (= 0 flagged))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here
