@@ -362,6 +362,16 @@ that mutates its drawables in place — an animated force layout, a dragged
 node — must call it, or picking and labelling keep pointing at where the
 node used to be.
 
+** The animation clock, and nested loops
+
+The clock is a single process-wide GSource on cmacs's private GMainContext, which is merged into Emacs's pselect. It self-terminates once no animated view remains, so an idle scene costs nothing.
+
+There is a *second* clock on the *default* context. Anything that runs a nested main loop on Emacs's thread — a GTK context menu, a modal dialog — stops the private context entirely, and an animated viewport froze for as long as the menu was open. A nested GTK loop does iterate the default context, and the pgtk present is =gtk_widget_queue_draw=, which that same loop services; so a source there can keep the picture moving.
+
+It is a fallback, not a second clock: if the private context presented recently it does nothing, so normal operation costs one timestamp comparison per tick and never double-renders.
+
+*Nothing in that fallback may evaluate Lisp.* It runs outside the =waiting_for_input= guard =cmacs_glib_dispatch= installs, and a Lisp error under that condition aborts Emacs. Rendering and =gtk_widget_queue_draw= are pure C, which is exactly why it is safe there.
+
 ** Frame probes for tests
 
 - =cmacs-libregnum-ink-bbox= — bounding box of non-background pixels, in displayed orientation.

@@ -93,6 +93,10 @@ static Lisp_Object       Vcmacs_libregnum__payloads;
 
 /* Animation clock state (see cmacs_libregnum_view_set_animated). */
 static guint             cmacs_libregnum__anim_timer_id = 0;
+/* Fallback clock on the DEFAULT context -- see anim_tick_nested. */
+static guint             cmacs_libregnum__anim_nested_id = 0;
+/* When the cmacs context last actually presented a frame. */
+static gint64            cmacs_libregnum__last_present_us = 0;
 static guint             cmacs_libregnum__anim_interval_ms = 16; /* ~60 FPS */
 static guint             cmacs_libregnum__anim_gen = 0;
 
@@ -263,6 +267,7 @@ redraw_idle (gpointer user)
       g_mutex_unlock (&v->frame_mtx);
 
       notify_frame_ready (v);
+      cmacs_libregnum__last_present_us = g_get_monotonic_time ();
 
       /* If a camera focus tween is in flight, keep the frames coming
        * until it converges (render_to_bgra advances it each frame). */
@@ -270,6 +275,29 @@ redraw_idle (gpointer user)
         cmacs_libregnum_view_request_redraw (v);
     }
   return G_SOURCE_REMOVE;
+}
+
+/* Render V and hand the frame to the widget, without going through the
+ * cmacs GMainContext.  Same work redraw_idle does for the pgtk path,
+ * factored out so the nested-loop fallback can do it directly. */
+static void
+view_present_now (CmacsLibregnumView *v)
+{
+  if (!v || !v->render || !v->back_data) return;
+  if (!cmacs_libregnum_render_ctx_render_to_bgra (v->render, v->back_data,
+                                                  v->width, v->height))
+    return;
+
+  g_mutex_lock (&v->frame_mtx);
+  cairo_surface_mark_dirty (v->back);
+  {
+    cairo_surface_t *ts = v->front; v->front = v->back; v->back = ts;
+    guint8 *td = v->front_data; v->front_data = v->back_data;
+    v->back_data = td;
+  }
+  g_mutex_unlock (&v->frame_mtx);
+
+  notify_frame_ready (v);
 }
 
 /* ── View construction / destruction ───────────────────────────── */
@@ -398,6 +426,72 @@ anim_tick (gpointer user)
   return G_SOURCE_CONTINUE;
 }
 
+/* Fallback animation clock, attached to the DEFAULT GMainContext.
+ *
+ * The real clock lives on cmacs's private context, which is merged into
+ * Emacs's pselect -- and anything that runs a NESTED main loop on
+ * Emacs's thread stops that context entirely.  A GTK context menu does
+ * exactly that, which is why an animated viewport froze for as long as
+ * the menu was open.
+ *
+ * A nested GTK loop does iterate the default context, and the pgtk
+ * present is `gtk_widget_queue_draw' -- pure GTK, which that same loop
+ * services.  So a source here can keep the picture moving while the
+ * menu is up.
+ *
+ * It is a fallback, not a second clock: if the cmacs context presented
+ * recently it does nothing at all, so in normal operation this costs one
+ * timestamp comparison per tick and never double-renders.
+ *
+ * Nothing here may evaluate Lisp.  It runs outside the
+ * `waiting_for_input' guard that cmacs_glib_dispatch installs, and a
+ * Lisp error under that condition aborts Emacs.  Rendering and
+ * gtk_widget_queue_draw are pure C, which is the whole reason this is
+ * safe to do from here. */
+static gboolean
+anim_tick_nested (gpointer user)
+{
+  gint64 now = g_get_monotonic_time ();
+  gint64 stale_us = (gint64) cmacs_libregnum__anim_interval_ms * 1000 * 3;
+  guint live_animated = 0;
+  GHashTableIter it;
+  gpointer val;
+
+  (void) user;
+
+  if (!cmacs_libregnum__views)
+    {
+      cmacs_libregnum__anim_nested_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  g_hash_table_iter_init (&it, cmacs_libregnum__views);
+  while (g_hash_table_iter_next (&it, NULL, &val))
+    if (((CmacsLibregnumView *) val)->animated)
+      live_animated++;
+
+  if (live_animated == 0)
+    {
+      cmacs_libregnum__anim_nested_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  /* The ordinary clock is keeping up: leave it alone. */
+  if (now - cmacs_libregnum__last_present_us < stale_us)
+    return G_SOURCE_CONTINUE;
+
+  g_hash_table_iter_init (&it, cmacs_libregnum__views);
+  while (g_hash_table_iter_next (&it, NULL, &val))
+    {
+      CmacsLibregnumView *v = val;
+      if (!v->animated) continue;
+      /* Same on-screen test the main clock uses. */
+      if (cmacs_libregnum__anim_gen - v->painted_gen <= 2)
+        view_present_now (v);
+    }
+  return G_SOURCE_CONTINUE;
+}
+
 void
 cmacs_libregnum_view_set_animated (CmacsLibregnumView *v,
                                    gboolean animated,
@@ -426,6 +520,14 @@ cmacs_libregnum_view_set_animated (CmacsLibregnumView *v,
           g_source_set_callback (src, anim_tick, NULL, NULL);
           cmacs_libregnum__anim_timer_id = g_source_attach (src, ctx);
           g_source_unref (src);
+        }
+      if (cmacs_libregnum__anim_nested_id == 0)
+        {
+          /* And a fallback on the DEFAULT context, which is the one a
+           * nested GTK loop iterates.  See anim_tick_nested. */
+          cmacs_libregnum__anim_nested_id =
+            g_timeout_add (cmacs_libregnum__anim_interval_ms,
+                           anim_tick_nested, NULL);
         }
     }
   /* When turning off, leave the timer running: anim_tick removes itself

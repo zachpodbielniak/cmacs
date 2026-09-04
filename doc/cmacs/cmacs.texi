@@ -6944,6 +6944,19 @@ rather than one per node.  Match, pinned and neighbour also override the
 per-node label policy: highlighting something whose name you then cannot
 read is useless.
 
+@item cmacs-libregnum-set-animated
+Drives a process-wide frame clock on cmacs's private GMainContext, which
+self-terminates once no animated view remains.  A @emph{second} clock
+sits on the default context, because anything running a nested main loop
+on Emacs's thread --- a GTK context menu, a modal dialog --- stops the
+private one dead, and an animated viewport froze for as long as the menu
+was up.  A nested GTK loop does iterate the default context, and the
+pgtk present is @code{gtk_widget_queue_draw}, which it services.  It is a
+fallback: if the private context presented recently it does nothing, so
+it never double-renders.  Nothing in it may evaluate Lisp --- it runs
+outside the @code{waiting_for_input} guard, where a Lisp error aborts
+Emacs.
+
 @item cmacs-libregnum-mean-color
 The mean colour of the rendered frame, and the colour counterpart to
 @code{cmacs-libregnum-ink-bbox}.  Both exist for tests, for the same
