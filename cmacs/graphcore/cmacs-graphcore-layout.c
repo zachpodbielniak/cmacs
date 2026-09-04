@@ -64,6 +64,14 @@
 /* Radial distance between adjacent rings / circles.  Twice the ideal
  * edge length, so a band reads as its own orbit rather than merging
  * into its neighbours. */
+/* Ring bookkeeping is a fixed array indexed by the node's guint8 ring,
+   so it covers every value that field can hold. */
+#define GRAPHCORE_MAX_BANDS (256)
+/* World units of arc each node wants to itself, and the radial gap
+   between two rows of the same band.  Together they set how much room a
+   band claims for its population. */
+#define GRAPHCORE_NODE_ARC (0.95)
+#define GRAPHCORE_ROW_GAP  (0.85)
 #define GRAPHCORE_RING_GAP     6.0
 
 /* Centre-to-centre spacing of the hex lattice, in the same world units
@@ -1086,6 +1094,9 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
   guint n = order->len, start = 0;
   GHashTable *root_of;   /* node index -> its top VISIBLE ancestor index */
   GHashTable *weight;    /* root index -> 1 + visible descendants shown */
+  guint  band_n[GRAPHCORE_MAX_BANDS];
+  double band_r[GRAPHCORE_MAX_BANDS];
+  guint  band_rows[GRAPHCORE_MAX_BANDS];
 
   /* Every node's group root: the outermost visible ancestor, or itself.
      Walking up rather than trusting `parent' directly matters once more
@@ -1121,6 +1132,58 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                               + 1));
     }
 
+  /* Band geometry, sized to what each band actually holds.
+     ------------------------------------------------------------------
+     A fixed radius per ring only works while the rings are small.  Give
+     the Memory band a thousand notes and every one of them lands on one
+     circle of circumference 2*pi*12, which is not a ring of nodes but a
+     solid line -- and the bands outside it are still where they were, so
+     the crowding has nowhere to go.
+
+     So each band gets as many ROWS as its population needs, and a RADIUS
+     big enough that the arc length per node stays legible; bands are then
+     pushed outward in turn so a fat one never grows into its neighbour. */
+  {
+    double prev_outer = 0.0;
+    guint b;
+
+    for (b = 0; b < GRAPHCORE_MAX_BANDS; b++)
+      { band_n[b] = 0; band_r[b] = 0.0; band_rows[b] = 1; }
+
+    for (guint i2 = 0; i2 < n; i2++)
+      {
+        guint8 bb = g_array_index (g->nodes, CmacsGraphNode,
+                                   g_array_index (order, guint, i2)).ring;
+        if (bb < GRAPHCORE_MAX_BANDS) band_n[bb]++;
+      }
+
+    for (b = 0; b < GRAPHCORE_MAX_BANDS; b++)
+      {
+        double needed, base, thick;
+        guint rows;
+
+        if (band_n[b] == 0) continue;
+
+        /* Rows grow with the square root of population and are capped:
+           past ten the band stops reading as a ring and starts reading
+           as a disc. */
+        rows = (guint) CLAMP (floor (sqrt ((double) band_n[b] / 12.0) + 0.5),
+                              1.0, 10.0);
+        band_rows[b] = rows;
+
+        /* Radius that leaves every node about GRAPHCORE_NODE_ARC of arc
+           to itself, given that many rows to spread over. */
+        needed = (double) band_n[b] * GRAPHCORE_NODE_ARC
+                   / (2.0 * G_PI * (double) rows);
+        base   = l->ring_gap * (double) (b + 1);
+        thick  = (double) rows * GRAPHCORE_ROW_GAP;
+
+        band_r[b] = MAX (MAX (base, needed),
+                         prev_outer + l->ring_gap * 0.55);
+        prev_outer = band_r[b] + thick;
+      }
+  }
+
   /* `order' is already sorted by ring, so each band is one run. */
   while (start < n)
     {
@@ -1128,6 +1191,7 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
       guint8 band = g_array_index (g->nodes, CmacsGraphNode, idx0).ring;
       guint end = start, i;
       double r, thickness, dir, total_w = 0.0, cursor;
+      guint band_row_n;
       GArray *roots;
 
       while (end < n
@@ -1135,13 +1199,13 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                                g_array_index (order, guint, end)).ring == band)
         end++;
 
-      r         = l->ring_gap * (double) (band + 1);
-      /* How far a department may spill off its band.  Well under the
-         gap, so two bands never blend into one another. */
-      thickness = l->ring_gap * 0.42;
+      band_row_n = (band < GRAPHCORE_MAX_BANDS) ? band_rows[band] : 1;
+      r          = (band < GRAPHCORE_MAX_BANDS)
+                     ? band_r[band] : l->ring_gap * (double) (band + 1);
+      thickness  = (double) band_row_n * GRAPHCORE_ROW_GAP;
       /* Alternate bands counter-rotate, so spinning does not slide every
          ring the same way and the motion reads as depth. */
-      dir       = (band & 1) ? -1.0 : 1.0;
+      dir        = (band & 1) ? -1.0 : 1.0;
 
       /* The roots present in this band, in `order' sequence so the
          result is deterministic. */
@@ -1203,9 +1267,10 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
             }
           if (kids == 0) continue;
 
-          /* Wide and shallow: a wedge is long in angle and thin in
-             radius, so the lattice should be too. */
-          rows = (guint) MAX (1.0, floor (sqrt ((double) kids / 8.0) + 0.5));
+          /* Rows come from the BAND, not the department: neighbouring
+             wedges that each chose their own depth would leave ragged
+             steps between them where the ring should be continuous. */
+          rows = MAX (1u, MIN (band_row_n, kids));
           cols = (kids + rows - 1) / rows;
 
           {
@@ -1238,8 +1303,8 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                    group then reads as hanging off its department, and
                    an expand animates outward, which is the direction
                    the gesture implies. */
-                rr = r + thickness * (0.25 + 0.75 * ((double) row + 0.5)
-                                              / (double) rows);
+                rr = r + GRAPHCORE_ROW_GAP * 0.9
+                       + thickness * (((double) row + 0.5) / (double) rows);
                 place_set (nd, rr * cos (a), rr * sin (a), 0.0, dims);
               }
           }

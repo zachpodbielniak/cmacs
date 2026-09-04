@@ -39,9 +39,12 @@
 #define SB_MAX_NODE_DRAWABLES 12000
 #define SB_MAX_EDGE_DRAWABLES 24000
 
-/* Edge alpha at rest.  Low: at a few thousand edges the lines are the
- * dominant ink and drown the nodes they exist to relate. */
-#define SB_EDGE_ALPHA 56
+/* Edge alpha at rest.  Very low, and it has to be: with every
+ * department open this graph draws well over a thousand links, and at
+ * any alpha you would pick by looking at ONE edge, a thousand of them
+ * overlap into a solid white mat across the middle of the map that
+ * hides the nodes they exist to relate. */
+#define SB_EDGE_ALPHA 26
 
 /* Camera field of view, in degrees.  A real angle -- both projections
  * here are perspective (see set_projection). */
@@ -140,14 +143,17 @@ unpack_rgba (guint32 rgba, guint8 *cr, guint8 *cg, guint8 *cb, guint8 *ca)
   if (*ca == 0) *ca = 0xFF;
 }
 
-/* Mute an edge toward grey so links read as structure rather than as
-   more nodes.  Same single-source-of-truth rule as roamgraph: the build
-   pass and the flag pass must agree or recolouring flattens every edge. */
+/* Mute an edge toward its endpoints' own colour, lifted slightly.  The
+   lift keeps a link between two dark nodes visible; keeping most of the
+   hue is what makes a bundle of links read as belonging to the
+   departments it joins rather than as generic white noise laid over
+   them.  Same single-source-of-truth rule as roamgraph: the build pass
+   and the flag pass must agree or recolouring flattens every edge. */
 static guint8
 edge_tint (guint8 x, guint8 y)
 {
   int avg = ((int) x + (int) y) / 2;
-  return (guint8) ((avg + 150 * 2) / 3);
+  return (guint8) ((avg * 2 + 110) / 3);
 }
 
 static GrlColor *

@@ -167,6 +167,16 @@ hub --- is given a contiguous angular @strong{wedge} sized by how many
 visible nodes it holds, and its members are laid out inside that wedge
 on a wide, shallow lattice sitting just outside the band radius.
 
+Bands are also @strong{sized to what they hold}.  A fixed radius per
+ring works only while the rings are small: give the Memory band a
+thousand notes and every one lands on one circle, which is not a ring of
+nodes but a solid line --- and the bands outside it are still where they
+were, so the crowding has nowhere to go.  Each band therefore takes as
+many rows as its population needs (capped at ten, past which it stops
+reading as a ring and starts reading as a disc) and a radius big enough
+to leave each node about @code{GRAPHCORE_NODE_ARC} of arc; bands are
+then pushed outward in turn so a fat one never grows into its neighbour.
+
 Three decisions, each with a failure it exists to prevent:
 
 @itemize @bullet

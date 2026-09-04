@@ -59,6 +59,7 @@
 (declare-function cmacs-libregnum-set-wheel-up-zooms-in "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-selection-style "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-inscene-labels "cmacs-libregnum")
+(declare-function cmacs-libregnum-set-background "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-enable "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-clear "cmacs-libregnum")
 (declare-function cmacs-libregnum-particles-emitter "cmacs-libregnum")
@@ -106,6 +107,43 @@ read, not the state you have to dig your way out of every time.
 Set it to t on a very large tree, where drawing everything at once costs
 more than it tells you."
   :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-background 'nebula
+  "What fills the viewport behind the graph.
+
+One of `none' (the flat default clear colour), `solid', `gradient',
+`starfield', `nebula', or `image' -- which draws
+`cmacs-secondbrain-background-image', cover-fit so a wallpaper of any
+shape fills the viewport without being squashed.
+
+The procedural kinds are generated once into a texture and cached, so
+they cost one blit per frame and nothing else.  They are also
+deterministic: the same viewport gives the same sky every session, which
+is both less distracting and what makes them testable."
+  :type '(choice (const none) (const solid) (const gradient)
+                 (const starfield) (const nebula) (const image))
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-background-colors '(#x2A3A6BFF . #x05050AFF)
+  "Top and bottom background colours, as 0xRRGGBBAA.
+`solid' uses only the top; the rest blend down the viewport."
+  :type '(cons integer integer)
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-background-image nil
+  "Image file drawn behind the graph when the background is `image'."
+  :type '(choice (const nil) file)
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-wallpaper-dirs
+  '("~/Pictures/wallpapers" "~/Pictures" "~/.local/share/backgrounds")
+  "Directories offered when picking a background image.
+
+A convenience, not a restriction: the picker always accepts any path you
+type, and a directory that does not exist is skipped rather than being
+an error."
+  :type '(repeat directory)
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-particle-fps 24
@@ -247,7 +285,61 @@ useless."
       ;; A halo, not the default wireframe cube: these are round.
       (cmacs-libregnum-set-selection-style buf 'halo))
     (when (fboundp 'cmacs-libregnum-set-inscene-labels)
-      (cmacs-libregnum-set-inscene-labels buf t))))
+      (cmacs-libregnum-set-inscene-labels buf t))
+    (cmacs-secondbrain--apply-background buf)))
+
+(defun cmacs-secondbrain--apply-background (&optional buf)
+  "Push the configured background into BUF's viewport."
+  (let ((buf (or buf (current-buffer))))
+    (when (fboundp 'cmacs-libregnum-set-background)
+      (unless (cmacs-libregnum-set-background
+               buf cmacs-secondbrain-background
+               (car cmacs-secondbrain-background-colors)
+               (cdr cmacs-secondbrain-background-colors)
+               (and (eq cmacs-secondbrain-background 'image)
+                    cmacs-secondbrain-background-image
+                    (expand-file-name cmacs-secondbrain-background-image)))
+        ;; Only `image' can fail, and only on an unreadable path.  Say so
+        ;; rather than leaving the user wondering why nothing changed.
+        (message "cmacs-secondbrain: cannot read %s"
+                 (or cmacs-secondbrain-background-image "(no image set)"))))))
+
+(defun cmacs-secondbrain--wallpapers ()
+  "Return image files found under `cmacs-secondbrain-wallpaper-dirs'."
+  (let ((out nil))
+    (dolist (d cmacs-secondbrain-wallpaper-dirs)
+      (let ((dir (expand-file-name d)))
+        (when (file-directory-p dir)
+          (dolist (f (ignore-errors
+                       (directory-files
+                        dir t "\\.\\(png\\|jpe?g\\|bmp\\|tga\\)\\'" t)))
+            (push f out)))))
+    (nreverse out)))
+
+(defun cmacs-secondbrain-set-background-interactive (kind)
+  "Choose the viewport background.
+
+Offers the procedural kinds plus `image', which then offers whatever is
+in `cmacs-secondbrain-wallpaper-dirs' and still accepts any path you
+type."
+  (interactive
+   (list (intern (completing-read
+                  "Background: "
+                  '("nebula" "starfield" "gradient" "solid" "image" "none")
+                  nil t nil nil
+                  (symbol-name cmacs-secondbrain-background)))))
+  (setq-local cmacs-secondbrain-background kind)
+  (when (eq kind 'image)
+    (let* ((found (cmacs-secondbrain--wallpapers))
+           (pick (completing-read
+                  "Wallpaper: " found nil nil
+                  (and cmacs-secondbrain-background-image
+                       (expand-file-name
+                        cmacs-secondbrain-background-image)))))
+      (setq-local cmacs-secondbrain-background-image
+                  (and (not (string-empty-p pick)) pick))))
+  (cmacs-secondbrain--apply-background (current-buffer))
+  (message "Background: %s" kind))
 
 ;;;; Animation --------------------------------------------------------
 
@@ -621,6 +713,7 @@ is the tier above."
   "p" #'cmacs-secondbrain-preview
   "W" #'cmacs-secondbrain-close-panes
   "v" #'cmacs-secondbrain-toggle-view
+  "b" #'cmacs-secondbrain-set-background-interactive
   "P" #'cmacs-secondbrain-toggle-particles
   "H" #'cmacs-secondbrain-toggle-hover-highlight
   "q" #'quit-window)
@@ -784,13 +877,23 @@ routine it is when it runs, for a file it is open it."
              ;; buffer's current target, which for a graph IS the
              ;; selection.
              (when node-id (cmacs-secondbrain--select node-id))
-             (let* ((items (cmacs-secondbrain--menu-items node-id))
-                    (items (append items
+             (let* ((node (and node-id
+                               (cmacs-secondbrain-node-at buffer node-id)))
+                    (title (or (plist-get node :title) "Second brain"))
+                    (items (append (cmacs-secondbrain--menu-items node-id)
                                    (and (fboundp 'cmacs-ai-menu-scene-items)
                                         (cmacs-ai-menu-scene-items))))
+                    ;; `cmacs-libregnum-popup-menu' takes (POSITION MENU),
+                    ;; and MENU is an x-popup-menu alist: a title plus one
+                    ;; pane of (LABEL . VALUE).  A nil item is a separator
+                    ;; and must become ("--"), not stay nil.
                     (choice (and items
                                  (cmacs-libregnum-popup-menu
-                                  buffer "Second brain" items))))
+                                  t (list title
+                                          (cons ""
+                                                (mapcar (lambda (it)
+                                                          (or it '("--")))
+                                                        items)))))))
                (when (functionp choice) (funcall choice))))))))))
 
 ;;;; Entry points -----------------------------------------------------

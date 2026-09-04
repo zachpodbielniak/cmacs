@@ -328,6 +328,39 @@ extern void  cmacs_libregnum_render_ctx_set_match_set
                                const gint *ids, gsize n,
                                gboolean dim_rest);
 
+/* ── Background ──────────────────────────────────────────────────
+ * What fills the viewport behind the scene.  Drawn as a 2D blit right
+ * after the clear and before anything 3D, so it is genuinely behind
+ * everything and costs one textured quad.
+ *
+ * The procedural kinds are generated once into a texture and cached
+ * until the size or the parameters change -- regenerating a starfield
+ * per frame would be both slow and a scene that shimmers.
+ *
+ * TOP/BOTTOM are 0xRRGGBBAA.  For SOLID only TOP is used; for IMAGE both
+ * are ignored and PATH is loaded (aspect-preserving cover fit, so a
+ * wallpaper of any shape fills the viewport without distorting). */
+typedef enum
+{
+  CMACS_LIBREGNUM_BG_NONE = 0,   /* the flat default clear colour */
+  CMACS_LIBREGNUM_BG_SOLID,
+  CMACS_LIBREGNUM_BG_GRADIENT,
+  CMACS_LIBREGNUM_BG_STARFIELD,
+  CMACS_LIBREGNUM_BG_NEBULA,
+  CMACS_LIBREGNUM_BG_IMAGE
+} CmacsLibregnumBackgroundKind;
+
+/* Returns FALSE only for IMAGE with a file that cannot be loaded -- in
+ * which case the background is left as it was, because a viewport that
+ * goes blank is a worse answer than one that ignores a bad path. */
+extern gboolean cmacs_libregnum_render_ctx_set_background
+                              (CmacsLibregnumRenderCtx *r,
+                               CmacsLibregnumBackgroundKind kind,
+                               guint32 top, guint32 bottom,
+                               const char *path);
+extern CmacsLibregnumBackgroundKind
+       cmacs_libregnum_render_ctx_get_background (CmacsLibregnumRenderCtx *r);
+
 /* ── Particles ───────────────────────────────────────────────────
  * A thin lease on libregnum's LrgParticleSystem, owned by the render
  * context because the update+draw has to happen inside the FBO's 3D

@@ -454,9 +454,21 @@ struct CmacsLibregnumRenderCtx
   /* Particles.  Created lazily -- a view that never asks pays
    * nothing -- and stepped inside the 3D pass, which is the only
    * place with a live camera and an open FBO. */
-  LrgParticleSystem *particles;       /* ambient: many rate-driven emitters */
-  LrgParticleSystem *bursts;          /* one-shot: ONE emitter, re-tuned */
-  LrgParticleEmitter *burst_emitter;  /* borrowed; owned by `bursts' */
+  /* Background layer (see the header).  `bg_tex' is regenerated only
+   * when the kind, colours, path or viewport size change. */
+  CmacsLibregnumBackgroundKind bg_kind;
+  guint32            bg_top, bg_bottom;
+  char              *bg_path;
+  Texture2D          bg_tex;
+  gboolean           bg_tex_ok;
+  int                bg_tex_w, bg_tex_h;
+  gboolean           bg_dirty;
+
+  LrgParticlePool   *particle_pool;    /* every live particle */
+  GArray            *particle_emitters;/* LrgParticleEmitter *, owned */
+  LrgParticleEmitter *burst_emitter;   /* owned; re-tuned per burst */
+  Texture2D          particle_tex;     /* soft dot, generated once */
+  gboolean           particle_tex_ok;
   gboolean           particles_on;
   gint64             particles_last_us;
 
@@ -611,8 +623,12 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->overlay_models) g_ptr_array_unref (r->overlay_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
-  g_clear_object (&r->particles);
-  g_clear_object (&r->bursts);
+  if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
+  g_free (r->bg_path);
+  g_clear_object (&r->particle_pool);
+  g_clear_object (&r->burst_emitter);
+  if (r->particle_emitters) g_array_free (r->particle_emitters, TRUE);
+  if (r->particle_tex_ok) UnloadTexture (r->particle_tex);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -1839,7 +1855,268 @@ cmacs_libregnum_render_ctx_clear_billboards (CmacsLibregnumRenderCtx *r)
   if (r && r->billboards) g_array_set_size (r->billboards, 0);
 }
 
-/* ── Particles ───────────────────────────────────────────────────── */
+/* ── Particles ─────────────────────────────────────────────────────
+ *
+ * Built on LrgParticlePool and LrgParticleEmitter directly, NOT on
+ * LrgParticleSystem.  The system looks like the obvious choice and is
+ * not: its `draw' vfunc is a documented no-op that iterates the live
+ * particles and does nothing with them, because rendering "depends on
+ * the graphics backend".  A system-based implementation therefore
+ * simulates correctly, reports a healthy live count, and draws not one
+ * pixel -- which is exactly as broken as doing nothing, but much harder
+ * to notice.
+ *
+ * Owning the pool costs one emission loop (the emitter already carries
+ * the rate accumulator via should_emit) and buys the draw. */
+
+/* Defined below, with the rest of the camera code. */
+static Camera3D ctx_raylib_camera (CmacsLibregnumRenderCtx *r);
+
+/* ── Background ────────────────────────────────────────────────────
+ *
+ * Generated into a texture and blitted, rather than drawn per frame:
+ * a starfield recomputed every frame both costs more and, because the
+ * randomness would differ each time, shimmers.  Regeneration is keyed
+ * on kind + colours + path + size, so resizing the window regenerates
+ * exactly once. */
+
+/* A deterministic hash-based PRNG.  Deliberately not `rand': the same
+ * viewport must produce the same sky every session, or a snapshot test
+ * can never assert anything about it. */
+static guint32
+bg_rand (guint32 *state)
+{
+  guint32 x = (*state += 0x9E3779B9u);
+  x = (x ^ (x >> 16)) * 0x21F0AAADu;
+  x = (x ^ (x >> 15)) * 0x735A2D97u;
+  return x ^ (x >> 15);
+}
+
+static double
+bg_randf (guint32 *state)
+{
+  return (double) bg_rand (state) / (double) 0xFFFFFFFFu;
+}
+
+static void
+bg_unpack (guint32 c, double *r, double *g, double *b)
+{
+  *r = (double) ((c >> 24) & 0xFF);
+  *g = (double) ((c >> 16) & 0xFF);
+  *b = (double) ((c >>  8) & 0xFF);
+}
+
+/* Smooth value noise on a coarse lattice, sampled bilinearly.  Enough
+ * for a nebula and far cheaper than real Perlin. */
+static double
+bg_noise (guint32 seed, double x, double y)
+{
+  int x0 = (int) floor (x), y0 = (int) floor (y);
+  double fx = x - x0, fy = y - y0;
+  double v[4];
+  int i;
+
+  /* Smoothstep, so the lattice does not show as a grid. */
+  fx = fx * fx * (3.0 - 2.0 * fx);
+  fy = fy * fy * (3.0 - 2.0 * fy);
+
+  for (i = 0; i < 4; i++)
+    {
+      guint32 st = seed ^ (guint32) ((x0 + (i & 1)) * 374761393)
+                        ^ (guint32) ((y0 + (i >> 1)) * 668265263);
+      v[i] = bg_randf (&st);
+    }
+  return (v[0] * (1 - fx) + v[1] * fx) * (1 - fy)
+       + (v[2] * (1 - fx) + v[3] * fx) * fy;
+}
+
+/* Build the procedural background for the current kind at W x H. */
+static void
+bg_generate (CmacsLibregnumRenderCtx *r, int w, int h)
+{
+  Color *px;
+  Image  img = { 0 };
+  double tr, tg, tb, br, bg_, bb;
+  int    x, y;
+
+  if (w < 2 || h < 2) return;
+
+  px = g_new0 (Color, (gsize) w * h);
+  bg_unpack (r->bg_top, &tr, &tg, &tb);
+  bg_unpack (r->bg_bottom, &br, &bg_, &bb);
+
+  for (y = 0; y < h; y++)
+    {
+      double t = (double) y / (double) (h - 1);
+      for (x = 0; x < w; x++)
+        {
+          double cr = tr, cg = tg, cb = tb;
+
+          if (r->bg_kind != CMACS_LIBREGNUM_BG_SOLID)
+            {
+              cr = tr + (br - tr) * t;
+              cg = tg + (bg_ - tg) * t;
+              cb = tb + (bb - tb) * t;
+            }
+          px[y * w + x] = (Color){ (unsigned char) CLAMP (cr, 0.0, 255.0),
+                                   (unsigned char) CLAMP (cg, 0.0, 255.0),
+                                   (unsigned char) CLAMP (cb, 0.0, 255.0),
+                                   255 };
+        }
+    }
+
+  if (r->bg_kind == CMACS_LIBREGNUM_BG_NEBULA)
+    {
+      /* Two octaves of noise tinted toward the top colour, so the cloud
+         belongs to the same palette as the gradient under it. */
+      for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++)
+          {
+            double nx = (double) x / (double) w, ny = (double) y / (double) h;
+            double n = bg_noise (0x51ED270Bu, nx * 5.0, ny * 5.0) * 0.65
+                     + bg_noise (0x1B873593u, nx * 13.0, ny * 13.0) * 0.35;
+            double k = CLAMP ((n - 0.45) * 2.2, 0.0, 1.0);
+            Color *c = &px[y * w + x];
+            c->r = (unsigned char) CLAMP (c->r + tr * k * 0.55, 0.0, 255.0);
+            c->g = (unsigned char) CLAMP (c->g + tg * k * 0.55, 0.0, 255.0);
+            c->b = (unsigned char) CLAMP (c->b + tb * k * 0.55, 0.0, 255.0);
+          }
+    }
+
+  if (r->bg_kind == CMACS_LIBREGNUM_BG_STARFIELD
+      || r->bg_kind == CMACS_LIBREGNUM_BG_NEBULA)
+    {
+      /* Density scales with area so a big viewport is not a sparse one. */
+      guint32 st = 0xC2B2AE35u;
+      int n = (w * h) / 1400, i;
+      for (i = 0; i < n; i++)
+        {
+          int sx = (int) (bg_randf (&st) * w);
+          int sy = (int) (bg_randf (&st) * h);
+          double mag = bg_randf (&st);
+          /* Cubed: mostly faint stars with a few bright ones, which is
+             what makes a field read as depth rather than as noise. */
+          double b = 90.0 + 165.0 * mag * mag * mag;
+          Color *c;
+          if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue;
+          c = &px[sy * w + sx];
+          c->r = (unsigned char) CLAMP (c->r + b, 0.0, 255.0);
+          c->g = (unsigned char) CLAMP (c->g + b, 0.0, 255.0);
+          c->b = (unsigned char) CLAMP (c->b + b, 0.0, 255.0);
+        }
+    }
+
+  img.data = px;
+  img.width = w;
+  img.height = h;
+  img.mipmaps = 1;
+  img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+  if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
+  r->bg_tex = LoadTextureFromImage (img);
+  r->bg_tex_ok = (r->bg_tex.id != 0);
+  if (r->bg_tex_ok) SetTextureFilter (r->bg_tex, TEXTURE_FILTER_BILINEAR);
+  r->bg_tex_w = w;
+  r->bg_tex_h = h;
+  g_free (px);
+}
+
+static void
+bg_load_image (CmacsLibregnumRenderCtx *r)
+{
+  Image img;
+
+  if (!r->bg_path || !r->bg_path[0]) return;
+  img = LoadImage (r->bg_path);
+  if (img.width <= 0 || img.height <= 0) { UnloadImage (img); return; }
+
+  if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
+  r->bg_tex = LoadTextureFromImage (img);
+  r->bg_tex_ok = (r->bg_tex.id != 0);
+  if (r->bg_tex_ok) SetTextureFilter (r->bg_tex, TEXTURE_FILTER_BILINEAR);
+  r->bg_tex_w = img.width;
+  r->bg_tex_h = img.height;
+  UnloadImage (img);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_set_background (CmacsLibregnumRenderCtx *r,
+                                           CmacsLibregnumBackgroundKind kind,
+                                           guint32 top, guint32 bottom,
+                                           const char *path)
+{
+  if (!r) return FALSE;
+
+  if (kind == CMACS_LIBREGNUM_BG_IMAGE && (!path || !path[0]))
+    return FALSE;
+
+  r->bg_kind = kind;
+  r->bg_top = top;
+  r->bg_bottom = bottom;
+  g_free (r->bg_path);
+  r->bg_path = (path && path[0]) ? g_strdup (path) : NULL;
+  r->bg_dirty = TRUE;
+
+  if (kind == CMACS_LIBREGNUM_BG_IMAGE)
+    {
+      /* Validate now rather than at frame time: the caller can then be
+         told the path is bad while it still has somewhere to say so. */
+      if (!g_file_test (r->bg_path, G_FILE_TEST_IS_REGULAR))
+        {
+          r->bg_kind = CMACS_LIBREGNUM_BG_NONE;
+          return FALSE;
+        }
+    }
+  return TRUE;
+}
+
+CmacsLibregnumBackgroundKind
+cmacs_libregnum_render_ctx_get_background (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->bg_kind : CMACS_LIBREGNUM_BG_NONE;
+}
+
+/* Blit the background over the whole FBO.  Called after the clear and
+ * before any 3D, so it sits behind everything. */
+static void
+ctx_draw_background (CmacsLibregnumRenderCtx *r, int w, int h)
+{
+  Rectangle src, dst;
+
+  if (!r || r->bg_kind == CMACS_LIBREGNUM_BG_NONE) return;
+
+  if (r->bg_dirty
+      || !r->bg_tex_ok
+      || (r->bg_kind != CMACS_LIBREGNUM_BG_IMAGE
+          && (r->bg_tex_w != w || r->bg_tex_h != h)))
+    {
+      if (r->bg_kind == CMACS_LIBREGNUM_BG_IMAGE) bg_load_image (r);
+      else bg_generate (r, w, h);
+      r->bg_dirty = FALSE;
+    }
+  if (!r->bg_tex_ok) return;
+
+  if (r->bg_kind == CMACS_LIBREGNUM_BG_IMAGE)
+    {
+      /* Cover fit: crop the longer axis rather than squashing it.  A
+         wallpaper stretched to the viewport's aspect looks broken in a
+         way a cropped one never does. */
+      double sa = (double) r->bg_tex_w / (double) r->bg_tex_h;
+      double da = (double) w / (double) h;
+      double cw = r->bg_tex_w, ch = r->bg_tex_h;
+      if (sa > da) cw = ch * da; else ch = cw / da;
+      src = (Rectangle){ (float) ((r->bg_tex_w - cw) / 2.0),
+                         (float) ((r->bg_tex_h - ch) / 2.0),
+                         (float) cw, (float) ch };
+    }
+  else
+    src = (Rectangle){ 0, 0, (float) r->bg_tex_w, (float) r->bg_tex_h };
+
+  dst = (Rectangle){ 0, 0, (float) w, (float) h };
+  DrawTexturePro (r->bg_tex, src, dst, (Vector2){ 0, 0 }, 0.0f, WHITE);
+  rlDrawRenderBatchActive ();
+}
+
 
 /* 0xRRGGBBAA to the 0..1 floats the emitter wants. */
 static void
@@ -1853,67 +2130,80 @@ rgba_to_floats (guint32 c, gfloat *r, gfloat *g, gfloat *b, gfloat *a)
 
 /* The cap is a budget, not a target: particles are pure decoration and
  * must never be the reason a graph view drops frames. */
-#define CMACS_PARTICLE_MAX (4096)
+#define CMACS_PARTICLE_MAX (2048)
+#define CMACS_PARTICLE_TEX (32)
 
-/* Additive so overlapping particles glow rather than muddy, and
- * billboards so they read the same from any camera angle -- this view is
- * orbited. */
-static LrgParticleSystem *
-ctx_new_system (guint max)
+/* A soft round dot, built by hand rather than with one of raylib's
+ * GenImage* helpers so it does not depend on which of them this raylib
+ * has.  Squared falloff: a linear one has a visible hard edge once it
+ * is additively blended over itself. */
+static void
+ctx_particle_texture (CmacsLibregnumRenderCtx *r)
 {
-  LrgParticleSystem *ps = lrg_particle_system_new (max);
-  if (!ps) return NULL;
-  lrg_particle_system_set_blend_mode (ps, LRG_PARTICLE_BLEND_ADDITIVE);
-  lrg_particle_system_set_render_mode (ps, LRG_PARTICLE_RENDER_BILLBOARD);
-  lrg_particle_system_set_loop (ps, TRUE);
-  lrg_particle_system_play (ps);
-  return ps;
+  const int S = CMACS_PARTICLE_TEX;
+  Color *px;
+  Image img = { 0 };
+  int x, y;
+
+  if (r->particle_tex_ok) return;
+
+  px = g_new0 (Color, (gsize) S * S);
+  for (y = 0; y < S; y++)
+    for (x = 0; x < S; x++)
+      {
+        double dx = (x - (S - 1) / 2.0) / (S / 2.0);
+        double dy = (y - (S - 1) / 2.0) / (S / 2.0);
+        double d  = sqrt (dx * dx + dy * dy);
+        double a  = (d >= 1.0) ? 0.0 : (1.0 - d) * (1.0 - d);
+        px[y * S + x] = (Color){ 255, 255, 255, (unsigned char) (a * 255.0) };
+      }
+
+  img.data = px;
+  img.width = S;
+  img.height = S;
+  img.mipmaps = 1;
+  img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+  r->particle_tex = LoadTextureFromImage (img);
+  r->particle_tex_ok = (r->particle_tex.id != 0);
+  if (r->particle_tex_ok)
+    SetTextureFilter (r->particle_tex, TEXTURE_FILTER_BILINEAR);
+  g_free (px);
 }
 
-static LrgParticleSystem *
+static void
+cmacs_particle_emitter_free (gpointer p)
+{
+  LrgParticleEmitter **e = p;
+  if (e && *e) g_object_unref (*e);
+}
+
+static LrgParticlePool *
 ctx_particles (CmacsLibregnumRenderCtx *r)
 {
   if (!r || !r->particles_on) return NULL;
-  if (!r->particles)
-    r->particles = ctx_new_system (CMACS_PARTICLE_MAX);
-  return r->particles;
+  if (!r->particle_pool)
+    {
+      r->particle_pool = lrg_particle_pool_new (CMACS_PARTICLE_MAX);
+      if (!r->particle_pool) return NULL;
+      r->particle_emitters =
+        g_array_new (FALSE, TRUE, sizeof (LrgParticleEmitter *));
+      g_array_set_clear_func (r->particle_emitters,
+                              cmacs_particle_emitter_free);
+    }
+  return r->particle_pool;
 }
 
-/* Bursts get their OWN system, and this is not tidiness.
- *
- * `lrg_particle_system_update' auto-emits from every emitter by rate,
- * while `lrg_particle_system_emit_at' emits from the FIRST emitter only.
- * So a burst emitter parked in the ambient system would either be
- * ignored by emit_at (it is appended, not prepended) or, with rate set,
- * spray continuously forever.  One emitter, rate 0, re-tuned per burst
- * is the only arrangement where both halves behave. */
-static LrgParticleSystem *
-ctx_bursts (CmacsLibregnumRenderCtx *r, LrgParticleEmitter **out_emitter)
+/* Acquire one particle, initialise it from E, and hand it back.  NULL
+ * when the pool is exhausted -- which is a budget being enforced, not
+ * an error. */
+static LrgParticle *
+ctx_particle_spawn (CmacsLibregnumRenderCtx *r, LrgParticleEmitter *e)
 {
-  if (!r || !r->particles_on) return NULL;
-  if (!r->bursts)
-    {
-      g_autoptr(LrgParticleEmitter) e = NULL;
-
-      r->bursts = ctx_new_system (CMACS_PARTICLE_MAX / 2);
-      if (!r->bursts) return NULL;
-
-      e = lrg_particle_emitter_new ();
-      if (!e) { g_clear_object (&r->bursts); return NULL; }
-      /* Rate 0: update() must never spawn from it -- emit_at() is the
-       * only thing allowed to.  Position 0 because emit_at supplies the
-       * world position and the emitter's own is added on top. */
-      lrg_particle_emitter_set_emission_rate (e, 0.0f);
-      lrg_particle_emitter_set_position (e, 0.0f, 0.0f, 0.0f);
-      lrg_particle_emitter_set_emission_shape (e, LRG_EMISSION_SHAPE_CIRCLE);
-      lrg_particle_system_add_emitter (r->bursts, e);
-      /* Borrowed: add_emitter took its own ref and the system outlives
-         this pointer's every use. */
-      r->burst_emitter = e;
-    }
-  if (out_emitter)
-    *out_emitter = r->burst_emitter;
-  return r->bursts;
+  LrgParticle *pt = lrg_particle_pool_acquire (r->particle_pool);
+  if (!pt) return NULL;
+  lrg_particle_emitter_emit (e, pt);
+  return pt;
 }
 
 void
@@ -1936,15 +2226,8 @@ void
 cmacs_libregnum_render_ctx_particles_clear (CmacsLibregnumRenderCtx *r)
 {
   if (!r) return;
-  if (r->particles)
-    {
-      lrg_particle_system_clear_emitters (r->particles);
-      lrg_particle_system_clear (r->particles);
-    }
-  /* The burst system keeps its one emitter -- clearing it would leave
-     emit_at with nothing to emit from and silently do nothing. */
-  if (r->bursts)
-    lrg_particle_system_clear (r->bursts);
+  if (r->particle_emitters) g_array_set_size (r->particle_emitters, 0);
+  if (r->particle_pool) lrg_particle_pool_clear (r->particle_pool);
 }
 
 gboolean
@@ -1956,19 +2239,19 @@ cmacs_libregnum_render_ctx_particles_add_emitter (CmacsLibregnumRenderCtx *r,
                                                   float size, float life,
                                                   float speed)
 {
-  LrgParticleSystem *ps = ctx_particles (r);
-  g_autoptr(LrgParticleEmitter) e = NULL;
+  LrgParticlePool *pool = ctx_particles (r);
+  LrgParticleEmitter *e;
   gfloat cr, cg, cb, ca;
 
-  if (!ps) return FALSE;
+  if (!pool) return FALSE;
 
   e = lrg_particle_emitter_new ();
   if (!e) return FALSE;
 
   lrg_particle_emitter_set_position (e, x, y, z);
   /* From a sphere's surface, drifting outward: an emitter anchored at a
-   * point looks like a fountain, which is wrong for a node that is
-   * supposed to feel ambient rather than active. */
+   * point looks like a fountain, which is wrong for a node meant to feel
+   * ambient rather than active. */
   lrg_particle_emitter_set_emission_shape (e, LRG_EMISSION_SHAPE_CIRCLE);
   lrg_particle_emitter_set_shape_radius (e, radius);
   lrg_particle_emitter_set_emission_rate (e, rate);
@@ -1981,7 +2264,7 @@ cmacs_libregnum_render_ctx_particles_add_emitter (CmacsLibregnumRenderCtx *r,
   rgba_to_floats (rgba_end, &cr, &cg, &cb, &ca);
   lrg_particle_emitter_set_end_color (e, cr, cg, cb, ca);
 
-  lrg_particle_system_add_emitter (ps, e);
+  g_array_append_val (r->particle_emitters, e);
   return TRUE;
 }
 
@@ -1994,36 +2277,50 @@ cmacs_libregnum_render_ctx_particles_burst (CmacsLibregnumRenderCtx *r,
                                             float size, float life,
                                             float speed)
 {
-  LrgParticleEmitter *e = NULL;
-  LrgParticleSystem *ps = ctx_bursts (r, &e);
+  LrgParticlePool *pool = ctx_particles (r);
   gfloat cr, cg, cb, ca;
+  guint i, made = 0;
 
-  if (!ps || !e) return FALSE;
+  if (!pool) return FALSE;
 
-  /* Re-tune the single burst emitter, then fire it.  Particles already
-   * in flight keep the values they were emitted with, so re-tuning does
-   * not disturb an earlier burst still fading out. */
-  lrg_particle_emitter_set_shape_radius (e, size);
-  lrg_particle_emitter_set_initial_speed (e, speed * 0.5f, speed);
-  lrg_particle_emitter_set_initial_lifetime (e, life * 0.5f, life);
-  lrg_particle_emitter_set_initial_size (e, size * 0.5f, size);
+  /* One reusable emitter at rate 0: a burst is emission on demand, and
+   * an emitter with a rate parked in the ambient list would spray
+   * forever. */
+  if (!r->burst_emitter)
+    {
+      r->burst_emitter = lrg_particle_emitter_new ();
+      if (!r->burst_emitter) return FALSE;
+      lrg_particle_emitter_set_emission_rate (r->burst_emitter, 0.0f);
+      lrg_particle_emitter_set_emission_shape (r->burst_emitter,
+                                               LRG_EMISSION_SHAPE_CIRCLE);
+    }
+
+  lrg_particle_emitter_set_position (r->burst_emitter, x, y, z);
+  lrg_particle_emitter_set_shape_radius (r->burst_emitter, size);
+  lrg_particle_emitter_set_initial_speed (r->burst_emitter,
+                                          speed * 0.5f, speed);
+  lrg_particle_emitter_set_initial_lifetime (r->burst_emitter,
+                                             life * 0.5f, life);
+  lrg_particle_emitter_set_initial_size (r->burst_emitter,
+                                         size * 0.5f, size);
 
   rgba_to_floats (rgba_start, &cr, &cg, &cb, &ca);
-  lrg_particle_emitter_set_start_color (e, cr, cg, cb, ca);
+  lrg_particle_emitter_set_start_color (r->burst_emitter, cr, cg, cb, ca);
   rgba_to_floats (rgba_end, &cr, &cg, &cb, &ca);
-  lrg_particle_emitter_set_end_color (e, cr, cg, cb, ca);
+  lrg_particle_emitter_set_end_color (r->burst_emitter, cr, cg, cb, ca);
 
-  return lrg_particle_system_emit_at (ps, x, y, z, count) > 0;
+  for (i = 0; i < count; i++)
+    if (ctx_particle_spawn (r, r->burst_emitter)) made++;
+    else break;
+
+  return made > 0;
 }
 
 guint
 cmacs_libregnum_render_ctx_particles_count (CmacsLibregnumRenderCtx *r)
 {
-  guint n = 0;
-  if (!r) return 0;
-  if (r->particles) n += lrg_particle_system_get_active_count (r->particles);
-  if (r->bursts)    n += lrg_particle_system_get_active_count (r->bursts);
-  return n;
+  if (!r || !r->particle_pool) return 0;
+  return lrg_particle_pool_get_alive_count (r->particle_pool);
 }
 
 /* Advance and draw.  Called from inside the 3D layer of the FBO pass --
@@ -2033,8 +2330,11 @@ ctx_particles_step_and_draw (CmacsLibregnumRenderCtx *r)
 {
   gint64  now;
   gdouble dt;
+  guint   i, n = 0;
+  LrgParticle *arr;
+  Camera3D cam;
 
-  if (!r || !r->particles_on || (!r->particles && !r->bursts)) return;
+  if (!r || !r->particles_on || !r->particle_pool) return;
 
   now = g_get_monotonic_time ();
   dt  = r->particles_last_us
@@ -2045,16 +2345,55 @@ ctx_particles_step_and_draw (CmacsLibregnumRenderCtx *r)
   if (dt < 0.0)  dt = 0.0;
   if (dt > 0.1)  dt = 0.1;
 
-  if (r->particles)
+  /* Emit.  `should_emit' carries the emitter's own fractional rate
+   * accumulator, so a 6/second emitter really does average six. */
+  if (r->particle_emitters)
+    for (i = 0; i < r->particle_emitters->len; i++)
+      {
+        LrgParticleEmitter *e =
+          g_array_index (r->particle_emitters, LrgParticleEmitter *, i);
+        if (!e) continue;
+        lrg_particle_emitter_update (e, (gfloat) dt);
+        while (lrg_particle_emitter_should_emit (e))
+          if (!ctx_particle_spawn (r, e)) break;
+      }
+
+  lrg_particle_pool_update_all (r->particle_pool, (gfloat) dt);
+
+  arr = lrg_particle_pool_get_particles (r->particle_pool, &n);
+  if (!arr || n == 0) return;
+
+  ctx_particle_texture (r);
+  if (!r->particle_tex_ok) return;
+
+  cam = ctx_raylib_camera (r);
+
+  /* Additive, and NOT writing depth: particles are a glow over the
+   * scene, and letting them into the depth buffer makes each one punch
+   * a hole the ones behind it cannot draw through. */
+  rlDrawRenderBatchActive ();
+  rlDisableDepthMask ();
+  BeginBlendMode (BLEND_ADDITIVE);
+
+  for (i = 0; i < n; i++)
     {
-      lrg_particle_system_update (r->particles, (gfloat) dt);
-      lrg_particle_system_draw (r->particles);
+      LrgParticle *pt = &arr[i];
+      Color c;
+
+      if (!pt->alive) continue;
+      c = (Color){ (unsigned char) (CLAMP (pt->color_r, 0.0f, 1.0f) * 255.0f),
+                   (unsigned char) (CLAMP (pt->color_g, 0.0f, 1.0f) * 255.0f),
+                   (unsigned char) (CLAMP (pt->color_b, 0.0f, 1.0f) * 255.0f),
+                   (unsigned char) (CLAMP (pt->color_a, 0.0f, 1.0f) * 255.0f) };
+      DrawBillboard (cam, r->particle_tex,
+                     (Vector3){ pt->position_x, pt->position_y,
+                                pt->position_z },
+                     pt->size, c);
     }
-  if (r->bursts)
-    {
-      lrg_particle_system_update (r->bursts, (gfloat) dt);
-      lrg_particle_system_draw (r->bursts);
-    }
+
+  EndBlendMode ();
+  rlDrawRenderBatchActive ();
+  rlEnableDepthMask ();
 }
 
 guint
@@ -3280,6 +3619,8 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
   {
     Color bg = (Color){ 16, 16, 21, 255 };
     ClearBackground (bg);
+    /* After the clear, before anything 3D: genuinely behind the scene. */
+    ctx_draw_background (r, r->width, r->height);
     if (r->camera)
       {
         lrg_renderer_begin_frame (r->renderer);

@@ -832,11 +832,6 @@ nodes are boxes), `halo' (a wireframe shell, right for spheres), or
   return style;
 }
 
-/* ── Particles ─────────────────────────────────────────────────────
- * Decoration, deliberately: they make a scene feel alive and they must
- * never be load-bearing.  Every entry point is a no-op on a buffer with
- * no view, so a caller need not care whether one is attached yet.  */
-
 /* 0xRRGGBBAA from a Lisp integer, clamped. */
 static guint32
 cmacs_lrg_rgba (Lisp_Object v, guint32 dflt)
@@ -850,6 +845,52 @@ cmacs_lrg_float (Lisp_Object v, double dflt)
 {
   return (float) (NUMBERP (v) ? XFLOATINT (v) : dflt);
 }
+
+DEFUN ("cmacs-libregnum-set-background",
+       Fcmacs_libregnum_set_background,
+       Scmacs_libregnum_set_background, 2, 5, 0,
+       doc: /* Set what fills BUFFER's viewport behind the scene.
+
+KIND is `none' (the flat default), `solid', `gradient', `starfield',
+`nebula' or `image'.  TOP and BOTTOM are 0xRRGGBBAA integers -- `solid'
+uses TOP only, the others blend TOP to BOTTOM down the viewport.  PATH is
+the image file for `image', which is drawn cover-fit so a wallpaper of
+any shape fills the viewport without being squashed.
+
+Returns nil, without changing anything, when `image' is given a path that
+is not a readable file: a viewport that goes blank is a worse answer
+than one that ignores a bad path.  */)
+  (Lisp_Object buffer, Lisp_Object kind, Lisp_Object top,
+   Lisp_Object bottom, Lisp_Object path)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  CmacsLibregnumBackgroundKind k = CMACS_LIBREGNUM_BG_NONE;
+  gboolean ok;
+
+  if (!ctx) return Qnil;
+
+  if (EQ (kind, Qcmacs_bg_solid))          k = CMACS_LIBREGNUM_BG_SOLID;
+  else if (EQ (kind, Qcmacs_bg_gradient))  k = CMACS_LIBREGNUM_BG_GRADIENT;
+  else if (EQ (kind, Qcmacs_bg_starfield)) k = CMACS_LIBREGNUM_BG_STARFIELD;
+  else if (EQ (kind, Qcmacs_bg_nebula))    k = CMACS_LIBREGNUM_BG_NEBULA;
+  else if (EQ (kind, Qcmacs_bg_image))     k = CMACS_LIBREGNUM_BG_IMAGE;
+
+  ok = cmacs_libregnum_render_ctx_set_background
+         (ctx, k,
+          cmacs_lrg_rgba (top, 0x101017FFu),
+          cmacs_lrg_rgba (bottom, 0x05050AFFu),
+          STRINGP (path) ? SSDATA (ENCODE_FILE (path)) : NULL);
+
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return ok ? kind : Qnil;
+}
+
+/* ── Particles ─────────────────────────────────────────────────────
+ * Decoration, deliberately: they make a scene feel alive and they must
+ * never be load-bearing.  Every entry point is a no-op on a buffer with
+ * no view, so a caller need not care whether one is attached yet.  */
 
 DEFUN ("cmacs-libregnum-particles-enable",
        Fcmacs_libregnum_particles_enable,
@@ -2879,6 +2920,11 @@ syms_of_cmacs_libregnum_defuns (void)
   DEFSYM (Qcmacs_label_hover, "hover");
   DEFSYM (Qcmacs_label_always, "always");
   DEFSYM (Qcmacs_sel_halo, "halo");
+  DEFSYM (Qcmacs_bg_solid, "solid");
+  DEFSYM (Qcmacs_bg_gradient, "gradient");
+  DEFSYM (Qcmacs_bg_starfield, "starfield");
+  DEFSYM (Qcmacs_bg_nebula, "nebula");
+  DEFSYM (Qcmacs_bg_image, "image");
   DEFSYM (Qcmacs_sel_none, "none");
   Fput (Qcmacs_libregnum_error, Qerror_conditions,
         list2 (Qcmacs_libregnum_error, Qerror));
@@ -2925,6 +2971,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_label_style);
   defsubr (&Scmacs_libregnum_set_label_decor);
   defsubr (&Scmacs_libregnum_set_selection_style);
+  defsubr (&Scmacs_libregnum_set_background);
   defsubr (&Scmacs_libregnum_particles_enable);
   defsubr (&Scmacs_libregnum_particles_clear);
   defsubr (&Scmacs_libregnum_particles_emitter);

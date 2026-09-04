@@ -102,6 +102,8 @@ cmacs_graph_layout_tween_begin (l, g, 24);   /* or _snap (g) */
 
 =RINGS= does not spread band members evenly. Each /group root/ — a visible node with no visible ancestor, i.e. a department hub — is given a contiguous angular *wedge* sized by how many visible nodes it holds, and its members are laid out inside that wedge on a wide, shallow lattice sitting just outside the band radius.
 
+Bands are also *sized to what they hold*. A fixed radius per ring works only while the rings are small: give the Memory band a thousand notes and every one lands on one circle of circumference 2πr, which is not a ring of nodes but a solid line — and the bands outside it are still where they were, so the crowding has nowhere to go. Each band therefore takes as many rows as its population needs (capped at ten, past which it stops reading as a ring and starts reading as a disc) and a radius big enough to leave each node about =GRAPHCORE_NODE_ARC= of arc; bands are then pushed outward in turn so a fat one never grows into its neighbour.
+
 Three decisions, each with a failure it exists to prevent:
 
 - *Wedges are proportional, not equal.* Equal wedges give a department of four notes the same arc as one of four thousand, so the big group piles onto itself while the small one floats in empty space. That is what turns "show me everything" into an unreadable smear.

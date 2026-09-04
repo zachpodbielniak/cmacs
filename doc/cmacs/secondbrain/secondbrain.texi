@@ -109,6 +109,7 @@ movement must not silently answer a different one.  @kbd{H} toggles it.
 @item @kbd{v} @tab toggle flat / 3D
 @item @kbd{0} @tab frame the whole graph
 @item @kbd{g} @tab re-read every source
+@item @kbd{b} @tab pick the background (or a wallpaper image)
 @item @kbd{P} @tab particle effects on/off
 @item @kbd{H} @tab hover department-highlighting on/off
 @item @kbd{q} @tab quit
@@ -132,6 +133,33 @@ Clicking a department expands it because that is the whole interaction:
 the rings tell you what exists, and a click tells you what is inside.
 Making expand a separate keystroke would mean the obvious gesture on the
 obvious target does nothing.
+
+@subsection Background
+
+@kbd{b} picks what fills the viewport behind the graph: @code{nebula}
+(the default --- layered value noise plus a star field over a vertical
+gradient), @code{starfield}, @code{gradient}, @code{solid}, @code{none},
+or @code{image}, which draws a wallpaper file cover-fit so any aspect
+ratio fills the viewport without being squashed.
+
+Picking @code{image} offers whatever it finds under
+@code{cmacs-secondbrain-wallpaper-dirs} and still accepts any path you
+type.  An unreadable path is refused and reported rather than blanking
+the viewport.
+
+The procedural kinds are generated once into a texture and cached until
+the kind, colours or viewport size change, so they cost one blit per
+frame.  They are deterministic --- the same viewport gives the same sky
+every session, which is both less distracting and what makes them
+testable.
+
+@strong{Screensavers are not yet available as a background.}  The
+@file{deps/screensavers} modules render out-of-process into a memfd ring
+whose only consumers are gowl's wallpaper and lock frame sinks, and the
+pump that drives them includes @file{gowl.h} directly.  Routing those
+frames into a libregnum viewport means adding a third sink and
+decoupling the pump from gowl --- worth doing, but a change to the
+screensaver subsystem rather than to this one.
 
 @subsection Particles
 

@@ -645,11 +645,7 @@ to click through, not a view of the graph."
                    (cmacs-secondbrain-node-count buf)))))))
 
 (ert-deftest cmacs-secondbrain-test-particle-burst-emits ()
-  "A burst puts particles on screen; with particles off it does not.
-
-The live count is the only externally visible proof the effect did
-anything -- without it a silently broken emitter looks exactly like a
-working one."
+  "A burst puts particles in the pool; with particles off it does not."
   (cmacs-secondbrain-tests--skip)
   (skip-unless (fboundp 'cmacs-libregnum-particles-burst))
   (cmacs-secondbrain-tests--with-view buf
@@ -661,6 +657,75 @@ working one."
     (should (= 0 (cmacs-libregnum-particles-count buf)))
     (should-not (cmacs-libregnum-particles-burst buf 0 0 0 12))))
 
+(ert-deftest cmacs-secondbrain-test-particles-actually-render ()
+  "Particles reach the framebuffer, not just the pool.
+
+This is the test that matters, and it is why it snapshots rather than
+counting.  `lrg_particle_system_draw' is a documented no-op -- it walks
+the live particles and draws nothing, because rendering \"depends on the
+graphics backend\".  An implementation built on it simulates correctly,
+reports a healthy live count, and puts not one pixel on screen.  A test
+that only asserted the count would have passed against exactly that.
+
+`cmacs-libregnum-ink-bbox' cannot do the job either: the viewport paints
+a background, so the ink box is already the whole frame before a single
+particle exists."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-particles-burst))
+  (let ((before (make-temp-file "sb-p-" nil ".png"))
+        (after  (make-temp-file "sb-p-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph buf (vector) (vector) 2)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-libregnum-snapshot buf before)
+          (cmacs-libregnum-particles-enable buf t)
+          (cmacs-libregnum-particles-burst buf 0 0 0 150 #xFFFFFFFF 0.6 0.2)
+          (cmacs-libregnum-snapshot buf after)
+          (should (file-exists-p before))
+          (should (file-exists-p after))
+          (should-not
+           (equal (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally before) (buffer-string))
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally after) (buffer-string)))))
+      (ignore-errors (delete-file before))
+      (ignore-errors (delete-file after)))))
+
+(ert-deftest cmacs-secondbrain-test-context-menu-call-shape ()
+  "The context menu calls `cmacs-libregnum-popup-menu' correctly.
+
+It takes (POSITION MENU) -- two arguments -- and MENU is an
+x-popup-menu alist, not a bare item list.  Passing a buffer, a title and
+the items instead is a `wrong-number-of-arguments' the moment anything
+is right-clicked, and no amount of testing `--menu-items' in isolation
+catches it, because the mistake is at the call site."
+  (cmacs-secondbrain-tests--skip)
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (cmacs-secondbrain-mode)
+      (cmacs-secondbrain-set-graph
+       buf (vector (list :id "n1" :title "One" :kind 'file :ring 'memory))
+       (vector) 2)
+      (let ((seen nil))
+        (cl-letf (((symbol-function 'cmacs-libregnum-popup-menu)
+                   ;; Strictly two arguments: a third signals, which is
+                   ;; the regression this exists for.
+                   (lambda (position menu) (setq seen (list position menu)) nil)))
+          (cmacs-secondbrain--context-menu buf 0 "n1" 0 0)
+          ;; The handler defers onto the command loop, so let it run.
+          (sit-for 0.2)
+          (should seen)
+          ;; MENU is (TITLE (PANE ITEM...)); a nil item must have become
+          ;; a separator, because x-popup-menu chokes on a bare nil.
+          (let* ((menu (nth 1 seen))
+                 (pane (nth 1 menu)))
+            (should (stringp (car menu)))
+            (should (consp pane))
+            (should (cl-every #'consp (cdr pane)))))))))
+
 (ert-deftest cmacs-secondbrain-test-particles-off-is-a-no-op ()
   "With `cmacs-secondbrain-particles' nil nothing reaches libregnum."
   (skip-unless (fboundp 'cmacs-secondbrain--burst-at))
@@ -670,6 +735,49 @@ working one."
                  (lambda (&rest _) (cl-incf calls) t)))
         (cmacs-secondbrain--burst-at "x")
         (should (= 0 calls))))))
+
+(ert-deftest cmacs-secondbrain-test-background-kinds-render ()
+  "Every procedural background reaches the framebuffer, and differs.
+
+Rendering each and comparing bytes, because \"the setter returned the
+symbol I gave it\" proves only that the symbol was recognised -- it says
+nothing about whether a single pixel changed."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-set-background))
+  (let ((files nil))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph buf (vector) (vector) 2)
+          (cmacs-secondbrain-fit buf)
+          (dolist (kind '(none gradient starfield nebula))
+            (should (eq kind (cmacs-libregnum-set-background
+                              buf kind #x2A3A6BFF #x05050AFF)))
+            (let ((f (make-temp-file "sb-bg-" nil ".png")))
+              (push f files)
+              (cmacs-libregnum-snapshot buf f)
+              (should (file-exists-p f))))
+          (let ((bytes (mapcar (lambda (f)
+                                 (with-temp-buffer
+                                   (set-buffer-multibyte nil)
+                                   (insert-file-contents-literally f)
+                                   (buffer-string)))
+                               files)))
+            ;; Four kinds, four distinct frames.
+            (should (= 4 (length (delete-dups (copy-sequence bytes)))))))
+      (dolist (f files) (ignore-errors (delete-file f))))))
+
+(ert-deftest cmacs-secondbrain-test-background-bad-image-is-refused ()
+  "An unreadable image is refused rather than blanking the viewport.
+
+A background that silently goes to nothing is a worse answer than one
+that keeps what it had and says the path is bad."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-set-background))
+  (cmacs-secondbrain-tests--with-view buf
+    (should-not (cmacs-libregnum-set-background
+                 buf 'image 0 0 "/nonexistent/nope.png"))
+    ;; And with no path at all, which is the other way to get here.
+    (should-not (cmacs-libregnum-set-background buf 'image 0 0 nil))))
 
 (provide 'cmacs-secondbrain-tests)
 

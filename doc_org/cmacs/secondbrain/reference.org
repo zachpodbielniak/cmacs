@@ -133,7 +133,7 @@ Clicking a department expands it because that is the whole interaction: the ring
 
 This is not cosmetic.  The framebuffer is blitted 1:1 across the window rectangle, and a pick maps view pixels against the *framebuffer's* dimensions -- so a mismatch does not merely stretch the picture, it puts every click somewhere other than where it was aimed.  A view that never fits its window is a view where nothing is clickable, which is exactly how this failed before the hook existed.
 
-* Particle DEFUNs
+* Background and particle DEFUNs
 
 Generic, on =cmacs-libregnum=, so any libregnum scene can use them.
 
