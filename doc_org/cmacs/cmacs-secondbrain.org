@@ -101,7 +101,7 @@ Picking =image= offers whatever it finds under =cmacs-secondbrain-wallpaper-dirs
 
 The procedural kinds are generated once into a texture and cached until the kind, colours or viewport size change, so they cost one blit per frame. They are deterministic — the same viewport gives the same sky every session, which is both less distracting and what makes them testable.
 
-*Screensavers* are a background too: set =cmacs-secondbrain-background= to =screensaver= and pick a config with =cmacs-secondbrain-screensaver= (default =helios-blue=). They render in the same out-of-process renderer the animated wallpaper uses, so none of the screensaver's GL runs on Emacs's thread, and the sink they use needs no gowl — this works in a plain pgtk Emacs.
+*Screensavers* are a background too, though not the default: set =cmacs-secondbrain-background= to =screensaver= and pick a config with =cmacs-secondbrain-screensaver= (=helios-blue= if you do not). They render in the same out-of-process renderer the animated wallpaper uses, so none of the screensaver's GL runs on Emacs's thread, and the sink they use needs no gowl — this works in a plain pgtk Emacs.
 
 Pick a dark one. The graph is drawn over the top, and a screensaver that fills the frame with bright detail leaves the nodes nowhere to be read against.
 
@@ -255,6 +255,91 @@ Shipped sources cover two worlds, because both are real:
 The Memory ring groups by [[file:cmacs-para.org][PARA]] bucket — =00_inbox=, =01_projects=, =02_areas=, =03_resources=, =04_archives=, with =02_areas/dailies= split out because it is roughly 40% of a mature tree and would otherwise swamp the areas colour. The tree is already organised; grouping it by anything else would be inventing a second organisation on top of the real one.
 
 Notes are read from =org-roam.db= when it exists. When it does not — org-roam builds it on demand, and roamgraph's native C scanner is a stub — a built-in scanner walks the tree for =:ID:= drawers and =[[id:]]= links instead. Without that fallback the largest of the four rings comes up empty on a machine whose notes are perfectly well formed.
+
+* Configuration
+
+Everything below is a =defcustom= in the =cmacs-secondbrain= group, so
+=M-x customize-group RET cmacs-secondbrain RET= shows the lot with its
+documentation. Nothing here needs to be set: the defaults are what you
+get on =M-x cmacs-secondbrain=.
+
+** A worked =init.el=
+
+#+begin_src elisp
+;; The view opens folded, to the rings and their department hubs.
+;; Set this to nil to open the whole graph -- every file and every
+;; link -- on load instead.
+(setq cmacs-secondbrain-start-collapsed t)
+
+;; Background.  `nebula' is the default: value noise and a star field
+;; over a vertical gradient, generated once into a texture and cached.
+(setq cmacs-secondbrain-background 'nebula
+      cmacs-secondbrain-background-colors '(#x2A3A6BFF . #x05050AFF))
+
+;; Or your own wallpaper, drawn cover-fit so any aspect ratio fills the
+;; viewport without being squashed:
+;; (setq cmacs-secondbrain-background 'image
+;;       cmacs-secondbrain-background-image "~/Pictures/space.png")
+
+;; Or a live screensaver from `cmacs-screensaver-configs'.  Off by
+;; default deliberately -- see the note below.
+;; (setq cmacs-secondbrain-background 'screensaver
+;;       cmacs-secondbrain-screensaver 'helios-blue)
+
+;; Motion.  Particles are ambient drift plus a burst on select/expand;
+;; the link pulse is the rope light along a selected note's links.
+(setq cmacs-secondbrain-particles t
+      cmacs-secondbrain-link-pulse t
+      cmacs-secondbrain-link-pulse-speed 2.4
+      cmacs-secondbrain-auto-rotate 0.0     ; degrees/second; `R' toggles
+      cmacs-secondbrain-rotate-speed 3.0)
+
+;; Labels scale with the viewport: this is the size at a viewport
+;; `-label-reference-height' tall, and it grows from there.
+(setq cmacs-secondbrain-label-size 15
+      cmacs-secondbrain-max-labels 160)
+
+;; Interaction.
+(setq cmacs-secondbrain-drag-nodes t
+      cmacs-secondbrain-hover-highlights-group t
+      cmacs-secondbrain-fly-context 0.4)
+
+;; Which rings get populated.  `t' means every registered source; a
+;; list names the ones you want.
+(setq cmacs-secondbrain-enabled-sources t)
+#+end_src
+
+** What costs something
+
+Three settings have a standing cost rather than a one-off one, which is
+why each is off or conservative by default:
+
+- =cmacs-secondbrain-background= set to =screensaver= runs a second
+  process rendering continuously, and holds a redraw clock up for as
+  long as the buffer lives. The procedural backgrounds are generated
+  once into a texture and then cost one blit per frame.
+- =cmacs-secondbrain-particles= holds a redraw clock at
+  =-particle-fps= even when nothing is happening. That is the honest
+  price of ambient motion; turning particles off stops the clock.
+- =cmacs-secondbrain-auto-rotate= costs a layout pass per tick, because
+  it turns the layout rather than the camera — which is what makes
+  picking follow the nodes.
+
+=cmacs-secondbrain-link-pulse= costs a recolour pass over the edges per
+frame, but only while something is selected.
+
+** Turning the whole thing down
+
+For a still, cheap view:
+
+#+begin_src elisp
+(setq cmacs-secondbrain-background 'solid
+      cmacs-secondbrain-particles nil
+      cmacs-secondbrain-link-pulse nil
+      cmacs-secondbrain-auto-rotate 0.0)
+#+end_src
+
+With all four off the view redraws only when something changes.
 
 * Reading the map
 

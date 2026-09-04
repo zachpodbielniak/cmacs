@@ -27,6 +27,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain AI::              Questions the rings make askable.
 * Secondbrain Panes::           The inspector, the preview, and icons.
 * Secondbrain Sources::         Where the data comes from.
+* Secondbrain Configuration::   Every knob, and what each one costs.
 * Secondbrain Reading::         Glyphs, sizes and colours.
 * Secondbrain MCP::             Driving it from an agent.
 * Secondbrain Extending::       Adding a source, action or glyph.
@@ -167,10 +168,10 @@ frame.  They are deterministic --- the same viewport gives the same sky
 every session, which is both less distracting and what makes them
 testable.
 
-@strong{Screensavers} are a background too: set
+@strong{Screensavers} are a background too, though not the default: set
 @code{cmacs-secondbrain-background} to @code{screensaver} and pick a
-config with @code{cmacs-secondbrain-screensaver} (default
-@code{helios-blue}).  They render in the same out-of-process
+config with @code{cmacs-secondbrain-screensaver} (@code{helios-blue} if
+you do not).  They render in the same out-of-process
 renderer the animated wallpaper uses, so none of the screensaver's GL
 runs on Emacs's thread, and the sink they use needs no gowl --- this
 works in a plain pgtk Emacs.
@@ -449,6 +450,95 @@ stub --- a built-in scanner walks the tree for @code{:ID:} drawers and
 @code{[[id:]]} links instead.  Without that fallback the largest of the
 four rings comes up empty on a machine whose notes are perfectly well
 formed.
+
+@node Secondbrain Configuration
+@section Configuration
+
+Everything below is a @code{defcustom} in the @code{cmacs-secondbrain}
+group, so @kbd{M-x customize-group @key{RET} cmacs-secondbrain} shows
+the lot with its documentation.  Nothing here needs to be set: the
+defaults are what @kbd{M-x cmacs-secondbrain} gives you.
+
+@subsection A worked init.el
+
+@lisp
+;; The view opens folded, to the rings and their department hubs.
+;; Set this to nil to open the whole graph -- every file and every
+;; link -- on load instead.
+(setq cmacs-secondbrain-start-collapsed t)
+
+;; Background.  `nebula' is the default: value noise and a star field
+;; over a vertical gradient, generated once into a texture and cached.
+(setq cmacs-secondbrain-background 'nebula
+      cmacs-secondbrain-background-colors '(#x2A3A6BFF . #x05050AFF))
+
+;; Or your own wallpaper, drawn cover-fit so any aspect ratio fills the
+;; viewport without being squashed:
+;; (setq cmacs-secondbrain-background 'image
+;;       cmacs-secondbrain-background-image "~/Pictures/space.png")
+
+;; Or a live screensaver from `cmacs-screensaver-configs'.  Off by
+;; default deliberately -- see below.
+;; (setq cmacs-secondbrain-background 'screensaver
+;;       cmacs-secondbrain-screensaver 'helios-blue)
+
+;; Motion.
+(setq cmacs-secondbrain-particles t
+      cmacs-secondbrain-link-pulse t
+      cmacs-secondbrain-link-pulse-speed 2.4
+      cmacs-secondbrain-auto-rotate 0.0     ; degrees/second; `R' toggles
+      cmacs-secondbrain-rotate-speed 3.0)
+
+;; Labels scale with the viewport: this is the size at a viewport
+;; `-label-reference-height' tall, and it grows from there.
+(setq cmacs-secondbrain-label-size 15
+      cmacs-secondbrain-max-labels 160)
+
+;; Interaction.
+(setq cmacs-secondbrain-drag-nodes t
+      cmacs-secondbrain-hover-highlights-group t
+      cmacs-secondbrain-fly-context 0.4)
+
+;; Which rings get populated.  `t' means every registered source; a
+;; list names the ones you want.
+(setq cmacs-secondbrain-enabled-sources t)
+@end lisp
+
+@subsection What costs something
+
+Three settings carry a standing cost rather than a one-off one, which is
+why each is off or conservative by default.
+
+@table @code
+@item cmacs-secondbrain-background
+Set to @code{screensaver} it runs a second process rendering
+continuously and holds a redraw clock up for as long as the buffer
+lives.  The procedural backgrounds are generated once into a texture and
+then cost one blit per frame.
+@item cmacs-secondbrain-particles
+Holds a redraw clock at @code{-particle-fps} even when nothing is
+happening.  That is the honest price of ambient motion; turning
+particles off stops the clock.
+@item cmacs-secondbrain-auto-rotate
+Costs a layout pass per tick, because it turns the layout rather than
+the camera --- which is what makes picking follow the nodes.
+@end table
+
+@code{cmacs-secondbrain-link-pulse} costs a recolour pass over the edges
+per frame, but only while something is selected.
+
+@subsection Turning the whole thing down
+
+For a still, cheap view:
+
+@lisp
+(setq cmacs-secondbrain-background 'solid
+      cmacs-secondbrain-particles nil
+      cmacs-secondbrain-link-pulse nil
+      cmacs-secondbrain-auto-rotate 0.0)
+@end lisp
+
+With all four off the view redraws only when something changes.
 
 @node Secondbrain Reading
 @section Reading the map

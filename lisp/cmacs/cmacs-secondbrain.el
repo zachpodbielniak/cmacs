@@ -114,11 +114,12 @@ one on a large tree."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-background 'screensaver
+(defcustom cmacs-secondbrain-background 'nebula
   "What fills the viewport behind the graph.
 
 One of `none' (the flat default clear colour), `solid', `gradient',
-`starfield', `nebula', `screensaver' -- a live screensaver from
+`starfield', `nebula' (the default: value noise and a star field over a
+gradient), `screensaver' -- a live screensaver from
 `cmacs-secondbrain-screensaver', which falls back to `nebula' when the
 screensaver subsystem is not built -- or `image', which draws
 `cmacs-secondbrain-background-image', cover-fit so a wallpaper of any
@@ -134,8 +135,10 @@ is both less distracting and what makes them testable."
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-screensaver 'helios-blue
-  "Screensaver config drawn behind the graph when the background is
-`screensaver'.
+  "Screensaver config used when `cmacs-secondbrain-background' is
+`screensaver'.  It is not the default background: a live screensaver
+means a second process rendering continuously and a redraw clock that
+never idles, which is a real cost to opt into rather than inherit.
 
 A name from `cmacs-screensaver-configs'.  It renders in the same
 out-of-process renderer the animated wallpaper uses -- so none of its GL

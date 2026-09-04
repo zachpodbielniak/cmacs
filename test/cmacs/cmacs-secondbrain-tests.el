@@ -1207,6 +1207,54 @@ neighbours keeping their labels is its own kind of wrong answer."
                       count 1)))
         (should (= 0 flagged))))))
 
+(ert-deftest cmacs-secondbrain-test-defaults-are-cheap ()
+  "The out-of-the-box view does not opt you into a standing cost.
+
+Three settings hold a clock up or a process open for as long as the
+buffer lives, and each should be something you choose rather than
+something you inherit.  A default that quietly runs a second process is
+the kind of thing nobody notices until they wonder why the machine is
+warm."
+  (skip-unless (boundp 'cmacs-secondbrain-background))
+  ;; A screensaver background means a second process rendering
+  ;; continuously; the procedural backgrounds are cached textures.
+  (should-not (eq 'screensaver (default-value 'cmacs-secondbrain-background)))
+  ;; Rotation costs a layout pass per tick.
+  (should (= 0.0 (default-value 'cmacs-secondbrain-auto-rotate))))
+
+(ert-deftest cmacs-secondbrain-test-every-setting-is-customizable ()
+  "Every knob is a defcustom in the `cmacs-secondbrain' group.
+
+So `M-x customize-group' shows the whole surface with its documentation,
+rather than half of it plus some variables a reader has to find by
+grepping."
+  (skip-unless (boundp 'cmacs-secondbrain-background))
+  (let ((members (mapcar #'car (get 'cmacs-secondbrain 'custom-group)))
+        (missing nil))
+    (should members)
+    (dolist (sym '(cmacs-secondbrain-background
+                   cmacs-secondbrain-background-colors
+                   cmacs-secondbrain-background-image
+                   cmacs-secondbrain-screensaver
+                   cmacs-secondbrain-wallpaper-dirs
+                   cmacs-secondbrain-particles
+                   cmacs-secondbrain-particle-fps
+                   cmacs-secondbrain-link-pulse
+                   cmacs-secondbrain-link-pulse-speed
+                   cmacs-secondbrain-auto-rotate
+                   cmacs-secondbrain-rotate-speed
+                   cmacs-secondbrain-drag-nodes
+                   cmacs-secondbrain-hover-highlights-group
+                   cmacs-secondbrain-fly-context
+                   cmacs-secondbrain-start-collapsed
+                   cmacs-secondbrain-label-size
+                   cmacs-secondbrain-max-labels
+                   cmacs-secondbrain-label-reference-height
+                   cmacs-secondbrain-label-scale-max))
+      (unless (and (custom-variable-p sym) (memq sym members))
+        (push sym missing)))
+    (should (equal nil (nreverse missing)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here
