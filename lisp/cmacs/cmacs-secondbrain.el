@@ -132,7 +132,7 @@ is both less distracting and what makes them testable."
                  (const screensaver))
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-screensaver 'helios-trinary
+(defcustom cmacs-secondbrain-screensaver 'helios-blue
   "Screensaver config drawn behind the graph when the background is
 `screensaver'.
 
@@ -142,7 +142,7 @@ runs on Emacs's thread -- and needs no gowl.
 
 Pick a dark one.  The graph is drawn over the top of it, and a
 screensaver that fills the frame with bright detail leaves the nodes
-nowhere to be read against.  `helios-trinary' and `blackhole-cool-orbit'
+nowhere to be read against.  `helios-blue' and `blackhole-cool-orbit'
 both stay mostly dark field."
   :type 'symbol
   :group 'cmacs-secondbrain)

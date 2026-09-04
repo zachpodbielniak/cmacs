@@ -51,7 +51,12 @@ The base name is resolved against `cmacs-screensaver-module-path'."
     (blackhole-cool-orbit
      . (:module blackhole
         :args ("--profile" "cool" "--orbit-radius" "60" "--infall" "2")))
-    (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden"))))
+    (helios-trinary   . (:module helios       :args ("--stars" "3" "--profile" "golden")))
+    ;; Helios' own default palette.  `--profile' is spelled out rather
+    ;; than left off, because "blue (default)" is a default of the
+    ;; MODULE, and a config that relies on one silently changes meaning
+    ;; if the module ever picks a different one.
+    (helios-blue      . (:module helios       :args ("--stars" "3" "--profile" "blue"))))
   "Named screensaver configurations.
 Each entry is (NAME . PLIST) where PLIST understands:
   :module  a key of `cmacs-screensaver-modules-alist', or an absolute

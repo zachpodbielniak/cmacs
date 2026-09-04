@@ -167,7 +167,7 @@ testable.
 @strong{Screensavers} are a background too: set
 @code{cmacs-secondbrain-background} to @code{screensaver} and pick a
 config with @code{cmacs-secondbrain-screensaver} (default
-@code{helios-trinary}).  They render in the same out-of-process
+@code{helios-blue}).  They render in the same out-of-process
 renderer the animated wallpaper uses, so none of the screensaver's GL
 runs on Emacs's thread, and the sink they use needs no gowl --- this
 works in a plain pgtk Emacs.
