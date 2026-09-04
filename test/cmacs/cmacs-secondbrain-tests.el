@@ -1054,23 +1054,38 @@ moves, and a phase stored but never used would pass any check that only
 looked at return values."
   (cmacs-secondbrain-tests--skip)
   (skip-unless (fboundp 'cmacs-secondbrain-set-link-phase))
-  (cmacs-secondbrain-tests--with-view buf
-    (cmacs-secondbrain-set-graph
-     buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
-                 (list :id "b" :title "B" :kind 'file :ring 'memory)
-                 (list :id "c" :title "C" :kind 'file :ring 'memory))
-     (vector (list :from "a" :to "b") (list :from "a" :to "c"))
-     2)
-    (cmacs-secondbrain-set-layout buf 'rings 0)
-    (cmacs-secondbrain-fit buf)
-    (should (cmacs-secondbrain-select buf "a"))
-    (cmacs-secondbrain-set-link-phase buf 0.0)
-    (cmacs-secondbrain-apply-flags buf)
-    (let ((a (cmacs-libregnum-mean-color buf)))
-      ;; Half a cycle: every lit edge is at the other end of its swing.
-      (cmacs-secondbrain-set-link-phase buf float-pi)
-      (cmacs-secondbrain-apply-flags buf)
-      (should-not (equal a (cmacs-libregnum-mean-color buf))))))
+  (let ((p0 (make-temp-file "sb-ph-" nil ".png"))
+        (p1 (make-temp-file "sb-ph-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph
+           buf (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                       (list :id "b" :title "B" :kind 'file :ring 'memory)
+                       (list :id "c" :title "C" :kind 'file :ring 'memory))
+           (vector (list :from "a" :to "b") (list :from "a" :to "c"))
+           2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (should (cmacs-secondbrain-select buf "a"))
+          (cmacs-secondbrain-set-link-phase buf 0.0)
+          (cmacs-secondbrain-apply-flags buf)
+          (cmacs-libregnum-snapshot buf p0)
+          (cmacs-secondbrain-set-link-phase buf 9.0)
+          (cmacs-secondbrain-apply-flags buf)
+          (cmacs-libregnum-snapshot buf p1)
+          ;; Snapshots, not `cmacs-libregnum-mean-color': a spark covers
+          ;; a few dozen pixels of a hundred thousand, so it moves the
+          ;; frame mean by less than a single unit and rounds away.  The
+          ;; mean is the right probe for a palette and the wrong one for
+          ;; a handful of bright pixels changing place.
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read p0) (funcall read p1)))))
+      (ignore-errors (delete-file p0))
+      (ignore-errors (delete-file p1)))))
 
 (ert-deftest cmacs-secondbrain-test-auto-rotate-turns-the-rings ()
   "Auto-rotation moves the nodes, rather than only the camera.
@@ -1096,6 +1111,44 @@ a camera trick would look the same and leave every pick box behind."
             (cmacs-secondbrain-auto-rotate 0.0))
         (cmacs-secondbrain--rotate-step buf 1.0)
         (should (equal now (cmacs-secondbrain-node-position buf "a")))))))
+
+(ert-deftest cmacs-secondbrain-test-hub-selection-lights-its-members ()
+  "Selecting a department lights what the department connects to.
+
+A hub carries no org-roam links of its own -- only its members do -- so
+matching against the selected node alone lit nothing at all, which is
+exactly how selecting a department looked.  Membership walks the parent
+chain, so a note nested below a folder below a hub still counts."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-link-phase))
+  (let ((p0 (make-temp-file "sb-hub-" nil ".png"))
+        (p1 (make-temp-file "sb-hub-" nil ".png")))
+    (unwind-protect
+        (cmacs-secondbrain-tests--with-view buf
+          (cmacs-secondbrain-set-graph
+           buf (vector (list :id "h" :title "H" :kind 'hub :ring 'memory)
+                       (list :id "a" :title "A" :kind 'file :ring 'memory
+                             :parent "h")
+                       (list :id "b" :title "B" :kind 'file :ring 'memory))
+           (vector (list :from "a" :to "b"))
+           2)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (cmacs-secondbrain-fit buf)
+          (cmacs-secondbrain-apply-flags buf)
+          (cmacs-libregnum-snapshot buf p0)
+          ;; Selecting the HUB must change the picture, because its
+          ;; member's link is now lit.
+          (should (cmacs-secondbrain-select buf "h"))
+          (cmacs-secondbrain-apply-flags buf)
+          (cmacs-libregnum-snapshot buf p1)
+          (let ((read (lambda (f)
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally f)
+                          (buffer-string)))))
+            (should-not (equal (funcall read p0) (funcall read p1)))))
+      (ignore-errors (delete-file p0))
+      (ignore-errors (delete-file p1)))))
 
 (provide 'cmacs-secondbrain-tests)
 

@@ -76,7 +76,21 @@ typedef struct
 
   gboolean   flat;
   double     link_phase;   /* travelling-light phase, radians */
+  GPtrArray *spark_shapes; /* LrgLine3D pool, repositioned each frame */
 } SceneState;
+
+/* Sparks are a fixed pool, not one drawable per lit edge: a note with a
+   hundred links would otherwise add a hundred drawables on every
+   selection change, and removing them again means a rebuild. */
+#define SB_N_SPARKS 256
+/* Fraction of an edge one spark covers.  Short enough to read as a
+   travelling light rather than a brightened edge. */
+#define SB_SPARK_LEN 0.13
+
+/* Defined below, used by apply_flags which appears first. */
+static gboolean node_in_selection (CmacsGraph *g, gint sel, guint i);
+static void     scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st,
+                                   CmacsGraph *g, gint sel_graph);
 
 static GHashTable *s_states;    /* CmacsLibregnumRenderCtx* -> SceneState* */
 
@@ -88,6 +102,7 @@ scene_state_free (gpointer p)
   if (!st) return;
   if (st->node_shapes) g_ptr_array_free (st->node_shapes, TRUE);
   if (st->edge_shapes) g_ptr_array_free (st->edge_shapes, TRUE);
+  if (st->spark_shapes) g_ptr_array_free (st->spark_shapes, TRUE);
   if (st->node_emit)   g_array_free (st->node_emit, TRUE);
   if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
   g_free (st);
@@ -111,6 +126,7 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
       /* No element free func: the entries are borrowed. */
       st->node_shapes = g_ptr_array_new ();
       st->edge_shapes = g_ptr_array_new ();
+      st->spark_shapes = g_ptr_array_new ();
       st->node_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->edge_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       g_hash_table_insert (s_states, r, st);
@@ -126,6 +142,7 @@ cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r)
   if (!st) return;
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
+  g_ptr_array_set_size (st->spark_shapes, 0);
   g_array_set_size (st->node_emit, 0);
   g_array_set_size (st->edge_emit, 0);
 }
@@ -254,6 +271,7 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   cmacs_libregnum_render_ctx_clear_drawables (r);
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
+  g_ptr_array_set_size (st->spark_shapes, 0);
 
   n = cmacs_graph_n_nodes (g);
   m = cmacs_graph_n_edges (g);
@@ -320,6 +338,21 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
       cmacs_libregnum_render_ctx_add_drawable (r, line);
       n_edges_drawn++;
     }
+
+  /* Spark pool for the travelling light.  Created once, parked at the
+     origin with zero alpha, and repositioned each frame -- so lighting a
+     note's links costs no drawable churn and no rebuild. */
+  {
+    guint sp;
+    for (sp = 0; sp < SB_N_SPARKS; sp++)
+      {
+        LrgLine3D *sl = lrg_line3d_new_from_to (0, 0, 0, 0, 0, 0);
+        g_autoptr (GrlColor) c0 = grl_color_new (255, 255, 255, 0);
+        lrg_shape_set_color (LRG_SHAPE (sl), c0);
+        g_ptr_array_add (st->spark_shapes, sl);
+        cmacs_libregnum_render_ctx_add_drawable (r, sl);
+      }
+  }
 
   /* Nodes.  One glyph and one node-table entry each; the node-table
      `path' is the caller's id string, because the numeric scene id is
@@ -588,17 +621,129 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
          The light travels rather than merely brightening -- each edge
          offset by its own index -- because a bundle of static bright
          lines still reads as one mass, while motion separates them. */
-      if (sel_emit >= 0 && (e->a == sel_graph || e->b == sel_graph))
-        {
-          double w = 0.55 + 0.45 * sin (st->link_phase + (double) i * 0.7);
-          alpha = (guint8) CLAMP (110.0 + 145.0 * w, 0.0, 255.0);
-        }
-      else if (sel_emit >= 0 && !any_match)
-        alpha = 14;                 /* recede, but do not vanish */
+      if (sel_graph >= 0
+          && (node_in_selection (g, sel_graph, e->a)
+              || node_in_selection (g, sel_graph, e->b)))
+        alpha = 210;                /* the answer to what you asked */
+      else if (sel_graph >= 0 && !any_match)
+        alpha = 10;                 /* recede, but do not vanish */
 
       col = edge_base_color (e, ea, eb, alpha);
       lrg_shape_set_color (LRG_SHAPE (line), col);
     }
+
+  scene_step_sparks (r, st, g, sel_graph);
+}
+
+/* Is node I the selection, or inside it?
+ *
+ * Inside it matters because selecting a DEPARTMENT should light what the
+ * department is connected to.  A hub carries no org-roam links of its
+ * own -- only its members do -- so comparing against the selected node
+ * alone lights nothing at all, which is exactly how this looked when it
+ * was first wired up. */
+static gboolean
+node_in_selection (CmacsGraph *g, gint sel, guint i)
+{
+  gint cur = (gint) i, guard = 0;
+
+  if (sel < 0) return FALSE;
+  while (guard++ < 64)
+    {
+      CmacsGraphNode *nd;
+      if (cur == sel) return TRUE;
+      nd = cmacs_graph_node (g, (guint) cur);
+      if (!nd || nd->parent < 0) return FALSE;
+      cur = nd->parent;
+    }
+  return FALSE;
+}
+
+/* Position the spark pool along the currently lit edges.
+ *
+ * Each spark is a short span of one edge, marching from end to end; the
+ * phase carries it, and each spark is offset so a bundle of links reads
+ * as many lights in motion rather than one blinking mass.  Spare sparks
+ * are given zero alpha rather than being removed, because removing a
+ * drawable means rebuilding the scene. */
+static void
+scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st, CmacsGraph *g,
+                   gint sel_graph)
+{
+  guint m = cmacs_graph_n_edges (g), i, lit = 0, slot = 0;
+  guint *lit_edges;
+
+  if (!st->spark_shapes || st->spark_shapes->len == 0) return;
+
+  lit_edges = g_new (guint, m ? m : 1);
+  if (sel_graph >= 0)
+    for (i = 0; i < m; i++)
+      {
+        CmacsGraphEdge *e = cmacs_graph_edge (g, i);
+        CmacsGraphNode *a, *b;
+        if (!e) continue;
+        a = cmacs_graph_node (g, e->a);
+        b = cmacs_graph_node (g, e->b);
+        if (!a || !b || !a->visible || !b->visible) continue;
+        if (node_in_selection (g, sel_graph, e->a)
+            || node_in_selection (g, sel_graph, e->b))
+          lit_edges[lit++] = i;
+      }
+
+  for (slot = 0; slot < st->spark_shapes->len; slot++)
+    {
+      LrgLine3D *sp = g_ptr_array_index (st->spark_shapes, slot);
+      g_autoptr (GrlColor) col = NULL;
+
+      if (!sp) continue;
+      if (lit == 0)
+        {
+          col = grl_color_new (255, 255, 255, 0);
+          lrg_shape_set_color (LRG_SHAPE (sp), col);
+          continue;
+        }
+      {
+        guint ei = lit_edges[slot % lit];
+        CmacsGraphEdge *e = cmacs_graph_edge (g, ei);
+        CmacsGraphNode *a = cmacs_graph_node (g, e->a);
+        CmacsGraphNode *b = cmacs_graph_node (g, e->b);
+        /* Offset per slot so they do not march in lockstep; the odd
+           multiplier keeps successive slots on the same edge apart. */
+        double t = st->link_phase * 0.16 + (double) slot * 0.37;
+        double t0, t1;
+
+        t -= floor (t);
+        t0 = t;
+        t1 = t + SB_SPARK_LEN;
+        if (t1 > 1.0) t1 = 1.0;
+
+        {
+          double ax = (double) a->x, ay = (double) a->y, az = (double) a->z;
+          double dx = (double) b->x - ax, dy = (double) b->y - ay;
+          double dz = (double) b->z - az;
+
+          lrg_shape3d_set_position_xyz (LRG_SHAPE3D (sp),
+                                        (float) (ax + dx * t0),
+                                        (float) (ay + dy * t0),
+                                        (float) (az + dz * t0));
+          lrg_line3d_set_end_xyz (sp,
+                                  (float) (ax + dx * t1),
+                                  (float) (ay + dy * t1),
+                                  (float) (az + dz * t1));
+        }
+
+        /* Fade in and out at the ends of the run so a spark appears and
+           vanishes rather than popping. */
+        {
+          double fade = sin (t * G_PI);
+          col = grl_color_new (255, 250, 210,
+                               (guint8) CLAMP (60.0 + 195.0 * fade,
+                                               0.0, 255.0));
+        }
+        lrg_shape_set_color (LRG_SHAPE (sp), col);
+      }
+    }
+  g_free (lit_edges);
 }
 
 /* ── Camera ───────────────────────────────────────────────────────── */

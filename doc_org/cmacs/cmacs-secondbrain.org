@@ -131,7 +131,9 @@ through the glyphs.
 
 Selecting a note *lights its links and dims everything else*. That is the part that makes them legible: at rest every link is drawn the same, which is honest and useless once there are a few hundred — the answer to "what is this note connected to" is invisible inside its own hairball.
 
-The light also *travels*, each link offset by its own index, because a bundle of static bright lines still reads as one mass while motion separates them. =cmacs-secondbrain-link-pulse= turns it off; =-link-pulse-speed= sets how fast.
+The light also *travels*: a pool of short bright segments marches along the lit links, fading in and out at each end. It is a fixed pool repositioned every frame, not one drawable per link — a note with a hundred links would otherwise add a hundred drawables on every selection change, and removing them again means a rebuild. =cmacs-secondbrain-link-pulse= turns it off; =-link-pulse-speed= sets how fast.
+
+*Selecting a department lights what the department connects to.* A hub carries no org-roam links of its own — only its members do — so matching the selected node alone lit nothing at all. Membership walks the parent chain, so a note nested below a folder below a hub still counts.
 
 Selecting from Lisp — keyboard navigation, search, the inspector — tells the scene too, so those get the halo and the lit links exactly as a click does.
 
