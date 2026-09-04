@@ -96,7 +96,7 @@ Picking =image= offers whatever it finds under =cmacs-secondbrain-wallpaper-dirs
 
 The procedural kinds are generated once into a texture and cached until the kind, colours or viewport size change, so they cost one blit per frame. They are deterministic — the same viewport gives the same sky every session, which is both less distracting and what makes them testable.
 
-*Screensavers* are a background too: set =cmacs-secondbrain-background= to =screensaver= and pick a config with =cmacs-secondbrain-screensaver= (default =blackhole-cool-orbit=). They render in the same out-of-process renderer the animated wallpaper uses, so none of the screensaver's GL runs on Emacs's thread, and the sink they use needs no gowl — this works in a plain pgtk Emacs.
+*Screensavers* are a background too: set =cmacs-secondbrain-background= to =screensaver= and pick a config with =cmacs-secondbrain-screensaver= (default =helios-trinary=). They render in the same out-of-process renderer the animated wallpaper uses, so none of the screensaver's GL runs on Emacs's thread, and the sink they use needs no gowl — this works in a plain pgtk Emacs.
 
 Pick a dark one. The graph is drawn over the top, and a screensaver that fills the frame with bright detail leaves the nodes nowhere to be read against.
 

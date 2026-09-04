@@ -94,7 +94,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-start-collapsed= | =nil= | =t= folds departments on open |
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
 | =cmacs-secondbrain-background= | =nebula= | =none/solid/gradient/starfield/nebula/image/screensaver= |
-| =cmacs-secondbrain-screensaver= | =blackhole-cool-orbit= | config from =cmacs-screensaver-configs= |
+| =cmacs-secondbrain-screensaver= | =helios-trinary= | config from =cmacs-screensaver-configs= |
 | =cmacs-secondbrain-background-colors= | =(#x2A3A6BFF . #x05050AFF)= | top . bottom, 0xRRGGBBAA |
 | =cmacs-secondbrain-background-image= | =nil= | wallpaper file for =image= |
 | =cmacs-secondbrain-wallpaper-dirs= | see defcustom | offered by the picker; any path still accepted |
