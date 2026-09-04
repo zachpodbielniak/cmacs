@@ -846,6 +846,24 @@ cmacs_lrg_float (Lisp_Object v, double dflt)
   return (float) (NUMBERP (v) ? XFLOATINT (v) : dflt);
 }
 
+DEFUN ("cmacs-libregnum-billboard-count",
+       Fcmacs_libregnum_billboard_count,
+       Scmacs_libregnum_billboard_count, 1, 1, 0,
+       doc: /* Number of billboards in BUFFER's scene.
+
+For tests.  Billboards are not cleared by `clear-drawables', so a scene
+that adds them per node has to clear them itself on every rebuild -- and
+a scene that forgets grows by one per node per refresh, which is
+invisible in a screenshot and obvious in this number.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return make_fixnum (ctx
+                      ? (EMACS_INT) cmacs_libregnum_render_ctx_billboard_count (ctx)
+                      : 0);
+}
+
 DEFUN ("cmacs-libregnum-set-focus-policy",
        Fcmacs_libregnum_set_focus_policy,
        Scmacs_libregnum_set_focus_policy, 2, 3, 0,
@@ -3020,6 +3038,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_label_style);
   defsubr (&Scmacs_libregnum_set_label_decor);
   defsubr (&Scmacs_libregnum_set_selection_style);
+  defsubr (&Scmacs_libregnum_billboard_count);
   defsubr (&Scmacs_libregnum_set_focus_policy);
   defsubr (&Scmacs_libregnum_set_background);
   defsubr (&Scmacs_libregnum_particles_enable);

@@ -155,11 +155,21 @@ Left-drag a node to move it. It is *pinned* where you drop it, so the layout lea
 
 ** Node shading
 
-raylib draws an unlit sphere in a single colour, so a node is a flat disc and size is the only depth cue the glyphs have. Each node therefore carries a small bright sphere set toward a fixed light — the specular that makes the eye read a ball.
+raylib draws an unlit sphere in a single colour, and the renderer's real lighting reaches only =MESH_ASSET= models inside the editor build — so a graph of a few thousand spheres has no shading available to it at all, and every node is a flat disc with size as its only depth cue.
 
-The offset matters more than it looks: at offset O and radius R, both fractions of the node radius, the highlight reaches O + R. Anything under 1.0 leaves it buried inside an opaque sphere — perfectly computed and completely invisible, which is exactly what the first attempt did.
+Sphere-shaped nodes are therefore drawn as *impostors*: a camera-facing quad carrying a texture of a lit sphere (ambient, diffuse, a tight specular, and a rim term, over a soft circular alpha mask). One texture serves every node, tinted per node.
 
-=cmacs-secondbrain-node-shading= turns it off. It costs one extra small sphere per visible node, and the highlight is moved with its node on every sync, or a tween leaves it behind as a second smaller node hanging in space.
+*Why an impostor and not a highlight.* The obvious cheap trick is a small bright sphere offset toward the light, and it does not survive contact with the 3D view: a world-space offset is only correct for one camera position. Orbit and the highlight slides round the back of the node and vanishes. A camera-facing quad is correct from every angle by construction, and costs nothing per frame to keep that way.
+
+Three details that are load-bearing rather than cosmetic:
+
+- *The tint is the ceiling.* The texture is multiplied by the tint, so a node tinted with its own colour could never be brighter than that colour and the specular would have nowhere to go. The tint is lifted toward white — but only slightly, because the colour /is/ the PARA category here. Lift it far and every ring drifts toward the same pale wash.
+- *Mipmaps.* Nodes are drawn a few pixels across, and minifying a 256px texture that far without mipmaps shimmers on every camera move. The artefact is motion, so a still screenshot hides it completely.
+- *Billboards are not cleared by =clear-drawables=.* The scene clears them itself on rebuild, or every refresh appends another impostor per node — thousands of stale quads at the positions the nodes used to be in, which a screenshot of a freshly built scene hides because the newest ones are drawn in the right places.
+
+Skills and applications keep their real geometry: a gem must show facets and a prism must show edges, and an impostor of a sphere shows neither. Those get the small offset highlight instead, which is adequate because there are tens of them rather than thousands.
+
+=cmacs-secondbrain-node-shading= turns the whole thing off.
 
 ** Particles
 

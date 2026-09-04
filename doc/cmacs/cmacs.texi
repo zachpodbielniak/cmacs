@@ -6964,6 +6964,21 @@ reason: a check that can only ask whether pixels @emph{changed} cannot
 catch a frame drawn in the wrong palette, which is what a swapped
 red/blue channel produces.
 
+@item cmacs-libregnum-add-billboard-full
+@itemx cmacs-libregnum-move-billboard
+@itemx cmacs-libregnum-billboard-count
+Camera-facing textured quads.  The plain @code{add-billboard} nails one
+to the world, which suits a flag on a globe; a scene whose nodes tween,
+drag or rotate needs the tinted, addressable form so it can carry them
+along, and needs the tint so every node is not forced to own a copy of
+one shared texture.  Paired with the lit-sphere impostor texture this is
+how a scene of thousands of unlit spheres gets shading at all --- and
+unlike a highlight offset in world space it is correct from every camera
+angle rather than from one.  Note that @code{clear-drawables} does
+@emph{not} clear billboards: a scene adding them per node must clear
+them itself, or they accumulate one per node per refresh, which
+@code{billboard-count} makes visible and a screenshot does not.
+
 @item cmacs-libregnum-set-drag-nodes
 Off by default.  Dragging used to be reachable only through the editor,
 whose drag path also selects into the editor's own model and builds undo

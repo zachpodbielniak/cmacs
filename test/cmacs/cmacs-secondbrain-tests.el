@@ -1313,6 +1313,61 @@ ones."
     ;; An id nobody has is reported, not an error.
     (cmacs-secondbrain--on-double-click buf 0 "no-such-node")))
 
+(ert-deftest cmacs-secondbrain-test-node-lighting-is-camera-relative ()
+  "A node looks lit from every camera angle, not just one.
+
+This is the whole reason the nodes are impostors -- camera-facing quads
+carrying a pre-lit sphere -- rather than a small bright sphere offset in
+world space.  The offset version worked only because the flat view's
+camera happens to sit on +Z: orbit into the 3D view and the highlight
+slides round to the back of the node and disappears.  Shading that holds
+for one camera angle is a coincidence, not shading.
+
+So: orbit a full turn and the frame must stay put."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-mean-color)
+                    (fboundp 'cmacs-libregnum-orbit)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'solid #x0A0A10FF #x0A0A10FF)
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'hub :ring 'memory
+                       :count 200))
+     (vector) 3)
+    (cmacs-secondbrain-set-projection buf nil)      ; free 3D
+    (cmacs-secondbrain-set-layout buf 'rings 0)
+    (cmacs-secondbrain-fit buf)
+    (let ((first (cmacs-libregnum-mean-color buf)))
+      (should first)
+      (should (> (apply #'+ first) 0))            ; something is drawn
+      (dolist (_ '(1 2 3))
+        (cmacs-libregnum-orbit buf 300.0 0.0)
+        (dotimes (_ 3) (ignore-errors (cmacs-libregnum-ink-bbox buf)))
+        (let ((now (cmacs-libregnum-mean-color buf)))
+          ;; Within a unit or two per channel: the orb is identical, and
+          ;; only the band guide behind it moves.
+          (cl-loop for a in first for b in now
+                   do (should (< (abs (- a b)) 4))))))))
+
+(ert-deftest cmacs-secondbrain-test-impostors-do-not-accumulate ()
+  "Rebuilding the scene does not leave the old node impostors behind.
+
+`clear-drawables' does not clear billboards, so a scene that adds one
+per node has to clear them itself.  Forgetting grows the list by one per
+node on every refresh -- thousands of stale quads sitting where the
+nodes used to be, which a screenshot of a freshly built scene hides
+completely because the newest ones are drawn in the right places."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-billboard-count))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                         (list :id "b" :title "B" :kind 'file :ring 'memory)))
+          counts)
+      (dotimes (_ 4)
+        (cmacs-secondbrain-set-graph buf nodes (vector) 2)
+        (push (cmacs-libregnum-billboard-count buf) counts))
+      (should (= 1 (length (delete-dups (copy-sequence counts)))))
+      (should (> (car counts) 0)))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

@@ -170,6 +170,44 @@ extern void  cmacs_libregnum_render_ctx_add_billboard
                               (CmacsLibregnumRenderCtx *r,
                                float x, float y, float z,
                                void *texture, float size);
+/* As add_billboard, but tinted and addressable: returns an index usable
+ * with move_billboard / set_billboard_color until the next clear.
+ *
+ * Both exist because a billboard that cannot move is only good for
+ * something nailed to the world (a flag on a globe).  A scene whose
+ * nodes tween, drag or rotate needs to carry its billboards along, and
+ * without a tint every node would need its own copy of what is
+ * otherwise one shared texture. */
+extern gint  cmacs_libregnum_render_ctx_add_billboard_full
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z,
+                               void *texture, float size, guint32 rgba);
+extern void  cmacs_libregnum_render_ctx_move_billboard
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               float x, float y, float z);
+extern void  cmacs_libregnum_render_ctx_set_billboard_color
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               guint32 rgba);
+extern void  cmacs_libregnum_render_ctx_set_billboard_size
+                              (CmacsLibregnumRenderCtx *r, gint idx,
+                               float size);
+
+/* A shared, lazily built texture of a lit sphere: ambient + diffuse +
+ * a tight specular + a rim term, with a soft circular alpha mask.
+ *
+ * This is how a node gets to look like a ball.  raylib draws an unlit
+ * sphere in one flat colour, and the renderer's real lighting applies
+ * only to MESH_ASSET models inside the editor build -- so a graph of a
+ * few thousand spheres has no shading available to it at all.  A
+ * camera-facing quad carrying a pre-lit sphere is the standard answer
+ * (an impostor), and unlike a highlight offset in world space it is
+ * correct from every camera angle rather than from one.
+ *
+ * Mip-mapped, because these are drawn at a few pixels across and
+ * minifying a sharp texture without mipmaps shimmers on every camera
+ * move.  Borrowed: the context owns it. */
+extern void *cmacs_libregnum_render_ctx_orb_texture
+                              (CmacsLibregnumRenderCtx *r);
 extern void  cmacs_libregnum_render_ctx_clear_billboards
                               (CmacsLibregnumRenderCtx *r);
 extern guint cmacs_libregnum_render_ctx_billboard_count

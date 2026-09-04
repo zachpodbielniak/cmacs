@@ -379,6 +379,21 @@ It is a fallback, not a second clock: if the private context presented recently 
 
 Both exist for tests, and the second exists because the first is not enough: a check that can only ask whether pixels /changed/ cannot catch a frame drawn in the wrong palette, which is exactly what a swapped red/blue channel produces.
 
+** Billboards and the lit-sphere impostor
+
+Camera-facing textured quads at world points. =cmacs-libregnum-add-billboard= nails one to the world; =-add-billboard-full= adds a tint and returns an index usable with =-move-billboard=, =-set-billboard-color= and =-set-billboard-size= until the next clear.
+
+Both exist because a billboard that cannot move is only good for something fixed in the world (a flag on a globe). A scene whose nodes tween, drag or rotate has to carry its billboards along, and without a tint every node would need its own copy of what is otherwise one shared texture.
+
+=cmacs-libregnum-render-ctx-orb-texture= is that shared texture: a lit sphere — ambient, diffuse, a tight specular and a rim term — over a soft circular alpha mask, generated once and mip-mapped.
+
+*Why this exists.* raylib draws an unlit sphere in one flat colour, and the renderer's real lighting applies only to =MESH_ASSET= models inside the editor build. A scene made of thousands of small spheres therefore has no shading available to it. A camera-facing quad carrying a pre-lit sphere is the standard answer, and unlike a highlight offset in world space it is correct from every camera angle rather than from one.
+
+Two traps:
+
+- *The tint is a ceiling, not an addition.* The texture is multiplied by it, so the brightest a texel can be is the tint. A specular that should read as light needs the tint lifted toward white to have anywhere to go.
+- *=clear-drawables= does not clear billboards.* A scene adding them per node must clear them itself on rebuild, or they accumulate one per node per refresh. =cmacs-libregnum-billboard-count= exists so a test can see that happening; a screenshot cannot, because the newest billboards are drawn in the right places.
+
 ** Node dragging
 
 =cmacs-libregnum-set-drag-nodes= — BUFFER &optional ON. Off by default.

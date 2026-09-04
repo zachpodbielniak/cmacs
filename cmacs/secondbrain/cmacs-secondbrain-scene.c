@@ -78,7 +78,8 @@ typedef struct
   double     link_phase;   /* travelling-light phase, radians */
   GPtrArray *spark_shapes; /* LrgLine3D pool, repositioned each frame */
   GPtrArray *node_hilite;  /* LrgSphere3D*, one per emitted node */
-  gboolean   shading;      /* draw the specular highlights */
+  GArray    *node_orb;     /* gint32 billboard index, or -1, per node */
+  gboolean   shading;      /* light the nodes */
 } SceneState;
 
 /* A node is a flat disc without one.  raylib draws an unlit sphere in a
@@ -96,6 +97,41 @@ typedef struct
    perfectly computed and completely invisible.  These put its cap just
    proud of the surface, which is what reads as a specular rather than
    as a bump. */
+/* Which glyphs are spheres, and may therefore be replaced by an
+   impostor without losing anything.  A skill is a faceted gem and an
+   application is a hex prism; their shape carries meaning that a
+   pre-lit sphere cannot. */
+static gboolean
+orb_kind_p (CmacsSbKind kind)
+{
+  switch (kind)
+    {
+    case CMACS_SB_KIND_SKILL:
+    case CMACS_SB_KIND_APP:
+      return FALSE;
+    default:
+      return TRUE;
+    }
+}
+
+/* Lift a channel toward white for an impostor tint.
+ *
+ * The texture is MULTIPLIED by the tint, so the tint is the ceiling on
+ * how bright any texel can be, and a node tinted with its own colour
+ * would never be brighter than that colour -- the specular would have
+ * nowhere to go.  Lifting buys headroom for the highlight.
+ *
+ * But only a little.  The colour IS the PARA category here, so this is
+ * an identity channel and not decoration: lift it far and every ring
+ * drifts toward the same pale wash.  The factor is chosen so a
+ * typically-lit texel (about 0.77 of full) lands back on the node's own
+ * colour, which keeps the mid-tone honest while leaving room above it. */
+static guint8
+orb_tint (guint8 c)
+{
+  return (guint8) (255 - (255 - (int) c) * 78 / 100);
+}
+
 #define SB_HILITE_R    0.34   /* highlight radius, as a fraction */
 #define SB_HILITE_OFF  0.78   /* how far toward the light, as a fraction */
 
@@ -127,6 +163,7 @@ scene_state_free (gpointer p)
   if (st->edge_shapes) g_ptr_array_free (st->edge_shapes, TRUE);
   if (st->spark_shapes) g_ptr_array_free (st->spark_shapes, TRUE);
   if (st->node_hilite) g_ptr_array_free (st->node_hilite, TRUE);
+  if (st->node_orb) g_array_free (st->node_orb, TRUE);
   if (st->node_emit)   g_array_free (st->node_emit, TRUE);
   if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
   g_free (st);
@@ -152,6 +189,7 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
       st->edge_shapes = g_ptr_array_new ();
       st->spark_shapes = g_ptr_array_new ();
       st->node_hilite = g_ptr_array_new ();
+      st->node_orb = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->shading = TRUE;
       st->node_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
       st->edge_emit   = g_array_new (FALSE, FALSE, sizeof (gint32));
@@ -170,6 +208,7 @@ cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r)
   g_ptr_array_set_size (st->edge_shapes, 0);
   g_ptr_array_set_size (st->spark_shapes, 0);
   g_ptr_array_set_size (st->node_hilite, 0);
+  g_array_set_size (st->node_orb, 0);
   g_array_set_size (st->node_emit, 0);
   g_array_set_size (st->edge_emit, 0);
 }
@@ -294,12 +333,19 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   st = scene_state (r, TRUE);
 
   /* clear_drawables also clears the node table, so both of our
-     borrowed-pointer arrays must be dropped at the same moment. */
+     borrowed-pointer arrays must be dropped at the same moment.
+     Billboards go with them now that nodes own some: they are not
+     cleared by clear_drawables, so without this every refresh would
+     append another impostor per node -- thousands of them, stacking up
+     at the positions the nodes used to be in.  Icons are re-applied
+     after the build, which is why clearing here is safe. */
   cmacs_libregnum_render_ctx_clear_drawables (r);
+  cmacs_libregnum_render_ctx_clear_billboards (r);
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
   g_ptr_array_set_size (st->spark_shapes, 0);
   g_ptr_array_set_size (st->node_hilite, 0);
+  g_array_set_size (st->node_orb, 0);
 
   n = cmacs_graph_n_nodes (g);
   m = cmacs_graph_n_edges (g);
@@ -403,40 +449,96 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
                    &cr, &cg, &cb, &ca);
       col = grl_color_new (cr, cg, cb, ca);
 
-      shape = glyph_for (kind, nd, col);
-      lrg_shape_set_color (LRG_SHAPE (shape), col);
-
       g_array_index (st->node_emit, gint32, i) = (gint32) n_nodes_drawn;
-      g_ptr_array_add (st->node_shapes, shape);
-      cmacs_libregnum_render_ctx_add_drawable (r, shape);
 
-      /* The specular.  One per emitted node, in the SAME order, so the
-         two arrays index alike and sync_positions can move both from one
-         loop.  A NULL entry keeps that alignment when shading is off --
-         a shorter array would silently pair a node with someone else's
-         highlight. */
-      if (st->shading)
-        {
-          double rad = (double) nd->radius;
-          double hr = rad * SB_HILITE_R;
-          double nx = (double) nd->x, ny = (double) nd->y;
-          double nz = (double) nd->z;
-          LrgSphere3D *hl =
-            lrg_sphere3d_new_at ((float) (nx + rad * SB_HILITE_OFF * SB_LIGHT_X),
-                                 (float) (ny + rad * SB_HILITE_OFF * SB_LIGHT_Y),
-                                 (float) (nz + rad * SB_HILITE_OFF * SB_LIGHT_Z),
-                                 (float) hr);
-          g_autoptr (GrlColor) hc =
-            grl_color_new ((guint8) (255 - (255 - (int) cr) * 35 / 100),
-                           (guint8) (255 - (255 - (int) cg) * 35 / 100),
-                           (guint8) (255 - (255 - (int) cb) * 35 / 100),
-                           ca);
-          lrg_shape_set_color (LRG_SHAPE (hl), hc);
-          g_ptr_array_add (st->node_hilite, hl);
-          cmacs_libregnum_render_ctx_add_drawable (r, hl);
-        }
+      /* A sphere-shaped node is drawn ONLY as an impostor, with no
+         geometry under it.  Keeping both would fight: the sphere's
+         front cap bulges a full radius toward the camera and pokes
+         through the camera-facing quad, which reads as a flat blob in
+         the middle of every orb.  node_shapes still gets an entry --
+         NULL -- so it stays index-aligned with the other per-node
+         arrays. */
+      if (st->shading && orb_kind_p (kind))
+        shape = NULL;
       else
-        g_ptr_array_add (st->node_hilite, NULL);
+        {
+          shape = glyph_for (kind, nd, col);
+          lrg_shape_set_color (LRG_SHAPE (shape), col);
+          cmacs_libregnum_render_ctx_add_drawable (r, shape);
+        }
+      g_ptr_array_add (st->node_shapes, shape);
+
+      /* Lighting.  Spheres become IMPOSTORS -- a camera-facing quad
+         carrying a pre-lit sphere -- and the flat glyph underneath is
+         dropped, because the two would fight: the sphere's front cap
+         bulges a full radius toward the camera and would poke through
+         the quad.
+         Shapes that are not spheres keep their geometry, because their
+         shape is the signal: a gem must show facets and a prism must
+         show edges, and an impostor of a sphere shows neither.  Those
+         get the small offset highlight instead.
+         Both arrays get an entry either way -- a NULL or a -1 -- so they
+         stay index-aligned with node_shapes and sync_positions can move
+         all three from one loop.  A shorter array would silently pair a
+         node with someone else's highlight. */
+      {
+        gint32 orb = -1;
+
+        if (shape == NULL)
+          {
+            void *tex = cmacs_libregnum_render_ctx_orb_texture (r);
+            if (tex)
+              {
+                /* Tint lifted toward white so the specular reads as a
+                   light rather than as more node colour: the texture is
+                   MULTIPLIED by the tint, so the brightest a texel can
+                   ever be is whatever is passed here. */
+                guint32 tint = ((guint32) orb_tint (cr) << 24)
+                               | ((guint32) orb_tint (cg) << 16)
+                               | ((guint32) orb_tint (cb) << 8)
+                               | (guint32) ca;
+                orb = cmacs_libregnum_render_ctx_add_billboard_full
+                        (r, nd->x, nd->y, nd->z,
+                         g_object_ref (tex), nd->radius * 2.0f, tint);
+              }
+            if (orb < 0)
+              {
+                /* No texture, so no impostor: fall back to the geometry
+                   rather than leaving an invisible node.  A node that
+                   silently stops being drawn is far worse than one that
+                   is drawn flat. */
+                shape = glyph_for (kind, nd, col);
+                lrg_shape_set_color (LRG_SHAPE (shape), col);
+                cmacs_libregnum_render_ctx_add_drawable (r, shape);
+                g_ptr_array_index (st->node_shapes,
+                                   st->node_shapes->len - 1) = shape;
+              }
+          }
+        g_array_append_val (st->node_orb, orb);
+
+        if (st->shading && orb < 0)
+          {
+            double rad = (double) nd->radius;
+            double hr = rad * SB_HILITE_R;
+            double nx = (double) nd->x, ny = (double) nd->y;
+            double nz = (double) nd->z;
+            LrgSphere3D *hl =
+              lrg_sphere3d_new_at ((float) (nx + rad * SB_HILITE_OFF * SB_LIGHT_X),
+                                   (float) (ny + rad * SB_HILITE_OFF * SB_LIGHT_Y),
+                                   (float) (nz + rad * SB_HILITE_OFF * SB_LIGHT_Z),
+                                   (float) hr);
+            g_autoptr (GrlColor) hc =
+              grl_color_new ((guint8) (255 - (255 - (int) cr) * 35 / 100),
+                             (guint8) (255 - (255 - (int) cg) * 35 / 100),
+                             (guint8) (255 - (255 - (int) cb) * 35 / 100),
+                             ca);
+            lrg_shape_set_color (LRG_SHAPE (hl), hc);
+            g_ptr_array_add (st->node_hilite, hl);
+            cmacs_libregnum_render_ctx_add_drawable (r, hl);
+          }
+        else
+          g_ptr_array_add (st->node_hilite, NULL);
+      }
 
       n_nodes_drawn++;
 
@@ -541,6 +643,17 @@ cmacs_secondbrain_scene_sync_positions (CmacsLibregnumRenderCtx *r,
       if (shape)
         lrg_shape3d_set_position_xyz (shape, nd->x, nd->y, nd->z);
 
+      /* The impostor travels with its node.  It IS the node for every
+         sphere-shaped glyph, so leaving it behind does not misplace a
+         highlight -- it misplaces the node. */
+      if (st->node_orb && node_i < st->node_orb->len)
+        {
+          gint32 orb = g_array_index (st->node_orb, gint32, node_i);
+          if (orb >= 0)
+            cmacs_libregnum_render_ctx_move_billboard (r, orb,
+                                                       nd->x, nd->y, nd->z);
+        }
+
       /* The specular travels with its node.  Left behind, it stops
          being a highlight and becomes a second, smaller node hanging in
          space -- and a tween moves every node every frame. */
@@ -623,16 +736,45 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       LrgShape3D *shape;
       guint flags;
       guint8 cr, cg, cb, ca;
+      gint32 orb;
 
       if (!nd || !nd->visible) continue;
       shape = g_ptr_array_index (st->node_shapes, node_i);
+      orb = (st->node_orb && node_i < st->node_orb->len)
+              ? g_array_index (st->node_orb, gint32, node_i) : -1;
       node_i++;
-      if (!shape) continue;
+      if (!shape && orb < 0) continue;
 
       flags = emitted_node_flags (r, st, i);
       unpack_rgba (nd->rgba ? nd->rgba
                             : cmacs_sb_ring_color ((CmacsSbRing) nd->ring),
                    &cr, &cg, &cb, &ca);
+
+      /* An impostor answers to the same flags -- searching must dim it
+         and a match must accent it, exactly as for a geometry glyph.
+         The tint is lifted toward white for the same reason it is at
+         build time: the texture is multiplied by it, so the tint is the
+         ceiling on how bright any texel can get. */
+      if (orb >= 0)
+        {
+          guint8 tr = cr, tg = cg, tb = cb, ta = ca;
+
+          if (flags & CMACS_LIBREGNUM_NODE_MATCH)
+            { tr = 255; tg = 210; tb = 74; ta = 255; }
+          else if (flags & CMACS_LIBREGNUM_NODE_DIM)
+            { tr = (guint8) (cr / 3); tg = (guint8) (cg / 3);
+              tb = (guint8) (cb / 3); ta = 90; }
+          else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
+            { tr = bump (cr); tg = bump (cg); tb = bump (cb); ta = 255; }
+
+          if (!(flags & CMACS_LIBREGNUM_NODE_DIM))
+            { tr = orb_tint (tr); tg = orb_tint (tg); tb = orb_tint (tb); }
+          cmacs_libregnum_render_ctx_set_billboard_color
+            (r, orb,
+             ((guint32) tr << 24) | ((guint32) tg << 16)
+             | ((guint32) tb << 8) | (guint32) ta);
+        }
+      if (!shape) continue;
 
       if (flags & CMACS_LIBREGNUM_NODE_MATCH)
         {

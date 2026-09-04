@@ -201,6 +201,7 @@ cmacs_map_label_clear (gpointer p)
 typedef struct
 {
   float       x, y, z, size;
+  guint32     rgba;      /* tint; 0 means opaque white */
   GrlTexture *tex;       /* owned */
 } CmacsBillboard;
 
@@ -450,6 +451,8 @@ struct CmacsLibregnumRenderCtx
 
   /* Persistent camera-facing billboards (e.g. country flags). */
   GArray           *billboards;       /* CmacsBillboard */
+  /* Shared lit-sphere impostor texture; see orb_texture(). */
+  GrlTexture       *orb_tex;          /* owned */
 
   /* Particles.  Created lazily -- a view that never asks pays
    * nothing -- and stepped inside the 3D pass, which is the only
@@ -639,6 +642,7 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->overlay_models) g_ptr_array_unref (r->overlay_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
+  g_clear_object (&r->orb_tex);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
   if (r->bg_src_notify && r->bg_src_data) r->bg_src_notify (r->bg_src_data);
   g_free (r->bg_src_rgba);
@@ -1865,6 +1869,170 @@ cmacs_libregnum_render_ctx_add_billboard (CmacsLibregnumRenderCtx *r,
   b.x = x; b.y = y; b.z = z; b.size = size;
   b.tex = (GrlTexture *) texture;     /* ownership transfers */
   g_array_append_val (r->billboards, b);
+}
+
+gint
+cmacs_libregnum_render_ctx_add_billboard_full (CmacsLibregnumRenderCtx *r,
+                                               float x, float y, float z,
+                                               void *texture, float size,
+                                               guint32 rgba)
+{
+  CmacsBillboard b = { 0 };
+
+  if (!r || !r->billboards || !texture) return -1;
+  b.x = x; b.y = y; b.z = z; b.size = size;
+  b.rgba = rgba;
+  b.tex = (GrlTexture *) texture;     /* ownership transfers */
+  g_array_append_val (r->billboards, b);
+  return (gint) r->billboards->len - 1;
+}
+
+void
+cmacs_libregnum_render_ctx_move_billboard (CmacsLibregnumRenderCtx *r,
+                                           gint idx,
+                                           float x, float y, float z)
+{
+  CmacsBillboard *b;
+  if (!r || !r->billboards || idx < 0 || (guint) idx >= r->billboards->len)
+    return;
+  b = &g_array_index (r->billboards, CmacsBillboard, idx);
+  b->x = x; b->y = y; b->z = z;
+}
+
+void
+cmacs_libregnum_render_ctx_set_billboard_color (CmacsLibregnumRenderCtx *r,
+                                                gint idx, guint32 rgba)
+{
+  if (!r || !r->billboards || idx < 0 || (guint) idx >= r->billboards->len)
+    return;
+  g_array_index (r->billboards, CmacsBillboard, idx).rgba = rgba;
+}
+
+void
+cmacs_libregnum_render_ctx_set_billboard_size (CmacsLibregnumRenderCtx *r,
+                                               gint idx, float size)
+{
+  if (!r || !r->billboards || idx < 0 || (guint) idx >= r->billboards->len)
+    return;
+  g_array_index (r->billboards, CmacsBillboard, idx).size = size;
+}
+
+/* ── The lit-sphere impostor ─────────────────────────────────────── */
+
+#define CMACS_ORB_PX 256
+
+/* Shade one texel of a sphere seen head-on.
+ *
+ * U and V are in [-1,1] across the quad.  Outside the unit disc the
+ * texel is transparent; inside, the surface normal of a unit sphere at
+ * that point is (u, v, sqrt (1 - r^2)) -- the near hemisphere, which is
+ * all a viewer ever sees.  From that: a Lambert term for the body, a
+ * Blinn-Phong specular for the highlight, and a Fresnel-ish rim.
+ *
+ * The result is a GREY level, because the caller tints it: one texture
+ * serves every node colour.  That also decides the shape of the curve --
+ * the tint is multiplied in, so the brightest a texel can be is the
+ * node's own colour, and the useful range is therefore ambient..1. */
+static void
+orb_shade (double u, double v, double *out_lum, double *out_alpha)
+{
+  /* Light: upper-left and toward the viewer.  View is +Z by
+     construction -- the quad always faces the camera, which is the
+     whole reason this works from any angle. */
+  static const double lx = -0.42, ly = 0.50, lz = 0.76;
+  double r2 = u * u + v * v;
+  double nz, ndl, spec, rim, lum;
+  double hx, hy, hz, hlen, ndh;
+
+  if (r2 >= 1.0)
+    {
+      *out_lum = 0.0;
+      *out_alpha = 0.0;
+      return;
+    }
+
+  nz = sqrt (1.0 - r2);
+
+  ndl = u * lx + v * ly + nz * lz;
+  if (ndl < 0.0) ndl = 0.0;
+
+  /* Half-vector between light and view (0,0,1). */
+  hx = lx; hy = ly; hz = lz + 1.0;
+  hlen = sqrt (hx * hx + hy * hy + hz * hz);
+  hx /= hlen; hy /= hlen; hz /= hlen;
+  ndh = u * hx + v * hy + nz * hz;
+  if (ndh < 0.0) ndh = 0.0;
+  spec = pow (ndh, 42.0);
+
+  /* Rim: bright where the surface turns away from the viewer.  This is
+     what keeps a small node's silhouette readable against a dark
+     background -- without it the unlit limb fades into the sky and the
+     node looks like a crescent. */
+  rim = pow (1.0 - nz, 3.0) * 0.45;
+
+  /* Ambient is high on purpose.  The node's colour IS its PARA
+     category, so a realistically dark terminator would make half of
+     every node unidentifiable. */
+  lum = 0.34 + 0.62 * ndl + 0.55 * spec + rim;
+  if (lum > 1.0) lum = 1.0;
+
+  /* Antialias the silhouette over roughly one texel of the 256 grid;
+     a hard cut aliases badly once the orb is a few pixels across. */
+  {
+    double r = sqrt (r2);
+    double edge = (1.0 - r) / (1.6 / (double) CMACS_ORB_PX * 2.0);
+    *out_alpha = CLAMP (edge, 0.0, 1.0);
+  }
+  *out_lum = lum;
+}
+
+void *
+cmacs_libregnum_render_ctx_orb_texture (CmacsLibregnumRenderCtx *r)
+{
+  const int N = CMACS_ORB_PX;
+  Color *px;
+  Image img = { 0 };
+  Texture2D tex;
+  int x, y;
+
+  if (!r) return NULL;
+  if (r->orb_tex) return r->orb_tex;
+
+  px = g_new0 (Color, (gsize) N * N);
+  for (y = 0; y < N; y++)
+    for (x = 0; x < N; x++)
+      {
+        double u = (2.0 * ((double) x + 0.5) / N) - 1.0;
+        double v = 1.0 - (2.0 * ((double) y + 0.5) / N);
+        double lum, a;
+        unsigned char c;
+
+        orb_shade (u, v, &lum, &a);
+        c = (unsigned char) CLAMP (lum * 255.0, 0.0, 255.0);
+        px[y * N + x] = (Color){ c, c, c,
+                                 (unsigned char) CLAMP (a * 255.0,
+                                                        0.0, 255.0) };
+      }
+
+  img.data = px;
+  img.width = N;
+  img.height = N;
+  img.mipmaps = 1;
+  img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+  tex = LoadTextureFromImage (img);
+  g_free (px);
+  if (tex.id == 0) return NULL;
+
+  /* Nodes are drawn a few pixels across.  Without mipmaps, minifying a
+     256px texture that far aliases into a shimmering dot on every
+     camera move -- the artefact is motion, so a still screenshot hides
+     it completely. */
+  GenTextureMipmaps (&tex);
+  SetTextureFilter (tex, TEXTURE_FILTER_TRILINEAR);
+
+  r->orb_tex = grl_texture_new_from_handle (&tex);
+  return r->orb_tex;
 }
 
 void
@@ -3953,6 +4121,7 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (!globe || cdist < 13.0)
               {
                 Color bw = (Color){ 255, 255, 255, 255 };
+                (void) bw;
                 for (guint i = 0; i < r->billboards->len; i++)
                   {
                     CmacsBillboard *bb =
@@ -3976,9 +4145,16 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                             if (near < 0.6) near = 0.6;
                             esize = bb->size * (float) near;
                           }
+                        Color tint =
+                          bb->rgba
+                          ? (Color){ (unsigned char) ((bb->rgba >> 24) & 0xFF),
+                                     (unsigned char) ((bb->rgba >> 16) & 0xFF),
+                                     (unsigned char) ((bb->rgba >>  8) & 0xFF),
+                                     (unsigned char) ( bb->rgba        & 0xFF) }
+                          : bw;
                         DrawBillboard (bcam, *t,
                                        (Vector3){ bb->x, bb->y, bb->z },
-                                       esize, bw);
+                                       esize, tint);
                       }
                   }
               }
