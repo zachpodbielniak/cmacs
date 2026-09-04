@@ -389,6 +389,21 @@ GMainContext."
          (is-dir (cmacs-libregnum--drill-to buffer path))
          ((and (stringp path) (> (length path) 0)) (find-file path)))))))
 
+(defun cmacs-libregnum--node-hovered (buffer info)
+  "Dispatch a viewport hover change in BUFFER.
+INFO is (ID PATH), where ID is -1 when the pointer left every node.
+Called from C only when the hovered node CHANGES, so this is a handful
+of calls per second of mouse movement rather than one per motion event
+-- but it is still on the hot path, so handlers must stay cheap and must
+never prompt.  Called on the cmacs GMainContext."
+  (when (buffer-live-p buffer)
+    (let ((id (nth 0 info)) (path (nth 1 info)))
+      (with-current-buffer buffer
+        (cond
+         ((and (fboundp 'cmacs-secondbrain--on-hover)
+               (derived-mode-p 'cmacs-secondbrain-mode))
+          (cmacs-secondbrain--on-hover buffer id path)))))))
+
 (defun cmacs-libregnum--node-context-menu (buffer info)
   "Dispatch a viewport RIGHT-click in BUFFER to the mode's context menu.
 INFO is (ID PATH IS-DIR VX VY) like `cmacs-libregnum--node-clicked'.

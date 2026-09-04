@@ -44,7 +44,11 @@ A file browser shows you the same bytes and answers none of that.
 (cmacs-secondbrain-3d)       ; free camera
 #+end_src
 
-Departments arrive *collapsed*: a ring holding four thousand notes is not a map. Each department is one hub, labelled with how many notes it holds and sized by the same number, and *clicking it* — or =TAB= on it once selected — unfolds it. The children fan out /around the hub they came from/ rather than spreading along the ring, so the relationship the expand was asking about stays legible; =e= opens every department at once and =c= shuts them again.
+The map opens *whole*: every ring shows its files and the links between them. Each department is a labelled hub carrying its own count, and its members occupy a contiguous *wedge* of the ring sized by how many there are — so a department of four thousand notes gets a proportionally bigger arc than one of four, and the two stay legible side by side.
+
+Folding is something you reach for, not something you have to dig out of: =TAB= folds or unfolds the selected department, clicking a hub does the same, =c= shuts everything and =e= opens it again. Set =cmacs-secondbrain-start-collapsed= to =t= if your tree is large enough that drawing it all costs more than it tells you.
+
+*Hover to interrogate.* Moving the pointer over any node lights up every other node in its department and dims the rest — no click, no state change, no way to get lost. It is suppressed while a search is active, because a search is a deliberate question and a stray pointer movement must not silently answer a different one. =H= toggles it.
 
 ** Keys
 
@@ -63,6 +67,8 @@ Departments arrive *collapsed*: a ring holding four thousand notes is not a map.
 | =v= | toggle flat / 3D |
 | =0= | frame the whole graph |
 | =g= | re-read every source |
+| =P= | particle effects on/off |
+| =H= | hover department-highlighting on/off |
 | =q= | quit |
 
 ** Mouse
@@ -77,6 +83,14 @@ Departments arrive *collapsed*: a ring holding four thousand notes is not a map.
 | right click | the context menu for that kind, AI section last |
 
 Clicking a department expands it because that is the whole interaction: the rings tell you what exists, and a click tells you what is inside. Making expand a separate keystroke would mean the obvious gesture on the obvious target does nothing.
+
+** Particles
+
+Ambient particles drift from every department hub, coloured by its PARA bucket and breathing wider and faster the more it holds, so the motion carries the same information the size does. Selecting a node and expanding a department each fire a burst — the expand's is bigger and bluer, because it moves the whole department and the burst marks where from.
+
+They are decoration and nothing about the map's meaning depends on them. They are on because a system you are meant to feel ownership of should look alive; =P= turns them off, and =cmacs-secondbrain-particles= is the defcustom.
+
+The honest cost: particles advance on wall-clock time inside the render pass, so the view keeps a redraw clock up at =cmacs-secondbrain-particle-fps= (24) even when nothing is happening. Turning particles off stops the clock with them.
 
 *** The framebuffer must match its window
 

@@ -362,6 +362,25 @@ that mutates its drawables in place — an animated force layout, a dragged
 node — must call it, or picking and labelling keep pointing at where the
 node used to be.
 
+** Particles
+
+A thin lease on libregnum's =LrgParticleSystem=, owned by the render context because the update and draw have to happen inside the FBO's 3D pass and nothing outside that file gets to be there. Off by default: the system is not even created until something asks for it, so a view that never uses particles pays nothing.
+
+- =cmacs-libregnum-particles-enable= — BUFFER &optional ON. Off drops every emitter and every live particle.
+- =cmacs-libregnum-particles-clear= — BUFFER.
+- =cmacs-libregnum-particles-emitter= — BUFFER X Y Z &optional RADIUS RATE COLOR SIZE. A persistent emitter drifting outward from a sphere of RADIUS, RATE particles per second.
+- =cmacs-libregnum-particles-burst= — BUFFER X Y Z &optional COUNT COLOR SIZE SPEED. COUNT particles at once, to mark an event.
+- =cmacs-libregnum-particles-count= — BUFFER. Live particle count.
+
+Colours are =0xRRGGBBAA=. Particles fade to transparent from whatever they start at, which is why there is no end-colour argument — and is what keeps both DEFUNs inside Emacs's eight-argument ceiling.
+
+*** Two implementation facts worth knowing before extending this
+
+- *Bursts use a separate particle system.* =lrg_particle_system_update= auto-emits from /every/ emitter by rate, while =lrg_particle_system_emit_at= emits from the /first/ emitter only. A burst emitter parked in the ambient system would either be ignored by =emit_at= (emitters are appended, not prepended) or, with a rate set, spray continuously forever. One emitter at rate 0, re-tuned per burst, is the only arrangement where both halves behave.
+- *Particles need a redraw clock.* They advance on wall-clock time inside the render pass, so a view that only redraws on input shows them frozen mid-flight. A scene using them must hold =cmacs-libregnum-set-animated= on — which is a standing cost, and the honest price of the effect.
+
+=-count= exists so the effect is testable: the live count is the only externally visible proof a burst did anything, and without it a silently broken emitter looks exactly like a working one.
+
 * Game module hosting
 
 Beyond the built-in scene visualisers, a =cmacs-libregnum= buffer can

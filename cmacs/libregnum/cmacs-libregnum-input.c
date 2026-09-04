@@ -120,6 +120,48 @@ defer_node_menu (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
   g_main_context_invoke (cmacs_glib_get_context (), node_menu_idle, a);
 }
 
+/* ── Hover → deferred Elisp callback ────────────────────────────────
+ *
+ * Hover already drove the overlay's label; nothing ever told Lisp about
+ * it.  That is the whole reason "hover a department to light up its
+ * files" was not expressible: the information stopped in C.
+ *
+ * Fires only when the hovered node CHANGES (the caller checks), so this
+ * is a handful of dispatches per second of mouse movement, not one per
+ * motion event.  Same defer-onto-the-GMainContext discipline as a click:
+ * a hover handler evaluates Lisp, which must not happen inside the GTK
+ * motion handler. */
+static gboolean
+hover_action_idle (gpointer user)
+{
+  ClickAction *a = user;
+  cmacs_dispatch_safe_call2 (intern ("cmacs-libregnum--node-hovered"),
+                             a->buffer,
+                             list2 (make_fixnum (a->id),
+                                    (a->path && a->path[0])
+                                      ? build_string (a->path) : Qnil));
+  g_free (a->path);
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+defer_node_hover (CmacsLibregnumView *v, CmacsLibregnumRenderCtx *ctx,
+                  gint id)
+{
+  const gchar *path = NULL;
+  ClickAction *a;
+
+  if (id >= 0)
+    cmacs_libregnum_render_ctx_node_info (ctx, (guint) id, &path, NULL,
+                                          NULL, NULL, NULL);
+  a = g_new0 (ClickAction, 1);
+  a->buffer = cmacs_libregnum_view_get_buffer (v);
+  a->path = (path && path[0]) ? g_strdup (path) : NULL;
+  a->id = id;
+  g_main_context_invoke (cmacs_glib_get_context (), hover_action_idle, a);
+}
+
 /* ── 2D image-mode input → deferred Elisp callbacks ──────────────────────
  * When a view is in image-display mode, mouse events map to DOCUMENT pixels
  * (via image_view_to_doc) and are dispatched to per-event Elisp routers that
@@ -697,6 +739,10 @@ cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
           if (hit != cmacs_libregnum_render_ctx_get_hovered (ctx))
             {
               cmacs_libregnum_render_ctx_set_hovered (ctx, hit);
+              /* Tell Lisp too, so a mode can react to hover with more
+               * than a label -- lighting up everything in the hovered
+               * department, for one.  Deferred, never inline. */
+              defer_node_hover (v, ctx, hit);
               cmacs_libregnum_view_request_redraw (v);
             }
         }

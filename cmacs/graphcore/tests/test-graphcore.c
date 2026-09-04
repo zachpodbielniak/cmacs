@@ -483,6 +483,129 @@ test_place_rings_bands_by_ring (void)
   cmacs_graph_free (g);
 }
 
+/* Angular half-width of a group about its own mean direction: how much
+   arc its members actually occupy. */
+static double
+group_arc (CmacsGraph *g, guint lo, guint hi)
+{
+  double sx = 0.0, sy = 0.0, mid, worst = 0.0;
+  guint i;
+
+  for (i = lo; i < hi; i++)
+    {
+      const CmacsGraphNode *nd = cmacs_graph_node (g, i);
+      sx += (double) nd->tx; sy += (double) nd->ty;
+    }
+  mid = atan2 (sy, sx);
+  for (i = lo; i < hi; i++)
+    {
+      const CmacsGraphNode *nd = cmacs_graph_node (g, i);
+      double d = atan2 ((double) nd->ty, (double) nd->tx) - mid;
+      while (d >  G_PI) d -= 2.0 * G_PI;
+      while (d < -G_PI) d += 2.0 * G_PI;
+      if (fabs (d) > worst) worst = fabs (d);
+    }
+  return worst;
+}
+
+static void
+test_place_rings_wedge_scales_with_size (void)
+{
+  /* Two departments on one band, one ten times the other.  The big one
+     must get the bigger arc.  Equal wedges are what makes "show me
+     everything" unreadable: the big group piles onto itself while the
+     small one floats in empty space. */
+  CmacsGraph *g = mk_nodes (24);
+  CmacsGraphLayout *l = cmacs_graph_layout_new ();
+  guint i;
+
+  for (i = 0; i < 24; i++) cmacs_graph_node (g, i)->ring = 1;
+  /* 0 = small hub with 2 members; 1 = big hub with 20. */
+  for (i = 2;  i < 4;  i++) cmacs_graph_set_parent (g, i, 0);
+  for (i = 4;  i < 24; i++) cmacs_graph_set_parent (g, i, 1);
+
+  cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+  assert_placed_sanely (g);
+
+  g_assert_cmpfloat (group_arc (g, 4, 24), >, group_arc (g, 2, 4));
+
+  cmacs_graph_layout_free (l);
+  cmacs_graph_free (g);
+}
+
+static void
+test_place_rings_members_stay_in_their_wedge (void)
+{
+  /* Every member must be nearer its own hub, by angle, than the other
+     hub -- that is what "contiguous wedge" has to mean for the map to
+     be readable with everything open. */
+  CmacsGraph *g = mk_nodes (22);
+  CmacsGraphLayout *l = cmacs_graph_layout_new ();
+  guint i;
+  double ha[2];
+
+  for (i = 0; i < 22; i++) cmacs_graph_node (g, i)->ring = 2;
+  for (i = 2;  i < 12; i++) cmacs_graph_set_parent (g, i, 0);
+  for (i = 12; i < 22; i++) cmacs_graph_set_parent (g, i, 1);
+
+  cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+  assert_placed_sanely (g);
+
+  for (i = 0; i < 2; i++)
+    ha[i] = atan2 ((double) cmacs_graph_node (g, i)->ty,
+                   (double) cmacs_graph_node (g, i)->tx);
+
+  for (i = 2; i < 22; i++)
+    {
+      const CmacsGraphNode *nd = cmacs_graph_node (g, i);
+      guint mine = (i < 12) ? 0 : 1;
+      double a = atan2 ((double) nd->ty, (double) nd->tx);
+      double dm = fabs (a - ha[mine]), dow = fabs (a - ha[1 - mine]);
+      while (dm  >  G_PI) dm  = fabs (dm  - 2.0 * G_PI);
+      while (dow >  G_PI) dow = fabs (dow - 2.0 * G_PI);
+      g_assert_cmpfloat (dm, <, dow);
+    }
+
+  cmacs_graph_layout_free (l);
+  cmacs_graph_free (g);
+}
+
+static void
+test_place_rings_grandchildren_join_their_department (void)
+{
+  /* A node two levels down belongs to its DEPARTMENT, not to its
+     immediate folder: the group root is the outermost visible ancestor,
+     so opening a subfolder must not eject its contents from the wedge. */
+  CmacsGraph *g = mk_nodes (10);
+  CmacsGraphLayout *l = cmacs_graph_layout_new ();
+  guint i;
+  double ha, worst = 0.0;
+
+  for (i = 0; i < 10; i++) cmacs_graph_node (g, i)->ring = 1;
+  cmacs_graph_set_parent (g, 1, 0);              /* folder under hub 0 */
+  for (i = 2; i < 10; i++) cmacs_graph_set_parent (g, i, 1);   /* leaves */
+
+  cmacs_graph_layout_place (l, g, CMACS_GRAPH_LAYOUT_RINGS, 2);
+  assert_placed_sanely (g);
+
+  /* One department: everything sits within a wedge of the whole circle,
+     centred on the hub, rather than being scattered. */
+  ha = atan2 ((double) cmacs_graph_node (g, 0)->ty,
+              (double) cmacs_graph_node (g, 0)->tx);
+  for (i = 1; i < 10; i++)
+    {
+      const CmacsGraphNode *nd = cmacs_graph_node (g, i);
+      double d = atan2 ((double) nd->ty, (double) nd->tx) - ha;
+      while (d >  G_PI) d -= 2.0 * G_PI;
+      while (d < -G_PI) d += 2.0 * G_PI;
+      if (fabs (d) > worst) worst = fabs (d);
+    }
+  g_assert_cmpfloat (worst, <=, G_PI + 1e-6);
+
+  cmacs_graph_layout_free (l);
+  cmacs_graph_free (g);
+}
+
 static void
 test_place_children_fan_around_their_parent (void)
 {
@@ -822,6 +945,12 @@ main (int argc, char **argv)
   g_test_add_func ("/graphcore/place/circle-groups-by-radius", test_place_circle_groups_by_radius);
   g_test_add_func ("/graphcore/place/hex-is-a-lattice", test_place_hex_is_a_lattice);
   g_test_add_func ("/graphcore/place/rings-bands-by-ring", test_place_rings_bands_by_ring);
+  g_test_add_func ("/graphcore/place/rings-wedge-scales-with-size",
+                   test_place_rings_wedge_scales_with_size);
+  g_test_add_func ("/graphcore/place/rings-members-stay-in-wedge",
+                   test_place_rings_members_stay_in_their_wedge);
+  g_test_add_func ("/graphcore/place/rings-grandchildren-join-department",
+                   test_place_rings_grandchildren_join_their_department);
   g_test_add_func ("/graphcore/place/children-fan-around-parent",
                    test_place_children_fan_around_their_parent);
   g_test_add_func ("/graphcore/place/collapsed-children-stay-hidden",

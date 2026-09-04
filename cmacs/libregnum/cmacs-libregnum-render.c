@@ -451,6 +451,15 @@ struct CmacsLibregnumRenderCtx
   /* Persistent camera-facing billboards (e.g. country flags). */
   GArray           *billboards;       /* CmacsBillboard */
 
+  /* Particles.  Created lazily -- a view that never asks pays
+   * nothing -- and stepped inside the 3D pass, which is the only
+   * place with a live camera and an open FBO. */
+  LrgParticleSystem *particles;       /* ambient: many rate-driven emitters */
+  LrgParticleSystem *bursts;          /* one-shot: ONE emitter, re-tuned */
+  LrgParticleEmitter *burst_emitter;  /* borrowed; owned by `bursts' */
+  gboolean           particles_on;
+  gint64             particles_last_us;
+
   /* Hovered scene node id (-1 none); drives hover label policy. */
   gint              hovered;
 
@@ -602,6 +611,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->overlay_models) g_ptr_array_unref (r->overlay_models);
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
+  g_clear_object (&r->particles);
+  g_clear_object (&r->bursts);
   g_clear_object (&r->camera);
   if (r->drawables) g_ptr_array_unref (r->drawables);
   if (r->nodes) g_array_free (r->nodes, TRUE);
@@ -1826,6 +1837,224 @@ void
 cmacs_libregnum_render_ctx_clear_billboards (CmacsLibregnumRenderCtx *r)
 {
   if (r && r->billboards) g_array_set_size (r->billboards, 0);
+}
+
+/* ── Particles ───────────────────────────────────────────────────── */
+
+/* 0xRRGGBBAA to the 0..1 floats the emitter wants. */
+static void
+rgba_to_floats (guint32 c, gfloat *r, gfloat *g, gfloat *b, gfloat *a)
+{
+  *r = (gfloat) ((c >> 24) & 0xFF) / 255.0f;
+  *g = (gfloat) ((c >> 16) & 0xFF) / 255.0f;
+  *b = (gfloat) ((c >>  8) & 0xFF) / 255.0f;
+  *a = (gfloat) ( c        & 0xFF) / 255.0f;
+}
+
+/* The cap is a budget, not a target: particles are pure decoration and
+ * must never be the reason a graph view drops frames. */
+#define CMACS_PARTICLE_MAX (4096)
+
+/* Additive so overlapping particles glow rather than muddy, and
+ * billboards so they read the same from any camera angle -- this view is
+ * orbited. */
+static LrgParticleSystem *
+ctx_new_system (guint max)
+{
+  LrgParticleSystem *ps = lrg_particle_system_new (max);
+  if (!ps) return NULL;
+  lrg_particle_system_set_blend_mode (ps, LRG_PARTICLE_BLEND_ADDITIVE);
+  lrg_particle_system_set_render_mode (ps, LRG_PARTICLE_RENDER_BILLBOARD);
+  lrg_particle_system_set_loop (ps, TRUE);
+  lrg_particle_system_play (ps);
+  return ps;
+}
+
+static LrgParticleSystem *
+ctx_particles (CmacsLibregnumRenderCtx *r)
+{
+  if (!r || !r->particles_on) return NULL;
+  if (!r->particles)
+    r->particles = ctx_new_system (CMACS_PARTICLE_MAX);
+  return r->particles;
+}
+
+/* Bursts get their OWN system, and this is not tidiness.
+ *
+ * `lrg_particle_system_update' auto-emits from every emitter by rate,
+ * while `lrg_particle_system_emit_at' emits from the FIRST emitter only.
+ * So a burst emitter parked in the ambient system would either be
+ * ignored by emit_at (it is appended, not prepended) or, with rate set,
+ * spray continuously forever.  One emitter, rate 0, re-tuned per burst
+ * is the only arrangement where both halves behave. */
+static LrgParticleSystem *
+ctx_bursts (CmacsLibregnumRenderCtx *r, LrgParticleEmitter **out_emitter)
+{
+  if (!r || !r->particles_on) return NULL;
+  if (!r->bursts)
+    {
+      g_autoptr(LrgParticleEmitter) e = NULL;
+
+      r->bursts = ctx_new_system (CMACS_PARTICLE_MAX / 2);
+      if (!r->bursts) return NULL;
+
+      e = lrg_particle_emitter_new ();
+      if (!e) { g_clear_object (&r->bursts); return NULL; }
+      /* Rate 0: update() must never spawn from it -- emit_at() is the
+       * only thing allowed to.  Position 0 because emit_at supplies the
+       * world position and the emitter's own is added on top. */
+      lrg_particle_emitter_set_emission_rate (e, 0.0f);
+      lrg_particle_emitter_set_position (e, 0.0f, 0.0f, 0.0f);
+      lrg_particle_emitter_set_emission_shape (e, LRG_EMISSION_SHAPE_CIRCLE);
+      lrg_particle_system_add_emitter (r->bursts, e);
+      /* Borrowed: add_emitter took its own ref and the system outlives
+         this pointer's every use. */
+      r->burst_emitter = e;
+    }
+  if (out_emitter)
+    *out_emitter = r->burst_emitter;
+  return r->bursts;
+}
+
+void
+cmacs_libregnum_render_ctx_particles_set_enabled (CmacsLibregnumRenderCtx *r,
+                                                  gboolean on)
+{
+  if (!r) return;
+  r->particles_on = on;
+  if (!on)
+    cmacs_libregnum_render_ctx_particles_clear (r);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_particles_enabled (CmacsLibregnumRenderCtx *r)
+{
+  return r && r->particles_on;
+}
+
+void
+cmacs_libregnum_render_ctx_particles_clear (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return;
+  if (r->particles)
+    {
+      lrg_particle_system_clear_emitters (r->particles);
+      lrg_particle_system_clear (r->particles);
+    }
+  /* The burst system keeps its one emitter -- clearing it would leave
+     emit_at with nothing to emit from and silently do nothing. */
+  if (r->bursts)
+    lrg_particle_system_clear (r->bursts);
+}
+
+gboolean
+cmacs_libregnum_render_ctx_particles_add_emitter (CmacsLibregnumRenderCtx *r,
+                                                  float x, float y, float z,
+                                                  float radius, float rate,
+                                                  guint32 rgba_start,
+                                                  guint32 rgba_end,
+                                                  float size, float life,
+                                                  float speed)
+{
+  LrgParticleSystem *ps = ctx_particles (r);
+  g_autoptr(LrgParticleEmitter) e = NULL;
+  gfloat cr, cg, cb, ca;
+
+  if (!ps) return FALSE;
+
+  e = lrg_particle_emitter_new ();
+  if (!e) return FALSE;
+
+  lrg_particle_emitter_set_position (e, x, y, z);
+  /* From a sphere's surface, drifting outward: an emitter anchored at a
+   * point looks like a fountain, which is wrong for a node that is
+   * supposed to feel ambient rather than active. */
+  lrg_particle_emitter_set_emission_shape (e, LRG_EMISSION_SHAPE_CIRCLE);
+  lrg_particle_emitter_set_shape_radius (e, radius);
+  lrg_particle_emitter_set_emission_rate (e, rate);
+  lrg_particle_emitter_set_initial_speed (e, speed * 0.35f, speed);
+  lrg_particle_emitter_set_initial_lifetime (e, life * 0.6f, life);
+  lrg_particle_emitter_set_initial_size (e, size * 0.5f, size);
+
+  rgba_to_floats (rgba_start, &cr, &cg, &cb, &ca);
+  lrg_particle_emitter_set_start_color (e, cr, cg, cb, ca);
+  rgba_to_floats (rgba_end, &cr, &cg, &cb, &ca);
+  lrg_particle_emitter_set_end_color (e, cr, cg, cb, ca);
+
+  lrg_particle_system_add_emitter (ps, e);
+  return TRUE;
+}
+
+gboolean
+cmacs_libregnum_render_ctx_particles_burst (CmacsLibregnumRenderCtx *r,
+                                            float x, float y, float z,
+                                            guint count,
+                                            guint32 rgba_start,
+                                            guint32 rgba_end,
+                                            float size, float life,
+                                            float speed)
+{
+  LrgParticleEmitter *e = NULL;
+  LrgParticleSystem *ps = ctx_bursts (r, &e);
+  gfloat cr, cg, cb, ca;
+
+  if (!ps || !e) return FALSE;
+
+  /* Re-tune the single burst emitter, then fire it.  Particles already
+   * in flight keep the values they were emitted with, so re-tuning does
+   * not disturb an earlier burst still fading out. */
+  lrg_particle_emitter_set_shape_radius (e, size);
+  lrg_particle_emitter_set_initial_speed (e, speed * 0.5f, speed);
+  lrg_particle_emitter_set_initial_lifetime (e, life * 0.5f, life);
+  lrg_particle_emitter_set_initial_size (e, size * 0.5f, size);
+
+  rgba_to_floats (rgba_start, &cr, &cg, &cb, &ca);
+  lrg_particle_emitter_set_start_color (e, cr, cg, cb, ca);
+  rgba_to_floats (rgba_end, &cr, &cg, &cb, &ca);
+  lrg_particle_emitter_set_end_color (e, cr, cg, cb, ca);
+
+  return lrg_particle_system_emit_at (ps, x, y, z, count) > 0;
+}
+
+guint
+cmacs_libregnum_render_ctx_particles_count (CmacsLibregnumRenderCtx *r)
+{
+  guint n = 0;
+  if (!r) return 0;
+  if (r->particles) n += lrg_particle_system_get_active_count (r->particles);
+  if (r->bursts)    n += lrg_particle_system_get_active_count (r->bursts);
+  return n;
+}
+
+/* Advance and draw.  Called from inside the 3D layer of the FBO pass --
+ * the only place with a bound camera and an open render target. */
+static void
+ctx_particles_step_and_draw (CmacsLibregnumRenderCtx *r)
+{
+  gint64  now;
+  gdouble dt;
+
+  if (!r || !r->particles_on || (!r->particles && !r->bursts)) return;
+
+  now = g_get_monotonic_time ();
+  dt  = r->particles_last_us
+          ? (gdouble) (now - r->particles_last_us) / 1e6 : 0.0;
+  r->particles_last_us = now;
+  /* Clamp: a view that was idle for a minute must not integrate a
+   * minute of motion in one frame and fling every particle away. */
+  if (dt < 0.0)  dt = 0.0;
+  if (dt > 0.1)  dt = 0.1;
+
+  if (r->particles)
+    {
+      lrg_particle_system_update (r->particles, (gfloat) dt);
+      lrg_particle_system_draw (r->particles);
+    }
+  if (r->bursts)
+    {
+      lrg_particle_system_update (r->bursts, (gfloat) dt);
+      lrg_particle_system_draw (r->bursts);
+    }
 }
 
 guint
@@ -3523,6 +3752,10 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
         /* Transform gizmo handles over the selection (translate/rotate/scale). */
         cmacs_editor_draw_gizmo (r);
 #endif
+        /* Particles last inside the 3D layer: additive blending wants
+         * the solid geometry already in the depth buffer. */
+        ctx_particles_step_and_draw (r);
+
         lrg_renderer_end_layer (r->renderer);
         lrg_renderer_end_frame (r->renderer);
       }

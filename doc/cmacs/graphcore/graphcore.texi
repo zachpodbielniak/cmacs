@@ -159,24 +159,49 @@ bands counter-rotate under spin so the motion reads as depth.  This is
 the ARMS layout.
 @end table
 
-@subsection Children fan around their parent
+@subsection RINGS: departments get proportional wedges
 
-Under @code{CIRCLE} and @code{RINGS}, a node whose parent is visible is
-skipped by the band pass and placed by a second pass that fans it out of
-that parent: a phyllotaxis spiral (golden angle, radius growing as the
-square root of rank so the density stays even), offset outward along the
-direction the parent already sits in.
+@code{RINGS} does not spread band members evenly.  Each @emph{group
+root} --- a visible node with no visible ancestor, that is, a department
+hub --- is given a contiguous angular @strong{wedge} sized by how many
+visible nodes it holds, and its members are laid out inside that wedge
+on a wide, shallow lattice sitting just outside the band radius.
 
-This is what an expanded department has to look like.  Spreading every
-band member evenly on the circle instead --- which is what a naive ``one
-ring, all members'' pass does --- drops a child next to a sibling of a
-different hub, buries the hub among its own contents, and loses exactly
-the relationship the expand was asking about.
+Three decisions, each with a failure it exists to prevent:
+
+@itemize @bullet
+@item
+@strong{Wedges are proportional, not equal.}  Equal wedges give a
+department of four notes the same arc as one of four thousand, so the
+big group piles onto itself while the small one floats in empty space.
+That is what turns ``show me everything'' into an unreadable smear.
+@item
+@strong{The group root is the outermost visible ancestor}, not the
+immediate parent.  A grandchild belongs to its @emph{department}, so
+opening a subfolder does not eject its contents from the wedge.
+@item
+@strong{Members sit just outside their hub}, not straddling it.  The
+group then reads as hanging off its department, and an expand animates
+outward --- the direction the gesture implies.
+@end itemize
 
 A collapsed parent's children are invisible and so are not placed at
 all; the next expand therefore animates them out of the hub's own
 position rather than out of wherever a stale placement had scattered
 them.
+
+@subsection CIRCLE: children fan around their parent
+
+@code{CIRCLE} has no bands to budget, so it uses a simpler second pass:
+a node whose parent is visible is skipped by the ring pass and fanned
+out of that parent on a phyllotaxis spiral (golden angle, radius growing
+as the square root of rank so density stays even), offset outward along
+the direction the parent already sits in.
+
+@code{RINGS} deliberately does @emph{not} use this pass.  A fan sized
+independently of the wedge it sits in overflows into the neighbouring
+department the moment a big group opens.  @code{HEX} is a lattice by
+definition and is left alone entirely.
 
 @strong{Placement writes to @code{tx/ty/tz} and moves nothing.}
 Separating ``decide where things go'' from ``move them there'' is what

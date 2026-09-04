@@ -59,6 +59,11 @@
 (declare-function cmacs-libregnum-set-wheel-up-zooms-in "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-selection-style "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-inscene-labels "cmacs-libregnum")
+(declare-function cmacs-libregnum-particles-enable "cmacs-libregnum")
+(declare-function cmacs-libregnum-particles-clear "cmacs-libregnum")
+(declare-function cmacs-libregnum-particles-emitter "cmacs-libregnum")
+(declare-function cmacs-libregnum-particles-burst "cmacs-libregnum")
+(declare-function cmacs-para-color "cmacs-para")
 (declare-function cmacs-libregnum-popup-menu "cmacs-libregnum")
 (declare-function cmacs-libregnum-set-match-set "cmacs-libregnum")
 (declare-function cmacs-libregnum-focus-node "cmacs-libregnum")
@@ -88,6 +93,49 @@ where, which is the whole reason to have a map."
 (defcustom cmacs-secondbrain-fps 30
   "Frames per second while a transition is in flight."
   :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-start-collapsed nil
+  "Whether departments start folded.
+
+Nil -- the default -- opens the whole map: every ring shows its files
+and the links between them, which is the view the thing exists to give
+you.  Folding is then something you reach for on a department too big to
+read, not the state you have to dig your way out of every time.
+
+Set it to t on a very large tree, where drawing everything at once costs
+more than it tells you."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-particle-fps 24
+  "Redraw rate, in frames per second, kept up for particles alone.
+
+Lower than `cmacs-secondbrain-fps': a transition is watched closely and
+wants to be smooth, while ambient drift only has to not look like a
+slideshow.  It is a standing cost on an otherwise idle buffer, which is
+the honest price of the effect -- turn particles off and the clock stops
+with them."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-hover-highlights-group t
+  "Whether hovering a node lights up everything in its department.
+
+This is the cheapest way to answer \"what is in here?\" -- no click, no
+state change, just move the pointer.  It is suppressed while a search is
+active, because a search is a deliberate question and a stray pointer
+movement must not silently answer a different one."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-particles t
+  "Whether to draw ambient particles and event bursts.
+
+Purely decorative, and deliberately so: nothing about the map's meaning
+depends on them.  They are on because a system you are meant to feel
+ownership of should look alive, and off is one setq away."
+  :type 'boolean
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-label-size 13
@@ -128,6 +176,14 @@ camera are drawn, so zooming in is what reveals names."
   "Active search string, or nil.")
 (defvar-local cmacs-secondbrain--resize-timer nil
   "Idle timer coalescing window size changes.")
+(defvar-local cmacs-secondbrain--groups nil
+  "Hash of group key -> list of node ids, for hover highlighting.
+Precomputed at graph-build time because the hover handler runs on the
+pointer's hot path and must not walk the node list.")
+(defvar-local cmacs-secondbrain--group-of nil
+  "Hash of node id -> its group key.")
+(defvar-local cmacs-secondbrain--hovered nil
+  "Group key currently lit by hover, or nil.")
 
 ;;;; View setup -------------------------------------------------------
 
@@ -195,8 +251,13 @@ useless."
 
 ;;;; Animation --------------------------------------------------------
 
-(defun cmacs-secondbrain--stop-animation ()
-  "Cancel any in-flight transition timer for the current buffer."
+(defun cmacs-secondbrain--stop-animation (&optional hard)
+  "Cancel any in-flight transition timer for the current buffer.
+
+With HARD, drop the render clock unconditionally.  Without it the clock
+survives when particles are on, because they need one.  Teardown must
+pass HARD: re-arming a clock for a view that is about to be detached
+leaves it flagged animated with nothing to draw."
   (when (timerp cmacs-secondbrain--anim-timer)
     (cancel-timer cmacs-secondbrain--anim-timer))
   (setq cmacs-secondbrain--anim-timer nil)
@@ -207,7 +268,14 @@ useless."
   (when (and (fboundp 'cmacs-libregnum-set-animated)
              (fboundp 'cmacs-secondbrain-attached-p)
              (ignore-errors (cmacs-secondbrain-attached-p (current-buffer))))
-    (ignore-errors (cmacs-libregnum-set-animated (current-buffer) nil))))
+    ;; But NOT while particles are drawing.  They advance on wall-clock
+    ;; time inside the render pass, so a view that only redraws on input
+    ;; would show them frozen mid-flight -- worse than not having them.
+    (ignore-errors
+      (if (and cmacs-secondbrain-particles (not hard))
+          (cmacs-libregnum-set-animated (current-buffer) t
+                                        cmacs-secondbrain-particle-fps)
+        (cmacs-libregnum-set-animated (current-buffer) nil)))))
 
 (defun cmacs-secondbrain--animate ()
   "Drive the current transition to completion, then stop.
@@ -244,11 +312,19 @@ itself -- and drops the libregnum animation clock with it."
       (cmacs-secondbrain--configure-view)
       (cmacs-secondbrain-set-graph buf (vconcat nodes) (vconcat edges)
                                    (if cmacs-secondbrain--3d 3 2))
+      ;; Open by default.  A map that shows only the folder names is
+      ;; not showing you your second brain; it is showing you a table of
+      ;; contents you then have to click your way through.
+      (unless cmacs-secondbrain-start-collapsed
+        (cmacs-secondbrain-collapse-all buf nil 0))
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
       (cmacs-secondbrain-fit buf)
-      ;; After the scene, always: icons live in the billboard list, which
-      ;; is cleared with the drawables on every rebuild.
+      (cmacs-secondbrain--build-groups nodes)
+      (setq cmacs-secondbrain--hovered nil)
+      ;; After the scene, always: icons and emitters both key on world
+      ;; positions and live in lists cleared with the drawables.
       (ignore-errors (cmacs-secondbrain-apply-icons buf nodes))
+      (cmacs-secondbrain--particles-refresh buf nodes)
       (message "cmacs-secondbrain: %d nodes (%d shown), %d links"
                (length nodes)
                (or (cmacs-secondbrain-visible-count buf) 0)
@@ -307,6 +383,7 @@ itself -- and drops the libregnum animation clock with it."
 (defun cmacs-secondbrain--select (id)
   "Select node ID, report it, and refresh any open pane."
   (setq cmacs-secondbrain--selected id)
+  (cmacs-secondbrain--burst-at id)
   ;; An inspector showing the previous node is worse than no inspector:
   ;; it is confidently wrong about what you just clicked.
   (when (and (fboundp 'cmacs-secondbrain-inspector-render)
@@ -329,7 +406,11 @@ itself -- and drops the libregnum animation clock with it."
          (now (cmacs-secondbrain-collapsed-p buf id)))
     (if (cmacs-secondbrain-set-collapsed buf id (not now)
                                          cmacs-secondbrain-transition-frames)
-        (cmacs-secondbrain--animate)
+        (progn
+          ;; Bigger and bluer than a selection burst: an expand moves the
+          ;; whole department, and the burst is what marks where from.
+          (cmacs-secondbrain--burst-at id #x8FD4FFFF 44)
+          (cmacs-secondbrain--animate))
       (message "Nothing to expand there"))))
 
 (defun cmacs-secondbrain-expand-all ()
@@ -345,6 +426,112 @@ itself -- and drops the libregnum animation clock with it."
   (cmacs-secondbrain-collapse-all (current-buffer) t
                                   cmacs-secondbrain-transition-frames)
   (cmacs-secondbrain--animate))
+
+;;;; Hover ------------------------------------------------------------
+
+(defun cmacs-secondbrain--build-groups (nodes)
+  "Index NODES by department into the hover lookup tables."
+  (setq cmacs-secondbrain--groups (make-hash-table :test 'equal)
+        cmacs-secondbrain--group-of (make-hash-table :test 'equal))
+  (dolist (n nodes)
+    (let* ((ring (plist-get n :ring))
+           (dept (plist-get n :department))
+           (id   (plist-get n :id))
+           ;; The centre belongs to no department; giving it one would
+           ;; make hovering it light up an arbitrary ring.
+           (key (and dept ring (format "%s/%s" ring dept))))
+      (when (and key id)
+        (puthash id key cmacs-secondbrain--group-of)
+        (puthash key (cons id (gethash key cmacs-secondbrain--groups))
+                 cmacs-secondbrain--groups)))))
+
+(defun cmacs-secondbrain--on-hover (buffer _id path)
+  "Light up the department under the pointer in BUFFER.
+
+PATH is the node's id string, or nil when the pointer left every node.
+Runs on the cmacs GMainContext on the pointer's hot path, so it does
+exactly two hash lookups and one bulk flag call -- no node-list walk, no
+consing per node, and nothing that can prompt."
+  (when (and (buffer-live-p buffer) cmacs-secondbrain-hover-highlights-group)
+    (with-current-buffer buffer
+      ;; A search is a deliberate question; a stray pointer movement must
+      ;; not silently replace its answer.
+      (unless cmacs-secondbrain--search
+        (let ((key (and path cmacs-secondbrain--group-of
+                        (gethash path cmacs-secondbrain--group-of))))
+          (unless (equal key cmacs-secondbrain--hovered)
+            (setq cmacs-secondbrain--hovered key)
+            (cmacs-secondbrain--flag-ids
+             (and key (gethash key cmacs-secondbrain--groups)))))))))
+
+;;;; Particles --------------------------------------------------------
+
+(defun cmacs-secondbrain--particle-color (node)
+  "Return the 0xRRGGBBAA particle colour for NODE."
+  (or (and (fboundp 'cmacs-para-color)
+           (plist-get node :bucket)
+           (cmacs-para-color (plist-get node :bucket)))
+      (pcase (plist-get node :ring)
+        ('applications #x7FC8FFFF)
+        ('routines     #x9C8FE0FF)
+        ('memory       #x6FD98AFF)
+        ('skills       #xE8A33DFF)
+        (_             #xB0B8C8FF))))
+
+(defun cmacs-secondbrain--particles-refresh (buf nodes)
+  "Re-seed BUF's ambient emitters, one per department hub in NODES.
+
+Emitters are attached to hubs only.  One per file would be a thousand
+emitters fighting over a four-thousand particle budget, which looks like
+nothing at all -- the departments are what should read as alive."
+  (when (and cmacs-secondbrain-particles
+             (fboundp 'cmacs-libregnum-particles-enable))
+    (ignore-errors
+      (cmacs-libregnum-particles-enable buf t)
+      ;; Emitters are anchored at world positions, so a rebuild that
+      ;; moved the hubs must drop the old ones.
+      (cmacs-libregnum-particles-clear buf)
+      ;; And keep a redraw clock up, or they are drawn once and freeze.
+      (when (fboundp 'cmacs-libregnum-set-animated)
+        (cmacs-libregnum-set-animated buf t cmacs-secondbrain-particle-fps))
+      (dolist (n nodes)
+        (when (eq (plist-get n :kind) 'hub)
+          (let ((pos (cmacs-secondbrain-node-position buf (plist-get n :id))))
+            (when pos
+              (cmacs-libregnum-particles-emitter
+               buf (nth 0 pos) (nth 1 pos) (nth 2 pos)
+               ;; Bigger departments breathe wider and faster, so the
+               ;; motion carries the same information the size does.
+               (+ 0.5 (* 0.02 (sqrt (float (or (plist-get n :count) 1)))))
+               (min 14.0 (+ 2.0 (* 0.4 (sqrt (float (or (plist-get n :count) 1))))))
+               (cmacs-secondbrain--particle-color n)
+               0.09))))))))
+
+(defun cmacs-secondbrain--burst-at (id &optional color count)
+  "Fire a particle burst at node ID, if particles are on."
+  (when (and cmacs-secondbrain-particles id
+             (fboundp 'cmacs-libregnum-particles-burst))
+    (let* ((buf (current-buffer))
+           (pos (ignore-errors (cmacs-secondbrain-node-position buf id))))
+      (when pos
+        (ignore-errors
+          (cmacs-libregnum-particles-burst
+           buf (nth 0 pos) (nth 1 pos) (nth 2 pos)
+           (or count 28) (or color #xFFE58CFF) 0.14 3.0))))))
+
+(defun cmacs-secondbrain-toggle-particles ()
+  "Turn particle effects on or off for this buffer."
+  (interactive)
+  (setq-local cmacs-secondbrain-particles (not cmacs-secondbrain-particles))
+  (if cmacs-secondbrain-particles
+      (cmacs-secondbrain--particles-refresh
+       (current-buffer) (plist-get cmacs-secondbrain--graph :nodes))
+    (when (fboundp 'cmacs-libregnum-particles-enable)
+      (ignore-errors (cmacs-libregnum-particles-enable (current-buffer) nil))))
+  ;; Start or stop the standing render clock with them.
+  (unless (timerp cmacs-secondbrain--anim-timer)
+    (cmacs-secondbrain--stop-animation (not cmacs-secondbrain-particles)))
+  (message "Particles %s" (if cmacs-secondbrain-particles "on" "off")))
 
 ;;;; Search -----------------------------------------------------------
 
@@ -434,7 +621,22 @@ is the tier above."
   "p" #'cmacs-secondbrain-preview
   "W" #'cmacs-secondbrain-close-panes
   "v" #'cmacs-secondbrain-toggle-view
+  "P" #'cmacs-secondbrain-toggle-particles
+  "H" #'cmacs-secondbrain-toggle-hover-highlight
   "q" #'quit-window)
+
+(defun cmacs-secondbrain-toggle-hover-highlight ()
+  "Turn hover department-highlighting on or off."
+  (interactive)
+  (setq-local cmacs-secondbrain-hover-highlights-group
+              (not cmacs-secondbrain-hover-highlights-group))
+  (unless cmacs-secondbrain-hover-highlights-group
+    ;; Leaving the last hovered department lit would be worse than not
+    ;; highlighting at all: it reads as a search nobody ran.
+    (setq cmacs-secondbrain--hovered nil)
+    (unless cmacs-secondbrain--search (cmacs-secondbrain--flag-ids nil)))
+  (message "Hover highlight %s"
+           (if cmacs-secondbrain-hover-highlights-group "on" "off")))
 
 (defun cmacs-secondbrain-fit-cmd ()
   "Frame the whole graph."
@@ -486,7 +688,7 @@ teardown, the Evil `C-w' handoff and `<escape>'.
 
 (defun cmacs-secondbrain--on-kill ()
   "Tear the view down with the buffer."
-  (cmacs-secondbrain--stop-animation)
+  (cmacs-secondbrain--stop-animation t)
   (ignore-errors (cmacs-secondbrain-detach (current-buffer))))
 
 ;;;; Pick dispatch ----------------------------------------------------

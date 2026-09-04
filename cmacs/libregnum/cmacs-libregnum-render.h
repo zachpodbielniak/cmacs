@@ -328,6 +328,45 @@ extern void  cmacs_libregnum_render_ctx_set_match_set
                                const gint *ids, gsize n,
                                gboolean dim_rest);
 
+/* ── Particles ───────────────────────────────────────────────────
+ * A thin lease on libregnum's LrgParticleSystem, owned by the render
+ * context because the update+draw has to happen inside the FBO's 3D
+ * pass and nothing outside this file gets to be there.
+ *
+ * Two shapes, which is all a graph view needs: persistent ambient
+ * emitters that make a region feel alive, and one-shot bursts that mark
+ * something happening (a selection, a department opening).  Colours are
+ * 0xRRGGBBAA to match every other colour in this API.
+ *
+ * The system is created lazily on first use and destroyed with the
+ * context, so a view that never asks for particles pays nothing. */
+extern void     cmacs_libregnum_render_ctx_particles_set_enabled
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_libregnum_render_ctx_particles_enabled
+                              (CmacsLibregnumRenderCtx *r);
+/* Drop every emitter and every live particle. */
+extern void     cmacs_libregnum_render_ctx_particles_clear
+                              (CmacsLibregnumRenderCtx *r);
+/* A persistent emitter drifting outward from a sphere of RADIUS around
+ * (X,Y,Z), RATE particles/second.  Returns FALSE when particles are off
+ * or the system could not be created. */
+extern gboolean cmacs_libregnum_render_ctx_particles_add_emitter
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z,
+                               float radius, float rate,
+                               guint32 rgba_start, guint32 rgba_end,
+                               float size, float life, float speed);
+/* COUNT particles at once from (X,Y,Z) -- a marker for an event. */
+extern gboolean cmacs_libregnum_render_ctx_particles_burst
+                              (CmacsLibregnumRenderCtx *r,
+                               float x, float y, float z, guint count,
+                               guint32 rgba_start, guint32 rgba_end,
+                               float size, float life, float speed);
+/* Live particle count, for tests: it is the only externally visible
+ * proof that a burst did anything. */
+extern guint    cmacs_libregnum_render_ctx_particles_count
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Spatial navigation ──────────────────────────────────────────
  * Nearest node to FROM within a screen-space cone pointing (DX,DY)
  * (y downward, need not be normalised).  CONE_COS is the minimum

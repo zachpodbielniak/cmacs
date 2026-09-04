@@ -1084,45 +1084,173 @@ static void
 place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
 {
   guint n = order->len, start = 0;
+  GHashTable *root_of;   /* node index -> its top VISIBLE ancestor index */
+  GHashTable *weight;    /* root index -> 1 + visible descendants shown */
+
+  /* Every node's group root: the outermost visible ancestor, or itself.
+     Walking up rather than trusting `parent' directly matters once more
+     than one level can be open at a time -- a grandchild belongs to its
+     department, not to its immediate folder. */
+  root_of = g_hash_table_new (g_direct_hash, g_direct_equal);
+  weight  = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+  for (guint i = 0; i < n; i++)
+    {
+      guint idx = g_array_index (order, guint, i);
+      gint  cur = (gint) idx, guard = 0;
+
+      /* Bounded: a cycle is refused at set_parent time, but a layout
+         pass must not be the thing that discovers otherwise. */
+      while (guard++ < 64)
+        {
+          CmacsGraphNode *nd =
+            &g_array_index (g->nodes, CmacsGraphNode, (guint) cur);
+          if (nd->parent < 0) break;
+          if (!g_array_index (g->nodes, CmacsGraphNode,
+                              (guint) nd->parent).visible)
+            break;
+          cur = nd->parent;
+        }
+      g_hash_table_insert (root_of, GUINT_TO_POINTER (idx),
+                           GINT_TO_POINTER (cur));
+      g_hash_table_insert (weight, GINT_TO_POINTER (cur),
+                           GINT_TO_POINTER
+                             (GPOINTER_TO_INT
+                                (g_hash_table_lookup (weight,
+                                                      GINT_TO_POINTER (cur)))
+                              + 1));
+    }
 
   /* `order' is already sorted by ring, so each band is one run. */
   while (start < n)
     {
       guint idx0 = g_array_index (order, guint, start);
       guint8 band = g_array_index (g->nodes, CmacsGraphNode, idx0).ring;
-      guint end = start, i, count;
-      double r, step;
+      guint end = start, i;
+      double r, thickness, dir, total_w = 0.0, cursor;
+      GArray *roots;
 
       while (end < n
              && g_array_index (g->nodes, CmacsGraphNode,
                                g_array_index (order, guint, end)).ring == band)
         end++;
 
-      count = end - start;
-      r     = l->ring_gap * (double) (band + 1);
-      step  = 2.0 * G_PI / (double) MAX (1u, count);
+      r         = l->ring_gap * (double) (band + 1);
+      /* How far a department may spill off its band.  Well under the
+         gap, so two bands never blend into one another. */
+      thickness = l->ring_gap * 0.42;
+      /* Alternate bands counter-rotate, so spinning does not slide every
+         ring the same way and the motion reads as depth. */
+      dir       = (band & 1) ? -1.0 : 1.0;
 
+      /* The roots present in this band, in `order' sequence so the
+         result is deterministic. */
+      roots = g_array_new (FALSE, FALSE, sizeof (guint));
       for (i = start; i < end; i++)
         {
-          CmacsGraphNode *nd =
-            &g_array_index (g->nodes, CmacsGraphNode,
-                            g_array_index (order, guint, i));
-          /* Alternate bands counter-rotate, so spinning does not slide
-             every ring the same way and the motion reads as depth. */
-          double dir = (band & 1) ? -1.0 : 1.0;
-          double a   = step * (double) (i - start) + l->spin * dir;
-          /* A node whose parent is visible belongs in a fan around that
-             parent, not spread along the band -- see
-             place_children_around_parents. */
-          if (nd->parent >= 0
-              && g_array_index (g->nodes, CmacsGraphNode,
-                                (guint) nd->parent).visible)
-            continue;
-          place_set (nd, r * cos (a), r * sin (a), 0.0, dims);
+          guint idx = g_array_index (order, guint, i);
+          gint  rt  = GPOINTER_TO_INT (g_hash_table_lookup
+                                         (root_of, GUINT_TO_POINTER (idx)));
+          if ((guint) rt == idx)
+            {
+              g_array_append_val (roots, idx);
+              total_w += (double) GPOINTER_TO_INT
+                           (g_hash_table_lookup (weight,
+                                                 GINT_TO_POINTER (rt)));
+            }
         }
 
+      if (roots->len == 0 || total_w <= 0.0)
+        {
+          g_array_free (roots, TRUE);
+          start = end;
+          continue;
+        }
+
+      /* Each department gets a contiguous wedge sized by how much it
+         holds.  Equal wedges would give a department of four notes the
+         same arc as one of four thousand, which is how "show me
+         everything" turns into an unreadable smear: the big group's
+         members pile on top of each other while the small one's float
+         alone in empty space. */
+      cursor = 0.0;
+      for (guint k = 0; k < roots->len; k++)
+        {
+          guint root = g_array_index (roots, guint, k);
+          double w = (double) GPOINTER_TO_INT
+                       (g_hash_table_lookup (weight, GINT_TO_POINTER (root)));
+          double span = 2.0 * G_PI * (w / total_w);
+          double a0 = cursor + l->spin * dir;
+          double mid = a0 + span * 0.5;
+          CmacsGraphNode *hub =
+            &g_array_index (g->nodes, CmacsGraphNode, root);
+          guint kids = 0, cols, rows;
+
+          cursor += span;
+
+          place_set (hub, r * cos (mid), r * sin (mid), 0.0, dims);
+
+          /* Count this root's members (excluding itself) to shape the
+             lattice they sit in. */
+          for (i = start; i < end; i++)
+            {
+              guint idx = g_array_index (order, guint, i);
+              if (idx != root
+                  && (guint) GPOINTER_TO_INT
+                       (g_hash_table_lookup (root_of,
+                                             GUINT_TO_POINTER (idx))) == root)
+                kids++;
+            }
+          if (kids == 0) continue;
+
+          /* Wide and shallow: a wedge is long in angle and thin in
+             radius, so the lattice should be too. */
+          rows = (guint) MAX (1.0, floor (sqrt ((double) kids / 8.0) + 0.5));
+          cols = (kids + rows - 1) / rows;
+
+          {
+            guint seen = 0;
+            /* Keep a margin at both edges so neighbouring departments
+               stay visually separate. */
+            double m = span * 0.08;
+            double usable = span - 2.0 * m;
+
+            for (i = start; i < end; i++)
+              {
+                guint idx = g_array_index (order, guint, i);
+                CmacsGraphNode *nd;
+                guint row, col;
+                double a, rr;
+
+                if (idx == root) continue;
+                if ((guint) GPOINTER_TO_INT
+                      (g_hash_table_lookup (root_of,
+                                            GUINT_TO_POINTER (idx))) != root)
+                  continue;
+
+                nd  = &g_array_index (g->nodes, CmacsGraphNode, idx);
+                row = seen / cols;
+                col = seen % cols;
+                seen++;
+
+                a = a0 + m + ((double) col + 0.5) / (double) cols * usable;
+                /* Just OUTSIDE the hub rather than straddling it: the
+                   group then reads as hanging off its department, and
+                   an expand animates outward, which is the direction
+                   the gesture implies. */
+                rr = r + thickness * (0.25 + 0.75 * ((double) row + 0.5)
+                                              / (double) rows);
+                place_set (nd, rr * cos (a), rr * sin (a), 0.0, dims);
+              }
+          }
+        }
+
+      g_array_free (roots, TRUE);
       start = end;
     }
+
+  g_hash_table_destroy (root_of);
+  g_hash_table_destroy (weight);
 }
 
 void
@@ -1160,10 +1288,13 @@ cmacs_graph_layout_place (CmacsGraphLayout *l, CmacsGraph *g,
     default: break;
     }
 
-  /* Second pass for the band layouts: anything with a visible parent
-     fans out of it.  HEX is a lattice by definition -- everything is a
-     cell -- so it is left alone. */
-  if (kind == CMACS_GRAPH_LAYOUT_RINGS || kind == CMACS_GRAPH_LAYOUT_CIRCLE)
+  /* CIRCLE gets the fan pass: anything with a visible parent is placed
+     around it rather than spread along the ring.  RINGS does its own,
+     wedge-aware placement -- a fan sized independently of the wedge it
+     sits in would overflow into the neighbouring department the moment
+     a big group opened.  HEX is a lattice by definition, so it is left
+     alone entirely. */
+  if (kind == CMACS_GRAPH_LAYOUT_CIRCLE)
     place_children_around_parents (g, order, l->dims, l->ring_gap);
 
   g_array_free (order, TRUE);

@@ -832,6 +832,137 @@ nodes are boxes), `halo' (a wireframe shell, right for spheres), or
   return style;
 }
 
+/* ── Particles ─────────────────────────────────────────────────────
+ * Decoration, deliberately: they make a scene feel alive and they must
+ * never be load-bearing.  Every entry point is a no-op on a buffer with
+ * no view, so a caller need not care whether one is attached yet.  */
+
+/* 0xRRGGBBAA from a Lisp integer, clamped. */
+static guint32
+cmacs_lrg_rgba (Lisp_Object v, guint32 dflt)
+{
+  if (!FIXNUMP (v)) return dflt;
+  return (guint32) (XFIXNUM (v) & 0xFFFFFFFF);
+}
+
+static float
+cmacs_lrg_float (Lisp_Object v, double dflt)
+{
+  return (float) (NUMBERP (v) ? XFLOATINT (v) : dflt);
+}
+
+DEFUN ("cmacs-libregnum-particles-enable",
+       Fcmacs_libregnum_particles_enable,
+       Scmacs_libregnum_particles_enable, 1, 2, 0,
+       doc: /* Turn particle effects on for BUFFER (ON nil turns them off).
+Off is the default and costs nothing: the particle system is not even
+created until something asks for it.  Turning them off drops every
+emitter and every live particle.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  cmacs_libregnum_render_ctx_particles_set_enabled (ctx, !NILP (on));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return NILP (on) ? Qnil : Qt;
+}
+
+DEFUN ("cmacs-libregnum-particles-clear",
+       Fcmacs_libregnum_particles_clear,
+       Scmacs_libregnum_particles_clear, 1, 1, 0,
+       doc: /* Drop BUFFER's particle emitters and every live particle.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (ctx) cmacs_libregnum_render_ctx_particles_clear (ctx);
+  return Qnil;
+}
+
+/* The fade colour is the start colour with alpha zeroed.  Deriving it
+ * rather than taking it as an argument keeps both DEFUNs inside Emacs's
+ * eight-argument ceiling, and a particle that fades to transparent is
+ * what every caller wanted anyway. */
+static guint32
+cmacs_lrg_fade (guint32 rgba)
+{
+  return rgba & 0xFFFFFF00u;
+}
+
+DEFUN ("cmacs-libregnum-particles-emitter",
+       Fcmacs_libregnum_particles_emitter,
+       Scmacs_libregnum_particles_emitter, 4, 8, 0,
+       doc: /* Add a persistent particle emitter to BUFFER at X Y Z.
+RADIUS is the sphere particles are born on, RATE how many per second,
+COLOR a 0xRRGGBBAA integer they start at (they fade to transparent), and
+SIZE their world size.  Returns t when the emitter was added -- nil
+means particles are off, which is not an error.  */)
+  (Lisp_Object buffer, Lisp_Object x, Lisp_Object y, Lisp_Object z,
+   Lisp_Object radius, Lisp_Object rate, Lisp_Object color,
+   Lisp_Object size)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  guint32 c = cmacs_lrg_rgba (color, 0x8FD4FFFFu);
+  gboolean ok = cmacs_libregnum_render_ctx_particles_add_emitter
+                  (ctx,
+                   cmacs_lrg_float (x, 0.0), cmacs_lrg_float (y, 0.0),
+                   cmacs_lrg_float (z, 0.0),
+                   cmacs_lrg_float (radius, 1.0),
+                   cmacs_lrg_float (rate, 6.0),
+                   c, cmacs_lrg_fade (c),
+                   cmacs_lrg_float (size, 0.12),
+                   2.0f, 0.4f);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-particles-burst",
+       Fcmacs_libregnum_particles_burst,
+       Scmacs_libregnum_particles_burst, 4, 8, 0,
+       doc: /* Fire COUNT particles at once from X Y Z in BUFFER.
+COLOR is a 0xRRGGBBAA integer they start at (they fade to transparent);
+SIZE is their world size and SPEED how fast they fly outward.  Returns t
+when anything was emitted.  */)
+  (Lisp_Object buffer, Lisp_Object x, Lisp_Object y, Lisp_Object z,
+   Lisp_Object count, Lisp_Object color, Lisp_Object size,
+   Lisp_Object speed)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  guint n = FIXNUMP (count) ? (guint) max (0, XFIXNUM (count)) : 24u;
+  guint32 c = cmacs_lrg_rgba (color, 0xFFE58CFFu);
+  gboolean ok = cmacs_libregnum_render_ctx_particles_burst
+                  (ctx,
+                   cmacs_lrg_float (x, 0.0), cmacs_lrg_float (y, 0.0),
+                   cmacs_lrg_float (z, 0.0), n,
+                   c, cmacs_lrg_fade (c),
+                   cmacs_lrg_float (size, 0.16),
+                   0.9f,
+                   cmacs_lrg_float (speed, 3.0));
+  CmacsLibregnumView *v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return ok ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-libregnum-particles-count",
+       Fcmacs_libregnum_particles_count,
+       Scmacs_libregnum_particles_count, 1, 1, 0,
+       doc: /* Number of live particles in BUFFER.
+The only externally visible proof that a burst did anything, which is
+what makes the effect testable at all.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return make_fixnum (ctx
+                      ? (EMACS_INT) cmacs_libregnum_render_ctx_particles_count (ctx)
+                      : 0);
+}
+
 DEFUN ("cmacs-libregnum-pan", Fcmacs_libregnum_pan,
        Scmacs_libregnum_pan, 3, 3, 0,
        doc: /* Pan BUFFER's camera by DX and DY, in pixels of drag.
@@ -2794,6 +2925,11 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_label_style);
   defsubr (&Scmacs_libregnum_set_label_decor);
   defsubr (&Scmacs_libregnum_set_selection_style);
+  defsubr (&Scmacs_libregnum_particles_enable);
+  defsubr (&Scmacs_libregnum_particles_clear);
+  defsubr (&Scmacs_libregnum_particles_emitter);
+  defsubr (&Scmacs_libregnum_particles_burst);
+  defsubr (&Scmacs_libregnum_particles_count);
   defsubr (&Scmacs_libregnum_pan);
   defsubr (&Scmacs_libregnum_set_right_drag_pans);
   defsubr (&Scmacs_libregnum_set_wheel_up_zooms_in);

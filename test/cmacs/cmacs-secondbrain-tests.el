@@ -549,6 +549,128 @@ window it was scheduled for has gone."
           (should-not (cmacs-secondbrain--fit-window-now buf)))
       (kill-buffer buf))))
 
+(ert-deftest cmacs-secondbrain-test-hover-groups-index-by-department ()
+  "The hover lookup tables map every node to its department and back.
+
+They are precomputed because `cmacs-secondbrain--on-hover' runs on the
+pointer's hot path -- walking the node list per motion event is how a
+hover effect becomes a stutter."
+  (skip-unless (fboundp 'cmacs-secondbrain--build-groups))
+  (with-temp-buffer
+    (let ((nodes '((:id "a" :ring memory :department "01_projects")
+                   (:id "b" :ring memory :department "01_projects")
+                   (:id "c" :ring memory :department "02_areas")
+                   (:id "centre" :ring skills))))
+      (cmacs-secondbrain--build-groups nodes)
+      (should (equal "memory/01_projects"
+                     (gethash "a" cmacs-secondbrain--group-of)))
+      (should (equal 2 (length (gethash "memory/01_projects"
+                                        cmacs-secondbrain--groups))))
+      (should (equal 1 (length (gethash "memory/02_areas"
+                                        cmacs-secondbrain--groups))))
+      ;; A node with no department joins no group: giving the centre one
+      ;; would make hovering it light up an arbitrary ring.
+      (should-not (gethash "centre" cmacs-secondbrain--group-of)))))
+
+(ert-deftest cmacs-secondbrain-test-hover-lights-the-whole-department ()
+  "Hovering one member flags every member of its department."
+  (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
+  (with-temp-buffer
+    (let ((flagged 'unset))
+      (cl-letf (((symbol-function 'cmacs-secondbrain--flag-ids)
+                 (lambda (ids) (setq flagged ids))))
+        (cmacs-secondbrain--build-groups
+         '((:id "a" :ring memory :department "d")
+           (:id "b" :ring memory :department "d")
+           (:id "z" :ring skills :department "other")))
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
+        (should (equal 2 (length flagged)))
+        (should (member "b" flagged))
+        ;; Leaving every node clears it, rather than leaving a
+        ;; department lit that reads as a search nobody ran.
+        (cmacs-secondbrain--on-hover (current-buffer) -1 nil)
+        (should-not flagged)
+        (should-not cmacs-secondbrain--hovered)))))
+
+(ert-deftest cmacs-secondbrain-test-hover-does-not-clobber-a-search ()
+  "A search survives the pointer moving over the graph.
+
+A search is a deliberate question; a stray pointer movement must not
+silently replace its answer."
+  (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
+  (with-temp-buffer
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'cmacs-secondbrain--flag-ids)
+                 (lambda (_ids) (cl-incf calls))))
+        (cmacs-secondbrain--build-groups
+         '((:id "a" :ring memory :department "d")))
+        (setq cmacs-secondbrain--search "query")
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
+        (should (= 0 calls))
+        (setq cmacs-secondbrain--search nil)
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
+        (should (= 1 calls))))))
+
+(ert-deftest cmacs-secondbrain-test-hover-respects-its-defcustom ()
+  "Hover highlighting can be turned off."
+  (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
+  (with-temp-buffer
+    (let ((calls 0)
+          (cmacs-secondbrain-hover-highlights-group nil))
+      (cl-letf (((symbol-function 'cmacs-secondbrain--flag-ids)
+                 (lambda (_ids) (cl-incf calls))))
+        (cmacs-secondbrain--build-groups
+         '((:id "a" :ring memory :department "d")))
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
+        (should (= 0 calls))))))
+
+(ert-deftest cmacs-secondbrain-test-everything-is-visible-by-default ()
+  "Nothing arrives folded unless asked for.
+
+A map that shows only the folder names is a table of contents you have
+to click through, not a view of the graph."
+  (cmacs-secondbrain-tests--skip)
+  (cmacs-secondbrain-tests--with-sources
+      (list (cmacs-secondbrain-tests--fixture 'a 'memory '("m1" "m2" "m3")))
+    (cmacs-secondbrain-tests--with-view buf
+      (with-current-buffer buf
+        (cmacs-secondbrain-mode)
+        (let ((cmacs-secondbrain-start-collapsed nil))
+          (cmacs-secondbrain-refresh))
+        (should (= (cmacs-secondbrain-node-count buf)
+                   (cmacs-secondbrain-visible-count buf)))
+        (let ((cmacs-secondbrain-start-collapsed t))
+          (cmacs-secondbrain-refresh))
+        (should (< (cmacs-secondbrain-visible-count buf)
+                   (cmacs-secondbrain-node-count buf)))))))
+
+(ert-deftest cmacs-secondbrain-test-particle-burst-emits ()
+  "A burst puts particles on screen; with particles off it does not.
+
+The live count is the only externally visible proof the effect did
+anything -- without it a silently broken emitter looks exactly like a
+working one."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-particles-burst))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-particles-enable buf t)
+    (should (cmacs-libregnum-particles-burst buf 0 0 0 12))
+    (should (>= (cmacs-libregnum-particles-count buf) 1))
+    ;; Off means off: no emitters, no live particles, nothing drawn.
+    (cmacs-libregnum-particles-enable buf nil)
+    (should (= 0 (cmacs-libregnum-particles-count buf)))
+    (should-not (cmacs-libregnum-particles-burst buf 0 0 0 12))))
+
+(ert-deftest cmacs-secondbrain-test-particles-off-is-a-no-op ()
+  "With `cmacs-secondbrain-particles' nil nothing reaches libregnum."
+  (skip-unless (fboundp 'cmacs-secondbrain--burst-at))
+  (with-temp-buffer
+    (let ((cmacs-secondbrain-particles nil) (calls 0))
+      (cl-letf (((symbol-function 'cmacs-libregnum-particles-burst)
+                 (lambda (&rest _) (cl-incf calls) t)))
+        (cmacs-secondbrain--burst-at "x")
+        (should (= 0 calls))))))
+
 (provide 'cmacs-secondbrain-tests)
 
 ;;; cmacs-secondbrain-tests.el ends here

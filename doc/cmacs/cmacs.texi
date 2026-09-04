@@ -6944,6 +6944,33 @@ rather than one per node.  Match, pinned and neighbour also override the
 per-node label policy: highlighting something whose name you then cannot
 read is useless.
 
+@item cmacs-libregnum-particles-enable
+@itemx cmacs-libregnum-particles-clear
+@itemx cmacs-libregnum-particles-emitter
+@itemx cmacs-libregnum-particles-burst
+@itemx cmacs-libregnum-particles-count
+A thin lease on libregnum's @code{LrgParticleSystem}, owned by the render
+context because the update and draw have to happen inside the FBO's 3D
+pass.  Off by default and not even created until something asks, so a
+view that never uses particles pays nothing.  Persistent emitters (a
+sphere of RADIUS emitting RATE particles per second) and one-shot bursts
+to mark an event.  Colours are @code{0xRRGGBBAA} and particles fade to
+transparent from whatever they start at --- which is why there is no
+end-colour argument, and is what keeps both DEFUNs inside Emacs's
+eight-argument ceiling.
+
+Two facts worth knowing before extending this.  @strong{Bursts use a
+separate particle system}: @code{update} auto-emits from every emitter by
+rate while @code{emit_at} emits from the first emitter only, so a burst
+emitter in the ambient system would either be ignored (emitters are
+appended, not prepended) or spray forever.  One emitter at rate 0,
+re-tuned per burst, is the only arrangement where both halves behave.
+And @strong{particles need a redraw clock}: they advance on wall-clock
+time inside the render pass, so a view that only redraws on input shows
+them frozen mid-flight.  @code{-count} exists so the effect is testable
+at all --- the live count is the only externally visible proof a burst
+did anything.
+
 @item cmacs-libregnum-nearest-in-direction
 @itemx cmacs-libregnum-node-onscreen-p
 Screen-space keyboard navigation.  Candidates are scored
