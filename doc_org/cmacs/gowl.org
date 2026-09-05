@@ -570,6 +570,71 @@ animating size as well would make every intermediate size a configure
 round-trip per window.  An interactive drag is exempt entirely, so
 dragging still tracks the pointer exactly.
 
+** The system tray
+:PROPERTIES:
+:CUSTOM_ID: tray
+:END:
+
+Solaar, Syncthing, Steam, Element and a long tail of others put their
+only always-available interface in a tray icon.  A gowl session has
+nowhere to put one --- and neither does a stock GNOME without the
+AppIndicator extension, so those applications have been running with
+their interface simply absent.
+
+The tray is not an X11 thing any more.  It is =StatusNotifierItem=:
+three D-Bus interfaces and no compositor involvement at all.  A
+*watcher* owns a well-known name and keeps the registry, a *host* says
+it is willing to display items, and each *item* is an object on the
+application's own bus name carrying a title, a status, an icon and a
+menu.  Nothing in that requires pixels.
+
+So =cmacs-tray-mode-global= is a real tray that happens to render as a
+buffer.  It works identically under gowl, under GNOME, in a terminal
+and over =emacsclient -nw=, and because cmacs is the watcher as well as
+the host it is *the* tray on the machine rather than a second one
+competing with a shell extension.  =cmacs-gowl-mode= enables it; opt
+out with =cmacs-gowl-tray=.
+
+The name is claimed only when free.  A desktop that already has a tray
+host keeps it, and this says so --- two watchers means applications
+register with whichever answered first and icons scatter between them.
+
+*** Using it
+
+=M-x cmacs-tray= lists the items.  In that buffer:
+
+| Key   | Does                                          |
+|-------+-----------------------------------------------|
+| =RET= / =a= | Activate (what a left click does)       |
+| =s=   | Secondary activate (a middle click)           |
+| =m=   | Open the item's own menu and pick an entry    |
+| =c=   | Ask the item to show its context menu         |
+| =g=   | Re-read everything                            |
+
+The menu comes from DBusMenu, the same protocol a graphical tray uses,
+so what you get is the application's real menu --- Solaar's device
+list, Syncthing's folder actions --- rather than an approximation.
+
+*** What it does not do
+
+Icons.  An item's icon arrives either as a themed name or as raw ARGB
+pixmaps over D-Bus, and a list of applications with their titles and
+statuses is more useful in a buffer than a row of 22-pixel images.  The
+icon *name* is kept on every item, so a graphical renderer could be
+added without touching any of the protocol handling.
+
+*** One thing worth knowing
+
+Reading an item's properties cannot be done inside the registration
+handler.  A property read is a synchronous call back into the
+application, which at that moment is blocked waiting for the reply to
+its own registration --- so neither side proceeds and every read times
+out.  It is not even a reliable failure: whether a given property
+arrives depends on how fast the client returns to its main loop, which
+is why an item looked complete one run and empty the next.  Answering
+first and reading on the next idle turn costs nothing and makes it
+deterministic.
+
 ** The control surface
 :PROPERTIES:
 :CUSTOM_ID: control-surface

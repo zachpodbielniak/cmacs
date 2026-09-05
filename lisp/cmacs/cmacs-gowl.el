@@ -43,6 +43,7 @@
 ;; Autoloaded, but declared so the byte compiler knows the arity of the
 ;; command the Super+Escape bind names.
 (declare-function cmacs-gowl-menu "cmacs-gowl-menu" ())
+(declare-function cmacs-tray-mode-global "cmacs-tray" (&optional arg))
 
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
@@ -243,6 +244,19 @@ podomation's cmacs module all end up at that same D-Bus name.
 Claiming it is conditional: if something already owns the name -- GNOME
 Shell in a GNOME session -- this does nothing and says so.  See
 `cmacs-notify-daemon-mode-global'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-tray t
+  "When non-nil, serve the system tray on `cmacs-gowl-mode' enable.
+
+A gowl session has no tray, so Solaar, Syncthing, Steam, Element and
+every other tray-only application runs with its interface absent.  So
+does a stock GNOME without the AppIndicator extension --- the tray is
+D-Bus, not a compositor feature, and nothing owns the name by default.
+
+Claimed only when free; a desktop that already has a tray host keeps
+it.  See `cmacs-tray-mode-global'."
   :type 'boolean
   :group 'cmacs-gowl)
 
@@ -645,6 +659,12 @@ thread is running and applies configuration."
   (when cmacs-gowl-notification-daemon
     (require 'cmacs-notify-daemon)
     (ignore-errors (cmacs-notify-daemon-mode-global 1)))
+  ;; Serve the system tray.  Same reasoning as the notification daemon:
+  ;; nothing else on the machine does, so tray-only applications are
+  ;; running with no interface at all.
+  (when cmacs-gowl-tray
+    (require 'cmacs-tray)
+    (ignore-errors (cmacs-tray-mode-global 1)))
   ;; Enable the in-process status bar with its dwm-style tag
   ;; indicator.  Opt-out via `cmacs-gowl-bar-show-tags'.
   (when (and cmacs-gowl-bar-show-tags

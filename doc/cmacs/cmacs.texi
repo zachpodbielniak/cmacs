@@ -2824,6 +2824,41 @@ but not the compositor: under @option{--gowl} the compositor runs on
 its own thread, so the desktop keeps compositing with the menu open.
 
 @noindent
+The system tray:
+
+@table @code
+@item cmacs-tray-mode-global
+@vindex cmacs-tray-mode-global
+Own @code{org.kde.StatusNotifierWatcher} and show tray items in Emacs.
+Enabled by @code{cmacs-gowl-mode} unless @code{cmacs-gowl-tray} is nil.
+@item cmacs-tray
+List the tray items.  @kbd{RET} activates, @kbd{s} secondary-activates,
+@kbd{m} opens the item's own DBusMenu, @kbd{c} asks for its context
+menu, @kbd{g} refreshes.
+@item cmacs-tray-serving-p
+Non-nil when this Emacs is the tray watcher.
+@end table
+
+Solaar, Syncthing, Steam and Element put their only always-available
+interface in a tray icon, and a gowl session has nowhere to put one ---
+nor does a stock GNOME without the AppIndicator extension, so those
+applications have been running with no visible interface at all.
+
+The tray is not an X11 thing any more: it is @code{StatusNotifierItem},
+three D-Bus interfaces and no compositor involvement.  cmacs is both the
+watcher and the host, so it is @emph{the} tray on the machine rather
+than a second one competing with a shell extension --- and the name is
+claimed only when free, because two watchers means applications
+register with whichever answered first and icons scatter between them.
+
+The menu comes from DBusMenu, so what you get is the application's real
+menu rather than an approximation.  Icons are deliberately not
+rendered: they arrive as themed names or raw ARGB pixmaps, and a list of
+applications with titles and statuses is more useful in a buffer.  The
+icon name is kept on every item, so a graphical renderer needs no
+protocol work.
+
+@noindent
 Notifications:
 
 @table @code

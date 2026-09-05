@@ -362,6 +362,8 @@ are handed to nmtui, which knows how to ask."
      :items (("Keybind cheatsheet" :call cmacs-gowl-describe-keybinds)
              ("Reload config"      :call gowl-reload-config)
              ("Layout"             :call cmacs-gowl-menu-layout)
+             ("System tray"        :call cmacs-tray
+              :when (fboundp 'cmacs-tray))
              ("Next layout"        :call (lambda () (gowl-cycle-layout)))))
     ("Power"
      :items (("Lock"      :call cmacs-gowl-menu-lock)
