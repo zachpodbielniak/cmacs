@@ -458,6 +458,9 @@ holds focus.
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
+| =Super+s=               | Scrolling layout (niri-style columns)   |
+| =Super+Tab=             | Next layout (=Super+Shift+Tab= previous)|
+| =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
 | =Super+Shift+v=         | Vsplit off (normal left/right split)    |
 | =Super+space=           | Toggle floating                         |
@@ -519,6 +522,53 @@ answers.  Worth knowing only for one reason: while a client holds the
 lock the cursor deliberately does not move, which is indistinguishable
 from a frozen cursor if you do not know a constraint exists.
 =gowl_compositor_pointer_is_locked()= reports it.
+
+** Layouts and motion
+:PROPERTIES:
+:CUSTOM_ID: layouts
+:END:
+
+Four layouts ship --- =tile=, =monocle=, =float= and =scrolling= ---
+plus whatever a loaded module registers.  =gowl-list-layouts= returns
+the live set, =gowl-set-layout= selects by name, =gowl-cycle-layout=
+walks them, and the control surface's =Compositor > Layout= entry is
+built from the same list rather than a hardcoded three.
+
+That last point is not cosmetic.  Until recently the compositor had
+exactly two layouts reachable: =set_layout= mapped every argument that
+was not ="monocle"= onto tile, so a =Float layout= menu entry silently
+did tile, and =gowl-set-layout= reported success either way.  A picker
+built from =gowl-list-layouts= cannot drift from what the compositor
+will accept.
+
+*** The scrolling layout
+
+A niri-style horizontal strip: full-height columns laid left to right,
+the viewport scrolling along them rather than windows being squeezed to
+fit.  =Super+s= selects it; =Super+[= and =Super+]= scroll.
+
+Column width is gowl's =scroll-column-width= (default 0.5, so two
+columns are visible at a time; 1.0 gives one).  The name matches
+Hyprland's =scrolling.column_width=, which is what Omarchy configures,
+so a Hyprland config translates.
+
+Focusing a window scrolls the strip by the smallest amount that reveals
+it, and does nothing when it is already visible --- otherwise every
+focus change would move the world.
+
+*** Motion
+
+Windows slide to new positions rather than snapping, along a
+configurable easing curve.  gowl's =animations=,
+=animation-duration= (180 ms) and =animation-curve= control it; the
+curves are the ones Omarchy configures Hyprland with, by the same names
+in kebab-case.
+
+Only *position* is animated.  A window is configured to its final size
+the moment the layout decides it, and its node slides to meet it ---
+animating size as well would make every intermediate size a configure
+round-trip per window.  An interactive drag is exempt entirely, so
+dragging still tracks the pointer exactly.
 
 ** The control surface
 :PROPERTIES:

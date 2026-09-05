@@ -204,6 +204,9 @@ standalone gowl ships with (see
   Super+i / Super+d   increment / decrement master count
   Super+Shift+Return  zoom (promote to master)
   Super+t / f / m     tile / float / monocle layout
+  Super+s             scrolling layout (niri-style columns)
+  Super+Tab           next layout (Super+Shift+Tab for previous)
+  Super+[ / Super+]   scroll the column strip
   Super+space         toggle floating
   Super+Shift+space   toggle fullscreen
   Super+0             view all tags
@@ -488,6 +491,15 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+t" 'set-layout "tile" "Tile layout")
         (bind "Super+f" 'set-layout "float" "Float layout")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
+        (bind "Super+s" 'set-layout "scrolling" "Scrolling layout")
+        (bind "Super+Tab" 'cycle-layout nil "Next layout")
+        (bind "Super+Shift+Tab" 'cycle-layout "-1" "Previous layout")
+        ;; Scroll the column strip.  Only meaningful in the scrolling
+        ;; layout; harmless everywhere else.
+        (bind "Super+bracketleft" 'custom "(gowl-scroll-by -200)"
+              "Scroll columns left")
+        (bind "Super+bracketright" 'custom "(gowl-scroll-by 200)"
+              "Scroll columns right")
         (bind "Super+v" 'set-split "vsplit" "Vertical split")
         (bind "Super+Shift+v" 'set-split "normal" "Horizontal split")
         (bind "Super+space" 'toggle-float nil "Toggle floating")

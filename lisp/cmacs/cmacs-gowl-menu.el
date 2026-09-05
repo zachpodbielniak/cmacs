@@ -361,9 +361,8 @@ are handed to nmtui, which knows how to ask."
      :when (and (fboundp 'gowl-running-p) (gowl-running-p))
      :items (("Keybind cheatsheet" :call cmacs-gowl-describe-keybinds)
              ("Reload config"      :call gowl-reload-config)
-             ("Tile layout"        :call (lambda () (gowl-set-layout "tile")))
-             ("Float layout"       :call (lambda () (gowl-set-layout "float")))
-             ("Monocle layout"     :call (lambda () (gowl-set-layout "monocle")))))
+             ("Layout"             :call cmacs-gowl-menu-layout)
+             ("Next layout"        :call (lambda () (gowl-cycle-layout)))))
     ("Power"
      :items (("Lock"      :call cmacs-gowl-menu-lock)
              ("Suspend"   :call cmacs-gowl-menu-suspend)
@@ -421,6 +420,26 @@ not offering it."
   "Open nmtui in a terminal."
   (interactive)
   (cmacs-gowl-menu--in-terminal "nmtui"))
+
+(defun cmacs-gowl-menu-layout ()
+  "Choose a compositor layout.
+
+Offers whatever is registered rather than a hardcoded three, so a
+layout module that is loaded appears here by name --- and so the list
+cannot drift from what the compositor will actually accept, which is
+how a `Float layout' entry that silently did tile survived."
+  (interactive)
+  (unless (fboundp 'gowl-list-layouts)
+    (user-error "Gowl is not available"))
+  (let ((layouts (ignore-errors (gowl-list-layouts))))
+    (unless layouts (user-error "No layouts registered (is gowl running?)"))
+    (let ((choice (completing-read
+                   (format "Layout (now %s): "
+                           (or (ignore-errors (gowl-get-layout)) "?"))
+                   layouts nil t)))
+      (if (gowl-set-layout choice)
+          (message "Layout: %s" choice)
+        (user-error "Compositor refused layout %s" choice)))))
 
 (defun cmacs-gowl-menu--monitors ()
   "Show the compositor's monitor list."

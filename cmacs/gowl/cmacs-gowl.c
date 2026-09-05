@@ -4006,56 +4006,80 @@ DEFUN ("gowl-get-layout", Fgowl_get_layout, Sgowl_get_layout, 0, 1, 0,
 
 DEFUN ("gowl-set-layout", Fgowl_set_layout, Sgowl_set_layout, 1, 2, 0,
        doc: /* Set LAYOUT on MONITOR.
-LAYOUT is a string: \"tile\", \"monocle\", or \"float\".
-Uses the module manager's key dispatch with GOWL_ACTION_SET_LAYOUT. */)
+LAYOUT is a layout name: \"tile\", \"monocle\", \"float\",
+\"scrolling\", or any layout a loaded module registered.  See
+`gowl-list-layouts'.  MONITOR is currently ignored; the layout applies
+to the focused monitor.
+
+Returns t when LAYOUT named a registered layout, nil otherwise.
+
+This used to look for a keybind bound to the requested layout and
+dispatch it through the MODULE key path -- which serves module
+keybinds, not compositor actions -- and, when no such keybind existed,
+build an eval expression and immediately free it without running it.
+So it worked only by accident, and reported success either way. */)
   (Lisp_Object layout, Lisp_Object monitor)
 {
-  GowlModuleManager *mgr;
-  GowlConfig *config;
-  GArray *keybinds;
-  guint i;
-
   CHECK_STRING (layout);
   GOWL_CHECK_RUNNING ();
 
-  (void)monitor;  /* layout switch acts on the focused monitor */
+  (void) monitor;  /* the layout applies to the focused monitor */
 
-  /* Walk the config keybinds to find one with SET_LAYOUT action matching
-     the requested layout string, and dispatch that keybind. */
-  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
-  config = gowl_compositor_get_config (cmacs_gowl_compositor);
-  if (mgr == NULL || config == NULL)
-    return Qnil;
-
-  keybinds = gowl_config_get_keybinds (config);
-  for (i = 0; i < keybinds->len; i++)
-    {
-      GowlKeybindEntry *kb = &g_array_index (keybinds, GowlKeybindEntry, i);
-      if (kb->action == (gint)GOWL_ACTION_SET_LAYOUT
-          && kb->arg != NULL
-          && g_strcmp0 (kb->arg, SSDATA (layout)) == 0)
-        {
-          gowl_module_manager_dispatch_key (mgr, kb->modifiers,
-                                             kb->keysym, TRUE);
-          return Qt;
-        }
-    }
-
-  /* If no keybind matched, just eval through the action system. */
-  {
-    gchar *expr = g_strdup_printf (
-      "(gowl-eval-action %d \"%s\")",
-      (int)GOWL_ACTION_SET_LAYOUT, SSDATA (layout));
-    g_free (expr);
-  }
-
-  return Qnil;
+  return gowl_layout_set (cmacs_gowl_compositor, NULL, SSDATA (layout))
+         ? Qt : Qnil;
 }
 
+DEFUN ("gowl-list-layouts", Fgowl_list_layouts, Sgowl_list_layouts,
+       0, 0, 0,
+       doc: /* Return the registered layout names, as a list of strings.
+Includes the built-ins and any layout a loaded module registered --- a
+module layout is selectable by name exactly like a built-in. */)
+  (void)
+{
+  GList *names, *l;
+  Lisp_Object result = Qnil;
 
-/* ══════════════════════════════════════════════════════════════════════
- * KEYBIND MANAGEMENT
- * ══════════════════════════════════════════════════════════════════════ */
+  GOWL_CHECK_RUNNING ();
+
+  names = gowl_layout_list (cmacs_gowl_compositor);
+  for (l = names; l != NULL; l = l->next)
+    result = Fcons (build_string ((const char *) l->data), result);
+  g_list_free (names);
+
+  return Fnreverse (result);
+}
+
+DEFUN ("gowl-cycle-layout", Fgowl_cycle_layout, Sgowl_cycle_layout,
+       0, 1, 0,
+       doc: /* Move to the next layout, returning its name.
+With STEP negative, move backwards.  Wraps at both ends. */)
+  (Lisp_Object step)
+{
+  const gchar *name;
+  gint n = 1;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (FIXNUMP (step))
+    n = (gint) XFIXNUM (step);
+
+  name = gowl_layout_cycle (cmacs_gowl_compositor, NULL, n);
+  return name ? build_string (name) : Qnil;
+}
+
+DEFUN ("gowl-scroll-by", Fgowl_scroll_by, Sgowl_scroll_by, 1, 1, 0,
+       doc: /* Scroll the column strip by DX pixels.
+Only meaningful in the scrolling layout.  Clamping happens in the
+layout, so pushing past either end is harmless. */)
+  (Lisp_Object dx)
+{
+  CHECK_FIXNUM (dx);
+  GOWL_CHECK_RUNNING ();
+
+  gowl_compositor_scroll_by (cmacs_gowl_compositor, NULL,
+                             (gint) XFIXNUM (dx));
+  return Qt;
+}
 
 DEFUN ("gowl-add-keybind", Fgowl_add_keybind, Sgowl_add_keybind,
        2, 4, 0,
@@ -7676,6 +7700,9 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_get_vsplit);
   defsubr (&Sgowl_get_layout);
   defsubr (&Sgowl_set_layout);
+  defsubr (&Sgowl_list_layouts);
+  defsubr (&Sgowl_cycle_layout);
+  defsubr (&Sgowl_scroll_by);
 
   /* Keybinds */
   defsubr (&Sgowl_add_keybind);

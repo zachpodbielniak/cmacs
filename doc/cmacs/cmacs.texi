@@ -2747,6 +2747,41 @@ indistinguishable from a frozen cursor if you do not know a constraint
 exists.
 
 @noindent
+Layouts:
+
+@table @code
+@item gowl-list-layouts
+@vindex gowl-list-layouts
+The registered layout names --- the four built-ins (@code{tile},
+@code{monocle}, @code{float}, @code{scrolling}) plus any a loaded
+module registered.
+@item gowl-set-layout NAME &optional MONITOR
+Select a layout by name.  Returns @code{t} when NAME was registered,
+@code{nil} otherwise.  It used to dispatch through the module key path
+and report success either way, which is why selecting @code{float}
+appeared to work while doing tile.
+@item gowl-cycle-layout &optional STEP
+Move to the next layout, or the previous with a negative STEP.
+@item gowl-get-layout &optional MONITOR
+The current layout's symbol.
+@item gowl-scroll-by DX
+Scroll the scrolling layout's column strip by DX pixels.
+@end table
+
+The scrolling layout is a niri-style horizontal strip: full-height
+columns laid left to right, with the viewport scrolling along them
+rather than windows being squeezed to fit.  @kbd{Super+s} selects it,
+@kbd{Super+[} and @kbd{Super+]} scroll.  Its column width is gowl's
+@code{scroll-column-width}, named after Hyprland's
+@code{scrolling.column_width} so a config translates.
+
+Windows slide to new positions rather than snapping.  Only position is
+animated --- a window is configured to its final size immediately and
+its node slides to meet it, because animating size would make every
+intermediate size a configure round-trip.  An interactive drag is
+exempt, so dragging still tracks the pointer exactly.
+
+@noindent
 The control surface:
 
 @table @code
