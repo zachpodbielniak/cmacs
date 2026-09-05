@@ -47,6 +47,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-edge-count BUFFER= | |
 | =cmacs-secondbrain-visible-count BUFFER= | differs whenever anything is collapsed |
 | =cmacs-secondbrain-node-position BUFFER ID= | =(X Y Z)= |
+| =cmacs-secondbrain-move-node BUFFER ID X Y Z &optional FRAMES= | move a node; nil if unknown. The scene owns the position, so a drag has to come back through here or the next layout pass undoes it |
 
 ** Layout
 | =cmacs-secondbrain-set-layout BUFFER KIND &optional FRAMES= | =rings= / =circle= / =hex= / =force= |
@@ -73,6 +74,11 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-set-projection BUFFER FLAT= | |
 | =cmacs-secondbrain-flat-p BUFFER= | |
 | =cmacs-secondbrain-set-band-guides BUFFER ON= | the ring circles |
+| =cmacs-secondbrain-set-shading BUFFER &optional ON= | specular highlight on each node |
+| =cmacs-secondbrain-select BUFFER ID= | mark ID selected; nil clears |
+| =cmacs-secondbrain-focus BUFFER ID= | ease the camera to frame ID; nil if unknown |
+| =cmacs-secondbrain-set-pinned BUFFER ID &optional ON= | pin or unpin; nil ID means every node |
+| =cmacs-secondbrain-set-link-phase BUFFER RADIANS= | the travelling light's phase along the links |
 | =cmacs-secondbrain-apply-flags BUFFER= | recolour from search flags, in place |
 | =cmacs-secondbrain-set-glow BUFFER ON= | halos; read at build time |
 | =cmacs-secondbrain-set-dressing BUFFER ON= | band lanes + galactic core; read at build time |
@@ -116,6 +122,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-age-fade= | =nil= | fade Memory toward grey by mtime |
 | =cmacs-secondbrain-age-fade-days= | 180.0 | days to full fade |
 | =cmacs-secondbrain-cone-degrees= | 50 | half-angle of the =hjkl= search cone |
+| =cmacs-secondbrain-link-cone-degrees= | 80 | half-angle for =[= / =]=, which walk links rather than screen directions, so it is wider |
 | =cmacs-secondbrain-search-style= | =orderless= | =literal= / =regexp= / =orderless= |
 | =cmacs-secondbrain-keep-selection-visible= | =t= | a spatial step that lands off-screen flies the camera |
 | =cmacs-secondbrain-edge-margin= | 48 | pixels of inset for the off-screen test |
@@ -133,6 +140,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-background-image= | =nil= | wallpaper file for =image= |
 | =cmacs-secondbrain-wallpaper-dirs= | see defcustom | offered by the picker; any path still accepted |
 | =cmacs-secondbrain-hover-highlights-links= | =t= | hover lights the node and what it links to (not its department) |
+| =cmacs-secondbrain-hover-highlights-group= | =nil= | the older behaviour: hover lights the whole department a node belongs to |
 | =cmacs-secondbrain-filter-mode= | =any= | how several active tags combine: =any= or =all= |
 | =cmacs-secondbrain-tags-width= | 0.24 | width of the tag palette pane |
 | =cmacs-secondbrain-particles= | =t= | ambient drift + event bursts |
@@ -318,6 +326,7 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-cli-directory= | =nil= | where a CLI provider runs; nil is a private 0700 per-session directory (a shared =/tmp= would let another user plant a =CLAUDE.md= or =.claude/settings.json= for every summary) |
 | =cmacs-secondbrain-ingest-cli-bare= | =nil= | =claude --bare=; off because it also skips the login |
 | =cmacs-secondbrain-ingest-cli-exclude-dynamic-sections= | =t= | drop cwd/env/memory sections from the CLI system prompt |
+| =cmacs-secondbrain-ingest-cli-disallowed-tools= | =Bash,Read,Edit,...= | tools the CLI is refused while summarising: in =--print= mode it still has its read-only tools and uses them, and a summariser has the material in its prompt already. nil leaves the CLI's defaults |
 | =cmacs-secondbrain-ingest-ai-timeout= | 600 | seconds per model call |
 | =cmacs-secondbrain-ingest-analysis-max-chars= | 16000 | sample seen by the analysis call |
 | =cmacs-secondbrain-ingest-summary-max-chars= | 150000 | sample seen by the summary call |
@@ -346,6 +355,7 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-redaction-text= | ="<redacted>"= | |
 | =cmacs-secondbrain-ingest-redaction-label-rule= | =t= | =<redacted:email>= |
 | =cmacs-secondbrain-ingest-youtube-strategy= | =subtitles-then-audio= | |
+| =cmacs-secondbrain-ingest-youtube-regexp= | watch/shorts/live/embed/youtu.be | what counts as a YouTube URL |
 | =cmacs-secondbrain-ingest-subtitle-languages= | en, en-orig, en.* | |
 | =cmacs-secondbrain-ingest-ytdlp-extra-args= | =nil= | cookies, proxies |
 | =cmacs-secondbrain-ingest-whisper-model= | =nil= | cmacs-whisper's default |
@@ -362,7 +372,7 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-crawl-max-pages= | 50 | |
 | =cmacs-secondbrain-ingest-crawl-wait= | 1.0 | |
 | =cmacs-secondbrain-ingest-crawl-respect-robots= | =t= | |
-| =cmacs-secondbrain-ingest-html-strip-tags= / =-strip-regexp= | | page chrome |
+| =cmacs-secondbrain-ingest-html-strip-tags= / =cmacs-secondbrain-ingest-html-strip-regexp= | | page chrome |
 | =cmacs-secondbrain-ingest-pandoc-args= | =("--wrap=none")= | |
 | =cmacs-secondbrain-ingest-table-max-rows= | 200 | |
 | =cmacs-secondbrain-ingest-programs= | | program → executable |

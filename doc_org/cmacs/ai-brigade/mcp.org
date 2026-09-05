@@ -169,6 +169,7 @@ than the account the first agent gives of itself. See [[file:mailbox.org][Mailbo
 (cmacs-brigade-allowlist-expand "weather")                               ;; => "weather_now"
 (cmacs-brigade-scope-open "weather_now,project_read_file")               ;; => "/run/user/1000/cmacs/brigade/mcp-12345-….sock"
 (cmacs-brigade-scope-list)                                               ;; => (("/run/user/…sock" . "weather_now,project_read_file"))
+(cmacs-brigade-scope-close "/run/user/1000/cmacs/brigade/mcp-12345-….sock") ;; => t
 #+end_src
 
 Verified end to end against a live cmacs: with an allowlist of two tools the

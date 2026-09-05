@@ -1342,6 +1342,8 @@ From Lisp, =cmacs-ai-chat-open= takes it as a third argument.
 
 An HTTP provider has no subprocess to place anywhere, so the directory only affects the buffer; =cmacs-ai-client-set-working-directory= returns nil there to say so.
 
+=cmacs-ai-client-set-cli-option HANDLE NAME VALUE= sets any GObject property the CLI client declares, by its string name — the escape hatch for a flag cmacs has no dedicated setter for. The ingester uses it for =bare=, =exclude-dynamic-system-prompt-sections= and =disallowed-tools=. It returns nil on an HTTP client, which has no CLI to configure.
+
 * Bootstrapping from the project
 
 When a chat is opened in a directory and that directory holds a =CLAUDE.md= or an =AGENTS.md=, its contents are folded into the session's system prompt — so an HTTP model arrives already knowing the project's standing instructions, the way a CLI agent does.

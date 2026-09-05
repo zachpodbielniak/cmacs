@@ -7060,6 +7060,31 @@ without it the distance comes from the clicked node's own size, which
 says nothing about the scale of the scene around it, so a small node in
 a large graph is framed close enough to fill the view with one dot.
 
+@item cmacs-libregnum-set-glow-breath
+Let the glow halos breathe by AMOUNT, 0.0 to 1.0.  Each halo's intensity
+drifts on its own period and phase, so a field of them never pulses in
+unison --- which is the difference between a scene that looks alive and
+one that looks like it is blinking at you.
+
+@item cmacs-libregnum-set-starfield
+@itemx cmacs-libregnum-starfield-count
+COUNT stars on a shell RADIUS world units about the origin, generated
+once from SEED.  Deliberately not the @code{starfield} @emph{background}
+kind: that one is a picture behind the scene and does not move with the
+camera, whereas a shell that is part of the world @emph{parallaxes}
+under orbit, which is most of what tells the eye the scene has depth at
+all.  Zero COUNT clears it.
+
+@item cmacs-libregnum-orbit-continuous-p
+Whether the camera tumbles through the poles rather than stopping short
+of them.
+
+@item cmacs-libregnum-get-node-flags
+The read half of @code{cmacs-libregnum-set-node-flags}: bit 0 a search
+match, 1 de-emphasised, 2 pinned, 3 a neighbour of the selection, 4 the
+keyboard cursor.  Mostly for tests, since a flag that only ever goes in
+cannot be asserted on.
+
 @item cmacs-libregnum-particles-enable
 @itemx cmacs-libregnum-particles-clear
 @itemx cmacs-libregnum-particles-emitter

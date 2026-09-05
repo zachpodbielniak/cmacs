@@ -32,6 +32,7 @@ when both are enabled (libreclaw's sub-make is redirected via
 * CMacs AI Coding Agent::
 * CMacs AI Tool Use::
 * CMacs AI Image Generation::
+* CMacs AI Embeddings::
 * CMacs AI Org Blocks::
 * CMacs AI GObject Introspection::
 * CMacs AI MCP Tools::
@@ -66,6 +67,10 @@ The @command{opencode} CLI.
 @item grok-build
 xAI's @command{grok} CLI in headless mode.  Reads @env{GROK_PATH} to
 locate the binary.
+@item antigravity
+The @command{agy} CLI.
+@item cursor
+The @command{cursor-agent} CLI.
 @end table
 
 @code{grok} and @code{grok-build} are two different backends, not two
@@ -1102,6 +1107,125 @@ The async callback receives
 or @code{(:error MSG)}.  @code{BYTES} is a unibyte string, already
 materialised whether the provider returned inline data or a URL --- so a
 caller can write it straight to a file without knowing which.
+
+@code{cmacs-ai-client-set-cli-option} @var{handle} @var{name}
+@var{value} sets any GObject property the CLI client declares, by its
+string name --- the escape hatch for a flag cmacs has no dedicated setter
+for.  The second brain's ingester uses it for @code{bare},
+@code{exclude-dynamic-system-prompt-sections} and
+@code{disallowed-tools}.  It returns @code{nil} on an HTTP client, which
+has no CLI to configure.
+
+@node CMacs AI Embeddings
+@section Embeddings
+
+@cindex embeddings
+@cindex semantic search
+
+An embedding turns text into a vector whose @emph{direction} carries
+meaning: two passages that say the same thing point the same way,
+whatever words they used.  That is what makes semantic search possible,
+and it is the machinery under the brigade memory index.
+
+ai-glib models this as an interface, @code{AiEmbedder}, rather than a
+method on every provider --- most providers do not serve embeddings at
+all.  Two do: @code{ollama} (local, no key) and @code{openai}.  Asking
+any other provider signals rather than failing later inside a request.
+
+@subsection Getting vectors
+
+@lisp
+(cmacs-ai-embed "hello world")       ; => [0.013 -0.041 ...], 768 floats
+(cmacs-ai-embed '("alpha" "beta"))   ; => (VECTOR VECTOR), in order
+(cmacs-ai-embed "text" 'openai "text-embedding-3-small")
+@end lisp
+
+A string returns one vector; a list returns a list of vectors.  The
+default provider is @code{ollama} and the default model its
+@code{nomic-embed-text:v1.5} (768 dimensions).
+
+@code{cmacs-ai-embed} @strong{blocks}, which is right for a single query
+and wrong for a corpus.  For anything larger use
+@code{cmacs-ai-embed-async}:
+
+@lisp
+(cmacs-ai-embed-async
+ '("chunk one" "chunk two")
+ (lambda (reply)
+   (pcase reply
+     (`(:ok ,vectors)  (use vectors))
+     (`(:cancelled)    nil)
+     (`(:error ,msg)   (message "embed failed: %s" msg)))))
+@end lisp
+
+It returns an integer request id, and @code{cmacs-ai-embed-cancel} stops
+a request still in flight --- which is how a half-finished index build is
+abandoned.  A cancelled request still calls back exactly once, with
+@code{(:cancelled)}; that is deliberate, so a caller's bookkeeping always
+gets closed out.
+
+Note that an Emacs thread would @emph{not} have made the blocking call
+safe: a thread parked in a synchronous call still holds the global Lisp
+lock, so the main thread cannot run either.  What actually yields is the
+GLib main loop cmacs already pumps, which is where the reply is
+delivered.
+
+@subsection Comparing vectors
+
+@code{cmacs-ai-embed-cosine} scores two vectors in [-1, 1] --- 1 for the
+same direction, 0 for unrelated, -1 for opposite.  It normalises
+internally, so unscaled vectors compare correctly:
+
+@lisp
+(cmacs-ai-embed-cosine (cmacs-ai-embed "the cat sat on the mat")
+                       (cmacs-ai-embed "a feline rested on the rug"))
+;; => 0.698   -- and 0.251 against "quarterly financial report"
+@end lisp
+
+@subsection Which model
+
+@code{cmacs-ai-embed-models} returns what a provider publishes, and
+@code{cmacs-ai-embed-default-model} names the one used when you pass
+@code{nil}:
+
+@multitable @columnfractions .35 .15 .50
+@headitem Model @tab Dimensions @tab Notes
+@item @code{nomic-embed-text:v1.5} @tab 768 @tab the default; good all-round
+@item @code{mxbai-embed-large} @tab 1024 @tab larger and slower
+@item @code{all-minilm} @tab 384 @tab small, quick, weaker
+@end multitable
+
+@code{:dimensions} is the number an index is built for.  Changing the
+model almost always changes it, which invalidates every vector already
+stored --- the brigade manifest records the model and its digest
+precisely so a mismatch is caught instead of silently returning nonsense.
+
+@subsection Brigade memory backend
+
+@code{cmacs-brigade-memory} embeds through this by default.
+@code{cmacs-brigade-embed-backend} chooses:
+
+@table @code
+@item ai-glib
+The default.  @code{cmacs-ai-embed-async}, in process.
+@item curl
+Posts JSON with the @command{curl} binary, which is what this did before
+ai-glib served embeddings.
+@end table
+
+They are interchangeable: both speak @code{/api/embed} to the same
+model, so vectors from one are valid in an index built by the other and
+switching requires no rebuild (the round trip through JSON moves the last
+bit or two of an fp32 value; a regression test asserts the two agree to
+better than 0.9999 cosine).  @code{ai-glib} is preferred because it drops
+the curl dependency and the temporary request files, reports real errors
+instead of an exit status, and can be cancelled.  A build without
+@option{--with-cmacs-ai} falls back to @code{curl} automatically.
+
+@code{cmacs-brigade-embed-endpoint} keeps working under either: the
+ai-glib path pushes it into ai-glib's own config before each call, since
+ai-glib otherwise reads a base URL that knows nothing about this
+package's setting.
 
 @node CMacs AI Org Blocks
 @section Org Babel Integration
