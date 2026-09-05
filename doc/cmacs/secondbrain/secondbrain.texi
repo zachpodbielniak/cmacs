@@ -91,8 +91,11 @@ notes gets a proportionally bigger arc than one of four and the two stay
 legible side by side.
 
 @strong{Hover to interrogate.}  Moving the pointer over any node lights
-up every other node in its department and dims the rest --- no click, no
-state change, no way to get lost.  It is suppressed while a search is
+up that node and the nodes it links to, and dims the rest --- no click,
+no state change, no way to get lost.  Its @emph{links}, not its
+department: a department is a wedge you can already see, and since every
+flagged node draws its label, lighting a department of fourteen hundred
+put fourteen hundred labels over the map.  It is suppressed while a search is
 active, because a search is a deliberate question and a stray pointer
 movement must not silently answer a different one.  @kbd{H} toggles it.
 
@@ -149,7 +152,7 @@ leaving the buffer.
 @item @kbd{b} @tab pick the background (or a wallpaper image)
 @item @kbd{G} @tab node glow on/off
 @item @kbd{P} @tab particle effects on/off
-@item @kbd{H} @tab hover department-highlighting on/off
+@item @kbd{H} @tab hover link-highlighting on/off
 @item @kbd{g} @tab re-read every source
 @item @kbd{q} @tab quit
 @end multitable
@@ -246,7 +249,7 @@ a single function precisely so that no individual command can forget.
 @item left drag @tab orbit (3D), continuously through the poles; no effect in the locked 2D view
 @item right drag @tab pan
 @item wheel @tab zoom, wheel-up towards the scene
-@item hover anything @tab light up its whole department, dim the rest
+@item hover anything @tab light up it and what it links to, dim the rest
 @item right click @tab the context menu for that kind, AI section last
 @end multitable
 
@@ -1004,7 +1007,7 @@ defaults are what @kbd{M-x cmacs-secondbrain} gives you.
       cmacs-secondbrain-age-fade-days 180.0
       cmacs-secondbrain-node-shading t
       cmacs-secondbrain-drag-nodes t
-      cmacs-secondbrain-hover-highlights-group t
+      cmacs-secondbrain-hover-highlights-links t
       cmacs-secondbrain-fly-context 0.4)
 
 ;; Which rings get populated.  `t' means every registered source; a

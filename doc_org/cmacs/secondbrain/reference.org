@@ -130,7 +130,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-background-colors= | =(#x2A3A6BFF . #x05050AFF)= | top . bottom, 0xRRGGBBAA |
 | =cmacs-secondbrain-background-image= | =nil= | wallpaper file for =image= |
 | =cmacs-secondbrain-wallpaper-dirs= | see defcustom | offered by the picker; any path still accepted |
-| =cmacs-secondbrain-hover-highlights-group= | =t= | hover lights the whole department |
+| =cmacs-secondbrain-hover-highlights-links= | =t= | hover lights the node and what it links to (not its department) |
 | =cmacs-secondbrain-particles= | =t= | ambient drift + event bursts |
 | =cmacs-secondbrain-particle-fps= | 24 | standing redraw clock while particles are on |
 | =cmacs-secondbrain-label-size= | 15 | base label height, at the reference viewport |
@@ -189,7 +189,7 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | Double click a node | select it and fly the camera to it |
 | Left drag a node | move it; it pins where you drop it |
 | (no click moves the camera) | =f= flies deliberately, keeping context |
-| Hover anything | light up its whole department, dim the rest |
+| Hover anything | light up it and what it links to, dim the rest |
 | Left drag | orbit (3D), continuously through the poles; no effect in the locked 2D view |
 | Right drag | pan |
 | Wheel | zoom, wheel-up towards the scene |

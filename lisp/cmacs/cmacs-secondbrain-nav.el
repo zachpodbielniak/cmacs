@@ -820,7 +820,7 @@ diagonal streak, which reads as a crooked picture rather than as depth."
       (princ "  b          background (wallpaper or screensaver)\n")
       (princ "  G          node glow\n")
       (princ "  P          particles\n")
-      (princ "  H          hover department-highlighting\n")
+      (princ "  H          hover: light what the node links to\n")
       (princ "  g          re-read every source\n")
       (princ "  q          quit\n\n")
 

@@ -348,13 +348,19 @@ which is the scale at which \"fly to this\" is a useful answer."
   :type 'number
   :group 'cmacs-secondbrain)
 
-(defcustom cmacs-secondbrain-hover-highlights-group t
-  "Whether hovering a node lights up everything in its department.
+(define-obsolete-variable-alias 'cmacs-secondbrain-hover-highlights-group
+  'cmacs-secondbrain-hover-highlights-links "cmacs 2026-09")
 
-This is the cheapest way to answer \"what is in here?\" -- no click, no
-state change, just move the pointer.  It is suppressed while a search is
-active, because a search is a deliberate question and a stray pointer
-movement must not silently answer a different one."
+(defcustom cmacs-secondbrain-hover-highlights-links t
+  "Whether hovering a node lights up the nodes it is linked to.
+
+This is the cheapest way to answer \"what does this connect to?\" -- no
+click, no state change, just move the pointer.  Only the LINKED nodes
+light, never the whole department: hovering one note in a department of
+fourteen hundred used to flag all fourteen hundred, and with a label per
+flagged node the map disappeared under its own names.  It is suppressed
+while a search is active, because a search is a deliberate question and
+a stray pointer movement must not silently answer a different one."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
@@ -799,6 +805,12 @@ type."
 
 ;;;; Animation --------------------------------------------------------
 
+(defvar-local cmacs-secondbrain--intro nil
+  "The fly-in in progress: (FROM TO TARGET FOV T0 SECS), or nil.
+FROM and TO are camera positions; the camera eases from FROM to TO
+while aiming at TARGET.  Defined here, ahead of the clock code that
+clears it; the fly-in itself lives further down.")
+
 (defun cmacs-secondbrain--stop-animation (&optional hard)
   "Cancel any in-flight transition timer for the current buffer.
 
@@ -918,7 +930,7 @@ itself -- and drops the libregnum animation clock with it."
         (cmacs-secondbrain-collapse-all buf nil 0))
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
       (cmacs-secondbrain-fit buf)
-      (cmacs-secondbrain--build-groups nodes)
+      (cmacs-secondbrain--build-groups nodes edges)
       (setq cmacs-secondbrain--hovered nil)
       ;; After the scene, always: icons and emitters both key on world
       ;; positions and live in lists cleared with the drawables.
@@ -1091,11 +1103,6 @@ nothing else -- no pane refresh, no message, no re-layout."
 
 ;;;; The opening fly-in ------------------------------------------------
 
-(defvar-local cmacs-secondbrain--intro nil
-  "The fly-in in progress: (FROM TO TARGET FOV T0 SECS), or nil.
-FROM and TO are camera positions; the camera eases from FROM to TO
-while aiming at TARGET.")
-
 (defun cmacs-secondbrain--intro-start (&optional buf)
   "Start the opening fly-in for BUF from its currently fitted camera.
 
@@ -1209,8 +1216,22 @@ shares a timer with the tween and ends with it."
 
 ;;;; Hover ------------------------------------------------------------
 
-(defun cmacs-secondbrain--build-groups (nodes)
-  "Index NODES by department into the hover lookup tables."
+(defvar-local cmacs-secondbrain--links nil
+  "Hash: node id -> list of the ids it shares an edge with, either way.")
+
+(defun cmacs-secondbrain--build-groups (nodes &optional edges)
+  "Index NODES by department, and EDGES by endpoint, for hover.
+
+Both tables are built once per graph so the hover handler -- which runs
+on the pointer\='s hot path -- does two lookups and no walk."
+  (setq cmacs-secondbrain--links (make-hash-table :test 'equal))
+  (dolist (e (append edges nil))
+    (let ((from (plist-get e :from)) (to (plist-get e :to)))
+      (when (and from to (not (equal from to)))
+        (puthash from (cons to (gethash from cmacs-secondbrain--links))
+                 cmacs-secondbrain--links)
+        (puthash to (cons from (gethash to cmacs-secondbrain--links))
+                 cmacs-secondbrain--links))))
   (setq cmacs-secondbrain--groups (make-hash-table :test 'equal)
         cmacs-secondbrain--group-of (make-hash-table :test 'equal))
   (dolist (n nodes)
@@ -1226,23 +1247,29 @@ shares a timer with the tween and ends with it."
                  cmacs-secondbrain--groups)))))
 
 (defun cmacs-secondbrain--on-hover (buffer _id path)
-  "Light up the department under the pointer in BUFFER.
+  "Light up the node under the pointer and what it links to, in BUFFER.
 
-PATH is the node's id string, or nil when the pointer left every node.
-Runs on the cmacs GMainContext on the pointer's hot path, so it does
-exactly two hash lookups and one bulk flag call -- no node-list walk, no
-consing per node, and nothing that can prompt."
-  (when (and (buffer-live-p buffer) cmacs-secondbrain-hover-highlights-group)
+PATH is the node\='s id string, or nil when the pointer left every node.
+Runs on the cmacs GMainContext on the pointer\='s hot path, so it does
+one hash lookup and one bulk flag call -- no node-list walk, no consing
+per node beyond the neighbour list itself, and nothing that can prompt.
+
+Links, not the department.  A department is a wedge you can already
+see; what you cannot see is which of a thousand edges belong to the one
+node under the pointer.  And every flagged node draws its label, so
+flagging a department of fourteen hundred put fourteen hundred labels
+over the map."
+  (when (and (buffer-live-p buffer) cmacs-secondbrain-hover-highlights-links)
     (with-current-buffer buffer
       ;; A search is a deliberate question; a stray pointer movement must
       ;; not silently replace its answer.
       (unless cmacs-secondbrain--search
-        (let ((key (and path cmacs-secondbrain--group-of
-                        (gethash path cmacs-secondbrain--group-of))))
-          (unless (equal key cmacs-secondbrain--hovered)
-            (setq cmacs-secondbrain--hovered key)
-            (cmacs-secondbrain--flag-ids
-             (and key (gethash key cmacs-secondbrain--groups)))))))))
+        (unless (equal path cmacs-secondbrain--hovered)
+          (setq cmacs-secondbrain--hovered path)
+          (cmacs-secondbrain--flag-ids
+           (and path
+                (cons path (and cmacs-secondbrain--links
+                                (gethash path cmacs-secondbrain--links))))))))))
 
 ;;;; Particles --------------------------------------------------------
 
@@ -1496,17 +1523,17 @@ sources."
   "q" #'quit-window)
 
 (defun cmacs-secondbrain-toggle-hover-highlight ()
-  "Turn hover department-highlighting on or off."
+  "Turn hover link-highlighting on or off."
   (interactive)
-  (setq-local cmacs-secondbrain-hover-highlights-group
-              (not cmacs-secondbrain-hover-highlights-group))
-  (unless cmacs-secondbrain-hover-highlights-group
+  (setq-local cmacs-secondbrain-hover-highlights-links
+              (not cmacs-secondbrain-hover-highlights-links))
+  (unless cmacs-secondbrain-hover-highlights-links
     ;; Leaving the last hovered department lit would be worse than not
     ;; highlighting at all: it reads as a search nobody ran.
     (setq cmacs-secondbrain--hovered nil)
     (unless cmacs-secondbrain--search (cmacs-secondbrain--flag-ids nil)))
-  (message "Hover highlight %s"
-           (if cmacs-secondbrain-hover-highlights-group "on" "off")))
+  (message "Hover link-highlight %s"
+           (if cmacs-secondbrain-hover-highlights-links "on" "off")))
 
 (defun cmacs-secondbrain-fit-cmd ()
   "Frame the whole graph."

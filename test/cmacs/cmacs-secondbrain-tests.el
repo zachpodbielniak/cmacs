@@ -572,8 +572,12 @@ hover effect becomes a stutter."
       ;; would make hovering it light up an arbitrary ring.
       (should-not (gethash "centre" cmacs-secondbrain--group-of)))))
 
-(ert-deftest cmacs-secondbrain-test-hover-lights-the-whole-department ()
-  "Hovering one member flags every member of its department."
+(ert-deftest cmacs-secondbrain-test-hover-lights-its-links-not-its-department ()
+  "Hovering a node flags it and its linked nodes -- and nothing else.
+
+Not the department.  Every flagged node draws its label, so flagging a
+department of fourteen hundred put fourteen hundred labels over the map
+and the thing under the pointer was the one thing you could not read."
   (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
   (with-temp-buffer
     (let ((flagged 'unset))
@@ -582,15 +586,21 @@ hover effect becomes a stutter."
         (cmacs-secondbrain--build-groups
          '((:id "a" :ring memory :department "d")
            (:id "b" :ring memory :department "d")
-           (:id "z" :ring skills :department "other")))
+           (:id "c" :ring memory :department "d")
+           (:id "z" :ring skills :department "other"))
+         '((:from "a" :to "z") (:from "b" :to "a")))
         (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
-        (should (equal 2 (length flagged)))
-        (should (member "b" flagged))
+        ;; Itself, plus both ends of its links whichever way they were
+        ;; stored; NOT "c", which merely shares its department.
+        (should (equal (sort (copy-sequence flagged) #'string<) '("a" "b" "z")))
         ;; Leaving every node clears it, rather than leaving a
-        ;; department lit that reads as a search nobody ran.
+        ;; neighbourhood lit that reads as a search nobody ran.
         (cmacs-secondbrain--on-hover (current-buffer) -1 nil)
         (should-not flagged)
-        (should-not cmacs-secondbrain--hovered)))))
+        (should-not cmacs-secondbrain--hovered)
+        ;; An unlinked node lights only itself.
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "c")
+        (should (equal flagged '("c")))))))
 
 (ert-deftest cmacs-secondbrain-test-hover-does-not-clobber-a-search ()
   "A search survives the pointer moving over the graph.
@@ -616,7 +626,7 @@ silently replace its answer."
   (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
   (with-temp-buffer
     (let ((calls 0)
-          (cmacs-secondbrain-hover-highlights-group nil))
+          (cmacs-secondbrain-hover-highlights-links nil))
       (cl-letf (((symbol-function 'cmacs-secondbrain--flag-ids)
                  (lambda (_ids) (cl-incf calls))))
         (cmacs-secondbrain--build-groups
@@ -1244,7 +1254,7 @@ grepping."
                    cmacs-secondbrain-auto-rotate
                    cmacs-secondbrain-rotate-speed
                    cmacs-secondbrain-drag-nodes
-                   cmacs-secondbrain-hover-highlights-group
+                   cmacs-secondbrain-hover-highlights-links
                    cmacs-secondbrain-fly-context
                    cmacs-secondbrain-start-collapsed
                    cmacs-secondbrain-label-size

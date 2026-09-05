@@ -48,7 +48,7 @@ The map opens to the rings and their department hubs, each labelled with what it
 
 Once open, a department's members occupy a contiguous *wedge* of the ring sized by how many there are, so a department of four thousand notes gets a proportionally bigger arc than one of four and the two stay legible side by side.
 
-*Hover to interrogate.* Moving the pointer over any node lights up every other node in its department and dims the rest — no click, no state change, no way to get lost. It is suppressed while a search is active, because a search is a deliberate question and a stray pointer movement must not silently answer a different one. =H= toggles it.
+*Hover to interrogate.* Moving the pointer over any node lights up that node and the nodes it links to, and dims the rest — no click, no state change, no way to get lost. Its /links/, not its department: a department is a wedge you can already see, and since every flagged node draws its label, lighting a department of fourteen hundred put fourteen hundred labels over the map. It is suppressed while a search is active, because a search is a deliberate question and a stray pointer movement must not silently answer a different one. =H= toggles it.
 
 ** Keys
 
@@ -107,7 +107,7 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =b= | pick the background (or a wallpaper image) |
 | =G= | node glow on/off |
 | =P= | particle effects on/off |
-| =H= | hover department-highlighting on/off |
+| =H= | hover link-highlighting on/off |
 | =g= | re-read every source |
 | =q= | quit |
 
@@ -511,7 +511,7 @@ get on =M-x cmacs-secondbrain=.
       cmacs-secondbrain-age-fade-days 180.0
       cmacs-secondbrain-node-shading t
       cmacs-secondbrain-drag-nodes t
-      cmacs-secondbrain-hover-highlights-group t
+      cmacs-secondbrain-hover-highlights-links t
       cmacs-secondbrain-fly-context 0.4)
 
 ;; Which rings get populated.  `t' means every registered source; a
