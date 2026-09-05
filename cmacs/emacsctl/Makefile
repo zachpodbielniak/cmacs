@@ -37,17 +37,14 @@ PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
 # copy links into this binary, so the static-library dedup concern
 # from src/Makefile.in does not apply here.
 YAMLGLIB_DIR ?= ../../deps/bacon/deps/yaml-glib
-YAMLGLIB_SRCS := \
-        $(YAMLGLIB_DIR)/src/yaml-builder.c \
-        $(YAMLGLIB_DIR)/src/yaml-document.c \
-        $(YAMLGLIB_DIR)/src/yaml-generator.c \
-        $(YAMLGLIB_DIR)/src/yaml-gobject.c \
-        $(YAMLGLIB_DIR)/src/yaml-mapping.c \
-        $(YAMLGLIB_DIR)/src/yaml-node.c \
-        $(YAMLGLIB_DIR)/src/yaml-parser.c \
-        $(YAMLGLIB_DIR)/src/yaml-schema.c \
-        $(YAMLGLIB_DIR)/src/yaml-sequence.c \
-        $(YAMLGLIB_DIR)/src/yaml-serializable.c
+
+# Wildcarded rather than hand-listed, for the same reason bacon's own
+# Makefile wildcards it: the explicit list went stale every time the
+# submodule was bumped, and a new upstream file surfaced only as an
+# undefined-reference link failure at the very end of a full build
+# (yaml-writer.c / yaml-comments.c did exactly that).  Everything under
+# yaml-glib's src/ is library code, so there is nothing to filter out.
+YAMLGLIB_SRCS := $(wildcard $(YAMLGLIB_DIR)/src/*.c)
 
 # Optional GNU readline for REPL line editing (fgets fallback).
 HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)
@@ -67,7 +64,7 @@ OUTDIR   ?= .
 
 all: $(OUTDIR)/emacsctl $(OUTDIR)/cmacsctl
 
-$(OUTDIR)/emacsctl: $(SRCS) $(HDRS)
+$(OUTDIR)/emacsctl: $(SRCS) $(HDRS) $(YAMLGLIB_SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(YAMLGLIB_SRCS) $(LDFLAGS)
 
 # cmacsctl is the same binary by another name (argv[0]-insensitive).
