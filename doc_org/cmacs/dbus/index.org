@@ -55,12 +55,14 @@ the two must stay in sync (=tools/sync-docs.sh=).
 |       | signal-emit infrastructure, .service activation, back-compat     |             |
 |     2 | Per-resource objects: Buffer / Frame / Window / Process,         | planned     |
 |       | =PropertiesChanged= driven by Lisp hooks                         |             |
-|     3 | Typed parity with cmacsgi: 80+ methods across                    | planned     |
-|       | =org.cmacs.Editor1.Buffer/.Search/.VC/.Pkg/.Monitor/...=         |             |
-|     4 | Desktop integration: =org.freedesktop.Application=,              | planned     |
-|       | =org.gtk.Actions=, =SearchProvider2=, =Notifications=,           |             |
-|       | =xdg-desktop-portal= consumer                                    |             |
-|     5 | Creative extensions: =Login1.Inhibit=, MPRIS-buffer-nav,         | planned     |
+|     3 | Typed parity with cmacsgi: 80+ methods across                    | mostly done |
+|       | =.Search/.VC/.Package/.Monitor/.Compositor/...= (~276 methods)   |             |
+|       | =.Bar=, =.Ripgrep=, =.Print= outstanding                          |             |
+|     4 | Desktop integration: =org.freedesktop.Application=,              | mostly done |
+|       | =org.gtk.Actions=, =SearchProvider2= all registered;             |             |
+|       | =Notifications= is *served* by cmacs (see below);                |             |
+|       | =xdg-desktop-portal= consumer outstanding                        |             |
+|     5 | Creative extensions: MPRIS registered; =Login1.Inhibit=,         | partial     |
 |       | GlobalShortcuts portal, BufferWatch, podomation events,          |             |
 |       | GI-as-D-Bus bridge                                               |             |
 
@@ -68,3 +70,10 @@ The unified events endpoint ([[file:events.org][events.org]],
 =org.cmacs.Editor1.Events=) has shipped: a generic =Event= firehose plus
 typed named signals for file / buffer / project / window / frame / editor
 activity, with opt-in text and subsystem feeds.
+
+=org.freedesktop.Notifications= is the one desktop-integration item
+where cmacs is the *server* rather than a client:
+=cmacs-notify-daemon-mode-global= claims the name when it is free and
+implements the freedesktop specification, so a gowl session has a
+notification daemon at all.  See the Notifications section of
+[[file:../gowl.org][gowl.org]].

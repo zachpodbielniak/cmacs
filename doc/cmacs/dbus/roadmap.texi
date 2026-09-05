@@ -26,7 +26,9 @@ File reorg: 838-line monolith split across 8 files in
 @file{cmacs/dbus/}
 @item
 Back-compat: @code{org.cmacs.Editor1} (6 core + 18 gowl methods)
-preserved bit-for-bit
+preserved bit-for-bit at the time.  The gowl half has since moved to
+@code{org.cmacs.Editor1.Compositor} and @code{.Monitor} and lost its
+@code{Gowl} prefix; the 6 core methods are still there.
 @item
 12 ERT tests
 @end itemize
@@ -57,42 +59,56 @@ hooks.  Per-buffer methods include @code{GetContent () -> h} (memfd
 file-descriptor pass), @code{Save ()}, @code{Kill ()},
 @code{Revert ()}.
 
-@subsection Phase 3 --- cmacsgi parity (planned)
+@subsection Phase 3 --- cmacsgi parity (mostly shipped)
 
 Goal: every cmacsgi command reachable as a typed D-Bus method.
 
-One file per interface, mirroring @file{cmacs/api/cmacs-api-cmd-*.c}:
-@code{Buffer}, @code{File}, @code{Text}, @code{Nav}, @code{Search},
-@code{Window}, @code{Config}, @code{Project}, @code{Bookmark},
-@code{Clipboard}, @code{VC}, @code{Package}, @code{Monitor} (extracts
-gowl), @code{Bar} (extracts gowl), @code{Ripgrep},
-@code{Cintrospect}, @code{Cpatch}, @code{Print}.
+One file per interface, mirroring @file{cmacs/api/cmacs-api-cmd-*.c}.
+Thirteen of the eighteen planned here have shipped: @code{File},
+@code{Text}, @code{Nav}, @code{Search}, @code{Config},
+@code{Project}, @code{Bookmark}, @code{Clipboard}, @code{VC},
+@code{Package}, @code{Monitor}, @code{Cintrospect} and @code{Cpatch}.
+@code{Buffer} and @code{Window} shipped under the names
+@code{BufferManager} and @code{WindowManager}.  @code{Bar},
+@code{Ripgrep} and @code{Print} are still outstanding --- grep is
+covered by @code{.Project} in the meantime.
+
+The compositor extraction happened too, as
+@code{org.cmacs.Editor1.Compositor}, replacing the @code{Gowl*}
+methods that used to sit on @code{org.cmacs.Editor1}; and a couple of
+dozen interfaces arrived that were never planned here at all
+(@code{.Ai}, @code{.Brigade}, @code{.SecondBrain},
+@code{.DbExplorer}, @code{.Gsurf}, @code{.Calc}, @code{.Lrg} and
+more).  Introspect a running instance for the current list.
 
 Long-running operations (compile, grep, rg, package install) get
 @code{Request} handles modeled on
 @code{org.freedesktop.portal.Request}.
 
-@subsection Phase 4 --- Desktop integration (planned)
+@subsection Phase 4 --- Desktop integration (mostly shipped)
 
 @itemize @bullet
 @item
-@code{org.freedesktop.Application} on root: @code{Activate},
-@code{Open}, @code{ActivateAction}
+@strong{Shipped:} @code{org.freedesktop.Application} on root:
+@code{Activate}, @code{Open}, @code{ActivateAction}
 @item
-@code{org.gtk.Actions} on root: every interactive defun → typed
-action
+@strong{Shipped:} @code{org.gtk.Actions} on root: every interactive
+defun → typed action
 @item
-@code{org.gnome.Shell.SearchProvider2}: buffers / recentf / org-roam
-in GNOME shell overview
+@strong{Shipped:} @code{org.gnome.Shell.SearchProvider2}: buffers /
+recentf / org-roam in GNOME shell overview
 @item
-@code{org.freedesktop.Notifications}: bidirectional --- send via
-@code{cmacs-notify} helper, receive via subscription
+@strong{Shipped, and further than planned:}
+@code{org.freedesktop.Notifications}.  Sending was the
+@code{cmacs-notify} helper all along; cmacs now also @emph{serves} the
+name, so a gowl session --- where nothing else does --- has a
+notification daemon.  See @code{cmacs-notify-daemon-mode-global}
 @item
 @code{xdg-desktop-portal} consumer: FileChooser / OpenURI / Print
 for sandboxed apps
 @end itemize
 
-@subsection Phase 5 --- Creative extensions (planned)
+@subsection Phase 5 --- Creative extensions (partial)
 
 @itemize @bullet
 @item
@@ -102,10 +118,11 @@ buffers modified, block idle during long compiles
 @code{org.freedesktop.portal.GlobalShortcuts}: desktop-wide hotkeys
 that fire even when cmacs isn't focused
 @item
-@code{org.mpris.MediaPlayer2} server: opt-in mode where mediakeys
-navigate buffers
+@strong{Shipped:} @code{org.mpris.MediaPlayer2} server: opt-in mode
+where mediakeys navigate buffers
 @item
-@code{org.cmacs.Editor1.Watch}: observable variable / form watchers
+@strong{Shipped:} @code{org.cmacs.Editor1.Watch}: observable variable
+/ form watchers
 @item
 @code{org.cmacs.Editor1.Podomation.Events}: every Pod event becomes
 a D-Bus signal

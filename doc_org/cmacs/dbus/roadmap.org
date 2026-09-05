@@ -19,7 +19,9 @@ What landed:
 - File reorg: 838-line monolith split across 8 files
   in =cmacs/dbus/=
 - Back-compat: =org.cmacs.Editor1= (6 core + 18 gowl methods)
-  preserved bit-for-bit
+  preserved bit-for-bit at the time.  The gowl half has since moved
+  to =org.cmacs.Editor1.Compositor= / =.Monitor= and lost its =Gowl=
+  prefix; the 6 core methods are still there.
 - 12 ERT tests
 
 Five new DEFUNs:
@@ -66,32 +68,45 @@ Per-buffer methods land alongside the properties:
 Plus root-level =BufferManager= / =FrameManager= / =WindowManager=
 interfaces with =List=, =Find=, =Create=, =Current= entry points.
 
-* Phase 3 — cmacsgi parity (planned)
+* Phase 3 — cmacsgi parity (mostly shipped)
 
 Goal: every cmacsgi command reachable as a typed D-Bus method.
 
 One file per interface, mirroring =cmacs/api/cmacs-api-cmd-*.c=:
 
-| Interface                          | Wraps cmacsgi group                   |
-|------------------------------------+---------------------------------------|
-| =org.cmacs.Editor1.Buffer=         | =buf=                                 |
-| =org.cmacs.Editor1.File=           | open / save / close / recent          |
-| =org.cmacs.Editor1.Text=           | insert / delete / line / append       |
-| =org.cmacs.Editor1.Nav=            | point / goto                          |
-| =org.cmacs.Editor1.Search=         | search / replace / occur              |
-| =org.cmacs.Editor1.Window=         | win                                   |
-| =org.cmacs.Editor1.Config=         | set / get / theme / font / mode       |
-| =org.cmacs.Editor1.Project=        | grep / find / project-root / compile  |
-| =org.cmacs.Editor1.Bookmark=       | mark                                  |
-| =org.cmacs.Editor1.Clipboard=      | copy / cut / paste / clip             |
-| =org.cmacs.Editor1.VC=             | vc                                    |
-| =org.cmacs.Editor1.Package=        | pkg                                   |
-| =org.cmacs.Editor1.Monitor=        | monitor (extracts gowl)               |
-| =org.cmacs.Editor1.Bar=            | bar (extracts gowl)                   |
-| =org.cmacs.Editor1.Ripgrep=        | rg                                    |
-| =org.cmacs.Editor1.Cintrospect=    | =c list/symbol/...=                   |
-| =org.cmacs.Editor1.Cpatch=         | =c patch/patches/...=                 |
-| =org.cmacs.Editor1.Print=          | new — Print.Submit fd-pass            |
+Most of this has since shipped; the =Status= column is what a live
+instance actually answers to, checked by introspecting one.
+
+| Interface                          | Wraps cmacsgi group                   | Status                        |
+|------------------------------------+---------------------------------------+-------------------------------|
+| =org.cmacs.Editor1.Buffer=         | =buf=                                 | shipped as =.BufferManager=   |
+| =org.cmacs.Editor1.File=           | open / save / close / recent          | shipped                       |
+| =org.cmacs.Editor1.Text=           | insert / delete / line / append       | shipped                       |
+| =org.cmacs.Editor1.Nav=            | point / goto                          | shipped                       |
+| =org.cmacs.Editor1.Search=         | search / replace / occur              | shipped                       |
+| =org.cmacs.Editor1.Window=         | win                                   | shipped as =.WindowManager=   |
+| =org.cmacs.Editor1.Config=         | set / get / theme / font / mode       | shipped                       |
+| =org.cmacs.Editor1.Project=        | grep / find / project-root / compile  | shipped                       |
+| =org.cmacs.Editor1.Bookmark=       | mark                                  | shipped                       |
+| =org.cmacs.Editor1.Clipboard=      | copy / cut / paste / clip             | shipped                       |
+| =org.cmacs.Editor1.VC=             | vc                                    | shipped                       |
+| =org.cmacs.Editor1.Package=        | pkg                                   | shipped                       |
+| =org.cmacs.Editor1.Monitor=        | monitor (extracts gowl)               | shipped                       |
+| =org.cmacs.Editor1.Bar=            | bar (extracts gowl)                   | *not yet*                     |
+| =org.cmacs.Editor1.Ripgrep=        | rg                                    | *not yet* (=.Project= covers grep) |
+| =org.cmacs.Editor1.Cintrospect=    | =c list/symbol/...=                   | shipped                       |
+| =org.cmacs.Editor1.Cpatch=         | =c patch/patches/...=                 | shipped                       |
+| =org.cmacs.Editor1.Print=          | new — Print.Submit fd-pass            | *not yet*                     |
+
+Beyond this list, the compositor block was extracted too:
+=org.cmacs.Editor1.Compositor= replaced the =Gowl*= methods that used
+to sit on =org.cmacs.Editor1=.  Others arrived that were never planned
+here at all --- =.Ai=, =.Brigade=, =.SecondBrain=, =.DbExplorer=,
+=.Gsurf=, =.GnusEye=, =.Calc=, =.Lrg=, =.Podomation=, =.Speech=,
+=.Audio=, =.Video=, =.Bacon=, =.Crispy=, =.Eshell=, =.Events=,
+=.Instance=, =.Log=, =.Debug=, =.Edit=, =.Input=, =.Watch=,
+=.FrameManager=, =.ProcessManager=.  The full current list is in
+[[file:methods.org][methods.org]] and by introspecting a running instance.
 
 Long-running operations (compile, grep, rg, package install) get
 =Request= handles modeled on
@@ -100,24 +115,30 @@ Long-running operations (compile, grep, rg, package install) get
 =Cancel ()=, a =Progress= property (with =PropertiesChanged=), and a
 single-shot =Response= signal for completion.
 
-* Phase 4 — Desktop integration (planned)
+* Phase 4 — Desktop integration (mostly shipped)
 
 Goal: cmacs is a first-class freedesktop citizen.
 
-| Interface                           | Object path                       | Adds                                        |
-|-------------------------------------+-----------------------------------+---------------------------------------------|
-| =org.freedesktop.Application=       | =/org/cmacs/Editor=               | =Activate=, =Open=, =ActivateAction=        |
-| =org.gtk.Actions=                   | =/org/cmacs/Editor=               | Every interactive defun → typed action      |
-| =org.gnome.Shell.SearchProvider2=   | =/org/cmacs/Editor/SearchProvider=| Buffers / recentf / org-roam in GNOME shell |
-| =org.freedesktop.Notifications=     | (consumer)                        | Lisp =cmacs-notify= helper, action callbacks|
-| =xdg-desktop-portal= (FileChooser,  | (consumer)                        | Native dialogs, sandbox-friendly Open       |
-|   OpenURI, Print)                   |                                   |                                             |
+| Interface                           | Object path                       | Adds                                        | Status   |
+|-------------------------------------+-----------------------------------+---------------------------------------------+----------|
+| =org.freedesktop.Application=       | =/org/cmacs/Editor=               | =Activate=, =Open=, =ActivateAction=        | shipped  |
+| =org.gtk.Actions=                   | =/org/cmacs/Editor=               | Every interactive defun → typed action      | shipped  |
+| =org.gnome.Shell.SearchProvider2=   | =/org/cmacs/Editor/SearchProvider=| Buffers / recentf / org-roam in GNOME shell | shipped  |
+| =org.freedesktop.Notifications=     | consumer *and server*             | =cmacs-notify= sends; =cmacs-notify-daemon= serves the name | shipped  |
+| =xdg-desktop-portal= (FileChooser,  | (consumer)                        | Native dialogs, sandbox-friendly Open       | *not yet* |
+|   OpenURI, Print)                   |                                   |                                             |          |
+
+The Notifications row went further than planned.  Sending was always
+the =cmacs-notify= helper; cmacs now also *serves* the name, because a
+gowl session has no notification daemon otherwise --- and cmacs itself
+has three things that send notifications.  See the Notifications
+section of [[file:../gowl.org][gowl.org]].
 
 Phase 4 also ships =etc/cmacs-search-provider.ini= for the GNOME
 search-provider registration so type-then-Enter in the shell overview
 opens cmacs at the right buffer.
 
-* Phase 5 — Creative extensions (planned)
+* Phase 5 — Creative extensions (partial)
 
 Goal: things no other editor does.
 
@@ -125,11 +146,11 @@ Goal: things no other editor does.
   modified, block idle during long compiles
 - =org.freedesktop.portal.GlobalShortcuts= — desktop-wide hotkeys
   that fire even when cmacs isn't focused
-- =org.mpris.MediaPlayer2= server — opt-in mode where mediakeys
-  navigate buffers (Next/Previous → next-buffer/previous-buffer,
+- *Shipped:* =org.mpris.MediaPlayer2= server — opt-in mode where
+  mediakeys navigate buffers (Next/Previous → next-buffer/previous-buffer,
   Seek → goto-line proportional, metadata reflects current buffer)
-- =org.cmacs.Editor1.Watch= — observable variable / form watchers,
-  one Request handle per watch with =Changed= signals
+- *Shipped:* =org.cmacs.Editor1.Watch= — observable variable / form
+  watchers (=Add=, =List=, =Remove=)
 - =org.cmacs.Editor1.Podomation.Events= — every Pod event becomes
   a D-Bus signal so podomation is observable from outside cmacs
 - *Shipped:* =org.cmacs.Editor1.Events= — a unified events endpoint

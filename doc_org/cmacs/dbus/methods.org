@@ -138,77 +138,107 @@ gdbus call --session --dest org.cmacs.Editor \
 # => (['access', 'ascii_digit_value', 'ascii_dtostr', ...],)
 #+end_src
 
-* Gowl methods (when =--with-cmacs-gowl=)
+* Compositor methods (when =--with-cmacs-gowl=)
+:PROPERTIES:
+:CUSTOM_ID: compositor-methods
+:END:
 
 Bypass the elisp eval round-trip for compositor-control hot paths.
 Each one returns a JSON-encoded string for structured fields and
 =t=/=nil= strings for booleans (matching the cmacsgi convention).
 
-That extraction has happened for the compositor block: these live on
-=org.cmacs.Editor1.Compositor= at =/org/cmacs/Editor= and have lost
-their =Gowl= prefix, because the interface name now carries that
-context.  The keybind rows below are current; the rest of this table
-still uses the old =Gowl*= names on =org.cmacs.Editor1= and needs the
-same correction.
+These are on *=org.cmacs.Editor1.Compositor=* at =/org/cmacs/Editor=.
+They used to live on =org.cmacs.Editor1= with a =Gowl= prefix, and
+lost the prefix when they moved, because the interface name now
+carries that context.  =GowlSetMfact= on =org.cmacs.Editor1= is
+=SetMfact= on =org.cmacs.Editor1.Compositor=; the old names do not
+resolve at all.
 
-=AddKeybindFull= exists rather than a fourth argument on
-=AddKeybind= because a D-Bus signature is part of the contract and
-callers already use the =(sis)= form.  An empty =desc= means none.
+| Method                     | Signature       | Arguments / description                        |
+|----------------------------+-----------------+------------------------------------------------|
+| =ListClients=              | =() -> (s)=     | Every Wayland client, as JSON                  |
+| =FocusedClient=            | =() -> (s)=     | The focused client, JSON or ="nil"=            |
+| =FindClient=               | =(ss) -> (s)=   | pattern, by (="title"= / ="app-id"=)           |
+| =FocusClient=              | =(ss) -> (s)=   | pattern, by                                    |
+| =CloseClient=              | =(ss) -> (s)=   | pattern, by                                    |
+| =SetClientGeometry=        | =(ssiiii) -> (s)= | pattern, by, x, y, width, height             |
+| =Spawn=                    | =(s) -> (s)=    | Launch a command with =$WAYLAND_DISPLAY= set   |
+| =SetLayout=                | =(s) -> (s)=    | ="tile"= / ="float"= / ="monocle"=             |
+| =SetMfact=                 | =(d) -> (s)=    | Master-area split                              |
+| =SetNmaster=               | =(i) -> (s)=    | Master-window count                            |
+| =ViewTags=                 | =(u) -> (s)=    | Visible tag mask                               |
+| =WorkspaceList=            | =() -> (s)=     | Workspaces, as JSON                            |
+| =WorkspaceSwitch=          | =(i) -> (s)=    | Switch to workspace by id                      |
+| =AddRule=                  | =(ssubi) -> (s)= | app_id, title, tags, floating, monitor        |
+| =AddKeybind=               | =(sis) -> (s)=  | key, action-id, arg                            |
+| =AddKeybindFull=           | =(siss) -> (s)= | key, action-id, arg, desc                      |
+| =RunKeybind=               | =(s) -> (s)=    | Run what a key is bound to                     |
+| =ListKeybinds=             | =() -> (s)=     | Bound keys with action nick, arg and desc      |
+| =Lock= / =Unlock=          | =() -> (s)=     | Toggle the session lock                        |
+| =Screenshot=               | =(ssss) -> (s)= | mode, client, by, file                         |
+| =ReloadConfig=             | =() -> (s)=     | Reload the gowl config                         |
+| =ConfigGet=                | =(s) -> (s)=    | Read a top-level config property               |
+| =SetScreensaverWallpaper=  | =(s) -> (s)=    | Animated screensaver wallpaper (config name)   |
+| =StopScreensaverWallpaper= | =() -> (s)=     | Stop the animated wallpaper                    |
+| =ListScreensaverConfigs=   | =() -> (s)=     | List screensaver config names                  |
+| =ScreensaverStatus=        | =() -> (s)=     | Renderer status                                |
+| =ScreensaverPause= / =-Resume= / =-Restart= | =() -> (s)= | Control the renderer          |
+| =ScreensaverSetFps=        | =(i) -> (s)=    | Renderer frame rate                            |
 
-=RunKeybind= runs the action a key is bound to without the key being
-pressed.  Note this is *not* what the input-injection calls do: those
+=AddKeybindFull= exists rather than a fourth argument on =AddKeybind=
+because a D-Bus signature is part of the contract and callers already
+use the =(sis)= form.  An empty =desc= means none.
+
+=RunKeybind= runs the action a key is bound to *without* the key being
+pressed.  Note this is not what the input-injection calls do: those
 hand a key to the focused client and never consult the keybind table.
 
-| Method                       | Signature                                 | Description                                |
-|------------------------------+-------------------------------------------+--------------------------------------------|
-| =GowlListClients=            | =-> (s)= JSON                             | Every Wayland client                       |
-| =GowlFocusedClient=          | =-> (s)= JSON or "nil"                    | The focused client                         |
-| =GowlSpawn=                  | =(s) -> (s)=                              | Launch CMD with =$WAYLAND_DISPLAY=         |
-| =GowlListMonitors=           | =-> (s)= JSON                             | Attached monitors                          |
-| =AddKeybind=                 | =(sis) -> (s)=                            | key, action-id, arg                        |
-| =AddKeybindFull=             | =(siss) -> (s)=                           | key, action-id, arg, desc                  |
-| =RunKeybind=                 | =(s) -> (s)=                              | Run what a key is bound to                 |
-| =ListKeybinds=               | =-> (s)= JSON                             | Bound keys, with action nick and desc      |
-| =GowlAddRule=                | =(ssubi) -> (s)=                          | app-id, title, tags, floating, monitor     |
-| =GowlSetMfact=               | =(d) -> (s)=                              | Master-area split                          |
-| =GowlSetNmaster=             | =(i) -> (s)=                              | Master-window count                        |
-| =GowlViewTags=               | =(u) -> (s)=                              | Visible tag-mask                           |
-| =GowlLock= / =GowlUnlock=    | =-> (s)=                                  | Toggle session lock                        |
-| =SetScreensaverWallpaper=    | =(s) -> (s)=                              | Animated screensaver wallpaper (config name) |
-| =StopScreensaverWallpaper=   | =-> (s)=                                  | Stop the animated wallpaper                |
-| =ListScreensaverConfigs=     | =-> (s)=                                  | List screensaver config names              |
-| =GowlReloadConfig=           | =-> (s)=                                  | Reload =gowl.yaml=                         |
-| =GowlConfigGet=              | =(s) -> (s)=                              | Read a top-level config property           |
-| =GowlFindClient=             | =(ss) -> (s)=                             | pattern, by ("title"/"app-id")             |
-| =GowlMonitorInfo=            | =(s) -> (s)=                              | Full monitor info JSON                     |
-| =GowlMonitorModes=           | =(s) -> (s)=                              | Available modes JSON                       |
-| =GowlSetMonitorMode=         | =(siii) -> (s)=                           | name, w, h, refresh-mhz                    |
-| =GowlMonitorPosition=        | =(s) -> (s)=                              | name → {x, y}                              |
-| =GowlSetMonitorPosition=     | =(sii) -> (s)=                            | name, x, y                                 |
-| =GowlSetMonitorEnabled=      | =(sb) -> (s)=                             | name, bool                                 |
-| =GowlSetMonitorScale=        | =(sd) -> (s)=                             | name, double                               |
-| =GowlSetMonitorTransform=    | =(si) -> (s)=                             | name, 0..7                                 |
+* Monitor methods (when =--with-cmacs-gowl=)
+:PROPERTIES:
+:CUSTOM_ID: monitor-methods
+:END:
+
+On *=org.cmacs.Editor1.Monitor=*, split out of the compositor block for
+the same reason: the interface name carries the context, so the
+methods do not repeat it.  =GowlSetMonitorPosition= is =SetPosition=
+on =org.cmacs.Editor1.Monitor=.
+
+| Method         | Signature      | Arguments / description        |
+|----------------+----------------+--------------------------------|
+| =List=         | =() -> (s)=    | Attached monitors, as JSON     |
+| =Info=         | =(s) -> (s)=   | name → full monitor info JSON  |
+| =Modes=        | =(s) -> (s)=   | name → available modes JSON    |
+| =Position=     | =(s) -> (s)=   | name → ={x, y}=                |
+| =SetPosition=  | =(sii) -> (s)= | name, x, y                     |
+| =SetMode=      | =(siii) -> (s)= | name, width, height, refresh-mHz |
+| =SetEnabled=   | =(sb) -> (s)=  | name, enabled                  |
+| =SetScale=     | =(sd) -> (s)=  | name, scale                    |
+| =SetTransform= | =(si) -> (s)=  | name, 0..7                     |
 
 ** Examples
-
-Two practical compositor-control snippets:
+:PROPERTIES:
+:CUSTOM_ID: compositor-examples
+:END:
 
 #+begin_src shell
-# Find a Firefox window and resize the master area to give it more room.
+# Resize the master area.
 gdbus call --session --dest org.cmacs.Editor \
     --object-path /org/cmacs/Editor \
-    --method org.cmacs.Editor1.GowlSetMfact 0.7
+    --method org.cmacs.Editor1.Compositor.SetMfact 0.7
 
-# Move the external monitor to position (1920, 0) and disable the laptop's.
+# Move the external monitor to (1920, 0) and disable the laptop panel.
 gdbus call --session --dest org.cmacs.Editor \
     --object-path /org/cmacs/Editor \
-    --method org.cmacs.Editor1.GowlSetMonitorPosition \
+    --method org.cmacs.Editor1.Monitor.SetPosition \
     HDMI-A-1 1920 0
 gdbus call --session --dest org.cmacs.Editor \
     --object-path /org/cmacs/Editor \
-    --method org.cmacs.Editor1.GowlSetMonitorEnabled \
+    --method org.cmacs.Editor1.Monitor.SetEnabled \
     eDP-1 false
 #+end_src
+
+The same surface is reachable as =emacsctl compositor ...= and
+=emacsctl monitor ...=, which is usually less typing.
 
 * AI methods (when =--with-cmacs-ai=)
 
@@ -242,12 +272,16 @@ and the two surfaces share a wire format.
 ** Examples
 
 Always target a specific instance.  A bare bus name reaches whichever
-cmacs answers first, which on a desktop is the user's live session:
+cmacs answers first, which on a desktop is the user's live session.
+The per-instance name is =org.cmacs.Editor.Pid<N>= (every instance
+acquires one; the unsuffixed =org.cmacs.Editor= goes to whichever got
+there first), and the object path is =/org/cmacs/Editor= for every
+interface:
 
 #+BEGIN_SRC sh
 gdbus call --session \
-  --dest org.cmacs.Editor1.p$(pgrep -n emacs) \
-  --object-path /org/cmacs/Editor1 \
+  --dest org.cmacs.Editor.Pid$(pgrep -n emacs) \
+  --object-path /org/cmacs/Editor \
   --method org.cmacs.Editor1.Ai.GenerateImage \
   'a brass telescope' 'gemini' '' '16:9' '' ''
 #+END_SRC
@@ -304,10 +338,13 @@ owner, who already has =org.cmacs.Editor1.Eval= on the same bus. It also could
 not work as written: RPC evals bind =inhibit-interaction=, so a prompt inside a
 dispatch signals rather than asking, and every =Spawn= would fail.
 
+The bus name is =org.cmacs.Editor= and the object path
+=/org/cmacs/Editor=; only the *interface* carries the =1=.
+
 #+begin_src bash
-busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+busctl --user call org.cmacs.Editor /org/cmacs/Editor \
   org.cmacs.Editor1.Brigade Send ss "$ID" "now check the error paths too"
 
-busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+busctl --user call org.cmacs.Editor /org/cmacs/Editor \
   org.cmacs.Editor1.Brigade Log sss "$ID" "2" ""
 #+end_src

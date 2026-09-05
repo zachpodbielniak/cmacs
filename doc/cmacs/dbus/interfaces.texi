@@ -104,11 +104,13 @@ Six core methods plus 23 @code{Gowl*} methods (when
 @option{--with-cmacs-gowl}); see @ref{D-Bus Methods} for the full
 reference.
 
-Phase 3 will introduce typed sub-interfaces
-(@code{org.cmacs.Editor1.Buffer}, @code{.Search}, @code{.VC},
-@code{.Pkg}, @code{.Monitor}, @code{.Bar}, @code{.Cintrospect},
-@code{.Cpatch}, ...) that mirror the cmacsgi group structure with
-proper return types.  The @code{Editor1} surface stays untouched.
+Most of those typed sub-interfaces now exist --- @code{.Search},
+@code{.VC}, @code{.Package}, @code{.Monitor}, @code{.Cintrospect},
+@code{.Cpatch}, @code{.Compositor} and some two dozen more, mirroring
+the cmacsgi group structure with proper return types.  @code{.Bar} and
+@code{.Print} are still outstanding, and @code{buf} / @code{win}
+shipped as @code{.BufferManager} / @code{.WindowManager}.  The
+@code{Editor1} surface stayed untouched, as intended.
 
 @subsection Inspecting the live surface
 

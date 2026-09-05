@@ -304,7 +304,7 @@ CUPS:
 
 #+begin_src bash
 gdbus call --session \
-  --dest=org.cmacs.Editor1 \
+  --dest=org.cmacs.Editor \
   --object-path=/org/cmacs/Editor \
   --method=org.cmacs.Editor1.Eval \
   '(cmacs-print-import-pdf "/tmp/test.pdf" "test")'

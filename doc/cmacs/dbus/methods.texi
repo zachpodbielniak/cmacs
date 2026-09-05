@@ -96,41 +96,99 @@ gdbus call --session --dest org.cmacs.Editor \
     GLib | head -3
 @end example
 
-@subsection Gowl methods (when --with-cmacs-gowl)
+@subsection Compositor methods (when --with-cmacs-gowl)
 
 Bypass the elisp eval round-trip for compositor-control hot paths.
 Each one returns a JSON-encoded string for structured fields and
-@code{t}/@code{nil} strings for booleans.  Phase 3 will extract
-these into typed @code{org.cmacs.Editor1.Monitor} / @code{.Bar} /
-@code{.Compositor} interfaces with proper return types.
+@code{t}/@code{nil} strings for booleans.
 
-@multitable @columnfractions .35 .35 .30
-@headitem Method @tab Signature @tab Description
-@item GowlListClients                @tab -> (s) JSON  @tab Every Wayland client
-@item GowlFocusedClient              @tab -> (s)       @tab Focused client (or "nil")
-@item GowlSpawn                      @tab (s) -> (s)   @tab Launch CMD with WAYLAND_DISPLAY
-@item GowlListMonitors               @tab -> (s) JSON  @tab Attached monitors
-@item AddKeybind                     @tab (sis) -> (s) @tab key, action-id, arg
-@item AddKeybindFull                 @tab (siss) -> (s) @tab key, action-id, arg, desc
-@item RunKeybind                     @tab (s) -> (s)   @tab Run what a key is bound to
-@item ListKeybinds                   @tab -> (s) JSON  @tab Bound keys, with action nick and desc
-@item GowlAddRule                    @tab (ssubi) -> (s) @tab app-id, title, tags, floating, monitor
-@item GowlSetMfact                   @tab (d) -> (s)   @tab Master-area split
-@item GowlSetNmaster                 @tab (i) -> (s)   @tab Master-window count
-@item GowlViewTags                   @tab (u) -> (s)   @tab Visible tag-mask
-@item GowlLock / GowlUnlock          @tab -> (s)       @tab Toggle session lock
-@item GowlReloadConfig               @tab -> (s)       @tab Reload gowl.yaml
-@item GowlConfigGet                  @tab (s) -> (s)   @tab Read top-level config property
-@item GowlFindClient                 @tab (ss) -> (s)  @tab pattern, by ("title"/"app-id")
-@item GowlMonitorInfo                @tab (s) -> (s)   @tab Full monitor info JSON
-@item GowlMonitorModes               @tab (s) -> (s)   @tab Available modes JSON
-@item GowlSetMonitorMode             @tab (siii) -> (s) @tab name, w, h, refresh-mhz
-@item GowlMonitorPosition            @tab (s) -> (s)   @tab name -> @{x, y@}
-@item GowlSetMonitorPosition         @tab (sii) -> (s) @tab name, x, y
-@item GowlSetMonitorEnabled          @tab (sb) -> (s)  @tab name, bool
-@item GowlSetMonitorScale            @tab (sd) -> (s)  @tab name, double
-@item GowlSetMonitorTransform        @tab (si) -> (s)  @tab name, 0..7
+These are on @strong{@code{org.cmacs.Editor1.Compositor}} at
+@code{/org/cmacs/Editor}.  They used to live on
+@code{org.cmacs.Editor1} with a @code{Gowl} prefix, and lost the prefix
+when they moved, because the interface name now carries that context.
+@code{GowlSetMfact} on @code{org.cmacs.Editor1} is @code{SetMfact} on
+@code{org.cmacs.Editor1.Compositor}; the old names do not resolve.
+
+@multitable @columnfractions .32 .22 .46
+@headitem Method @tab Signature @tab Arguments / description
+@item ListClients              @tab () -> (s)      @tab Every Wayland client, as JSON
+@item FocusedClient            @tab () -> (s)      @tab The focused client, JSON or "nil"
+@item FindClient               @tab (ss) -> (s)    @tab pattern, by ("title"/"app-id")
+@item FocusClient              @tab (ss) -> (s)    @tab pattern, by
+@item CloseClient              @tab (ss) -> (s)    @tab pattern, by
+@item SetClientGeometry        @tab (ssiiii) -> (s) @tab pattern, by, x, y, width, height
+@item Spawn                    @tab (s) -> (s)     @tab Launch a command with WAYLAND_DISPLAY set
+@item SetLayout                @tab (s) -> (s)     @tab "tile" / "float" / "monocle"
+@item SetMfact                 @tab (d) -> (s)     @tab Master-area split
+@item SetNmaster               @tab (i) -> (s)     @tab Master-window count
+@item ViewTags                 @tab (u) -> (s)     @tab Visible tag mask
+@item WorkspaceList            @tab () -> (s)      @tab Workspaces, as JSON
+@item WorkspaceSwitch          @tab (i) -> (s)     @tab Switch to workspace by id
+@item AddRule                  @tab (ssubi) -> (s) @tab app_id, title, tags, floating, monitor
+@item AddKeybind               @tab (sis) -> (s)   @tab key, action-id, arg
+@item AddKeybindFull           @tab (siss) -> (s)  @tab key, action-id, arg, desc
+@item RunKeybind               @tab (s) -> (s)     @tab Run what a key is bound to
+@item ListKeybinds             @tab () -> (s)      @tab Bound keys with action nick, arg and desc
+@item Lock / Unlock            @tab () -> (s)      @tab Toggle the session lock
+@item Screenshot               @tab (ssss) -> (s)  @tab mode, client, by, file
+@item ReloadConfig             @tab () -> (s)      @tab Reload the gowl config
+@item ConfigGet                @tab (s) -> (s)     @tab Read a top-level config property
+@item SetScreensaverWallpaper  @tab (s) -> (s)     @tab Animated screensaver wallpaper (config name)
+@item StopScreensaverWallpaper @tab () -> (s)      @tab Stop the animated wallpaper
+@item ListScreensaverConfigs   @tab () -> (s)      @tab List screensaver config names
+@item ScreensaverStatus        @tab () -> (s)      @tab Renderer status
+@item ScreensaverPause         @tab () -> (s)      @tab Pause the renderer
+@item ScreensaverResume        @tab () -> (s)      @tab Resume the renderer
+@item ScreensaverRestart       @tab () -> (s)      @tab Restart the renderer
+@item ScreensaverSetFps        @tab (i) -> (s)     @tab Renderer frame rate
 @end multitable
+
+@code{AddKeybindFull} exists rather than a fourth argument on
+@code{AddKeybind} because a D-Bus signature is part of the contract and
+callers already use the @code{(sis)} form.  An empty @code{desc} means
+none.
+
+@code{RunKeybind} runs the action a key is bound to @emph{without} the
+key being pressed.  This is not what the input-injection calls do:
+those hand a key to the focused client and never consult the keybind
+table.
+
+@subsection Monitor methods (when --with-cmacs-gowl)
+
+On @strong{@code{org.cmacs.Editor1.Monitor}}, split out of the
+compositor block for the same reason: the interface name carries the
+context, so the methods do not repeat it.
+@code{GowlSetMonitorPosition} is @code{SetPosition} on
+@code{org.cmacs.Editor1.Monitor}.
+
+@multitable @columnfractions .22 .22 .56
+@headitem Method @tab Signature @tab Arguments / description
+@item List         @tab () -> (s)     @tab Attached monitors, as JSON
+@item Info         @tab (s) -> (s)    @tab name -> full monitor info JSON
+@item Modes        @tab (s) -> (s)    @tab name -> available modes JSON
+@item Position     @tab (s) -> (s)    @tab name -> @{x, y@}
+@item SetPosition  @tab (sii) -> (s)  @tab name, x, y
+@item SetMode      @tab (siii) -> (s) @tab name, width, height, refresh-mHz
+@item SetEnabled   @tab (sb) -> (s)   @tab name, enabled
+@item SetScale     @tab (sd) -> (s)   @tab name, scale
+@item SetTransform @tab (si) -> (s)   @tab name, 0..7
+@end multitable
+
+@example
+# Resize the master area.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Compositor.SetMfact 0.7
+
+# Move the external monitor to (1920, 0) and disable the laptop panel.
+gdbus call --session --dest org.cmacs.Editor \
+    --object-path /org/cmacs/Editor \
+    --method org.cmacs.Editor1.Monitor.SetPosition HDMI-A-1 1920 0
+@end example
+
+@noindent
+The same surface is reachable as @command{emacsctl compositor ...} and
+@command{emacsctl monitor ...}, which is usually less typing.
 
 @subsection Error handling
 
@@ -184,6 +242,6 @@ written: RPC evals bind @code{inhibit-interaction}, so a prompt inside a
 dispatch signals rather than asking, and every @code{Spawn} would fail.
 
 @example
-busctl --user call org.cmacs.Editor1 /org/cmacs/Editor1 \
+busctl --user call org.cmacs.Editor /org/cmacs/Editor \
   org.cmacs.Editor1.Brigade Send ss "$ID" "now check the error paths"
 @end example

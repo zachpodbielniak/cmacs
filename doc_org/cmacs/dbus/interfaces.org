@@ -129,11 +129,13 @@ that calls =org.cmacs.Editor1.Eval= and friends keeps working.
 Plus 23 =Gowl*= methods when =--with-cmacs-gowl= is enabled (full
 list in [[file:methods.org][methods.org]]).
 
-Phase 3 will introduce typed sub-interfaces
-(=org.cmacs.Editor1.Buffer=, =.Search=, =.VC=, =.Pkg=, =.Monitor=,
-=.Bar=, =.Cintrospect=, =.Cpatch=, ...) that mirror the cmacsgi
-group structure with proper return types.  The =Editor1= surface
-stays untouched; it just becomes the "low-level escape hatch" for
+Most of those typed sub-interfaces now exist --- =.Search=, =.VC=,
+=.Package=, =.Monitor=, =.Cintrospect=, =.Cpatch=, =.Compositor= and
+some two dozen more, mirroring the cmacsgi group structure with proper
+return types; =.Bar= and =.Print= are still outstanding, and =buf= /
+=win= shipped as =.BufferManager= / =.WindowManager=.  See
+[[file:roadmap.org][roadmap.org]] for what landed and what did not.  The =Editor1= surface
+stayed untouched, as intended; it is now the "low-level escape hatch" for
 arbitrary elisp.
 
 
