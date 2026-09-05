@@ -434,6 +434,70 @@ bound on what the agent can reach.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-ai-client-set-cli-option",
+       Fcmacs_ai_client_set_cli_option,
+       Scmacs_ai_client_set_cli_option, 3, 3, 0,
+       doc: /* Set GObject property NAME of HANDLE's CLI client to VALUE.
+
+NAME is the property's string name as the provider declares it, for
+claude-code e.g. "bare", "permission-mode", "append-system-prompt",
+"exclude-dynamic-system-prompt-sections" or "max-budget-usd".  VALUE is
+coerced to the property's type: a string for string properties, nil/non-nil
+for booleans, a number for integers and doubles.
+
+Returns t when the property was set, nil when HANDLE is not a CLI client
+or the provider has no property called NAME -- so a caller can offer a
+flag one provider knows without breaking on one that does not.  Signals
+on a VALUE the property cannot take.
+
+This exists so an Elisp caller can reach every knob a CLI client exposes
+without a DEFUN per knob; the per-knob DEFUNs above remain for the ones
+common enough to deserve documentation of their own.  */)
+  (Lisp_Object handle, Lisp_Object name, Lisp_Object value)
+{
+  CHECK_FIXNAT (handle);
+  CHECK_STRING (name);
+  gpointer p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  if (!AI_IS_CLI_CLIENT (p)) return Qnil;
+
+  GParamSpec *pspec = g_object_class_find_property (G_OBJECT_GET_CLASS (p),
+                                                    SSDATA (name));
+  if (pspec == NULL || !(pspec->flags & G_PARAM_WRITABLE))
+    return Qnil;
+
+  GType type = G_PARAM_SPEC_VALUE_TYPE (pspec);
+  if (type == G_TYPE_STRING)
+    {
+      if (!NILP (value)) CHECK_STRING (value);
+      g_object_set (G_OBJECT (p), SSDATA (name),
+                    NILP (value) ? NULL : SSDATA (value), NULL);
+    }
+  else if (type == G_TYPE_BOOLEAN)
+    g_object_set (G_OBJECT (p), SSDATA (name), NILP (value) ? FALSE : TRUE,
+                  NULL);
+  else if (type == G_TYPE_DOUBLE)
+    {
+      CHECK_NUMBER (value);
+      g_object_set (G_OBJECT (p), SSDATA (name), XFLOATINT (value), NULL);
+    }
+  else if (type == G_TYPE_INT)
+    {
+      CHECK_FIXNUM (value);
+      g_object_set (G_OBJECT (p), SSDATA (name), (gint) XFIXNUM (value), NULL);
+    }
+  else if (type == G_TYPE_UINT)
+    {
+      CHECK_FIXNAT (value);
+      g_object_set (G_OBJECT (p), SSDATA (name), (guint) XFIXNAT (value),
+                    NULL);
+    }
+  else
+    error ("cmacs-ai: property %s has a type this setter cannot coerce",
+           SSDATA (name));
+  return Qt;
+}
+
 void syms_of_cmacs_ai_client_defuns (void);
 void
 syms_of_cmacs_ai_client_defuns (void)
@@ -453,6 +517,7 @@ syms_of_cmacs_ai_client_defuns (void)
   defsubr (&Scmacs_ai_client_set_working_directory);
   defsubr (&Scmacs_ai_client_working_directory);
   defsubr (&Scmacs_ai_client_set_skip_permissions);
+  defsubr (&Scmacs_ai_client_set_cli_option);
 }
 
 #endif /* HAVE_CMACS_AI */

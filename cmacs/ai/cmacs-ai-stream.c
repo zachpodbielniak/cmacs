@@ -351,9 +351,19 @@ cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
 
   GCancellable *cancel = cmacs_ai_session_install_cancellable (sess);
 
+  /* CMACS: an HTTP provider reads a NULL system prompt from its own
+   * configuration, but the CLI base class hands whatever it is given
+   * straight to build_argv -- so NULL meant "no --system-prompt-file",
+   * and every streamed CLI turn ran under Claude Code's default coding
+   * persona instead of the caller's prompt (a summariser asked for JSON
+   * replied with questions about the source tree it was started in).
+   * Pass the client's prompt explicitly for CLI clients. */
+  const gchar *system_prompt = AI_IS_CLI_CLIENT (prov)
+    ? ai_cli_client_get_system_prompt (AI_CLI_CLIENT (prov)) : NULL;
+
   ai_streamable_chat_stream_async (s->streamable,
                                    cmacs_ai_session_get_messages (sess),
-                                   NULL,   /* system: take from client */
+                                   system_prompt,
                                    0,      /* max_tokens: take from client */
                                    tools,  /* (transfer none); ai-glib copies */
                                    cancel,
