@@ -94,6 +94,16 @@ extern void cmacs_secondbrain_scene_set_shading
 extern void cmacs_secondbrain_scene_set_glow
                         (CmacsLibregnumRenderCtx *r, gboolean on);
 
+/* Band lanes and the galactic core: additive ribbons under each band in
+   its own colour plus a warm-to-cool stack of glows on the origin.  Off
+   in C by default -- the Lisp side turns it on from its defcustom -- so
+   a bare attach draws nothing it was not asked for, and the billboard
+   and ribbon counts a test reads stay exactly what that test built. */
+extern void     cmacs_secondbrain_scene_set_dressing
+                              (CmacsLibregnumRenderCtx *r, gboolean on);
+extern gboolean cmacs_secondbrain_scene_dressing_p
+                              (CmacsLibregnumRenderCtx *r);
+
 /* Isolate mode: while a selection exists, everything outside its
  * subtree and direct neighbours is painted dim.  A paint-time decision,
  * not a flag write -- takes effect on the next apply_flags. */

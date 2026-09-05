@@ -841,6 +841,32 @@ Read when the scene is built, so it takes effect on the next refresh.  */)
   return NILP (on) ? Qnil : Qt;
 }
 
+DEFUN ("cmacs-secondbrain-set-dressing", Fcmacs_secondbrain_set_dressing,
+       Scmacs_secondbrain_set_dressing, 2, 2, 0,
+       doc: /* Turn BUFFER's band lanes and galactic core on or off.
+
+The lanes are soft additive fills under each ARMS band in its own colour
+-- a skirt rising to the hub circle, a fill across the rows the members
+sit in, a skirt falling away outside -- so the four rings read as bands
+of light the nodes lie IN rather than as dots on wire.  The core is a
+warm-to-cool stack of glows on the origin, sized from the innermost
+band.  Neither carries meaning.
+
+Takes effect at the next scene build (`cmacs-secondbrain-set-graph' or a
+refresh).  Returns ON.  */)
+  (Lisp_Object buffer, Lisp_Object on)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  SbState *st;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+  cmacs_secondbrain_scene_set_dressing (ctx, !NILP (on));
+  return on;
+}
+
 DEFUN ("cmacs-secondbrain-set-isolate", Fcmacs_secondbrain_set_isolate,
        Scmacs_secondbrain_set_isolate, 1, 2, 0,
        doc: /* Dim everything outside BUFFER's selection neighbourhood (ON nil off).
@@ -1677,6 +1703,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_set_match_set);
   defsubr (&Scmacs_secondbrain_set_shading);
   defsubr (&Scmacs_secondbrain_set_glow);
+  defsubr (&Scmacs_secondbrain_set_dressing);
   defsubr (&Scmacs_secondbrain_set_isolate);
   defsubr (&Scmacs_secondbrain_set_ring_filter);
   defsubr (&Scmacs_secondbrain_set_link_phase);

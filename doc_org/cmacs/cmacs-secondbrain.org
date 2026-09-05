@@ -94,6 +94,9 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =a= | age fade: colour Memory by staleness |
 | =T= | galaxy tilt: flat / gentle / default / steep (3D) |
 | =M-t= | galaxy shape: symmetric saucer / one-sided warp (3D) |
+| =M-d= | dressing: band lanes and the galactic core |
+| =*= | world-space stars (they parallax; the wallpaper does not) |
+| =M-i= | replay the opening fly-in |
 | =s= / =S= | spin the rings |
 | =R= | slow auto-rotation on/off |
 | =u= / =U= | unpin the selection / everything |
@@ -242,6 +245,34 @@ The honest cost: particles advance on wall-clock time inside the render pass, so
 =cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's *body* pixel size — the text area, with fringes, margins and the mode line excluded — and =window-size-change-functions= re-runs it, coalesced through a 0.06 s idle timer, whenever the window changes.
 
 This is not cosmetic, and neither is the word /body/. The picture, the click mapping and the framebuffer are a three-party contract: the pgtk overlay and the =--lrg= backend paint the view into =window_box TEXT_AREA=, the input layer maps clicks against that same box, and this hook sizes the FBO to match. Any party on a different rect puts every click somewhere other than where it was aimed. Both failure modes have shipped: before the hook existed nothing was clickable at all, and later the /paint/ used the full window rect against a text-area click mapping — offset by the fringes and the mode line's share of the height — so every node had to be clicked above and to the right of where it was drawn.
+
+* The dressing: lanes, a core, a sky, breath, and the fly-in
+
+Everything in this section is decoration. None of it changes what the map means, and =M-d=, =*= and one =setq= each turn it off. It is on because a system you are meant to feel ownership of should look like somewhere, and a graph of lit balls on a dark gradient, however correct, looks like a diagram.
+
+*** Band lanes
+
+Each ARMS band gets three soft additive fills in its own colour: a skirt rising to the hub circle, a fill across the rows the members sit in, and a skirt falling away outside. The peak is on the hub circle, where the crisp guide line runs (drawn a little brighter over a lane than it needed to be alone, because the sharp line is what the eye locks onto in the soft fill). They follow the layout's own band radii — the same rule the guides follow, for the same reason — and the galaxy warp, so they bend with the disc. Widths are fractions of the ring gap and intensities are low on purpose: a lane is a place, not a light, and the nodes have to stay the brightest thing on it. Together they turn four thin hoops into four bands of light the nodes lie /in/, which is what makes the disc read as a galaxy's dust lanes.
+
+*** The galactic core
+
+A disc fading out toward the innermost band, and three glows stacked on the origin: white-hot, then warm, then a cool corona, each wider than the last. Sized from the innermost band so it stays inside the Skills ring however the map has grown — a fixed size would swallow a small map and vanish in a large one. The centre node sits inside all of it and comes out white-hot, which is the right thing to happen to the one node everything else hangs off.
+
+*** A sky that is part of the world
+
+=cmacs-secondbrain-starfield= (1600) stars sit on a shell 420 world units out — outside any map this draws, inside the far clip plane at 1000. This is not the =starfield= *background*, which is a picture and does not move when the camera does. These parallax under orbit, and that parallax is most of what tells the eye the scene has depth. The sky is generated from a fixed seed so it is the same every session, and it twinkles gently on the renderer's effect clock.
+
+*** Breathing halos
+
+=cmacs-secondbrain-glow-breath= (0.35) lets every node's halo drift in brightness on its own period and phase, so no two neighbours pulse in step. Brightness, never hue: the category colours survive it. It needs a running clock to be seen, which the particles keep; turn particles off and the halos hold still along with them.
+
+*** The opening fly-in
+
+Opening the map (=cmacs-secondbrain-intro=, =cmacs-secondbrain-intro-seconds= 1.8) fits the view and then flies the camera in onto it from further out, higher, and swung seventy degrees round — so the disc is seen turning in depth once before you touch it. Ease-out cubic: fast off the mark, gentle landing, and it lands /exactly/ on the fitted pose, because a fly-in that ended a little off would be a small jump on every open, forever. In the flat view the orbit is locked, so the start is a straight pull-back — a zoom in, not a swing. =M-i= replays it. The fly-in rides the transition clock and is a reason for it to keep running; a hard stop (the buffer hidden) drops it, or it would jump the camera back to mid-flight when the buffer next appeared.
+
+*** Why these are counts in the tests, and frames only when they must be
+
+A lane at rest alpha barely moves a frame mean, so the tests count ribbons and glows — four bands × three lanes + one disc = thirteen ribbons, three core glows — and prove the renderer drew them with one frame comparison against an empty scene. The sky is asserted by frame *bytes* across a quarter turn, because a shell is roughly isotropic and its mean barely moves; the breath by pinning the effect clock (=cmacs-libregnum-set-effect-time=) and requiring two instants to differ and one instant to agree.
 
 * The 3D view is a galaxy
 
@@ -506,6 +537,8 @@ why each is off or conservative by default:
 
 =cmacs-secondbrain-link-pulse= costs a recolour pass over the edges per
 frame, but only while something is selected.
+
+- *The dressing* is thirteen ribbons of 96 stations and three glows — nothing. *The sky* is 1600 quads in one batch, also nothing; set =cmacs-secondbrain-starfield= to 0 if you would rather the parallax were not there. *Breathing* is one sine per halo per frame, and only costs anything at all because it wants the particle clock running.
 
 ** Turning the whole thing down
 

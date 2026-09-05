@@ -1590,5 +1590,36 @@ drag: still a valid view, and completely wrong."
           (error (ert-skip "no GL context")))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest cmacs-libregnum-test-starfield-count-round-trips ()
+  "A starfield of N stars reports N, and 0 clears it."
+  (skip-unless (or (getenv "DISPLAY") (getenv "WAYLAND_DISPLAY")))
+  (skip-unless (fboundp 'cmacs-libregnum-set-starfield))
+  (let ((buf (generate-new-buffer " *lrg-stars*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 200 150)
+          (should (= 0 (cmacs-libregnum-starfield-count buf)))
+          (cmacs-libregnum-set-starfield buf 500 100.0)
+          (should (= 500 (cmacs-libregnum-starfield-count buf)))
+          (cmacs-libregnum-set-starfield buf 0 100.0)
+          (should (= 0 (cmacs-libregnum-starfield-count buf))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest cmacs-libregnum-test-effect-time-pins-and-frees ()
+  "The effect clock can be pinned to a value and released to run.
+
+Pinned, two reads agree exactly; released, it advances.  The release
+path matters as much as the pin: a test that pinned the clock and forgot
+would leave every breathing effect in that buffer frozen."
+  (skip-unless (or (getenv "DISPLAY") (getenv "WAYLAND_DISPLAY")))
+  (skip-unless (fboundp 'cmacs-libregnum-set-effect-time))
+  (let ((buf (generate-new-buffer " *lrg-clock*")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-tests--attach-or-skip buf 200 150)
+          (should (eql 2.5 (cmacs-libregnum-set-effect-time buf 2.5)))
+          (should (null (cmacs-libregnum-set-effect-time buf nil))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'cmacs-libregnum-tests)
 ;;; cmacs-libregnum-tests.el ends here

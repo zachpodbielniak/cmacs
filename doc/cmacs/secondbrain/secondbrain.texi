@@ -23,6 +23,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain ARMS::            The four layers, and why they matter.
 * Secondbrain Getting Started:: Opening it, and the keys.
 * Secondbrain Galaxy::          Why the 3D view is a warped disc.
+* Secondbrain Dressing::        Lanes, a core, a sky, breath, the fly-in.
 * Secondbrain Layouts::         Four layouts, all animated.
 * Secondbrain Search::          Three tiers, cheapest first.
 * Secondbrain Focusing::        Isolate, ring filter and age fade.
@@ -135,6 +136,9 @@ leaving the buffer.
 @item @kbd{a} @tab age fade: colour Memory by how recently it changed
 @item @kbd{T} @tab galaxy tilt: flat / gentle / default / steep (3D)
 @item @kbd{M-t} @tab galaxy shape: symmetric saucer / one-sided warp (3D)
+@item @kbd{M-d} @tab dressing: band lanes and the galactic core
+@item @kbd{*} @tab world-space stars (they parallax; the wallpaper does not)
+@item @kbd{M-i} @tab replay the opening fly-in
 @item @kbd{s} / @kbd{S} @tab spin the rings
 @item @kbd{R} @tab slow auto-rotation on/off
 @item @kbd{u} / @kbd{U} @tab unpin the selection / everything
@@ -692,6 +696,62 @@ answers in [-90, 90] degrees.  The camera's up vector carries the other
 half of the state.  Read it back without also correcting the azimuth by
 half a turn and the camera teleports to the mirror-image viewpoint on
 the first inverted drag --- a valid view, and completely wrong.
+
+@node Secondbrain Dressing
+@section The dressing: lanes, a core, a sky, breath, and the fly-in
+
+Everything here is decoration.  None of it changes what the map means,
+and @kbd{M-d}, @kbd{*} and one @code{setq} each turn it off.  It is on
+because a system you are meant to feel ownership of should look like
+@emph{somewhere}, and a graph of lit balls on a dark gradient, however
+correct, looks like a diagram.
+
+@subsection Band lanes
+
+Each ARMS band gets three soft additive fills in its own colour: a
+skirt rising to the hub circle, a fill across the rows the members sit
+in, and a skirt falling away outside.  The peak is on the hub circle,
+where the crisp guide line runs.  They follow the layout's own band
+radii and the galaxy warp, so they bend with the disc.  Intensities are
+low on purpose: a lane is a place, not a light, and the nodes have to
+stay the brightest thing on it.  Together they turn four thin hoops
+into four bands of light the nodes lie @emph{in}.
+
+@subsection The galactic core
+
+A disc fading out toward the innermost band, and three glows stacked on
+the origin: white-hot, then warm, then a cool corona.  Sized from the
+innermost band so it stays inside the Skills ring however the map has
+grown.  The centre node sits inside all of it and comes out white-hot.
+
+@subsection A sky that is part of the world
+
+@code{cmacs-secondbrain-starfield} (1600) stars sit on a shell
+@code{cmacs-secondbrain-starfield-radius} (420) world units out.  This
+is not the @code{starfield} @emph{background}, which is a picture and
+does not move when the camera does.  These parallax under orbit, and
+that parallax is most of what tells the eye the scene has depth.  The
+sky is generated from a fixed seed, so it is the same every session.
+
+@subsection Breathing halos
+
+@code{cmacs-secondbrain-glow-breath} (0.35) lets every node's halo
+drift in brightness on its own period and phase, so no two neighbours
+pulse in step.  Brightness, never hue.  It needs a running clock, which
+the particles keep.
+
+@subsection The opening fly-in
+
+Opening the map (@code{cmacs-secondbrain-intro},
+@code{cmacs-secondbrain-intro-seconds} 1.8) fits the view and then
+flies the camera in onto it from further out, higher, and swung seventy
+degrees round, with an ease-out so it lands gently and @emph{exactly} on
+the fitted pose.  In the flat view it is a straight pull-back.
+@kbd{M-i} replays it.
+
+The renderer side---additive ribbons, the world-space starfield and the
+pinnable effect clock the tests use---is documented with libregnum in
+@file{doc_org/cmacs/cmacs-libregnum.org}.
 
 @node Secondbrain Layouts
 @section Layouts

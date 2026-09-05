@@ -290,6 +290,69 @@ extern void  cmacs_libregnum_render_ctx_clear_orbs
 extern guint cmacs_libregnum_render_ctx_orb_count
                               (CmacsLibregnumRenderCtx *r);
 
+/* ── Ribbons, starfield, breathing ───────────────────────────────
+ *
+ * Set dressing.  A graph of lit balls over a dark gradient is a diagram;
+ * these are what make it read as a place.  None carries meaning, every
+ * one is a plain array the scene owns and clears, and each is off until
+ * asked for.
+ *
+ * A RIBBON is a strip between an inner and an outer polyline, N stations
+ * long (xyz triples; one 0xRRGGBBAA per station per rail), drawn
+ * additive, two-sided, with the depth mask off, BEFORE the per-tick
+ * geometry.  Additive so overlapping fills sum rather than occlude and
+ * so the pass needs no sorting; depth mask off so a fill never punches a
+ * hole a later glow cannot draw through; drawn first so a node sits ON
+ * its band instead of being washed out by it.  Two-sided because a
+ * warped disc is looked at from both faces.  CLOSED joins the last
+ * station back to the first.  Indices are valid until clear_ribbons.
+ *
+ * The STARFIELD is COUNT small additive quads on a shell of RADIUS world
+ * units about the origin, generated once from SEED.  The 2D background
+ * kinds already paint stars and they are wallpaper: they do not move
+ * when the camera does.  A shell that is part of the world parallaxes
+ * under orbit, which is most of what tells the eye the scene has depth.
+ * Radius is jittered so near stars slide against far ones.  Zero COUNT
+ * clears it.  RADIUS should sit well outside the scene and inside the
+ * far clip plane (1000).
+ *
+ * GLOW BREATH is a 0..1 amplitude by which every glow billboard's
+ * intensity drifts on its own period and phase (hashed from its index,
+ * so neighbours never pulse in step).  Zero, the default, is steady.
+ * The stars twinkle on the same clock regardless.
+ *
+ * The EFFECT TIME is the clock both read: seconds since the context was
+ * created, or a pinned value.  Pinning exists for tests -- two frames
+ * at two pinned times must differ, two at the same time must not -- and
+ * a negative value returns to the live clock. */
+extern gint  cmacs_libregnum_render_ctx_add_ribbon
+                              (CmacsLibregnumRenderCtx *r,
+                               const float *inner_xyz,
+                               const float *outer_xyz,
+                               const guint32 *inner_rgba,
+                               const guint32 *outer_rgba,
+                               guint n, gboolean closed);
+extern void  cmacs_libregnum_render_ctx_clear_ribbons
+                              (CmacsLibregnumRenderCtx *r);
+extern guint cmacs_libregnum_render_ctx_ribbon_count
+                              (CmacsLibregnumRenderCtx *r);
+
+extern void  cmacs_libregnum_render_ctx_set_starfield
+                              (CmacsLibregnumRenderCtx *r,
+                               guint count, float radius, guint32 seed);
+extern guint cmacs_libregnum_render_ctx_starfield_count
+                              (CmacsLibregnumRenderCtx *r);
+
+extern void  cmacs_libregnum_render_ctx_set_glow_breath
+                              (CmacsLibregnumRenderCtx *r, float amount);
+extern float cmacs_libregnum_render_ctx_glow_breath
+                              (CmacsLibregnumRenderCtx *r);
+
+extern void   cmacs_libregnum_render_ctx_set_effect_time
+                              (CmacsLibregnumRenderCtx *r, double seconds);
+extern double cmacs_libregnum_render_ctx_effect_time
+                              (CmacsLibregnumRenderCtx *r);
+
 /* ── Per-node label policy ───────────────────────────────────────
  * Generalises the overlay's label filter.  LEGACY (-1) keeps the original
  * behaviour (label directories + the selected node); the others let a

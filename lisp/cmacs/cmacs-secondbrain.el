@@ -60,6 +60,11 @@
 (declare-function cmacs-secondbrain-set-galaxy-shape "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-toggle-galaxy-shape "cmacs-secondbrain-nav")
 (declare-function cmacs-libregnum-set-orbit-continuous "cmacs-libregnum-defuns")
+(declare-function cmacs-libregnum-set-starfield "cmacs-libregnum-defuns")
+(declare-function cmacs-libregnum-set-glow-breath "cmacs-libregnum-defuns")
+(declare-function cmacs-libregnum-camera-state "cmacs-libregnum-defuns")
+(declare-function cmacs-libregnum-set-camera "cmacs-libregnum-defuns")
+(declare-function cmacs-secondbrain-set-dressing "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-supported-p "cmacs-secondbrain-defuns")
@@ -362,6 +367,60 @@ ownership of should look alive, and off is one setq away."
   :type 'boolean
   :group 'cmacs-secondbrain)
 
+(defcustom cmacs-secondbrain-dressing t
+  "Whether to draw the band lanes and the galactic core.
+
+The lanes are soft additive fills under each ARMS band in its own
+colour, so the four rings read as bands of light the nodes lie in rather
+than as dots on wire.  The core is a warm-to-cool stack of glows on the
+centre, sized from the innermost band.  Neither carries meaning; both
+are what turn a diagram into a place.  `M-d\=' toggles."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-starfield 1600
+  "How many world-space stars surround the map, or 0 for none.
+
+Not the `starfield\=' background: that one is a picture behind the scene
+and does not move when the camera does.  These are part of the world and
+parallax under orbit, which is most of what tells the eye the scene has
+depth.  Generated once from a fixed seed, so the sky is the same every
+session.  `*\=' toggles."
+  :type 'natnum
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-starfield-radius 420.0
+  "Radius, in world units, of the shell the stars sit on.
+
+Well outside any map this draws (the outer band of the real notes graph
+sits near 45) and inside the renderer\='s far clip plane at 1000."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-glow-breath 0.35
+  "How much each node\='s halo breathes, 0.0 (steady) to 1.0.
+
+Every halo drifts on its own period and phase, so a field of steady
+lights becomes one that looks alive without any two neighbours pulsing
+in step.  The drift is brightness, never hue, so the category colours
+survive it.  Needs a running clock to be seen; particles keep one."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-intro t
+  "Whether opening the map flies the camera in from a distance.
+
+A short ease-out from far, high and off to one side down onto the fitted
+view.  Purely theatrical, and the one moment the whole disc is seen
+turning in depth before you touch it.  `M-i\=' replays it."
+  :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-intro-seconds 1.8
+  "How long the opening fly-in takes."
+  :type 'number
+  :group 'cmacs-secondbrain)
+
 (defcustom cmacs-secondbrain-label-size 15
   "Base on-screen height, in pixels, of an in-scene node label.
 
@@ -550,7 +609,47 @@ useless."
       ;; than filling the view with a dot.
       (cmacs-libregnum-set-focus-policy
        buf nil cmacs-secondbrain-fly-context))
+    (when (fboundp 'cmacs-secondbrain-set-dressing)
+      ;; Read at scene-build time, so this has to land before
+      ;; `set-graph' -- which is why it lives here and not in a toggle.
+      (ignore-errors
+        (cmacs-secondbrain-set-dressing buf cmacs-secondbrain-dressing)))
+    (cmacs-secondbrain--apply-starfield buf)
+    (when (fboundp 'cmacs-libregnum-set-glow-breath)
+      (ignore-errors
+        (cmacs-libregnum-set-glow-breath buf cmacs-secondbrain-glow-breath)))
     (cmacs-secondbrain--apply-background buf)))
+
+(defun cmacs-secondbrain--apply-starfield (buf)
+  "Give BUF the configured world-space sky, or clear it."
+  (when (fboundp 'cmacs-libregnum-set-starfield)
+    (ignore-errors
+      (cmacs-libregnum-set-starfield
+       buf (max 0 cmacs-secondbrain-starfield)
+       cmacs-secondbrain-starfield-radius))))
+
+(defun cmacs-secondbrain-toggle-dressing ()
+  "Turn the band lanes and galactic core on or off.
+
+Decided when the scene is built, so this re-reads the sources -- the
+same work as `cmacs-secondbrain-refresh'."
+  (interactive)
+  (setq-local cmacs-secondbrain-dressing (not cmacs-secondbrain-dressing))
+  (cmacs-secondbrain-refresh)
+  (message "Dressing %s" (if cmacs-secondbrain-dressing "on" "off")))
+
+(defun cmacs-secondbrain-toggle-starfield ()
+  "Turn the world-space stars on or off."
+  (interactive)
+  (setq-local cmacs-secondbrain-starfield
+              (if (> cmacs-secondbrain-starfield 0)
+                  0
+                (let ((d (default-value 'cmacs-secondbrain-starfield)))
+                  (if (> d 0) d 1600))))
+  (cmacs-secondbrain--apply-starfield (current-buffer))
+  (when (fboundp 'cmacs-libregnum-redraw)
+    (ignore-errors (cmacs-libregnum-redraw (current-buffer))))
+  (message "Stars %s" (if (> cmacs-secondbrain-starfield 0) "on" "off")))
 
 (defun cmacs-secondbrain--viewport-height (buf)
   "Return BUF's viewport height in pixels.
@@ -710,6 +809,10 @@ leaves it flagged animated with nothing to draw."
   (when (timerp cmacs-secondbrain--anim-timer)
     (cancel-timer cmacs-secondbrain--anim-timer))
   (setq cmacs-secondbrain--anim-timer nil)
+  ;; A fly-in cannot outlive its clock: left set, it would restart the
+  ;; timer the moment the buffer is looked at again and jump the camera
+  ;; back to wherever the intro was.
+  (when hard (setq cmacs-secondbrain--intro nil))
   ;; Dropping the animation clock is best-effort: this also runs from
   ;; `kill-buffer-hook', by which point the view may already be gone --
   ;; and libregnum signals rather than shrugging when asked about a
@@ -728,7 +831,8 @@ leaves it flagged animated with nothing to draw."
 
 (defun cmacs-secondbrain--wants-animation-p ()
   "Non-nil when this buffer has something that needs a running clock."
-  (or (and (numberp cmacs-secondbrain-auto-rotate)
+  (or cmacs-secondbrain--intro
+      (and (numberp cmacs-secondbrain-auto-rotate)
            (/= cmacs-secondbrain-auto-rotate 0.0))
       (and cmacs-secondbrain-link-pulse cmacs-secondbrain--selected)
       (ignore-errors (cmacs-secondbrain-tweening-p (current-buffer)))))
@@ -785,6 +889,7 @@ itself -- and drops the libregnum animation clock with it."
                   (t
                    (cmacs-secondbrain--rotate-step buf 0.03)
                    (cmacs-secondbrain--pulse-step buf 0.03)
+                   (cmacs-secondbrain--intro-step buf)
                    ;; Rotation has no end state, so it must not let the
                    ;; tween\'s completion stop the clock; nor must a
                    ;; running pulse.
@@ -983,6 +1088,78 @@ nothing else -- no pane refresh, no message, no re-layout."
                                 cmacs-secondbrain-transition-frames)
   (cmacs-secondbrain--animate)
   (message "Unpinned everything"))
+
+;;;; The opening fly-in ------------------------------------------------
+
+(defvar-local cmacs-secondbrain--intro nil
+  "The fly-in in progress: (FROM TO TARGET FOV T0 SECS), or nil.
+FROM and TO are camera positions; the camera eases from FROM to TO
+while aiming at TARGET.")
+
+(defun cmacs-secondbrain--intro-start (&optional buf)
+  "Start the opening fly-in for BUF from its currently fitted camera.
+
+Takes the fitted pose as the DESTINATION and backs the camera off from
+it: further out, higher, and swung round by a good part of a turn, so
+the disc is seen turning in depth on the way in.  In the flat view the
+orbit is locked, so the start is a straight pull-back along the view
+axis -- a zoom in, not a swing.  Runs on the transition clock, so it
+shares a timer with the tween and ends with it."
+  (let ((buf (or buf (current-buffer))))
+    (when (and (buffer-live-p buf)
+               (fboundp 'cmacs-libregnum-camera-state)
+               (fboundp 'cmacs-libregnum-set-camera))
+      (with-current-buffer buf
+        (let* ((st (ignore-errors (cmacs-libregnum-camera-state buf)))
+               (pos (plist-get st :position))
+               (tgt (plist-get st :target))
+               (fov (or (plist-get st :fov) 40.0)))
+          (when (and pos tgt)
+            (let* ((dx (- (nth 0 pos) (nth 0 tgt)))
+                   (dy (- (nth 1 pos) (nth 1 tgt)))
+                   (dz (- (nth 2 pos) (nth 2 tgt)))
+                   (from
+                    (if cmacs-secondbrain--3d
+                        ;; Swing 70 degrees about the height axis, pull
+                        ;; back 2.4x and climb: the map is a disc, and a
+                        ;; disc only shows its depth when the eye moves
+                        ;; AROUND it.
+                        (let* ((ang (degrees-to-radians -70.0))
+                               (c (cos ang)) (sn (sin ang))
+                               (rx (- (* c dx) (* sn dz)))
+                               (rz (+ (* sn dx) (* c dz))))
+                          (list (+ (nth 0 tgt) (* 2.4 rx))
+                                (+ (nth 1 tgt) (* 3.2 dy) (* 0.6 (abs dx)))
+                                (+ (nth 2 tgt) (* 2.4 rz))))
+                      (list (+ (nth 0 tgt) (* 2.2 dx))
+                            (+ (nth 1 tgt) (* 2.2 dy))
+                            (+ (nth 2 tgt) (* 2.2 dz))))))
+              (setq cmacs-secondbrain--intro
+                    (list from pos tgt fov (float-time)
+                          (max 0.2 (float cmacs-secondbrain-intro-seconds))))
+              (ignore-errors (cmacs-libregnum-set-camera buf from tgt fov))
+              (cmacs-secondbrain--animate))))))))
+
+(defun cmacs-secondbrain--intro-step (buf)
+  "Advance BUF's fly-in to now; clear it once it has landed."
+  (when (and (buffer-live-p buf) (buffer-local-value 'cmacs-secondbrain--intro buf))
+    (with-current-buffer buf
+      (pcase-let* ((`(,from ,to ,tgt ,fov ,t0 ,secs) cmacs-secondbrain--intro)
+                   (u (min 1.0 (/ (- (float-time) t0) secs)))
+                   ;; Ease-out cubic: fast off the mark, gentle landing.
+                   ;; A linear fly-in arrives with a bump; an ease-in-out
+                   ;; hangs at the start, where nothing is happening yet.
+                   (e (- 1.0 (expt (- 1.0 u) 3)))
+                   (pos (cl-mapcar (lambda (a b) (+ a (* e (- b a)))) from to)))
+        (ignore-errors (cmacs-libregnum-set-camera buf pos tgt fov))
+        (when (>= u 1.0)
+          (setq cmacs-secondbrain--intro nil))))))
+
+(defun cmacs-secondbrain-replay-intro ()
+  "Fly the camera in again, from the currently fitted view."
+  (interactive)
+  (cmacs-secondbrain-fit (current-buffer))
+  (cmacs-secondbrain--intro-start (current-buffer)))
 
 ;;;; Auto-rotation ------------------------------------------------------
 
@@ -1312,6 +1489,9 @@ sources."
   "a" #'cmacs-secondbrain-toggle-age-fade
   "T" #'cmacs-secondbrain-cycle-galaxy-tilt
   "M-t" #'cmacs-secondbrain-toggle-galaxy-shape
+  "M-d" #'cmacs-secondbrain-toggle-dressing
+  "*" #'cmacs-secondbrain-toggle-starfield
+  "M-i" #'cmacs-secondbrain-replay-intro
   "C-h m" #'describe-mode
   "q" #'quit-window)
 
@@ -1531,6 +1711,11 @@ routine it is when it runs, for a file it is open it."
     (pop-to-buffer-same-window buf)
     ;; And fit the framebuffer to it, or nothing is clickable.
     (cmacs-secondbrain--fit-window-now buf)
+    ;; Then the fly-in, from the pose that fit just chose.  After the
+    ;; window fit and not before: the fit re-frames the camera, and a
+    ;; fly-in that landed on the pre-fit pose would end in a jump.
+    (when cmacs-secondbrain-intro
+      (cmacs-secondbrain--intro-start buf))
     buf))
 
 ;;;###autoload

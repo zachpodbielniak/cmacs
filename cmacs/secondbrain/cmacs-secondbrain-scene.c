@@ -45,6 +45,23 @@
  * overlap into a solid white mat across the middle of the map that
  * hides the nodes they exist to relate. */
 #define SB_EDGE_ALPHA 26
+/* ...and even that is only right up to a point.  The real notes graph
+   draws 4700 links, and at 26 each they sum into a solid haze that
+   hides the disc.  So the rest alpha is HELD to 26 up to SB_EDGE_FULL
+   edges and scaled down as 1/m past it, to a floor that keeps the
+   structure faintly present.  One function, used by the build pass and
+   the flag pass both, because the two must agree or a recolour
+   flattens every edge. */
+#define SB_EDGE_FULL  700
+#define SB_EDGE_FLOOR 5
+
+static guint8
+edge_rest_alpha (guint m)
+{
+  double a = (double) SB_EDGE_ALPHA;
+  if (m > SB_EDGE_FULL) a = a * (double) SB_EDGE_FULL / (double) m;
+  return (guint8) CLAMP (a, (double) SB_EDGE_FLOOR, (double) SB_EDGE_ALPHA);
+}
 
 /* Camera field of view, in degrees.  A real angle -- both projections
  * here are perspective (see set_projection). */
@@ -53,6 +70,36 @@
 /* Vertices in a band guide.  High enough that a large ring reads as a
  * circle rather than a polygon. */
 #define SB_BAND_VERTICES 96
+
+/* The dressing: luminous band LANES and a galactic CORE.
+ *
+ * The lanes are additive ribbons under each band -- a skirt rising to
+ * the hub circle, a fill across the rows the members sit in, a skirt
+ * falling away outside -- in the ring's own colour.  They turn four thin
+ * guide hoops into four bands of light the nodes lie IN, which is what
+ * makes the disc read as a galaxy's dust lanes rather than as dots on
+ * wire.  Intensities are additive alpha, and low on purpose: a lane is
+ * a place, not a light, and the nodes have to stay the brightest thing
+ * on it.  Widths are fractions of the ring gap so they scale with the
+ * layout. */
+#define SB_LANE_IN      0.30   /* inner skirt width, ring gaps */
+#define SB_LANE_OUT     0.45   /* outer skirt width, ring gaps */
+#define SB_LANE_PEAK    118    /* additive alpha on the hub circle */
+#define SB_LANE_MID     66     /* additive alpha at the members' outer row */
+
+/* The core is three additive glows and a fading disc on the origin:
+   white-hot, then warm, then a cool corona, each wider than the last.
+   The GLOWS are sized from the disc's OUTER edge -- a bulge is read
+   against the galaxy it sits in, and sized from the innermost band
+   (radius 6 on the real map, against a rim past 45) it came out as a
+   pinprick under the centre label.  The DISC is sized from the
+   innermost band, so the flat bright part stays inside the Skills ring
+   and does not paint over it. */
+#define SB_CORE_HOT_SIZE   0.11   /* x outer radius */
+#define SB_CORE_WARM_SIZE  0.21
+#define SB_CORE_COOL_SIZE  0.34   /* any wider and the corona paints the
+                                     inner lanes blue */
+#define SB_CORE_DISC       0.85   /* x innermost band radius */
 
 /* ── Retained drawable references ──────────────────────────────────
  * Kept so a position or colour change is an in-place mutation rather
@@ -82,6 +129,8 @@ typedef struct
   GArray    *node_glow;    /* gint32 glow billboard index, or -1 */
   gboolean   shading;      /* light the nodes */
   gboolean   glow;         /* halo billboard behind each node */
+  gboolean   dressing;     /* band lanes + galactic core; see
+                              scene_dress */
   gboolean   isolate;      /* dim everything outside the selection's
                               neighbourhood */
   gint       ring_filter;  /* CmacsSbRing to keep, or -1 for all */
@@ -167,6 +216,9 @@ orb_lod_for (CmacsSbKind kind, guint n_visible)
 
 /* Defined below, used by apply_flags which appears first. */
 static gboolean node_in_selection (CmacsGraph *g, gint sel, guint i);
+static void     scene_dress (CmacsLibregnumRenderCtx *r,
+                             CmacsGraphLayout *layout, int dims,
+                             double ring_gap);
 static void     scene_step_sparks (CmacsLibregnumRenderCtx *r, SceneState *st,
                                    CmacsGraph *g, gint sel_graph);
 
@@ -221,20 +273,18 @@ scene_state (CmacsLibregnumRenderCtx *r, gboolean create)
   return st;
 }
 
+/* Forget everything about R, flags included -- not merely empty the
+   arrays.  The state table is keyed by the render context's ADDRESS, and
+   a freed context's address is exactly what the allocator hands the next
+   one; a state left behind here would then be inherited whole by a
+   view that never set it.  That is not hypothetical: two tests in a row
+   that attach, configure and detach saw the second one come up with the
+   first one's dressing on, and every count it read was off by that. */
 void
 cmacs_secondbrain_scene_reset (CmacsLibregnumRenderCtx *r)
 {
-  SceneState *st = scene_state (r, FALSE);
-
-  if (!st) return;
-  g_ptr_array_set_size (st->node_shapes, 0);
-  g_ptr_array_set_size (st->edge_shapes, 0);
-  g_ptr_array_set_size (st->spark_shapes, 0);
-  g_ptr_array_set_size (st->node_hilite, 0);
-  g_array_set_size (st->node_orb, 0);
-  g_array_set_size (st->node_glow, 0);
-  g_array_set_size (st->node_emit, 0);
-  g_array_set_size (st->edge_emit, 0);
+  if (!r || !s_states) return;
+  g_hash_table_remove (s_states, r);
 }
 
 /* ── Colour ───────────────────────────────────────────────────────── */
@@ -342,6 +392,109 @@ kind_of (CmacsGraphNode *nd)
   return (CmacsSbKind) k;
 }
 
+/* ── Dressing ─────────────────────────────────────────────────────── */
+
+/* One station of a ring at radius RAD and azimuth A, in the layout's
+   own frame: XY in 2D, the ground plane with the warp on Y in 3D. */
+static void
+ring_point (CmacsGraphLayout *layout, int dims, double rad, double a,
+            float *out)
+{
+  double h = (dims == 2 || rad <= 0.0)
+               ? 0.0 : cmacs_graph_layout_warp_height (layout, rad, a);
+
+  if (dims == 2)
+    { out[0] = (float) (rad * cos (a)); out[1] = (float) (rad * sin (a));
+      out[2] = 0.0f; }
+  else
+    { out[0] = (float) (rad * cos (a)); out[1] = (float) h;
+      out[2] = (float) (rad * sin (a)); }
+}
+
+/* A closed annulus between radii R_IN and R_OUT, alpha A_IN on the inner
+   rail and A_OUT on the outer, following the warp.  Either radius may
+   be zero, which collapses that rail onto the origin and makes the
+   ribbon a disc. */
+static void
+dress_annulus (CmacsLibregnumRenderCtx *r, CmacsGraphLayout *layout,
+               int dims, double r_in, double r_out,
+               guint8 cr, guint8 cg, guint8 cb, guint8 a_in, guint8 a_out)
+{
+  float   in_xyz[SB_BAND_VERTICES * 3], out_xyz[SB_BAND_VERTICES * 3];
+  guint32 in_c[SB_BAND_VERTICES], out_c[SB_BAND_VERTICES];
+  guint32 base = ((guint32) cr << 24) | ((guint32) cg << 16)
+                 | ((guint32) cb << 8);
+  int v;
+
+  for (v = 0; v < SB_BAND_VERTICES; v++)
+    {
+      double a = 2.0 * G_PI * (double) v / SB_BAND_VERTICES;
+      ring_point (layout, dims, r_in,  a, &in_xyz[v * 3]);
+      ring_point (layout, dims, r_out, a, &out_xyz[v * 3]);
+      in_c[v]  = base | a_in;
+      out_c[v] = base | a_out;
+    }
+  cmacs_libregnum_render_ctx_add_ribbon (r, in_xyz, out_xyz, in_c, out_c,
+                                         SB_BAND_VERTICES, TRUE);
+}
+
+static void
+scene_dress (CmacsLibregnumRenderCtx *r, CmacsGraphLayout *layout,
+             int dims, double ring_gap)
+{
+  double r0 = 0.0, rout = 0.0;
+  int band;
+
+  if (ring_gap <= 0.0) ring_gap = 6.0;
+
+  /* Lanes: one per band, at the radius the layout placed it -- the same
+     rule the guides follow, for the same reason (see the guides). */
+  for (band = 0; band < CMACS_SB_RING_COUNT; band++)
+    {
+      double rad = cmacs_graph_layout_band_radius (layout, (guint) band);
+      double dep = cmacs_graph_layout_band_depth (layout, (guint) band);
+      guint8 cr, cg, cb, ca;
+
+      if (rad <= 0.0)
+        {
+          rad = cmacs_sb_ring_radius ((CmacsSbRing) band, ring_gap);
+          dep = ring_gap * 0.35;
+        }
+      if (dep <= 0.0) dep = ring_gap * 0.35;
+      if (band == 0 || r0 <= 0.0) r0 = rad;
+      rout = MAX (rout, rad + dep);
+
+      unpack_rgba (cmacs_sb_ring_color ((CmacsSbRing) band),
+                   &cr, &cg, &cb, &ca);
+      /* Skirt in, fill across the members, skirt out.  The peak is on
+         the hub circle, where the guide line runs. */
+      dress_annulus (r, layout, dims, MAX (0.0, rad - SB_LANE_IN * ring_gap),
+                     rad, cr, cg, cb, 0, SB_LANE_PEAK);
+      dress_annulus (r, layout, dims, rad, rad + dep,
+                     cr, cg, cb, SB_LANE_PEAK, SB_LANE_MID);
+      dress_annulus (r, layout, dims, rad + dep,
+                     rad + dep + SB_LANE_OUT * ring_gap,
+                     cr, cg, cb, SB_LANE_MID, 0);
+    }
+
+  /* The core.  A disc fading out toward the innermost band, and three
+     glows stacked on the origin.  Warm at the centre and cool at the
+     edge, which is the palette every picture of a galactic bulge has
+     taught the eye to expect.  The centre node sits inside all of it
+     and comes out white-hot, which is the right thing to happen to the
+     one node everything else hangs off. */
+  if (r0 <= 0.0) r0 = ring_gap;
+  if (rout <= 0.0) rout = ring_gap * 4.0;
+  dress_annulus (r, layout, dims, 0.0, r0 * SB_CORE_DISC,
+                 255, 236, 200, 96, 0);
+  cmacs_libregnum_render_ctx_add_billboard_glow
+    (r, 0.0f, 0.0f, 0.0f, (float) (rout * SB_CORE_HOT_SIZE),  0xFFF4D6A0u);
+  cmacs_libregnum_render_ctx_add_billboard_glow
+    (r, 0.0f, 0.0f, 0.0f, (float) (rout * SB_CORE_WARM_SIZE), 0xFFB86E5Au);
+  cmacs_libregnum_render_ctx_add_billboard_glow
+    (r, 0.0f, 0.0f, 0.0f, (float) (rout * SB_CORE_COOL_SIZE), 0x6E8CFF1Cu);
+}
+
 /* ── Build ────────────────────────────────────────────────────────── */
 
 guint
@@ -367,6 +520,7 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   cmacs_libregnum_render_ctx_clear_drawables (r);
   cmacs_libregnum_render_ctx_clear_billboards (r);
   cmacs_libregnum_render_ctx_clear_orbs (r);
+  cmacs_libregnum_render_ctx_clear_ribbons (r);
   g_ptr_array_set_size (st->node_shapes, 0);
   g_ptr_array_set_size (st->edge_shapes, 0);
   g_ptr_array_set_size (st->spark_shapes, 0);
@@ -386,6 +540,12 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
   }
 
   st->flat = (dims == 2);
+
+  /* The dressing goes under everything: lanes and core are additive
+     ribbons and glows that write no depth, so whatever is drawn after
+     them sits on them. */
+  if (st->dressing)
+    scene_dress (r, layout, dims, ring_gap);
 
   /* Band guides first, so everything else draws over them.  They are
      static scenery: a translucent circle per ARMS ring, which is what
@@ -432,7 +592,11 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
                             ? 0.0
                             : cmacs_graph_layout_warp_height (layout, rad, a1);
               LrgLine3D *seg;
-              g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, 70);
+              /* Brighter over a lane than it needed to be alone: the
+                 crisp line is what the eye locks onto in the soft
+                 fill. */
+              g_autoptr (GrlColor) col =
+                grl_color_new (cr, cg, cb, st->dressing ? 96 : 70);
 
               if (dims == 2)
                 seg = lrg_line3d_new_from_to
@@ -470,7 +634,7 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
       if (n_edges_drawn >= SB_MAX_EDGE_DRAWABLES) break;
 
       line = lrg_line3d_new_from_to (a->x, a->y, a->z, b->x, b->y, b->z);
-      col = edge_base_color (e, a, b, SB_EDGE_ALPHA);
+      col = edge_base_color (e, a, b, edge_rest_alpha (m));
       lrg_shape_set_color (LRG_SHAPE (line), col);
 
       g_array_index (st->edge_emit, gint32, i) = (gint32) n_edges_drawn;
@@ -1023,7 +1187,7 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
       LrgLine3D *line;
       gint32 ei;
       guint fa, fb;
-      guint8 alpha = SB_EDGE_ALPHA;
+      guint8 alpha = edge_rest_alpha (m);
       g_autoptr (GrlColor) col = NULL;
 
       if (!e) continue;
@@ -1303,6 +1467,20 @@ cmacs_secondbrain_scene_set_glow (CmacsLibregnumRenderCtx *r, gboolean on)
 {
   SceneState *st = scene_state (r, TRUE);
   if (st) st->glow = on;
+}
+
+void
+cmacs_secondbrain_scene_set_dressing (CmacsLibregnumRenderCtx *r, gboolean on)
+{
+  SceneState *st = scene_state (r, TRUE);
+  if (st) st->dressing = on;
+}
+
+gboolean
+cmacs_secondbrain_scene_dressing_p (CmacsLibregnumRenderCtx *r)
+{
+  SceneState *st = scene_state (r, FALSE);
+  return st ? st->dressing : FALSE;
 }
 
 void

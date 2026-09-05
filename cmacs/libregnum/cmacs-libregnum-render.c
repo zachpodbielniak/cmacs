@@ -207,6 +207,43 @@ typedef struct
                             1 = additive glow, drawn after, unsorted */
 } CmacsBillboard;
 
+/* One vertex of an additive ribbon; see the ribbon pass. */
+typedef struct
+{
+  float   x, y, z;
+  guint32 rgba;
+} CmacsRibbonVertex;
+
+/* A ribbon: a strip between an INNER and an OUTER polyline with a colour
+ * at every vertex, drawn additive with the depth mask off.  Vertices
+ * are stored interleaved -- inner[i], outer[i] -- so one array walks
+ * both rails. */
+typedef struct
+{
+  GArray  *verts;    /* CmacsRibbonVertex, 2 per station */
+  gboolean closed;   /* last station joins back to the first */
+} CmacsRibbon;
+
+static void
+cmacs_ribbon_clear (gpointer p)
+{
+  CmacsRibbon *rb = p;
+  if (rb->verts) g_array_free (rb->verts, TRUE);
+  rb->verts = NULL;
+}
+
+/* One distant star; see the starfield pass.  Generated once from a
+ * seed and never touched again: a starfield that is regenerated is a
+ * starfield that shimmers. */
+typedef struct
+{
+  float  x, y, z;
+  float  size;       /* world units, edge of the quad */
+  guint8 cr, cg, cb; /* already scaled by the star's brightness */
+  float  phase;      /* twinkle offset, radians */
+  float  rate;       /* twinkle rate, radians per second */
+} CmacsStar;
+
 /* A real, per-vertex-lit sphere at a fixed world point; see the orb
  * pass near the billboards.  Deliberately a POD in a flat array rather
  * than an LrgShape3D: there are thousands of these, they are all the
@@ -493,6 +530,18 @@ struct CmacsLibregnumRenderCtx
   /* Shared radial-falloff glow texture; see ctx_glow_texture(). */
   GrlTexture       *glow_tex;         /* owned */
 
+  /* Set dressing: additive ribbons (band fills, discs), a world-space
+   * starfield, and the breathing clock the glow layer and the stars
+   * read.  See the "Ribbons, starfield, breathing" section. */
+  GArray           *ribbons;          /* CmacsRibbon */
+  GArray           *stars;            /* CmacsStar */
+  guint             star_count;
+  float             star_radius;
+  guint32           star_seed;
+  float             glow_breath;      /* 0 = every glow is steady */
+  gint64            effect_epoch_us;  /* when the effect clock started */
+  double            effect_time_pin;  /* >= 0 pins the clock, for tests */
+
   /* Particles.  Created lazily -- a view that never asks pays
    * nothing -- and stepped inside the 3D pass, which is the only
    * place with a live camera and an open FBO. */
@@ -619,6 +668,13 @@ cmacs_libregnum_render_ctx_new (int w, int h)
   r->billboards = g_array_new (FALSE, TRUE, sizeof (CmacsBillboard));
   g_array_set_clear_func (r->billboards, cmacs_billboard_clear);
   r->orbs = g_array_new (FALSE, TRUE, sizeof (CmacsOrb));
+  r->ribbons = g_array_new (FALSE, TRUE, sizeof (CmacsRibbon));
+  g_array_set_clear_func (r->ribbons, cmacs_ribbon_clear);
+  r->stars = g_array_new (FALSE, TRUE, sizeof (CmacsStar));
+  /* Live clock by default.  g_new0 left this at 0, which would PIN the
+     clock at t = 0 and quietly freeze every breathing effect. */
+  r->effect_epoch_us = g_get_monotonic_time ();
+  r->effect_time_pin = -1.0;
   r->nodes = g_array_new (FALSE, TRUE, sizeof (CmacsNode));
   g_array_set_clear_func (r->nodes, cmacs_node_clear);
 
@@ -683,6 +739,8 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (r->map_labels) g_array_free (r->map_labels, TRUE);
   if (r->billboards) g_array_free (r->billboards, TRUE);
   if (r->orbs) g_array_free (r->orbs, TRUE);
+  if (r->ribbons) g_array_free (r->ribbons, TRUE);
+  if (r->stars) g_array_free (r->stars, TRUE);
   g_clear_object (&r->orb_tex);
   g_clear_object (&r->glow_tex);
   if (r->bg_tex_ok) UnloadTexture (r->bg_tex);
@@ -2482,6 +2540,336 @@ ctx_draw_orbs (CmacsLibregnumRenderCtx *r, Camera3D cam)
 
 /* Defined below, with the rest of the camera code. */
 static Camera3D ctx_raylib_camera (CmacsLibregnumRenderCtx *r);
+
+/* ── Ribbons, starfield, breathing ─────────────────────────────────
+ *
+ * Three pieces of set dressing that a graph of lit balls on a black
+ * gradient turns out to need before it reads as a PLACE rather than a
+ * diagram.  None of them carries meaning, all of them are cheap, and
+ * every one is a plain array the scene owns and clears.
+ *
+ * Ribbons are strips between two polylines with a colour per vertex,
+ * drawn additive with the depth mask off -- the same two rules the glow
+ * layer lives by, and for the same reasons: additive can only brighten,
+ * so overlapping fills sum instead of occluding and draw order stops
+ * mattering; and a translucent surface that wrote depth would punch a
+ * hole every later glow behind it could not draw through.  Two-sided,
+ * because a band fill is looked at from above AND below once the disc
+ * is warped.  Drawn BEFORE the opaque geometry so a node sits on its
+ * band rather than being washed out by it.
+ *
+ * The starfield is a shell of small additive quads at a fixed WORLD
+ * radius.  The 2D background already paints stars, and they are a
+ * wallpaper: they do not move when the camera does.  A shell that is
+ * part of the world parallaxes under orbit, which is most of what tells
+ * the eye the scene has depth at all.  Generated once from a seed --
+ * deterministic, so a snapshot can be asserted against and so the sky
+ * is the same every session -- and jittered in radius so near stars
+ * slide against far ones.
+ *
+ * The breathing clock is the one time source both the glow layer and
+ * the stars read.  A glow whose intensity drifts a little on its own
+ * period, out of step with its neighbours, is what makes a field of
+ * steady lights look alive; the amount is a single scalar the scene
+ * sets, and zero switches it off.  The clock can be PINNED, which is
+ * how a test proves the breathing does anything: two frames at two
+ * pinned times must differ, and two at the same time must not. */
+
+/* The background's deterministic PRNG, defined with it below; the
+   starfield wants the same property for the same reason. */
+static guint32 bg_rand  (guint32 *state);
+static double  bg_randf (guint32 *state);
+
+static double
+ctx_effect_time (CmacsLibregnumRenderCtx *r)
+{
+  if (!r) return 0.0;
+  if (r->effect_time_pin >= 0.0) return r->effect_time_pin;
+  return (double) (g_get_monotonic_time () - r->effect_epoch_us) / 1e6;
+}
+
+void
+cmacs_libregnum_render_ctx_set_effect_time (CmacsLibregnumRenderCtx *r,
+                                            double seconds)
+{
+  if (!r) return;
+  r->effect_time_pin = seconds;
+}
+
+double
+cmacs_libregnum_render_ctx_effect_time (CmacsLibregnumRenderCtx *r)
+{
+  return ctx_effect_time (r);
+}
+
+void
+cmacs_libregnum_render_ctx_set_glow_breath (CmacsLibregnumRenderCtx *r,
+                                            float amount)
+{
+  if (!r) return;
+  r->glow_breath = CLAMP (amount, 0.0f, 1.0f);
+}
+
+float
+cmacs_libregnum_render_ctx_glow_breath (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->glow_breath : 0.0f;
+}
+
+/* Per-glow breathing multiplier.  Phase and rate are hashed from the
+   billboard INDEX so neighbours never pulse in step -- a whole ring
+   swelling together reads as a heartbeat, which is the wrong thing. */
+static double
+ctx_breath_factor (CmacsLibregnumRenderCtx *r, guint i, double now)
+{
+  double ph, rate;
+
+  if (!r || r->glow_breath <= 0.0f) return 1.0;
+  ph   = (double) ((i * 2654435761u) % 6283u) / 1000.0;
+  rate = 0.7 + 0.9 * (double) ((i * 40503u) % 1000u) / 1000.0;
+  return 1.0 + (double) r->glow_breath * sin (now * rate + ph);
+}
+
+gint
+cmacs_libregnum_render_ctx_add_ribbon (CmacsLibregnumRenderCtx *r,
+                                       const float *inner_xyz,
+                                       const float *outer_xyz,
+                                       const guint32 *inner_rgba,
+                                       const guint32 *outer_rgba,
+                                       guint n, gboolean closed)
+{
+  CmacsRibbon rb = { 0 };
+  guint i;
+
+  if (!r || !r->ribbons || !inner_xyz || !outer_xyz
+      || !inner_rgba || !outer_rgba || n < 2)
+    return -1;
+
+  rb.verts = g_array_sized_new (FALSE, FALSE, sizeof (CmacsRibbonVertex),
+                                n * 2);
+  for (i = 0; i < n; i++)
+    {
+      CmacsRibbonVertex a, b;
+      a.x = inner_xyz[i * 3]; a.y = inner_xyz[i * 3 + 1];
+      a.z = inner_xyz[i * 3 + 2]; a.rgba = inner_rgba[i];
+      b.x = outer_xyz[i * 3]; b.y = outer_xyz[i * 3 + 1];
+      b.z = outer_xyz[i * 3 + 2]; b.rgba = outer_rgba[i];
+      g_array_append_val (rb.verts, a);
+      g_array_append_val (rb.verts, b);
+    }
+  rb.closed = closed;
+  g_array_append_val (r->ribbons, rb);
+  return (gint) r->ribbons->len - 1;
+}
+
+void
+cmacs_libregnum_render_ctx_clear_ribbons (CmacsLibregnumRenderCtx *r)
+{
+  if (r && r->ribbons) g_array_set_size (r->ribbons, 0);
+}
+
+guint
+cmacs_libregnum_render_ctx_ribbon_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->ribbons) ? r->ribbons->len : 0;
+}
+
+static void
+ribbon_vertex (const CmacsRibbonVertex *v)
+{
+  rlColor4ub ((unsigned char) ((v->rgba >> 24) & 0xFF),
+              (unsigned char) ((v->rgba >> 16) & 0xFF),
+              (unsigned char) ((v->rgba >>  8) & 0xFF),
+              (unsigned char) ( v->rgba        & 0xFF));
+  rlVertex3f (v->x, v->y, v->z);
+}
+
+static void
+ctx_draw_ribbons (CmacsLibregnumRenderCtx *r)
+{
+  guint k;
+
+  if (!r || !r->ribbons || r->ribbons->len == 0) return;
+
+  /* Flush first: rlgl applies the mask and cull changes immediately,
+     while whatever was drawn before us may still be sitting batched. */
+  rlDrawRenderBatchActive ();
+  rlDisableDepthMask ();
+  rlDisableBackfaceCulling ();
+  BeginBlendMode (BLEND_ADDITIVE);
+  rlBegin (RL_TRIANGLES);
+  for (k = 0; k < r->ribbons->len; k++)
+    {
+      CmacsRibbon *rb = &g_array_index (r->ribbons, CmacsRibbon, k);
+      guint n, segs, s;
+
+      if (!rb->verts || rb->verts->len < 4) continue;
+      n    = rb->verts->len / 2;
+      segs = rb->closed ? n : n - 1;
+      for (s = 0; s < segs; s++)
+        {
+          guint i0 = s, i1 = (s + 1) % n;
+          const CmacsRibbonVertex *a =
+            &g_array_index (rb->verts, CmacsRibbonVertex, i0 * 2);
+          const CmacsRibbonVertex *b =
+            &g_array_index (rb->verts, CmacsRibbonVertex, i0 * 2 + 1);
+          const CmacsRibbonVertex *c =
+            &g_array_index (rb->verts, CmacsRibbonVertex, i1 * 2);
+          const CmacsRibbonVertex *d =
+            &g_array_index (rb->verts, CmacsRibbonVertex, i1 * 2 + 1);
+
+          ribbon_vertex (a); ribbon_vertex (b); ribbon_vertex (d);
+          ribbon_vertex (a); ribbon_vertex (d); ribbon_vertex (c);
+        }
+    }
+  rlEnd ();
+  EndBlendMode ();
+  rlDrawRenderBatchActive ();
+  rlEnableBackfaceCulling ();
+  rlEnableDepthMask ();
+}
+
+void
+cmacs_libregnum_render_ctx_set_starfield (CmacsLibregnumRenderCtx *r,
+                                          guint count, float radius,
+                                          guint32 seed)
+{
+  guint32 st;
+  guint i;
+
+  if (!r || !r->stars) return;
+  g_array_set_size (r->stars, 0);
+  r->star_count  = count;
+  r->star_radius = radius;
+  r->star_seed   = seed;
+  if (count == 0 || radius <= 0.0f) return;
+
+  st = seed ^ 0xA5A5F00Du;
+  for (i = 0; i < count; i++)
+    {
+      CmacsStar s;
+      double z, a, rxy, rr, u, b, t;
+
+      /* Uniform over the sphere: z uniform in [-1, 1], azimuth uniform.
+         Picking latitude uniformly instead bunches stars at the poles,
+         and the pole of this sky is straight above the disc. */
+      z   = 2.0 * bg_randf (&st) - 1.0;
+      a   = 2.0 * G_PI * bg_randf (&st);
+      rxy = sqrt (MAX (0.0, 1.0 - z * z));
+      /* A shell, not a surface: the radius jitter is what makes near
+         stars slide against far ones under orbit. */
+      rr  = (double) radius * (0.72 + 0.56 * bg_randf (&st));
+      s.x = (float) (rr * rxy * cos (a));
+      s.y = (float) (rr * z);
+      s.z = (float) (rr * rxy * sin (a));
+
+      /* Sizes in world units, scaled to the radius so a star keeps the
+         same ANGULAR size whatever shell it was given.  Most are a few
+         pixels; the fourth power keeps the bright ones rare. */
+      u = bg_randf (&st);
+      s.size = (float) ((double) radius * (0.0058 + 0.0140 * u * u * u * u));
+
+      /* Brightness, then a colour temperature: a few blue-white, most
+         white, some warm -- the mix a real sky has.  The floor is high
+         because a star is drawn through the glow texture, whose alpha
+         is 1 only at the very centre: a two-pixel star at brightness
+         0.3 rounds to nothing at all. */
+      b = 0.55 + 0.45 * bg_randf (&st) * bg_randf (&st);
+      t = bg_randf (&st);
+      if (t < 0.18)
+        { s.cr = (guint8) (185 * b); s.cg = (guint8) (200 * b);
+          s.cb = (guint8) (255 * b); }
+      else if (t < 0.78)
+        { s.cr = (guint8) (236 * b); s.cg = (guint8) (240 * b);
+          s.cb = (guint8) (255 * b); }
+      else
+        { s.cr = (guint8) (255 * b); s.cg = (guint8) (222 * b);
+          s.cb = (guint8) (178 * b); }
+
+      s.phase = (float) (2.0 * G_PI * bg_randf (&st));
+      s.rate  = (float) (0.5 + 1.6 * bg_randf (&st));
+      g_array_append_val (r->stars, s);
+    }
+}
+
+guint
+cmacs_libregnum_render_ctx_starfield_count (CmacsLibregnumRenderCtx *r)
+{
+  return (r && r->stars) ? r->stars->len : 0;
+}
+
+static void
+ctx_draw_stars (CmacsLibregnumRenderCtx *r, Camera3D cam)
+{
+  GrlTexture *gt;
+  Texture2D *tex;
+  float fwd[3], right[3], up[3], len;
+  double now;
+  guint i;
+
+  if (!r || !r->stars || r->stars->len == 0) return;
+  gt = ctx_glow_texture (r);
+  tex = gt ? grl_texture_get_handle (gt) : NULL;
+  if (!tex || !tex->id) return;
+
+  /* Camera basis, so every quad faces the viewer.  Built once here
+     rather than per star through DrawBillboard, which recomputes it --
+     and the whole point of a few thousand stars is that they are
+     cheap. */
+  fwd[0] = cam.target.x - cam.position.x;
+  fwd[1] = cam.target.y - cam.position.y;
+  fwd[2] = cam.target.z - cam.position.z;
+  len = sqrtf (fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+  if (len < 1e-6f) return;
+  fwd[0] /= len; fwd[1] /= len; fwd[2] /= len;
+  right[0] = fwd[1]*cam.up.z - fwd[2]*cam.up.y;
+  right[1] = fwd[2]*cam.up.x - fwd[0]*cam.up.z;
+  right[2] = fwd[0]*cam.up.y - fwd[1]*cam.up.x;
+  len = sqrtf (right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+  if (len < 1e-6f) { right[0] = 1; right[1] = 0; right[2] = 0; }
+  else { right[0] /= len; right[1] /= len; right[2] /= len; }
+  up[0] = right[1]*fwd[2] - right[2]*fwd[1];
+  up[1] = right[2]*fwd[0] - right[0]*fwd[2];
+  up[2] = right[0]*fwd[1] - right[1]*fwd[0];
+
+  now = ctx_effect_time (r);
+
+  rlDrawRenderBatchActive ();
+  rlDisableDepthMask ();
+  /* Two-sided: the glow texture is symmetric, so the winding of a quad
+     seen from behind is irrelevant and culling it would only make a
+     star vanish depending on which way the camera happens to face. */
+  rlDisableBackfaceCulling ();
+  BeginBlendMode (BLEND_ADDITIVE);
+  rlSetTexture (tex->id);
+  rlBegin (RL_QUADS);
+  for (i = 0; i < r->stars->len; i++)
+    {
+      CmacsStar *s = &g_array_index (r->stars, CmacsStar, i);
+      /* A gentle twinkle, always on: it is what makes the sky read as a
+         sky and not a texture, and it costs one sine per star. */
+      double tw = 0.82 + 0.18 * sin (now * (double) s->rate + (double) s->phase);
+      float h = (float) (0.5 * (double) s->size * tw);
+      float rx = right[0] * h, ry = right[1] * h, rz = right[2] * h;
+      float ux = up[0] * h, uy = up[1] * h, uz = up[2] * h;
+
+      rlColor4ub (s->cr, s->cg, s->cb, 255);
+      rlTexCoord2f (0.0f, 0.0f);
+      rlVertex3f (s->x - rx + ux, s->y - ry + uy, s->z - rz + uz);
+      rlTexCoord2f (0.0f, 1.0f);
+      rlVertex3f (s->x - rx - ux, s->y - ry - uy, s->z - rz - uz);
+      rlTexCoord2f (1.0f, 1.0f);
+      rlVertex3f (s->x + rx - ux, s->y + ry - uy, s->z + rz - uz);
+      rlTexCoord2f (1.0f, 0.0f);
+      rlVertex3f (s->x + rx + ux, s->y + ry + uy, s->z + rz + uz);
+    }
+  rlEnd ();
+  rlSetTexture (0);
+  EndBlendMode ();
+  rlDrawRenderBatchActive ();
+  rlEnableBackfaceCulling ();
+  rlEnableDepthMask ();
+}
 
 /* ── Background ────────────────────────────────────────────────────
  *
@@ -4430,6 +4818,9 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
            `in_frame' is private bookkeeping nothing reads, and
            begin_layer/end_layer do not consult it. */
         lrg_renderer_begin_layer (r->renderer, LRG_RENDER_LAYER_WORLD);
+        /* The sky first: a world-space shell far behind everything,
+         * writing no depth, so every later pass simply paints over it. */
+        ctx_draw_stars (r, ctx_raylib_camera (r));
         /* Persistent background model (e.g. the gnuseye Earth sphere):
          * drawn first, behind the per-tick scene drawables, with an
          * optional spin about +Y.  Depth-tested so surface markers
@@ -4535,6 +4926,10 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
             if (LRG_IS_DRAWABLE (d))
               lrg_drawable_draw (LRG_DRAWABLE (d), 0.0f);
           }
+        /* Additive ribbons -- band fills and discs -- UNDER the
+         * per-tick geometry: they write no depth, so what is drawn after
+         * them sits on them rather than being brightened by them. */
+        ctx_draw_ribbons (r);
         for (guint i = 0; r->drawables && i < r->drawables->len; i++)
           {
             gpointer d = g_ptr_array_index (r->drawables, i);
@@ -4645,6 +5040,7 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                  * batched. */
                 if (n_glow > 0)
                   {
+                    double breath_now = ctx_effect_time (r);
                     rlDrawRenderBatchActive ();
                     rlDisableDepthMask ();
                     BeginBlendMode (BLEND_ADDITIVE);
@@ -4660,12 +5056,21 @@ cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                         t = grl_texture_get_handle (bb->tex);
                         if (t && t->id)
                           {
+                            /* Breathing lands on the ALPHA: under
+                             * additive blending alpha is intensity, so
+                             * this is a brightness drift, never a hue
+                             * change, and the category colour survives
+                             * it. */
+                            double bf = ctx_breath_factor (r, i, breath_now);
+                            unsigned char ba =
+                              (unsigned char) CLAMP ((double) (bb->rgba & 0xFF)
+                                                     * bf, 0.0, 255.0);
                             Color tint =
                               bb->rgba
                               ? (Color){ (unsigned char) ((bb->rgba >> 24) & 0xFF),
                                          (unsigned char) ((bb->rgba >> 16) & 0xFF),
                                          (unsigned char) ((bb->rgba >>  8) & 0xFF),
-                                         (unsigned char) ( bb->rgba        & 0xFF) }
+                                         ba }
                               : bw;
                             DrawBillboard (bcam, *t,
                                            (Vector3){ bb->x, bb->y, bb->z },

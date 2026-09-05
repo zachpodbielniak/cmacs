@@ -1250,7 +1250,13 @@ grepping."
                    cmacs-secondbrain-label-size
                    cmacs-secondbrain-max-labels
                    cmacs-secondbrain-label-reference-height
-                   cmacs-secondbrain-label-scale-max))
+                   cmacs-secondbrain-label-scale-max
+                   cmacs-secondbrain-dressing
+                   cmacs-secondbrain-starfield
+                   cmacs-secondbrain-starfield-radius
+                   cmacs-secondbrain-glow-breath
+                   cmacs-secondbrain-intro
+                   cmacs-secondbrain-intro-seconds))
       (unless (and (custom-variable-p sym) (memq sym members))
         (push sym missing)))
     (should (equal nil (nreverse missing)))))
@@ -2425,6 +2431,242 @@ near a frame period is the cap rather than the drawing."
       ;; so 8 ms separates the two by a wide margin either way and does
       ;; not make the test a benchmark of the GPU.
       (should (< ms 8.0)))))
+
+;;;; The dressing: lanes, core, stars, breath, fly-in ----------------
+
+(ert-deftest cmacs-secondbrain-test-dressing-adds-lanes-and-a-core ()
+  "With the dressing on, every band gets its lanes and the origin its core.
+
+Counted, not screenshotted, for the same reason the halos are: an
+additive lane at rest alpha barely moves a frame mean, but each one is
+a ribbon in the renderer\='s list, and the count has to be exactly what
+the scene claims.  Four bands, three lanes each, plus one core disc:
+thirteen.  Three core glows on top of the per-node halos.  With it off,
+no ribbons at all -- a bare attach must draw nothing it was not asked
+for, or every other count in this file is off by the dressing."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-dressing)
+                    (fboundp 'cmacs-libregnum-ribbon-count)))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)
+                         (list :id "b" :title "B" :kind 'file :ring 'skills)))
+          on-ribbons on-glows off-ribbons off-glows)
+      (cmacs-secondbrain-set-glow buf t)
+      (cmacs-secondbrain-set-dressing buf t)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      (setq on-ribbons (cmacs-libregnum-ribbon-count buf)
+            on-glows (cmacs-libregnum-billboard-count buf))
+      (cmacs-secondbrain-set-dressing buf nil)
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      (setq off-ribbons (cmacs-libregnum-ribbon-count buf)
+            off-glows (cmacs-libregnum-billboard-count buf))
+      (should (= off-ribbons 0))
+      (should (= on-ribbons (+ (* 3 4) 1)))
+      ;; The three core glows, and nothing else, on top of the halos.
+      (should (= (- on-glows off-glows) 3)))))
+
+(ert-deftest cmacs-secondbrain-test-dressing-does-not-accumulate ()
+  "Rebuilding with the dressing on keeps the ribbon count flat.
+
+Ribbons, like billboards and orbs, survive `clear-drawables\=', so the
+build has to clear them itself or every refresh lays another set of
+lanes over the last."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-dressing)
+                    (fboundp 'cmacs-libregnum-ribbon-count)))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (vector (list :id "a" :title "A" :kind 'file :ring 'memory)))
+          counts)
+      (cmacs-secondbrain-set-dressing buf t)
+      (dotimes (_ 4)
+        (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+        (push (cmacs-libregnum-ribbon-count buf) counts))
+      (should (= 1 (length (delete-dups (copy-sequence counts)))))
+      (should (> (car counts) 0)))))
+
+(ert-deftest cmacs-secondbrain-test-dressing-reaches-the-frame ()
+  "The lanes and core actually brighten the picture.
+
+A count proves the scene asked for them; only the frame proves the
+renderer drew them.  Empty graph, plain background, so the only thing
+that can differ between the two frames is the dressing."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-dressing)
+                    (fboundp 'cmacs-libregnum-mean-color)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'none 0 0)
+    (cmacs-secondbrain-set-glow buf nil)
+    (cmacs-secondbrain-set-dressing buf nil)
+    (cmacs-secondbrain-set-graph buf (vector) (vector) 3)
+    (cmacs-secondbrain-fit buf)
+    (let ((bare (cmacs-libregnum-mean-color buf)))
+      (cmacs-secondbrain-set-dressing buf t)
+      (cmacs-secondbrain-set-graph buf (vector) (vector) 3)
+      (cmacs-secondbrain-fit buf)
+      (let ((dressed (cmacs-libregnum-mean-color buf)))
+        (should bare)
+        (should dressed)
+        ;; Additive: it can only have got brighter.
+        (should (> (apply #'+ (cl-subseq dressed 0 3))
+                   (apply #'+ (cl-subseq bare 0 3))))))))
+
+(defun cmacs-secondbrain-tests--frame-bytes (buf)
+  "BUF\='s current frame as a string of PNG bytes.
+
+The honest probe for a sky: a shell of small stars is roughly isotropic
+and barely moves a frame MEAN -- 3000 two-pixel stars over 120k pixels
+round to nothing -- but every one of them changes the bytes."
+  (let ((f (make-temp-file "sb-frame-" nil ".png")))
+    (unwind-protect
+        (progn
+          (cmacs-libregnum-snapshot buf f)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally f)
+            (buffer-string)))
+      (ignore-errors (delete-file f)))))
+
+(ert-deftest cmacs-secondbrain-test-starfield-is-part-of-the-world ()
+  "The stars render, and they move when the camera does.
+
+The second half is the point.  The `starfield\=' BACKGROUND is a picture
+and is identical from every angle; a sky that is part of the world
+parallaxes under orbit, and with nothing else in the scene any change in
+the frame under an azimuth turn is that parallax and nothing else."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-set-starfield)
+                    (fboundp 'cmacs-libregnum-snapshot)
+                    (fboundp 'cmacs-libregnum-orbit)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'none 0 0)
+    (cmacs-secondbrain-set-dressing buf nil)
+    (cmacs-secondbrain-set-graph buf (vector) (vector) 3)
+    (cmacs-secondbrain-fit buf)
+    ;; Pin the clock: the twinkle must not be what changes the frame.
+    (cmacs-libregnum-set-effect-time buf 0.0)
+    (cmacs-libregnum-set-starfield buf 0 300.0)
+    (let ((dark (cmacs-secondbrain-tests--frame-bytes buf)))
+      (cmacs-libregnum-set-starfield buf 3000 300.0)
+      (should (= 3000 (cmacs-libregnum-starfield-count buf)))
+      (let ((sky (cmacs-secondbrain-tests--frame-bytes buf)))
+        (should-not (equal dark sky))
+        ;; A quarter turn in azimuth: a different sky, because the sky is
+        ;; in the world.
+        (cmacs-libregnum-orbit buf (* 100 float-pi) 0)
+        (should-not (equal sky (cmacs-secondbrain-tests--frame-bytes buf)))))))
+
+(ert-deftest cmacs-secondbrain-test-starfield-is-deterministic ()
+  "The same seed gives the same sky, twice; a different seed does not.
+
+A sky that differed between two builds would shimmer on every refresh,
+and a snapshot test could never assert anything about it."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-set-starfield)
+                    (fboundp 'cmacs-libregnum-snapshot)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'none 0 0)
+    (cmacs-secondbrain-set-dressing buf nil)
+    (cmacs-secondbrain-set-graph buf (vector) (vector) 3)
+    (cmacs-secondbrain-fit buf)
+    (cmacs-libregnum-set-effect-time buf 0.0)
+    (cmacs-libregnum-set-starfield buf 1200 300.0 11)
+    (let ((a (cmacs-secondbrain-tests--frame-bytes buf)))
+      (cmacs-libregnum-set-starfield buf 1200 300.0 11)
+      (should (equal a (cmacs-secondbrain-tests--frame-bytes buf)))
+      (cmacs-libregnum-set-starfield buf 1200 300.0 12)
+      (should-not (equal a (cmacs-secondbrain-tests--frame-bytes buf))))))
+
+(ert-deftest cmacs-secondbrain-test-glow-breath-moves-with-the-clock ()
+  "Breathing halos differ between two instants, and only then.
+
+Pinning the effect clock makes a frame a pure function of the scene,
+which is what lets this be asserted at all: two frames at two pinned
+times must differ, two at the same time must not, and with the breath
+at zero the clock must make no difference whatever."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-libregnum-set-glow-breath)
+                    (fboundp 'cmacs-libregnum-set-effect-time)
+                    (fboundp 'cmacs-libregnum-mean-color)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'none 0 0)
+    (cmacs-secondbrain-set-dressing buf nil)
+    (cmacs-secondbrain-set-glow buf t)
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'hub :ring 'memory)) (vector) 3)
+    ;; Stand close, as the relight test does: at the fitted distance a
+    ;; single halo moves the mean by less than one level.
+    (let ((p (cmacs-secondbrain-node-position buf "a")))
+      (cmacs-libregnum-set-camera
+       buf (list (nth 0 p) (nth 1 p) (+ (nth 2 p) 1.6)) p 45.0))
+    (cmacs-libregnum-set-glow-breath buf 0.9)
+    (cmacs-libregnum-set-effect-time buf 0.0)
+    (let ((t0 (cmacs-libregnum-mean-color buf)))
+      (cmacs-libregnum-set-effect-time buf 0.0)
+      (should (equal t0 (cmacs-libregnum-mean-color buf)))
+      (cmacs-libregnum-set-effect-time buf 1.3)
+      (should-not (equal t0 (cmacs-libregnum-mean-color buf)))
+      ;; Steady: the clock is irrelevant.
+      (cmacs-libregnum-set-glow-breath buf 0.0)
+      (cmacs-libregnum-set-effect-time buf 0.0)
+      (let ((s0 (cmacs-libregnum-mean-color buf)))
+        (cmacs-libregnum-set-effect-time buf 1.3)
+        (should (equal s0 (cmacs-libregnum-mean-color buf)))))))
+
+(ert-deftest cmacs-secondbrain-test-intro-starts-far-and-lands-on-fit ()
+  "The fly-in begins away from the fitted pose and ends exactly on it.
+
+Stepped by hand with a faked clock rather than waited for: the point is
+the endpoints, not the timer.  Landing exactly is the part that
+matters -- a fly-in that ended a little off the fit would be a small
+jump on every open, forever."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain--intro-start)
+                    (fboundp 'cmacs-libregnum-camera-state)))
+  (cmacs-secondbrain-tests--with-view buf
+    (with-current-buffer buf
+      (setq-local cmacs-secondbrain--3d t)
+      (cmacs-secondbrain-set-graph
+       buf (cmacs-secondbrain-tests--ring-nodes 8) (vector) 3)
+      (cmacs-secondbrain-fit buf)
+      (let* ((fitted (plist-get (cmacs-libregnum-camera-state buf) :position))
+             (far nil))
+        (cl-letf (((symbol-function 'cmacs-secondbrain--animate) #'ignore))
+          (cmacs-secondbrain--intro-start buf))
+        (should cmacs-secondbrain--intro)
+        (setq far (plist-get (cmacs-libregnum-camera-state buf) :position))
+        ;; Further from the target than the fit was.
+        (let ((tgt (plist-get (cmacs-libregnum-camera-state buf) :target)))
+          (cl-flet ((dist (p) (sqrt (apply #'+ (cl-mapcar
+                                                 (lambda (a b) (expt (- a b) 2))
+                                                 p tgt)))))
+            (should (> (dist far) (* 1.5 (dist fitted))))))
+        ;; Fake the clock past the end and step once: it must land.
+        (setf (nth 4 cmacs-secondbrain--intro)
+              (- (float-time) (* 2 (nth 5 cmacs-secondbrain--intro))))
+        (cmacs-secondbrain--intro-step buf)
+        (should-not cmacs-secondbrain--intro)
+        (let ((landed (plist-get (cmacs-libregnum-camera-state buf) :position)))
+          (should (< (apply #'max (cl-mapcar (lambda (a b) (abs (- a b)))
+                                             landed fitted))
+                     1e-3)))))))
+
+(ert-deftest cmacs-secondbrain-test-intro-is-a-reason-to-animate ()
+  "A fly-in in progress keeps the clock alive, and a hard stop drops it.
+
+Without the first, the timer would stop at the tween\='s end with the
+camera hanging mid-flight.  Without the second, a buffer hidden during
+its intro would restart the timer when next shown and jump the camera
+back to where the intro was."
+  (skip-unless (fboundp 'cmacs-secondbrain--wants-animation-p))
+  (with-temp-buffer
+    (setq-local cmacs-secondbrain--intro '((0 0 0) (1 1 1) (0 0 0) 40.0 0.0 1.0))
+    (setq-local cmacs-secondbrain-auto-rotate 0.0)
+    (setq-local cmacs-secondbrain--selected nil)
+    (cl-letf (((symbol-function 'cmacs-secondbrain-tweening-p) #'ignore))
+      (should (cmacs-secondbrain--wants-animation-p)))
+    (cl-letf (((symbol-function 'cmacs-secondbrain-attached-p) #'ignore))
+      (cmacs-secondbrain--stop-animation t))
+    (should-not cmacs-secondbrain--intro)))
 
 (provide 'cmacs-secondbrain-tests)
 

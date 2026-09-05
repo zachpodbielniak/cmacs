@@ -75,6 +75,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-set-band-guides BUFFER ON= | the ring circles |
 | =cmacs-secondbrain-apply-flags BUFFER= | recolour from search flags, in place |
 | =cmacs-secondbrain-set-glow BUFFER ON= | halos; read at build time |
+| =cmacs-secondbrain-set-dressing BUFFER ON= | band lanes + galactic core; read at build time |
 | =cmacs-secondbrain-set-match-set BUFFER IDS &optional DIM-REST= | ids, not scene indices; a hit in a collapsed department flags the department. Returns nodes flagged |
 | =cmacs-secondbrain-scene-index BUFFER ID= | emission index, or nil when not on screen. Never store it |
 | =cmacs-secondbrain-node-id-at BUFFER INDEX= | the inverse |
@@ -104,6 +105,12 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-fly-context= | 0.4 | scene fraction =f= keeps in view |
 | =cmacs-secondbrain-node-shading= | =t= | light the nodes: round ones become real lit sphere geometry |
 | =cmacs-secondbrain-node-glow= | =t= | additive halo per node |
+| =cmacs-secondbrain-dressing= | =t= | band lanes under each ring + a warm-to-cool core on the origin |
+| =cmacs-secondbrain-starfield= | 1600 | world-space stars (parallax under orbit); 0 for none |
+| =cmacs-secondbrain-starfield-radius= | 420.0 | shell radius, world units; inside the far plane (1000) |
+| =cmacs-secondbrain-glow-breath= | 0.35 | halo brightness drift, 0..1; needs the particle clock |
+| =cmacs-secondbrain-intro= | =t= | fly the camera in on open |
+| =cmacs-secondbrain-intro-seconds= | 1.8 | length of the fly-in |
 | =cmacs-secondbrain-age-fade= | =nil= | fade Memory toward grey by mtime |
 | =cmacs-secondbrain-age-fade-days= | 180.0 | days to full fade |
 | =cmacs-secondbrain-cone-degrees= | 50 | half-angle of the =hjkl= search cone |
@@ -168,6 +175,9 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | =cmacs-secondbrain-zoom-in= / =-zoom-out= | =+= =-= | toward / away from the camera target |
 | =cmacs-secondbrain-cycle-galaxy-tilt= | =T= | flat / gentle / default / steep |
 | =cmacs-secondbrain-toggle-galaxy-shape= | =M-t= | symmetric saucer / one-sided warp |
+| =cmacs-secondbrain-toggle-dressing= | =M-d= | band lanes and the galactic core |
+| =cmacs-secondbrain-toggle-starfield= | =*= | world-space stars |
+| =cmacs-secondbrain-replay-intro= | =M-i= | fly in again from the fitted view |
 | =cmacs-secondbrain-help= | =?= | every key, and the legend |
 
 * Mouse

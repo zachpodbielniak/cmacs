@@ -494,6 +494,18 @@ Colours are =0xRRGGBBAA=. Particles fade to transparent from whatever they start
 
 =-count= exists so the effect is testable: the live count is the only externally visible proof a burst did anything, and without it a silently broken emitter looks exactly like a working one.
 
+** Ribbons, starfield and breathing: set dressing
+
+Three pieces of set dressing that a graph of lit balls on a dark gradient turns out to need before it reads as a /place/ rather than a diagram. None carries meaning, all are cheap, and each is a plain array the scene owns and clears. They are off until asked for.
+
+*Ribbons.* =cmacs_libregnum_render_ctx_add_ribbon= adds a strip between an /inner/ and an /outer/ polyline, N stations long, with a 0xRRGGBBAA at every station on each rail; =CLOSED= joins the last station back to the first. Drawn additive, two-sided, with the depth mask off, *before* the per-tick geometry. Additive so overlapping fills sum rather than occlude and the pass needs no sorting; depth mask off so a fill never punches a hole a later glow cannot draw through; first so a node sits /on/ its band instead of being brightened by it; two-sided because a warped disc is looked at from both faces. =clear_ribbons= drops them; =cmacs-libregnum-ribbon-count= exposes the count to tests. The second brain uses them for its band lanes and its core disc.
+
+*Starfield.* =cmacs_libregnum_render_ctx_set_starfield (count, radius, seed)= puts COUNT small additive quads on a shell RADIUS world units about the origin, generated once from SEED. This is deliberately not the =starfield= /background/ kind: that one is a picture behind the scene and does not move when the camera does, whereas a shell that is part of the world *parallaxes* under orbit — which is most of what tells the eye the scene has depth at all. The radius is jittered ±28% so near stars slide against far ones; sizes scale with the radius so a star keeps its angular size whatever shell it was given; a few are blue-white and some warm, most white. The quads are built from the camera basis once per frame in one =RL_QUADS= batch — a few thousand of them cost less than a handful of =DrawBillboard= calls — and drawn first in the 3D layer, writing no depth. Zero COUNT clears it. =cmacs-libregnum-set-starfield= / =-starfield-count= from Lisp.
+
+*Breathing.* =cmacs_libregnum_render_ctx_set_glow_breath (amount)= lets every glow billboard's intensity drift by up to AMOUNT (0..1) on its own period and phase, hashed from its *index* so no two neighbours pulse in step — a whole ring swelling together reads as a heartbeat, which is the wrong thing. The drift lands on the additive alpha, which under =GL_SRC_ALPHA, GL_ONE= is brightness and never hue, so a node's category colour survives it. The stars twinkle on the same clock regardless. Zero is steady. It is only visible while something keeps the view redrawing; the second brain's particle clock does.
+
+*The effect clock.* Both read =ctx_effect_time=: seconds since the context was created, or a *pinned* value. Pinning (=cmacs-libregnum-set-effect-time BUF SECS=, nil to free) exists for tests, and is what makes these effects testable at all: pinned, a frame is a pure function of the scene, so two frames at two pinned times must differ and two at the same time must not — and with the breath at zero the clock must make no difference whatever. The one trap: the context is =g_new0='d, so the pin field has to be set to −1 explicitly at construction or every clock starts life frozen at =t = 0=.
+
 * Game module hosting
 
 Beyond the built-in scene visualisers, a =cmacs-libregnum= buffer can

@@ -883,6 +883,110 @@ that forgets to clear them grows by one per node per refresh.  */)
                       : 0);
 }
 
+DEFUN ("cmacs-libregnum-ribbon-count",
+       Fcmacs_libregnum_ribbon_count,
+       Scmacs_libregnum_ribbon_count, 1, 1, 0,
+       doc: /* Number of additive ribbons in BUFFER's scene.
+
+For tests.  Ribbons -- band fills and discs -- are drawn by their own
+pass and are neither drawables nor billboards, so no other count sees
+them; and like both they survive `clear-drawables', so a scene that
+forgets to clear them stacks one more set per refresh.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return make_fixnum (ctx
+                      ? (EMACS_INT) cmacs_libregnum_render_ctx_ribbon_count (ctx)
+                      : 0);
+}
+
+DEFUN ("cmacs-libregnum-set-starfield",
+       Fcmacs_libregnum_set_starfield,
+       Scmacs_libregnum_set_starfield, 3, 4, 0,
+       doc: /* Give BUFFER's scene a world-space sky of COUNT stars.
+
+The stars sit on a shell RADIUS world units about the origin, jittered
+in depth, and are generated once from SEED (default 7) so the same sky
+comes back every session and a snapshot can be asserted against.
+
+This is not the `starfield' background kind.  That one is a picture
+behind the scene and does not move when the camera does; these are part
+of the world and parallax under orbit, which is most of what tells the
+eye the scene has depth.  Use both.  COUNT of 0 clears the sky.
+Returns COUNT.  */)
+  (Lisp_Object buffer, Lisp_Object count, Lisp_Object radius,
+   Lisp_Object seed)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNAT (count);
+  CHECK_NUMBER (radius);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  cmacs_libregnum_render_ctx_set_starfield
+    (ctx, (guint) XFIXNAT (count),
+     (float) XFLOATINT (radius),
+     FIXNUMP (seed) ? (guint32) XFIXNUM (seed) : 7u);
+  return count;
+}
+
+DEFUN ("cmacs-libregnum-starfield-count",
+       Fcmacs_libregnum_starfield_count,
+       Scmacs_libregnum_starfield_count, 1, 1, 0,
+       doc: /* Number of world-space stars in BUFFER's scene.  */)
+  (Lisp_Object buffer)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  return make_fixnum
+    (ctx ? (EMACS_INT) cmacs_libregnum_render_ctx_starfield_count (ctx) : 0);
+}
+
+DEFUN ("cmacs-libregnum-set-glow-breath",
+       Fcmacs_libregnum_set_glow_breath,
+       Scmacs_libregnum_set_glow_breath, 2, 2, 0,
+       doc: /* Let BUFFER's glow halos breathe by AMOUNT, 0.0 to 1.0.
+
+Each halo's intensity drifts on its own period and phase, so a field of
+steady lights becomes one that looks alive without any two neighbours
+pulsing in step.  The drift is on the additive alpha -- brightness, never
+hue -- so a node's category colour survives it.  0 is steady.  Visible
+only while something keeps the view redrawing; particles do.
+Returns AMOUNT.  */)
+  (Lisp_Object buffer, Lisp_Object amount)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_NUMBER (amount);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  cmacs_libregnum_render_ctx_set_glow_breath (ctx, (float) XFLOATINT (amount));
+  return amount;
+}
+
+DEFUN ("cmacs-libregnum-set-effect-time",
+       Fcmacs_libregnum_set_effect_time,
+       Scmacs_libregnum_set_effect_time, 2, 2, 0,
+       doc: /* Pin BUFFER's effect clock at SECONDS, or free it with nil.
+
+The clock the breathing halos and the twinkling stars read.  Pinned, a
+frame is a pure function of the scene, which is how a test proves those
+effects do anything: two frames at two times must differ, two frames at
+the same time must not.  Returns SECONDS.  */)
+  (Lisp_Object buffer, Lisp_Object seconds)
+{
+  CHECK_BUFFER (buffer);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  if (NILP (seconds))
+    cmacs_libregnum_render_ctx_set_effect_time (ctx, -1.0);
+  else
+    {
+      CHECK_NUMBER (seconds);
+      cmacs_libregnum_render_ctx_set_effect_time (ctx, XFLOATINT (seconds));
+    }
+  return seconds;
+}
+
 DEFUN ("cmacs-libregnum-set-focus-policy",
        Fcmacs_libregnum_set_focus_policy,
        Scmacs_libregnum_set_focus_policy, 2, 3, 0,
@@ -3149,6 +3253,11 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_set_selection_style);
   defsubr (&Scmacs_libregnum_billboard_count);
   defsubr (&Scmacs_libregnum_orb_count);
+  defsubr (&Scmacs_libregnum_ribbon_count);
+  defsubr (&Scmacs_libregnum_set_starfield);
+  defsubr (&Scmacs_libregnum_starfield_count);
+  defsubr (&Scmacs_libregnum_set_glow_breath);
+  defsubr (&Scmacs_libregnum_set_effect_time);
   defsubr (&Scmacs_libregnum_set_focus_policy);
   defsubr (&Scmacs_libregnum_set_background);
   defsubr (&Scmacs_libregnum_particles_enable);
