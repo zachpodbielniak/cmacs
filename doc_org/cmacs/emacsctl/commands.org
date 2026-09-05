@@ -108,7 +108,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =speech=    | =transcribe=, =models=, =say=, =voices=                     |
 | =lrg=       | =open=, =play=, =stop=, =save=, =tree=, =select=, =move=, =delete=, =add-primitive=, =add-visual= |
 | =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
-| =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
+| =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =run-keybind=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
 | =sb=        | =ingest=, =jobs=, =status=, =cancel=, =tree=, =find=, =doctor=, =migrate=, =watch=, =open=, =layout=, =search=, =expand=, =node=, =stats=, =sources=, =refresh= (aliases =second-brain=, =secondbrain=) |
 

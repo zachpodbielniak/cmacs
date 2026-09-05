@@ -2703,10 +2703,28 @@ Recalculate tiling layout.
 Keybinds:
 
 @table @code
-@item gowl-add-keybind KEY ACTION &optional ARG
-Add a keybind. KEY is a string like @code{"Super+Return"}.
+@item gowl-add-keybind KEY ACTION &optional ARG DESC
+@vindex gowl-add-keybind
+Add a keybind. KEY is a string like @code{"Super+Return"}, and accepts
+any keysym name xkbcommon knows --- including the modifierless
+@code{XF86} media keys. ACTION is a symbol (@code{spawn},
+@code{kill-client}, @code{set-mfact}, @dots{}) resolved from gowl's own
+@code{GowlAction} enum rather than from a list kept in cmacs, so an
+action added upstream works here with no change; underscores are
+accepted in place of hyphens. DESC is an optional human-readable
+description, which never affects dispatch and is what
+@code{cmacs-gowl-describe-keybinds} renders.
 @item gowl-list-keybinds
-List installed keybinds as alists (key, action, arg).
+List installed keybinds as alists with keys @code{key}, @code{action},
+@code{arg} and @code{desc}. @code{action} is the action's symbol, not
+the enum's integer.
+@item gowl-run-keybind KEY
+@vindex gowl-run-keybind
+Run the action bound to KEY, as if the key had been pressed --- a
+@code{spawn} bind launches its command, a @code{custom} bind evaluates
+its Elisp form. Note that @code{gowl-send-key} does @emph{not} do
+this: injected keys go to the focused client and never consult the
+keybind table. Returns @code{t} if a bind matched.
 @item gowl-remove-keybind KEY
 Remove every keybind whose combo is KEY. Use before
 @code{gowl-add-keybind} to make a freshly installed bind authoritative
@@ -2715,6 +2733,62 @@ otherwise shadow it). Returns the number removed.
 @item gowl-clear-keybinds
 Remove every keybind from the config.
 @end table
+
+@noindent
+Keybind cheatsheet and media keys:
+
+@table @code
+@item cmacs-gowl-describe-keybinds
+@vindex cmacs-gowl-describe-keybinds
+Show every active compositor keybind and what it does, bound to
+@kbd{Super+/}. Reads the @emph{live} table out of the running
+compositor rather than a config file, so binds added at runtime --- by
+a module, a podomation rule, an MCP tool --- appear alongside the
+defaults. Binds sort by modifier count first, so the modifierless
+media keys group together. A bind with a description shows it; one
+without falls back to its action and argument.
+@item cmacs-gowl-volume-raise, cmacs-gowl-volume-lower
+@itemx cmacs-gowl-volume-mute-toggle, cmacs-gowl-mic-mute-toggle
+@itemx cmacs-gowl-brightness-up, cmacs-gowl-brightness-down
+@itemx cmacs-gowl-media-play-pause, cmacs-gowl-media-next
+@itemx cmacs-gowl-media-previous, cmacs-gowl-media-stop
+The commands the @code{XF86} keys are bound to, controlled by
+@code{cmacs-gowl-media-keybindings} (default on).
+@end table
+
+A compositor keybind can only name one of gowl's built-in actions or
+spawn a subprocess, so the obvious binding for volume up is
+@code{@{ action: spawn, arg: "pamixer -i 5" @}}. That works, and gives
+no feedback: the volume moves and nothing on screen says so. gowl's
+@code{custom} action hands its argument to the embedder instead, and
+cmacs evaluates it as Elisp --- which is why these keys run commands
+that can show the resulting level in the echo area:
+
+@example
+Volume ██████████░░░░░░  62%
+Brightness ████████░░░░░░░░  50%
+@end example
+
+@vindex cmacs-gowl-media-osd-function
+Set @code{cmacs-gowl-media-osd-function} to route that elsewhere (it
+receives @code{(LABEL VALUE TEXT)}), or @code{cmacs-gowl-media-osd} to
+nil to suppress it.
+
+@vindex cmacs-gowl-media-volume-program
+@vindex cmacs-gowl-media-brightness-program
+@vindex cmacs-gowl-media-player-program
+The backends are @command{wpctl} (which ships with wireplumber, so it
+is present wherever pipewire is), @command{brightnessctl} and
+@command{playerctl}; each is a defcustom. A key whose backend is not
+installed says so once rather than failing silently on every press.
+@code{cmacs-gowl-media-volume-step} and
+@code{cmacs-gowl-media-brightness-step} are 5 points;
+@code{cmacs-gowl-media-volume-max} (1.0) is the ceiling passed to
+wpctl, which keeps a held key out of software amplification.
+
+Every call is asynchronous: under @option{--gowl} the Emacs main loop
+is also the compositor's, so a synchronous @code{call-process} would
+stall every client's frame callbacks for its duration.
 
 @noindent
 Embedding primitives:

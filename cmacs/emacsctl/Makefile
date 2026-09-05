@@ -37,17 +37,20 @@ PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
 # copy links into this binary, so the static-library dedup concern
 # from src/Makefile.in does not apply here.
 YAMLGLIB_DIR ?= ../../deps/bacon/deps/yaml-glib
-YAMLGLIB_SRCS := \
-        $(YAMLGLIB_DIR)/src/yaml-builder.c \
-        $(YAMLGLIB_DIR)/src/yaml-document.c \
-        $(YAMLGLIB_DIR)/src/yaml-generator.c \
-        $(YAMLGLIB_DIR)/src/yaml-gobject.c \
-        $(YAMLGLIB_DIR)/src/yaml-mapping.c \
-        $(YAMLGLIB_DIR)/src/yaml-node.c \
-        $(YAMLGLIB_DIR)/src/yaml-parser.c \
-        $(YAMLGLIB_DIR)/src/yaml-schema.c \
-        $(YAMLGLIB_DIR)/src/yaml-sequence.c \
-        $(YAMLGLIB_DIR)/src/yaml-serializable.c
+#
+# Globbed, not listed.  A hand-maintained list of a submodule's sources
+# goes stale the first time that submodule grows a file, and says so by
+# failing to link with undefined references to the new symbols --- which
+# names the function, not the missing source.  That is what happened
+# when yaml-glib added yaml-comments.c and yaml-writer.c: emacsctl
+# stopped building and nothing else noticed, because src/emacs links
+# the archive rather than these sources.
+YAMLGLIB_SRCS := $(sort $(wildcard $(YAMLGLIB_DIR)/src/*.c))
+
+ifeq ($(YAMLGLIB_SRCS),)
+$(error No yaml-glib sources under $(YAMLGLIB_DIR)/src -- \
+	run `git submodule update --init --recursive')
+endif
 
 # Optional GNU readline for REPL line editing (fgets fallback).
 HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)

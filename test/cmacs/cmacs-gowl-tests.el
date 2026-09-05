@@ -18,7 +18,10 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'cmacs)
+;; The cheatsheet helpers are internal, so nothing autoloads them.
+(require 'cmacs-gowl)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 
@@ -884,6 +887,127 @@ no server answers."
       (insert-file-contents client)
       (should (string-match-p "^Exec=emacsclient --gowl" (buffer-string)))
       (should-not (string-match-p "^MimeType=" (buffer-string))))))
+
+;;; Keybind cheatsheet
+
+(ert-deftest cmacs-gowl-test-keybind-label-prefers-desc ()
+  "A bind's description wins over its action and argument."
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "Super+Return") (action . spawn)
+                    (arg . "gst") (desc . "Terminal")))
+                 "Terminal")))
+
+(ert-deftest cmacs-gowl-test-keybind-label-falls-back-to-action-arg ()
+  "With no description, the label is the action and its argument.
+Binds arriving from a YAML config or a module carry no desc, and a
+cheatsheet listing them as a bare action nick would be less useful
+than what they actually do."
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "Super+p") (action . spawn)
+                    (arg . "wofi --show drun") (desc . nil)))
+                 "spawn: wofi --show drun"))
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "Super+Shift+c") (action . kill-client)
+                    (arg . nil) (desc . nil)))
+                 "kill-client")))
+
+(ert-deftest cmacs-gowl-test-keybind-label-empty-desc ()
+  "An empty description is treated as absent, not printed as blank."
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "Super+m") (action . set-layout)
+                    (arg . "monocle") (desc . "")))
+                 "set-layout: monocle")))
+
+(ert-deftest cmacs-gowl-test-keybind-sort-groups-by-modifiers ()
+  "Binds sort by modifier count first, so media keys group together.
+A plain XF86 key has no modifier and must not be interleaved with the
+Super binds."
+  (should (= (car (cmacs-gowl--keybind-sort-key
+                   '((key . "XF86AudioMute"))))
+             0))
+  (should (= (car (cmacs-gowl--keybind-sort-key
+                   '((key . "Super+p"))))
+             1))
+  (should (= (car (cmacs-gowl--keybind-sort-key
+                   '((key . "Super+Shift+Ctrl+1"))))
+             3)))
+
+(ert-deftest cmacs-gowl-test-keybind-sort-key-handles-missing-key ()
+  "A malformed entry sorts rather than erroring.
+`gowl-list-keybinds' always supplies a key, but the cheatsheet should
+not be the thing that breaks if one day it does not."
+  (should (cmacs-gowl--keybind-sort-key '((action . quit)))))
+
+(ert-deftest cmacs-gowl-test-describe-keybinds-renders ()
+  "The cheatsheet lists every live bind, one line each."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (skip-unless (gowl-list-keybinds))
+  (let ((count (length (gowl-list-keybinds))))
+    (cmacs-gowl-describe-keybinds)
+    (with-current-buffer cmacs-gowl-describe-keybinds-buffer
+      (should (string-match-p (format "^%d compositor keybinds" count)
+                              (buffer-string)))
+      ;; Header, blank line, then one line per bind.
+      (should (= (count-lines (point-min) (point-max)) (+ 2 count))))))
+
+;;; Action symbols
+
+(ert-deftest cmacs-gowl-test-list-keybinds-action-is-a-symbol ()
+  "`gowl-list-keybinds' reports actions by name, not by enum number.
+The integer it used to return meant a caller had to know the C enum's
+order to make any sense of the answer."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (let ((binds (gowl-list-keybinds)))
+    (skip-unless binds)
+    (dolist (entry binds)
+      (let ((action (cdr (assq 'action entry))))
+        (should (or (symbolp action) (integerp action)))))
+    ;; At least one must be a symbol, or the mapping is not working.
+    (should (cl-some (lambda (e) (symbolp (cdr (assq 'action e)))) binds))))
+
+(ert-deftest cmacs-gowl-test-add-keybind-accepts-desc ()
+  "A fourth argument to `gowl-add-keybind' round-trips as `desc'."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (unwind-protect
+      (progn
+        (gowl-remove-keybind "Super+Ctrl+Shift+F12")
+        (should (gowl-add-keybind "Super+Ctrl+Shift+F12" 'none nil
+                                  "cmacs test bind"))
+        (let ((entry (cl-find-if
+                      (lambda (e)
+                        (equal (cdr (assq 'desc e)) "cmacs test bind"))
+                      (gowl-list-keybinds))))
+          (should entry)
+          (should (eq (cdr (assq 'action entry)) 'none))))
+    (gowl-remove-keybind "Super+Ctrl+Shift+F12")))
+
+(ert-deftest cmacs-gowl-test-add-keybind-unknown-action-errors ()
+  "An action name gowl does not know is an error, not a silent no-op."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (skip-unless (gowl-running-p))
+  (should-error (gowl-add-keybind "Super+Ctrl+Shift+F11"
+                                  'no-such-gowl-action)))
+
+;;; Dashboard config path
+
+(ert-deftest cmacs-gowl-test-dashboard-config-path-includes-gowl ()
+  "The dashboard saves under gowl/, whether or not XDG_CONFIG_HOME is set.
+An earlier version passed XDG_CONFIG_HOME straight in as the
+directory, so with it set -- the usual case -- the file landed at
+~/.config/config.yaml, which gowl never reads."
+  (require 'cmacs-gowl-dashboard)
+  (let ((process-environment
+         (cons "XDG_CONFIG_HOME=/tmp/cmacs-test-xdg" process-environment)))
+    (should (equal (cmacs-gowl-dashboard-config-file)
+                   "/tmp/cmacs-test-xdg/gowl/config.yaml")))
+  (let ((process-environment
+         (cl-remove-if (lambda (v) (string-prefix-p "XDG_CONFIG_HOME=" v))
+                       process-environment)))
+    (should (string-suffix-p "/.config/gowl/config.yaml"
+                             (cmacs-gowl-dashboard-config-file)))))
 
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

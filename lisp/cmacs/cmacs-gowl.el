@@ -34,6 +34,11 @@
 (require 'cmacs-gowl-focus)
 (require 'cmacs-gowl-app)
 
+;; Loaded on demand when `cmacs-gowl-media-keybindings' is on, rather
+;; than required here: the media layer is only useful in a running
+;; session, and nothing else in this file needs it.
+(declare-function cmacs-gowl-media-install-keybinds "cmacs-gowl-media" ())
+
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
   :group 'cmacs
@@ -206,11 +211,32 @@ standalone gowl ships with (see
   Super+Shift+, / .   move focused client to previous / next monitor
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
+  Super+/             show the keybind cheatsheet
+
+Every bind is registered with a description, which is what
+`cmacs-gowl-describe-keybinds' renders.
 
 Note: under `--gowl' the compositor IS the Emacs session, so
 Super+Shift+q quits Emacs.  To customise, set this to nil and add
 your own binds with `gowl-add-keybind', or edit
 `cmacs-gowl--install-default-keybinds'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-media-keybindings t
+  "When non-nil, bind the XF86 media keys on `cmacs-gowl-mode' enable.
+
+Volume, microphone, brightness and player keys, bound to the commands
+in `cmacs-gowl-media' via gowl's `custom' action -- so they run in
+Emacs and show the resulting level in the echo area, rather than
+spawning a helper that changes the volume with no feedback.
+
+The backends are wpctl, brightnessctl and playerctl; see
+`cmacs-gowl-media-volume-program' and friends.  A key whose backend is
+not installed says so once instead of failing silently.
+
+Set to nil to leave those keysyms unbound, or to bind them yourself
+with `gowl-add-keybind'."
   :type 'boolean
   :group 'cmacs-gowl)
 
@@ -413,34 +439,39 @@ authoritative and keeps re-runs idempotent."
                     "gst"))
           (menu (or cmacs-gowl-menu-command "wofi --show drun"))
           (run  (or cmacs-gowl-run-command "wofi --show run")))
-      (cl-flet ((bind (key action &optional arg)
+      (cl-flet ((bind (key action &optional arg desc)
                   ;; Remove any stale bind for this key combo first so
                   ;; the new entry below is the one gowl dispatches.
                   ;; `ignore-errors' tolerates older builds that lack
                   ;; `gowl-remove-keybind' (void-function).
                   (ignore-errors (gowl-remove-keybind key))
-                  (ignore-errors (gowl-add-keybind key action arg))))
+                  ;; DESC is the fourth argument and older builds took
+                  ;; three, so fall back rather than losing the bind
+                  ;; entirely on a mismatched C layer.
+                  (or (ignore-errors
+                        (gowl-add-keybind key action arg desc))
+                      (ignore-errors (gowl-add-keybind key action arg)))))
         ;; Spawns.
-        (bind "Super+Return" 'spawn term)
-        (bind "Super+p" 'spawn menu)
-        (bind "Super+Shift+p" 'spawn run)
+        (bind "Super+Return" 'spawn term "Terminal")
+        (bind "Super+p" 'spawn menu "App launcher")
+        (bind "Super+Shift+p" 'spawn run "Run command")
         ;; Client management.
-        (bind "Super+Shift+c" 'kill-client)
-        (bind "Super+j" 'focus-stack "+1")
-        (bind "Super+k" 'focus-stack "-1")
-        (bind "Super+h" 'set-mfact "-0.05")
-        (bind "Super+l" 'set-mfact "+0.05")
-        (bind "Super+i" 'inc-nmaster "+1")
-        (bind "Super+d" 'inc-nmaster "-1")
-        (bind "Super+Shift+Return" 'zoom)
+        (bind "Super+Shift+c" 'kill-client nil "Close window")
+        (bind "Super+j" 'focus-stack "+1" "Focus next window")
+        (bind "Super+k" 'focus-stack "-1" "Focus previous window")
+        (bind "Super+h" 'set-mfact "-0.05" "Shrink master area")
+        (bind "Super+l" 'set-mfact "+0.05" "Grow master area")
+        (bind "Super+i" 'inc-nmaster "+1" "More master windows")
+        (bind "Super+d" 'inc-nmaster "-1" "Fewer master windows")
+        (bind "Super+Shift+Return" 'zoom nil "Promote to master")
         ;; Layouts.
-        (bind "Super+t" 'set-layout "tile")
-        (bind "Super+f" 'set-layout "float")
-        (bind "Super+m" 'set-layout "monocle")
-        (bind "Super+v" 'set-split "vsplit")
-        (bind "Super+Shift+v" 'set-split "normal")
-        (bind "Super+space" 'toggle-float)
-        (bind "Super+Shift+space" 'toggle-fullscreen)
+        (bind "Super+t" 'set-layout "tile" "Tile layout")
+        (bind "Super+f" 'set-layout "float" "Float layout")
+        (bind "Super+m" 'set-layout "monocle" "Monocle layout")
+        (bind "Super+v" 'set-split "vsplit" "Vertical split")
+        (bind "Super+Shift+v" 'set-split "normal" "Horizontal split")
+        (bind "Super+space" 'toggle-float nil "Toggle floating")
+        (bind "Super+Shift+space" 'toggle-fullscreen nil "Toggle fullscreen")
         ;; Tags.  The compositor interprets every tag-action arg as a
         ;; raw tag *bitmask* (atoi(arg) & TAGMASK), not a 1-based tag
         ;; number — and arg "0" is a no-op.  So tag N uses the string
@@ -449,24 +480,113 @@ authoritative and keeps re-runs idempotent."
         ;; plain "1".."9"/"0" here, which is only correct for tags 1
         ;; and 2 and a no-op for "all"; we pass real bitmasks.)
         (let ((all (number-to-string (1- (ash 1 9)))))
-          (bind "Super+0" 'tag-view all)
-          (bind "Super+Shift+0" 'tag-set all))
+          (bind "Super+0" 'tag-view all "View all tags")
+          (bind "Super+Shift+0" 'tag-set all "Tag window to all"))
         (dotimes (i 9)
-          (let ((key  (number-to-string (1+ i)))
-                (mask (number-to-string (ash 1 i))))
-            (bind (concat "Super+" key) 'tag-view mask)
-            (bind (concat "Super+Shift+" key) 'tag-set mask)
-            (bind (concat "Super+Ctrl+" key) 'tag-toggle-view mask)
-            (bind (concat "Super+Shift+Ctrl+" key) 'tag-toggle mask)))
+          (let* ((n    (1+ i))
+                 (key  (number-to-string n))
+                 (mask (number-to-string (ash 1 i))))
+            (bind (concat "Super+" key) 'tag-view mask
+                  (format "View tag %d" n))
+            (bind (concat "Super+Shift+" key) 'tag-set mask
+                  (format "Move window to tag %d" n))
+            (bind (concat "Super+Ctrl+" key) 'tag-toggle-view mask
+                  (format "Toggle tag %d in view" n))
+            (bind (concat "Super+Shift+Ctrl+" key) 'tag-toggle mask
+                  (format "Toggle tag %d on window" n))))
         ;; Multi-monitor.
-        (bind "Super+comma" 'focus-monitor "-1")
-        (bind "Super+period" 'focus-monitor "+1")
-        (bind "Super+Shift+comma" 'move-to-monitor "-1")
-        (bind "Super+Shift+period" 'move-to-monitor "+1")
+        (bind "Super+comma" 'focus-monitor "-1" "Focus previous monitor")
+        (bind "Super+period" 'focus-monitor "+1" "Focus next monitor")
+        (bind "Super+Shift+comma" 'move-to-monitor "-1"
+              "Move window to previous monitor")
+        (bind "Super+Shift+period" 'move-to-monitor "+1"
+              "Move window to next monitor")
         ;; Session.
-        (bind "Super+Shift+q" 'quit)
-        (bind "Super+Shift+r" 'reload-config)))
+        (bind "Super+Shift+q" 'quit nil "Quit cmacs")
+        (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
+        (bind "Super+slash" 'custom "(cmacs-gowl-describe-keybinds)"
+              "Show this cheatsheet"))
+      ;; Media, volume and brightness keys.  Bound to Elisp via gowl's
+      ;; `custom' action rather than spawned, so each one can show the
+      ;; resulting level.  Opt out with `cmacs-gowl-media-keybindings'.
+      (when cmacs-gowl-media-keybindings
+        (require 'cmacs-gowl-media)
+        (ignore-errors (cmacs-gowl-media-install-keybinds))))
     (setq cmacs-gowl--keybinds-installed t)))
+
+;;; Keybind cheatsheet
+
+(defvar cmacs-gowl-describe-keybinds-buffer "*gowl keybinds*"
+  "Buffer name used by `cmacs-gowl-describe-keybinds'.")
+
+(defun cmacs-gowl--keybind-label (entry)
+  "Return the human-readable label for keybind alist ENTRY.
+Prefers the bind's own description.  Falls back to the action and its
+argument, so a bind registered without a description --- from a YAML
+config, or by a module --- still says something more useful than a
+bare action name."
+  (let ((desc   (cdr (assq 'desc entry)))
+        (action (cdr (assq 'action entry)))
+        (arg    (cdr (assq 'arg entry))))
+    (cond
+     ((and (stringp desc) (not (string-empty-p desc))) desc)
+     ((and arg (not (string-empty-p arg)))
+      (format "%s: %s" action arg))
+     (t (format "%s" action)))))
+
+(defun cmacs-gowl--keybind-sort-key (entry)
+  "Return a sort key for keybind alist ENTRY.
+Groups by modifier set first so that the plain media keys, the Super
+binds and the Super+Shift binds each land together, then by the key
+name inside a group."
+  (let* ((key (or (cdr (assq 'key entry)) ""))
+         (parts (split-string key "+" t))
+         (mods (butlast parts))
+         (base (car (last parts))))
+    (cons (length mods) (concat (mapconcat #'identity mods "+") "\0" base))))
+
+;;;###autoload
+(defun cmacs-gowl-describe-keybinds ()
+  "Show every active compositor keybind, with what it does.
+
+Reads the live table out of the running compositor rather than any
+config file, so binds added at runtime --- by a module, by a
+podomation rule, from an MCP tool --- appear alongside the defaults.
+
+Each line shows its description where the bind carries one, and falls
+back to the action and argument where it does not."
+  (interactive)
+  (unless (fboundp 'gowl-list-keybinds)
+    (user-error "Gowl support is not compiled into this build"))
+  (let ((binds (ignore-errors (gowl-list-keybinds))))
+    (unless binds
+      (user-error "No compositor keybinds (is gowl running?)"))
+    (setq binds
+          (sort (copy-sequence binds)
+                (lambda (a b)
+                  (let ((ka (cmacs-gowl--keybind-sort-key a))
+                        (kb (cmacs-gowl--keybind-sort-key b)))
+                    (if (= (car ka) (car kb))
+                        (string< (cdr ka) (cdr kb))
+                      (< (car ka) (car kb)))))))
+    ;; Elisp's `format' has no `*' width, so the column is baked into
+    ;; the control string once rather than passed per line.
+    (let* ((width (apply #'max 3 (mapcar (lambda (e)
+                                           (length (or (cdr (assq 'key e)) "")))
+                                         binds)))
+           (line (format "  %%-%ds  %%s\n" width)))
+      (with-current-buffer (get-buffer-create
+                            cmacs-gowl-describe-keybinds-buffer)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "%d compositor keybinds\n\n" (length binds)))
+          (dolist (entry binds)
+            (insert (format line
+                            (or (cdr (assq 'key entry)) "")
+                            (cmacs-gowl--keybind-label entry)))))
+        (goto-char (point-min))
+        (special-mode)
+        (display-buffer (current-buffer))))))
 
 (defun cmacs-gowl--start ()
   "Start the Gowl compositor and apply configuration.

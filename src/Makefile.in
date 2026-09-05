@@ -983,7 +983,11 @@ endif
 
 ifeq ($(CMACS_GOWL_BUNDLED),yes)
 CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/libgowl.a
-$(CMACS_GOWL_STATIC_LIB):
+## FORCE, not a bare rule: without a prerequisite make only checks that
+## the archive EXISTS, so a submodule bump left the old libgowl.a in
+## place and the link failed on symbols the new sources plainly define.
+## gowl's own build decides incrementality, same as every other dep here.
+$(CMACS_GOWL_STATIC_LIB): FORCE
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl lib
 
 ## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)

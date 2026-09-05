@@ -144,9 +144,20 @@ Bypass the elisp eval round-trip for compositor-control hot paths.
 Each one returns a JSON-encoded string for structured fields and
 =t=/=nil= strings for booleans (matching the cmacsgi convention).
 
-Phase 3 will extract these into typed
-=org.cmacs.Editor1.Monitor= / =.Bar= / =.Compositor= interfaces
-with proper a{sv} return types.  Until then, parse the JSON.
+That extraction has happened for the compositor block: these live on
+=org.cmacs.Editor1.Compositor= at =/org/cmacs/Editor= and have lost
+their =Gowl= prefix, because the interface name now carries that
+context.  The keybind rows below are current; the rest of this table
+still uses the old =Gowl*= names on =org.cmacs.Editor1= and needs the
+same correction.
+
+=AddKeybindFull= exists rather than a fourth argument on
+=AddKeybind= because a D-Bus signature is part of the contract and
+callers already use the =(sis)= form.  An empty =desc= means none.
+
+=RunKeybind= runs the action a key is bound to without the key being
+pressed.  Note this is *not* what the input-injection calls do: those
+hand a key to the focused client and never consult the keybind table.
 
 | Method                       | Signature                                 | Description                                |
 |------------------------------+-------------------------------------------+--------------------------------------------|
@@ -154,8 +165,10 @@ with proper a{sv} return types.  Until then, parse the JSON.
 | =GowlFocusedClient=          | =-> (s)= JSON or "nil"                    | The focused client                         |
 | =GowlSpawn=                  | =(s) -> (s)=                              | Launch CMD with =$WAYLAND_DISPLAY=         |
 | =GowlListMonitors=           | =-> (s)= JSON                             | Attached monitors                          |
-| =GowlAddKeybind=             | =(siu) -> (s)=                            | key, action-id, arg                        |
-| =GowlListKeybinds=           | =-> (s)= JSON                             | Bound keys                                 |
+| =AddKeybind=                 | =(sis) -> (s)=                            | key, action-id, arg                        |
+| =AddKeybindFull=             | =(siss) -> (s)=                           | key, action-id, arg, desc                  |
+| =RunKeybind=                 | =(s) -> (s)=                              | Run what a key is bound to                 |
+| =ListKeybinds=               | =-> (s)= JSON                             | Bound keys, with action nick and desc      |
 | =GowlAddRule=                | =(ssubi) -> (s)=                          | app-id, title, tags, floating, monitor     |
 | =GowlSetMfact=               | =(d) -> (s)=                              | Master-area split                          |
 | =GowlSetNmaster=             | =(i) -> (s)=                              | Master-window count                        |

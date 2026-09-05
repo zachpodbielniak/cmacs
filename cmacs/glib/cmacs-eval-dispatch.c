@@ -981,7 +981,8 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
 
 gchar *
 cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
-                                  const gchar *arg, GError **error)
+                                  const gchar *arg, const gchar *desc,
+                                  GError **error)
 {
   GowlConfig *config;
   guint modifiers, keysym;
@@ -1003,8 +1004,31 @@ cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
       return NULL;
     }
 
-  gowl_config_add_keybind (config, modifiers, keysym, action, arg);
+  gowl_config_add_keybind_full (config, modifiers, keysym, action,
+                                 arg, desc);
   return g_strdup ("t");
+}
+
+gchar *
+cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error)
+{
+  guint modifiers, keysym;
+
+  GOWL_DISPATCH_CHECK ();
+
+  if (!gowl_keybind_parse (key, &modifiers, &keysym))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Invalid key string: %s", key);
+      return NULL;
+    }
+
+  /* Runs the bind, which is NOT what the input-injection calls do:
+     those hand a key to the focused client and never consult the
+     keybind table. */
+  return g_strdup (gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
+                                                     modifiers, keysym)
+                   ? "t" : "nil");
 }
 
 gchar *
@@ -1027,14 +1051,28 @@ cmacs_dispatch_gowl_list_keybinds (GError **error)
     {
       GowlKeybindEntry *kb = &g_array_index (keybinds, GowlKeybindEntry, i);
       gchar *key_str = gowl_keybind_to_string (kb->modifiers, kb->keysym);
+      const gchar *nick = cmacs_gowl_action_to_name (kb->action);
 
       g_autofree gchar *jk = cmacs_dispatch_json_escape (key_str);
       g_autofree gchar *jarg = cmacs_dispatch_json_escape (kb->arg);
+      g_autofree gchar *jdesc = cmacs_dispatch_json_escape (kb->desc);
 
       if (i > 0) g_string_append_c (buf, ',');
-      g_string_append_printf (buf,
-        "{\"key\":\"%s\",\"action\":%d,\"arg\":\"%s\"}",
-        jk, kb->action, jarg);
+      /* "action" is the nick ("kill-client"), matching what a config
+         and Fgowl_list_keybinds say.  It used to be the raw enum
+         integer, which meant a caller had to know the C enum order to
+         make any sense of the answer.  An action gowl does not know
+         still reports its number rather than vanishing. */
+      g_string_append_printf (buf, "{\"key\":\"%s\",\"action\":", jk);
+      if (nick != NULL)
+        g_string_append_printf (buf, "\"%s\"", nick);
+      else
+        g_string_append_printf (buf, "%d", kb->action);
+      g_string_append_printf (buf, ",\"arg\":\"%s\",\"desc\":", jarg);
+      if (kb->desc != NULL)
+        g_string_append_printf (buf, "\"%s\"}", jdesc);
+      else
+        g_string_append (buf, "null}");
       g_free (key_str);
     }
   g_string_append_c (buf, ']');

@@ -34,6 +34,25 @@ extern gboolean cmacs_gowl_spawn_command (const gchar *command,
  * the wallpaper / lock-screen sinks. */
 extern GowlCompositor *cmacs_gowl_get_compositor (void);
 
+/* Keybind action names <-> GowlAction values.
+ *
+ * gowl already registers every action as a GEnum with a nick
+ * ("kill-client", "set-mfact", ...), so these resolve through
+ * g_enum_get_value_by_nick/g_enum_get_value rather than repeating the
+ * list.  A hand-written copy is how `codex-cli' ended up working in one
+ * cmacs-ai surface and unknown in two others; the same shape of bug
+ * here would be a new gowl action that binds from Elisp and not from
+ * D-Bus, or vice versa.
+ *
+ * Underscores are accepted as well as hyphens, matching gowl's own YAML
+ * parser, so `kill_client' and `kill-client' both resolve. */
+extern gboolean cmacs_gowl_action_from_name (const gchar *name,
+                                             gint *out_action);
+
+/* The canonical nick for ACTION, or NULL when it is not a known value.
+ * Returned string is owned by the enum class and must not be freed. */
+extern const gchar *cmacs_gowl_action_to_name (gint action);
+
 /* Lock/unlock the compositor dispatch mutex.  Scene-graph mutations from a
  * thread other than the gowl dispatch thread (e.g. the screensaver frame
  * pump on the Emacs main thread) MUST be wrapped in these to avoid racing

@@ -376,9 +376,10 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
       IPC_REQUIRE_STRING (key, "key");
       gint action = (gint)ipc_param_int (params, "action");
       const gchar *arg = ipc_param_string (params, "arg") ? ipc_param_string (params, "arg") : NULL;
+      const gchar *desc = ipc_param_string (params, "desc");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_add_keybind (key, action, arg,
-                                                         &err);
+                                                         desc, &err);
       if (result != NULL)
         {
           ipc_send_result (ipc->fd, id, result);

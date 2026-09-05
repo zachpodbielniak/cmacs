@@ -101,8 +101,12 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{gnuseye}, @code{pod} (podomation), @code{video}, @code{audio},
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{calc} (@code{eval}, @code{symbolic}, @code{units},
-@code{list}, @code{describe}), @code{compositor} and @code{monitor}
-(gowl), and @code{sb} (the second brain: @code{ingest}, @code{jobs},
+@code{list}, @code{describe}), @code{compositor} (whose verbs include
+@code{keybinds} to list the live keybind table with each bind's action
+nick and description, and @code{run-keybind KEY} to run what a key is
+bound to --- which is not the same as injecting the key, since an
+injected key goes to the focused client and never consults the table)
+and @code{monitor} (gowl), and @code{sb} (the second brain: @code{ingest}, @code{jobs},
 @code{status}, @code{cancel}, @code{tree}, @code{find}, @code{doctor},
 @code{migrate}, @code{watch}, @code{open}, @code{layout}, @code{search}, @code{expand}, @code{node},
 @code{stats}, @code{sources}, @code{refresh}; aliases

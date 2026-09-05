@@ -60,14 +60,25 @@
     (when setter
       (funcall setter value))))
 
+(defun cmacs-gowl-dashboard-config-file ()
+  "Return the path this dashboard saves the gowl config to.
+`$XDG_CONFIG_HOME/gowl/config.yaml', or `~/.config/gowl/config.yaml'
+when that variable is unset.
+
+The gowl/ component is not optional: an earlier version passed
+XDG_CONFIG_HOME straight to `expand-file-name' as the directory, so
+with the variable set --- which is the usual case --- the config
+landed at ~/.config/config.yaml, where gowl does not look for it."
+  (expand-file-name
+   "gowl/config.yaml"
+   (or (getenv "XDG_CONFIG_HOME") (expand-file-name "~/.config"))))
+
 (defun cmacs-gowl-dashboard-save-yaml ()
   "Save the current compositor config as YAML."
   (interactive)
   (let ((yaml (gowl-config-generate-yaml)))
     (when yaml
-      (let ((file (expand-file-name "config.yaml"
-                                     (or (getenv "XDG_CONFIG_HOME")
-                                         "~/.config/gowl/"))))
+      (let ((file (cmacs-gowl-dashboard-config-file)))
         (make-directory (file-name-directory file) t)
         (with-temp-file file
           (insert yaml))

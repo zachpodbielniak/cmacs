@@ -37,6 +37,19 @@ static const gchar *iface_xml =
   "    <arg type='i' name='action' direction='in'/>"
   "    <arg type='s' name='arg' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* AddKeybindFull rather than a fourth argument on AddKeybind: a
+     D-Bus signature is part of the contract, and emacsctl, podomation
+     rules and user scripts already call the (sis) form.  An empty
+     `desc' means no description. */
+  "  <method name='AddKeybindFull'>"
+  "    <arg type='s' name='key' direction='in'/>"
+  "    <arg type='i' name='action' direction='in'/>"
+  "    <arg type='s' name='arg' direction='in'/>"
+  "    <arg type='s' name='desc' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='RunKeybind'>"
+  "    <arg type='s' name='key' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ListKeybinds'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='AddRule'>"
@@ -168,7 +181,24 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       const gchar *key, *arg;
       gint action;
       g_variant_get (p, "(&si&s)", &key, &action, &arg);
-      RETURN_STR (cmacs_dispatch_gowl_add_keybind (key, action, arg, &err));
+      RETURN_STR (cmacs_dispatch_gowl_add_keybind (key, action, arg,
+                                                    NULL, &err));
+    }
+  else if (g_strcmp0 (m, "AddKeybindFull") == 0)
+    {
+      const gchar *key, *arg, *desc;
+      gint action;
+      g_variant_get (p, "(&si&s&s)", &key, &action, &arg, &desc);
+      RETURN_STR (cmacs_dispatch_gowl_add_keybind (
+                    key, action, arg,
+                    (desc != NULL && desc[0] != '\0') ? desc : NULL,
+                    &err));
+    }
+  else if (g_strcmp0 (m, "RunKeybind") == 0)
+    {
+      const gchar *key;
+      g_variant_get (p, "(&s)", &key);
+      RETURN_STR (cmacs_dispatch_gowl_run_keybind (key, &err));
     }
   else if (g_strcmp0 (m, "ListKeybinds") == 0)
     RETURN_STR (cmacs_dispatch_gowl_list_keybinds (&err));

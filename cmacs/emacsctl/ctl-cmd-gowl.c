@@ -46,6 +46,10 @@ static const CtlMethodSpec gowl_specs[] = {
     "s?:mode s?:client s?:by s:file", CTL_REPLY_STRING },
   { "compositor keybinds", "List keybinds",
     CTL_IFACE_COMPOSITOR, "ListKeybinds", NULL, CTL_REPLY_JSON },
+  { "compositor run-keybind", "Run what a key is bound to "
+    "(e.g. \"Super+Return\"); not the same as injecting the key, "
+    "which goes to the focused client",
+    CTL_IFACE_COMPOSITOR, "RunKeybind", "s:key", CTL_REPLY_STRING },
   { "compositor mfact", "Set the master area factor",
     CTL_IFACE_COMPOSITOR, "SetMfact", "d:mfact", CTL_REPLY_STRING },
   { "compositor nmaster", "Set the number of master windows",

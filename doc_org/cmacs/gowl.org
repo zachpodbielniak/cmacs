@@ -472,12 +472,100 @@ holds focus.
 | =Super+Shift+,= / =.=   | Move client to previous / next monitor  |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
+| =Super+/=               | Show the keybind cheatsheet             |
+
+Every one of these is registered with a *description*.  That is the
+fourth argument to =gowl-add-keybind=, it never affects dispatch, and
+it is what [[#keybind-cheatsheet][the cheatsheet]] renders instead of an action name.
 
 #+begin_quote
 *Caution:* under =--gowl= the compositor /is/ the Emacs session, so
 =Super+Shift+q= quits Emacs.  Set =cmacs-gowl-default-keybindings= to
 nil and install your own binds with =gowl-add-keybind= to customise.
 #+end_quote
+
+** The keybind cheatsheet
+:PROPERTIES:
+:CUSTOM_ID: keybind-cheatsheet
+:END:
+
+=M-x cmacs-gowl-describe-keybinds= (=Super+/=) lists every active
+compositor keybind and what it does.
+
+It reads the *live* table out of the running compositor rather than
+any config file, so binds added at runtime --- by a module, a
+podomation rule, an MCP tool --- appear alongside the defaults.  Binds
+sort by modifier count first, so the modifierless media keys group
+together ahead of the =Super= binds.
+
+A bind that carries a description shows it.  One that does not ---
+anything from a YAML config, or a module's own binds --- falls back to
+its action and argument (=spawn: wofi --show drun=), which is still
+more use than a bare action nick.
+
+** Media, volume and brightness keys
+:PROPERTIES:
+:CUSTOM_ID: media-keys
+:END:
+
+The =XF86= keys a laptop emits are bound on mode enable, controlled by
+=cmacs-gowl-media-keybindings= (default on):
+
+| Key                                                  | Command                          |
+|------------------------------------------------------+----------------------------------|
+| =XF86AudioRaiseVolume= / =XF86AudioLowerVolume=      | =cmacs-gowl-volume-raise/-lower= |
+| =XF86AudioMute=                                      | =cmacs-gowl-volume-mute-toggle=  |
+| =XF86AudioMicMute=                                   | =cmacs-gowl-mic-mute-toggle=     |
+| =XF86MonBrightnessUp= / =XF86MonBrightnessDown=      | =cmacs-gowl-brightness-up/-down= |
+| =XF86AudioPlay= / =Next= / =Prev= / =Stop=           | =cmacs-gowl-media-*=             |
+
+These carry no modifier, which dispatch handles like any other bind:
+it compares a *cleaned* modifier mask, so zero matches zero (and
+NumLock or CapsLock being on cannot stop a bind firing).
+
+*** Why these are Elisp and not spawned commands
+
+A compositor keybind can only name one of gowl's built-in actions or
+spawn a subprocess, so the obvious binding is
+~{ action: spawn, arg: "pamixer -i 5" }~.  That works, and gives no
+feedback --- the volume moves and nothing says so.
+
+gowl's =custom= action hands its argument to the embedder instead, and
+cmacs evaluates that argument as Elisp.  So these keys run
+=cmacs-gowl-media= commands, which show the resulting level in the
+echo area on the way past:
+
+#+begin_example
+Volume ██████████░░░░░░  62%
+Brightness ████████░░░░░░░░  50%
+Next: Sabaton - Bismarck
+#+end_example
+
+Route the OSD elsewhere --- a gowl layer surface, a posframe, a
+notification --- by setting =cmacs-gowl-media-osd-function=, which
+receives =(LABEL VALUE TEXT)=.  Set =cmacs-gowl-media-osd= to nil to
+suppress it entirely.
+
+*** Backends
+
+| Variable                                | Default          | Used for            |
+|-----------------------------------------+------------------+---------------------|
+| =cmacs-gowl-media-volume-program=       | =wpctl=          | volume, mute        |
+| =cmacs-gowl-media-brightness-program=   | =brightnessctl=  | backlight           |
+| =cmacs-gowl-media-player-program=       | =playerctl=      | MPRIS transport     |
+
+=wpctl= ships with wireplumber, so it is present wherever pipewire is;
+the other two are separate packages.  A key whose backend is not
+installed says so *once* rather than failing silently on every press.
+
+Steps are =cmacs-gowl-media-volume-step= and
+=-brightness-step= (5 points each).  =cmacs-gowl-media-volume-max=
+(1.0) is the ceiling passed to wpctl, which keeps a held key from
+driving the sink into software amplification.
+
+Every call is asynchronous.  Under =--gowl= the Emacs main loop is
+also the compositor's, so a synchronous =call-process= would stall
+every client's frame callbacks for its duration.
 
 Note on tag arguments: the compositor interprets a tag-action keybind
 argument as a raw tag /bitmask/ (=atoi(arg) & TAGMASK=), not a 1-based
@@ -918,10 +1006,26 @@ Keybinds:
 
 | Primitive                      | Description                                    |
 |--------------------------------+------------------------------------------------|
-| =gowl-add-keybind=           | Add a keybind (key string, action, arg)        |
+| =gowl-add-keybind=           | Add a keybind (key, action, arg, desc)         |
 | =gowl-list-keybinds=         | List installed keybinds as alists              |
+| =gowl-run-keybind=           | Run the action bound to a key, as if pressed   |
 | =gowl-remove-keybind=        | Remove all keybinds for a key combo            |
 | =gowl-clear-keybinds=        | Remove every keybind                           |
+
+=gowl-add-keybind= takes the action as a symbol --- =spawn=,
+=kill-client=, =set-mfact= and the rest --- resolved from gowl's own
+=GowlAction= enum rather than a list kept in cmacs, so an action added
+upstream works here with no change.  Underscores are accepted in place
+of hyphens.  Its optional fourth argument is the bind's *description*.
+
+=gowl-list-keybinds= returns =((key . "Super+p") (action . spawn) (arg
+. "wofi --show drun") (desc . "App launcher"))= per bind.  =action= is
+the symbol, not the enum's integer.
+
+=gowl-run-keybind= runs what a key is bound to *without* pressing it,
+which is what makes a =custom= bind reachable from a menu or a test.
+Note that =gowl-send-key= does **not** do this: injected keys go to
+the focused client and never consult the keybind table.
 
 Embedding primitives:
 

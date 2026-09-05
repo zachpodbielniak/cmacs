@@ -179,9 +179,19 @@ gchar *cmacs_dispatch_gowl_spawn (const gchar *command, GError **error);
 /* List monitors as JSON array string. */
 gchar *cmacs_dispatch_gowl_list_monitors (GError **error);
 
-/* Add a keybind.  Returns "t" on success. */
+/* Add a keybind.  DESC is an optional human-readable description of
+   what the bind does; it never affects dispatch and may be NULL.
+   Returns "t" on success. */
 gchar *cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
-                                         const gchar *arg, GError **error);
+                                         const gchar *arg,
+                                         const gchar *desc,
+                                         GError **error);
+
+/* Run the action bound to KEY, as if the key had been pressed.
+   Returns "t" if a bind matched, "nil" otherwise.  Not the same as
+   injecting the key: injection goes to the focused client and never
+   consults the keybind table. */
+gchar *cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error);
 
 /* List keybinds as JSON array string. */
 gchar *cmacs_dispatch_gowl_list_keybinds (GError **error);

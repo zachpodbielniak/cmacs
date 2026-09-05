@@ -59,6 +59,56 @@ cmacs_gowl_get_compositor (void)
   return cmacs_gowl_compositor;
 }
 
+/* ── Keybind action name <-> value ────────────────────────────────────
+ *
+ * gowl registers GowlAction as a GEnum whose nicks are exactly the
+ * names a config uses, so both directions come out of that one table
+ * instead of a switch that has to be extended in lockstep with gowl.
+ * Adding an action upstream now reaches every cmacs surface at once:
+ * `gowl-add-keybind', the D-Bus/MCP dispatch, and the cheatsheet.  */
+
+gboolean
+cmacs_gowl_action_from_name (const gchar *name, gint *out_action)
+{
+  GEnumClass *klass;
+  GEnumValue *val;
+  g_autofree gchar *norm = NULL;
+
+  if (name == NULL || out_action == NULL)
+    return false;
+
+  /* gowl's YAML parser normalises underscores to hyphens; do the same
+     so a config and an Elisp call spell an action identically. */
+  norm = g_strdup (name);
+  g_strdelimit (norm, "_", '-');
+
+  klass = (GEnumClass *) g_type_class_ref (GOWL_TYPE_ACTION);
+  val = g_enum_get_value_by_nick (klass, norm);
+  if (val != NULL)
+    *out_action = val->value;
+  g_type_class_unref (klass);
+
+  return val != NULL;
+}
+
+const gchar *
+cmacs_gowl_action_to_name (gint action)
+{
+  GEnumClass *klass;
+  GEnumValue *val;
+  const gchar *nick = NULL;
+
+  /* g_type_class_ref keeps the class alive for the process (GLib caches
+     enum classes), so the nick stays valid after the unref below. */
+  klass = (GEnumClass *) g_type_class_ref (GOWL_TYPE_ACTION);
+  val = g_enum_get_value (klass, action);
+  if (val != NULL)
+    nick = val->value_nick;
+  g_type_class_unref (klass);
+
+  return nick;
+}
+
 /* TRUE while a keyboard-interactive layer-shell surface -- a launcher
    such as wofi, an on-screen keyboard -- holds an exclusive keyboard
    grab in the compositor.
@@ -1035,6 +1085,60 @@ cmacs_gowl_client_map (GowlCompositor *comp, GowlClient *client,
     }
 }
 
+/* ── Custom keybind action: run Elisp from a compositor key ──────────
+ *
+ * A `custom' keybind carries an Elisp form as its arg.  gowl calls the
+ * handler below from key dispatch, which runs on the COMPOSITOR
+ * thread -- so it must not touch the Lisp VM.  It hands the form to
+ * the Emacs main loop with g_idle_add, exactly as the clipboard bridge
+ * does, and the idle callback evaluates it there through
+ * cmacs_dispatch_eval (which carries the waiting_for_input guard and
+ * the condition-case; under --gowl an error escaping into
+ * signal_or_quit would abort the whole session).
+ *
+ * The consequence is that the eval is asynchronous: the key is
+ * consumed immediately and the form runs on the next main-loop turn.
+ * For a volume step or a menu that is invisible, and it is the only
+ * safe option -- blocking the compositor thread on the Lisp VM would
+ * stall every client's frame callbacks. */
+
+static gboolean
+cmacs_gowl_custom_action_idle (gpointer data)
+{
+  gchar *form = (gchar *) data;
+  GError *err = NULL;
+  gchar *result;
+
+  result = cmacs_dispatch_eval (form, &err);
+  if (result == NULL)
+    {
+      /* A broken form in a keybind should say so once, not wedge the
+         session or fail silently on every press. */
+      g_warning ("gowl custom keybind failed: %s (form was: %s)",
+                 err != NULL ? err->message : "unknown error", form);
+      g_clear_error (&err);
+    }
+  g_free (result);
+  g_free (form);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+cmacs_gowl_custom_action (GowlCompositor *comp,
+                           const gchar    *arg,
+                           gpointer        data)
+{
+  (void) comp;
+  (void) data;
+
+  if (arg == NULL || arg[0] == '\0')
+    return FALSE;
+
+  g_idle_add (cmacs_gowl_custom_action_idle, g_strdup (arg));
+  return true;
+}
+
 void
 cmacs_gowl_start_thread (void)
 {
@@ -1050,6 +1154,9 @@ cmacs_gowl_start_thread (void)
   gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
                                      cmacs_gowl_key_intercept,
                                      NULL);
+  gowl_compositor_set_custom_action_handler (cmacs_gowl_compositor,
+                                             cmacs_gowl_custom_action,
+                                             NULL);
   gowl_compositor_set_client_map_callback (cmacs_gowl_compositor,
                                            cmacs_gowl_client_map,
                                            NULL);
@@ -3951,17 +4058,35 @@ Uses the module manager's key dispatch with GOWL_ACTION_SET_LAYOUT. */)
  * ══════════════════════════════════════════════════════════════════════ */
 
 DEFUN ("gowl-add-keybind", Fgowl_add_keybind, Sgowl_add_keybind,
-       2, 3, 0,
+       2, 4, 0,
        doc: /* Add a keybind.  KEY is a string like \"Super+Return\".
-ACTION is a symbol from gowl-action-* constants or an integer.
-Optional ARG is a string argument for the action (e.g. command to spawn).
-Uses gowl_keybind_parse to resolve the key string. */)
-  (Lisp_Object key, Lisp_Object action, Lisp_Object arg)
+ACTION is a symbol naming a gowl action, or its integer value.  The
+symbol names are gowl's own action nicks -- `spawn', `kill-client',
+`toggle-float', `toggle-fullscreen', `focus-stack', `focus-monitor',
+`tag-view', `tag-set', `tag-toggle-view', `tag-toggle',
+`move-to-monitor', `set-mfact', `inc-nmaster', `set-layout',
+`cycle-layout', `set-split', `zoom', `quit', `reload-config',
+`ipc-command', `lock', `custom' and `none' -- resolved from the
+GowlAction enum itself, so a new action in gowl works here with no
+change.  Underscores are accepted in place of hyphens.
+
+Optional ARG is a string argument for the action, e.g. the command for
+`spawn' or the Elisp form for `custom'.
+
+Optional DESC is a human-readable description of what the bind does.
+It never affects dispatch; `cmacs-gowl-describe-keybinds' and gowl's
+MCP `list_keybinds' render it.
+
+KEY is resolved with gowl_keybind_parse, so it accepts any keysym name
+xkbcommon knows -- including the modifierless media keys, whose names
+all begin \"XF86\".  */)
+  (Lisp_Object key, Lisp_Object action, Lisp_Object arg, Lisp_Object desc)
 {
   GowlConfig *config;
   guint modifiers, keysym;
   gint action_val;
   const gchar *arg_str = NULL;
+  const gchar *desc_str = NULL;
 
   CHECK_STRING (key);
   GOWL_CHECK_RUNNING ();
@@ -3977,66 +4102,36 @@ Uses gowl_keybind_parse to resolve the key string. */)
     action_val = (gint)XFIXNUM (action);
   else if (SYMBOLP (action))
     {
-      /* Map symbol names to GowlAction enum values. */
-      const char *name = SSDATA (SYMBOL_NAME (action));
-      if (g_strcmp0 (name, "spawn") == 0)
-        action_val = (gint)GOWL_ACTION_SPAWN;
-      else if (g_strcmp0 (name, "kill-client") == 0)
-        action_val = (gint)GOWL_ACTION_KILL_CLIENT;
-      else if (g_strcmp0 (name, "toggle-float") == 0)
-        action_val = (gint)GOWL_ACTION_TOGGLE_FLOAT;
-      else if (g_strcmp0 (name, "toggle-fullscreen") == 0)
-        action_val = (gint)GOWL_ACTION_TOGGLE_FULLSCREEN;
-      else if (g_strcmp0 (name, "focus-stack") == 0)
-        action_val = (gint)GOWL_ACTION_FOCUS_STACK;
-      else if (g_strcmp0 (name, "focus-monitor") == 0)
-        action_val = (gint)GOWL_ACTION_FOCUS_MONITOR;
-      else if (g_strcmp0 (name, "tag-view") == 0)
-        action_val = (gint)GOWL_ACTION_TAG_VIEW;
-      else if (g_strcmp0 (name, "tag-set") == 0)
-        action_val = (gint)GOWL_ACTION_TAG_SET;
-      else if (g_strcmp0 (name, "tag-toggle-view") == 0)
-        action_val = (gint)GOWL_ACTION_TAG_TOGGLE_VIEW;
-      else if (g_strcmp0 (name, "tag-toggle") == 0)
-        action_val = (gint)GOWL_ACTION_TAG_TOGGLE;
-      else if (g_strcmp0 (name, "move-to-monitor") == 0)
-        action_val = (gint)GOWL_ACTION_MOVE_TO_MONITOR;
-      else if (g_strcmp0 (name, "set-mfact") == 0)
-        action_val = (gint)GOWL_ACTION_SET_MFACT;
-      else if (g_strcmp0 (name, "inc-nmaster") == 0)
-        action_val = (gint)GOWL_ACTION_INC_NMASTER;
-      else if (g_strcmp0 (name, "set-layout") == 0)
-        action_val = (gint)GOWL_ACTION_SET_LAYOUT;
-      else if (g_strcmp0 (name, "cycle-layout") == 0)
-        action_val = (gint)GOWL_ACTION_CYCLE_LAYOUT;
-      else if (g_strcmp0 (name, "set-split") == 0)
-        action_val = (gint)GOWL_ACTION_SET_SPLIT;
-      else if (g_strcmp0 (name, "zoom") == 0)
-        action_val = (gint)GOWL_ACTION_ZOOM;
-      else if (g_strcmp0 (name, "quit") == 0)
-        action_val = (gint)GOWL_ACTION_QUIT;
-      else if (g_strcmp0 (name, "reload-config") == 0)
-        action_val = (gint)GOWL_ACTION_RELOAD_CONFIG;
-      else if (g_strcmp0 (name, "lock") == 0)
-        action_val = (gint)GOWL_ACTION_LOCK;
-      else
-        error ("Unknown action: %s", name);
+      if (!cmacs_gowl_action_from_name (SSDATA (SYMBOL_NAME (action)),
+                                        &action_val))
+        error ("Unknown action: %s", SSDATA (SYMBOL_NAME (action)));
     }
   else
     error ("ACTION must be an integer or symbol");
 
   if (STRINGP (arg))
     arg_str = SSDATA (arg);
+  if (STRINGP (desc))
+    desc_str = SSDATA (desc);
 
-  gowl_config_add_keybind (config, modifiers, keysym,
-                            action_val, arg_str);
+  gowl_config_add_keybind_full (config, modifiers, keysym,
+                                 action_val, arg_str, desc_str);
   return Qt;
 }
 
 DEFUN ("gowl-list-keybinds", Fgowl_list_keybinds, Sgowl_list_keybinds,
        0, 0, 0,
        doc: /* Return a list of keybind alists.
-Each alist has keys: key, action, arg. */)
+Each alist has keys: key, action, arg, desc.
+
+`action' is the action's symbol -- `spawn', `kill-client', ... -- taken
+from gowl's own GowlAction enum, so it reads the same way it is written
+in `gowl-add-keybind' and in a YAML config.  An action value gowl does
+not know (only reachable by passing an integer to `gowl-add-keybind')
+comes back as the integer instead.
+
+`desc' is the bind's description, or nil when it was registered without
+one.  `cmacs-gowl-describe-keybinds' renders this list.  */)
   (void)
 {
   GowlConfig *config;
@@ -4054,21 +4149,53 @@ Each alist has keys: key, action, arg. */)
     {
       GowlKeybindEntry *kb = &g_array_index (keybinds, GowlKeybindEntry, i);
       gchar *key_str = gowl_keybind_to_string (kb->modifiers, kb->keysym);
+      const gchar *action_nick = cmacs_gowl_action_to_name (kb->action);
       Lisp_Object entry;
 
-      entry = list3 (
+      entry = list4 (
         Fcons (intern_c_string ("key"),
                build_string (key_str ? key_str : "")),
+        /* A symbol when gowl knows the value, else the raw integer --
+           losing an unrecognised action entirely would be worse than
+           showing a number the caller can look up. */
         Fcons (intern_c_string ("action"),
-               make_fixnum (kb->action)),
+               action_nick ? intern (action_nick) : make_fixnum (kb->action)),
         Fcons (intern_c_string ("arg"),
-               kb->arg ? build_string (kb->arg) : Qnil));
+               kb->arg ? build_string (kb->arg) : Qnil),
+        Fcons (intern_c_string ("desc"),
+               kb->desc ? build_string (kb->desc) : Qnil));
 
       g_free (key_str);
       result = Fcons (entry, result);
     }
 
   return Fnreverse (result);
+}
+
+DEFUN ("gowl-run-keybind", Fgowl_run_keybind, Sgowl_run_keybind,
+       1, 1, 0,
+       doc: /* Run the action bound to KEY, as if the key had been pressed.
+KEY is a string like \"Super+Return\" (parsed with gowl_keybind_parse).
+
+This is the compositor's own keybind dispatch, so a `spawn' bind
+launches its command and a `custom' bind evaluates its Elisp form.
+Note that `gowl-send-key' does NOT do this: injected keys go to the
+focused client and never consult the keybind table.
+
+Returns t if a bind matched, nil otherwise. */)
+  (Lisp_Object key)
+{
+  guint modifiers, keysym;
+
+  CHECK_STRING (key);
+  GOWL_CHECK_RUNNING ();
+
+  if (!gowl_keybind_parse (SSDATA (key), &modifiers, &keysym))
+    error ("Invalid key string: %s", SSDATA (key));
+
+  return gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
+                                           modifiers, keysym)
+         ? Qt : Qnil;
 }
 
 DEFUN ("gowl-remove-keybind", Fgowl_remove_keybind, Sgowl_remove_keybind,
@@ -7553,6 +7680,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   /* Keybinds */
   defsubr (&Sgowl_add_keybind);
   defsubr (&Sgowl_list_keybinds);
+  defsubr (&Sgowl_run_keybind);
   defsubr (&Sgowl_remove_keybind);
   defsubr (&Sgowl_clear_keybinds);
 

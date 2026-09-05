@@ -351,11 +351,15 @@ gowl_handle_event (PodEventHandler *handler,
       const gchar *key = get_param_string (params, 0);
       const gchar *action_str = get_param_string (params, 1);
       const gchar *arg = get_param_string (params, 2);
+      /* Optional fourth positional param: the bind's description.
+	 Absent in every rule written before it existed, which
+	 get_param_string reports as NULL. */
+      const gchar *desc = get_param_string (params, 3);
       if (key == NULL || action_str == NULL)
 	return FALSE;
       gint action = (gint) g_ascii_strtoll (action_str, NULL, 10);
       res = cmacs_dispatch_gowl_add_keybind (key, action,
-					     arg ? arg : "", &error);
+					     arg ? arg : "", desc, &error);
     }
   else if (g_strcmp0 (event_name, "list_keybinds") == 0)
     {
