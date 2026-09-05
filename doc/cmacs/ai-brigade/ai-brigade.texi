@@ -834,6 +834,18 @@ is, a thread adds nothing while still bringing a second Lisp execution
 context into a subsystem that calls into GLib.  Under @option{--gowl} a
 crash there takes the desktop session with it.
 
+@subsection Keeping it current
+
+A full build re-embeds the corpus; changing one note does not cost
+that.  @code{cmacs-brigade-memory-update-files} re-chunks and re-embeds
+only the files given, drops their old rows, appends the new ones, and
+copies every other row verbatim (@code{cmacs-brigade-index-writer-copy},
+a memcpy of fp16 rows in C), then rewrites the metadata and the manifest.
+The writer still assembles a temporary and renames over the live index.
+A file that no longer exists simply loses its rows; requests arriving
+during a build or another update are coalesced and run afterwards.  The
+second-brain ingester calls this after every note it writes.
+
 @node Brigade Scheduling
 @section Scheduled runs
 

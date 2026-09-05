@@ -487,6 +487,24 @@ cmacs_brigade_index_writer_add (CmacsBrigadeIndexWriter *w,
     && (w->count++, TRUE);
 }
 
+const guint16 *
+cmacs_brigade_index_row (CmacsBrigadeIndex *ix, guint64 i)
+{
+  if (ix == NULL || ix->vec_map == NULL || i >= ix->count) return NULL;
+  return (const guint16 *) ((const guint8 *) ix->vec_map
+                            + sizeof (IndexHeader)
+                            + i * (guint64) ix->dim * sizeof (guint16));
+}
+
+gboolean
+cmacs_brigade_index_writer_add_f16 (CmacsBrigadeIndexWriter *w,
+                                    const guint16 *row, guint32 dim)
+{
+  if (w == NULL || row == NULL || dim != w->dim) return FALSE;
+  return fwrite (row, sizeof (guint16), dim, w->vec_fp) == dim
+    && (w->count++, TRUE);
+}
+
 gboolean
 cmacs_brigade_index_writer_commit (CmacsBrigadeIndexWriter *w, GError **error)
 {

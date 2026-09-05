@@ -179,6 +179,17 @@ extern CmacsBrigadeIndexWriter *
 cmacs_brigade_index_writer_new (const gchar *dir, guint32 dim, GError **error);
 extern gboolean cmacs_brigade_index_writer_add (CmacsBrigadeIndexWriter *w,
                                                 const float *vec, guint32 dim);
+
+/* Row I of IX as the stored fp16 bytes, or NULL when out of range.  With
+ * cmacs_brigade_index_writer_add_f16 this is how an index is rebuilt
+ * around a few changed files without re-embedding the corpus: the rows
+ * that did not change are copied verbatim, so the cost of updating one
+ * note is one embedding call plus a memcpy of the index. */
+extern const guint16 *cmacs_brigade_index_row (CmacsBrigadeIndex *ix,
+                                                guint64 i);
+extern gboolean cmacs_brigade_index_writer_add_f16 (CmacsBrigadeIndexWriter *w,
+                                                    const guint16 *row,
+                                                    guint32 dim);
 extern gboolean cmacs_brigade_index_writer_commit (CmacsBrigadeIndexWriter *w,
                                                    GError **error);
 extern void     cmacs_brigade_index_writer_free (CmacsBrigadeIndexWriter *w);

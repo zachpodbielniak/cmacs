@@ -115,6 +115,12 @@ back to =curl= automatically.
 it into ai-glib's own config before each call, because ai-glib otherwise
 resolves a base URL that knows nothing about this package's setting.
 
+* Keeping it current
+
+A full build re-embeds the corpus. Changing one note should not cost that, and does not: =cmacs-brigade-memory-update-files FILES= re-chunks and re-embeds only FILES, drops their old rows, appends the new ones, and copies every other row of the index verbatim — =cmacs-brigade-index-writer-copy= is a memcpy of fp16 rows in C — then rewrites the parallel metadata and the manifest. The writer still assembles a temporary and renames over the live index, so a crash mid-update leaves the previous index intact, exactly as a build does. A file that no longer exists simply loses its rows. Requests that arrive while a build or another update is running are coalesced and run afterwards.
+
+The second-brain ingester calls this after every note it writes (=cmacs-secondbrain-ingest-reindex-memory=), which is what lets the related-notes step of the /next/ ingest see this one. It needs a committed index that matches the current embedding settings; until a first build exists there is nothing to update.
+
 * Chunking
 
 Three passes, in C, over a line scanner rather than an org parser — the latter

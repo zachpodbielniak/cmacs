@@ -315,6 +315,68 @@ fp16, which is why a query later needs only a dot product.  */)
   return make_fixnum ((EMACS_INT) cmacs_brigade_index_writer_count (w));
 }
 
+DEFUN ("cmacs-brigade-index-writer-copy", Fcmacs_brigade_index_writer_copy,
+       Scmacs_brigade_index_writer_copy, 2, 3, 0,
+       doc: /* Copy the rows of index INDEX into the index being written by WRITER.
+
+SKIP is an optional list or vector of row numbers to leave out.  Rows are
+copied in order as their stored fp16 bytes, so this is a memcpy and not
+a re-embedding; the caller keeps its own metadata parallel by dropping
+the same rows.  Returns the number of rows copied.
+
+This is what makes an incremental update affordable: replacing one note's
+chunks means copying every other row, embedding the new chunks, and
+committing -- seconds, where a rebuild of the corpus is hours.  The two
+indexes must have the same dimensionality.  */)
+  (Lisp_Object writer, Lisp_Object index, Lisp_Object skip)
+{
+  CmacsBrigadeIndexWriter *w = mem_get (cmacs_brigade__writers, writer);
+  CmacsBrigadeIndex *ix = mem_get (cmacs_brigade__indexes, index);
+  g_autofree guint8 *skipmap = NULL;
+  guint64 count, i, copied = 0;
+  guint32 dim;
+
+  if (w == NULL) error ("cmacs-brigade: bad writer handle");
+  if (ix == NULL) error ("cmacs-brigade: bad index handle");
+  count = cmacs_brigade_index_count (ix);
+  dim = cmacs_brigade_index_dim (ix);
+
+  /* A bitmap rather than a membership test per row: SKIP is small but
+   * COUNT is the whole corpus. */
+  skipmap = g_malloc0 (count ? count : 1);
+  if (VECTORP (skip))
+    {
+      ptrdiff_t n = ASIZE (skip), k;
+      for (k = 0; k < n; k++)
+        {
+          Lisp_Object e = AREF (skip, k);
+          CHECK_FIXNAT (e);
+          if ((guint64) XFIXNAT (e) < count) skipmap[XFIXNAT (e)] = 1;
+        }
+    }
+  else
+    {
+      Lisp_Object tail = skip;
+      FOR_EACH_TAIL (tail)
+        {
+          Lisp_Object e = XCAR (tail);
+          CHECK_FIXNAT (e);
+          if ((guint64) XFIXNAT (e) < count) skipmap[XFIXNAT (e)] = 1;
+        }
+    }
+
+  for (i = 0; i < count; i++)
+    {
+      if (skipmap[i]) continue;
+      if (!cmacs_brigade_index_writer_add_f16 (w, cmacs_brigade_index_row (ix, i),
+                                               dim))
+        error ("cmacs-brigade: writing row %llu failed",
+               (unsigned long long) i);
+      copied++;
+    }
+  return make_uint (copied);
+}
+
 DEFUN ("cmacs-brigade-index-writer-commit",
        Fcmacs_brigade_index_writer_commit,
        Scmacs_brigade_index_writer_commit, 1, 1, 0,
@@ -374,6 +436,7 @@ syms_of_cmacs_ai_brigade_memory (void)
   defsubr (&Scmacs_brigade_index_search);
   defsubr (&Scmacs_brigade_index_writer_new);
   defsubr (&Scmacs_brigade_index_writer_add);
+  defsubr (&Scmacs_brigade_index_writer_copy);
   defsubr (&Scmacs_brigade_index_writer_commit);
   defsubr (&Scmacs_brigade_index_writer_abort);
 }

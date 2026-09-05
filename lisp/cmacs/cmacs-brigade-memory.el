@@ -832,6 +832,184 @@ heading path above it."
     (setq cmacs-brigade-memory--handle nil))
   (setq cmacs-brigade-memory--meta nil))
 
+
+;;;; Incremental update
+;;
+;; A full build re-embeds the corpus, which for a large tree is hours.
+;; Changing one note should cost one embedding call.  The index is a flat
+;; array of rows with a metadata vector parallel to it, so replacing a
+;; file's rows is: copy every row that is not the file's (a memcpy in C,
+;; `cmacs-brigade-index-writer-copy'), append the file's new vectors,
+;; commit, and rewrite the metadata in the same order.  The writer still
+;; assembles a temporary and renames over the live index, so a crash
+;; mid-update leaves the previous index intact, exactly as a build does.
+;;
+;; The same routine handles a deleted file: it has no chunks, so its
+;; rows are dropped and nothing is appended.
+
+(defvar cmacs-brigade-memory--update nil
+  "Plist describing an in-progress incremental update, or nil.")
+
+(defvar cmacs-brigade-memory--update-queue nil
+  "Files waiting for the next incremental update, as an alist of
+(FILE . CALLBACKS).  Requests that arrive while an update or a build is
+running are coalesced here and run when it finishes.")
+
+(defun cmacs-brigade-memory-index-exists-p ()
+  "Non-nil when there is a committed index matching the current settings."
+  (and (file-readable-p (expand-file-name "vectors.f16" cmacs-brigade-memory-index-dir))
+       (file-readable-p (cmacs-brigade-memory--meta-file))
+       (cmacs-brigade-memory--manifest-matches-p (cmacs-brigade-memory-manifest))))
+
+(defun cmacs-brigade-memory--indexable-p (file)
+  "Non-nil when FILE is under a configured root and its source would index it."
+  (let ((f (expand-file-name file)))
+    (cl-some (lambda (root)
+               (let* ((p (file-name-as-directory (expand-file-name (plist-get root :path))))
+                      (excl (plist-get root :exclude))
+                      (glob (or (plist-get root :glob) "\\.org\\'")))
+                 (and (string-prefix-p p f)
+                      (string-match-p glob f)
+                      (not (cl-some (lambda (e) (string-search e f)) excl)))))
+             cmacs-brigade-memory-roots)))
+
+;;;###autoload
+(defun cmacs-brigade-memory-update-files (files &optional callback)
+  "Re-index FILES in the memory index without rebuilding it.
+
+FILES is a file name or a list.  Each is re-chunked and re-embedded, its
+old rows are dropped and the new ones appended; a file that no longer
+exists simply loses its rows.  Files outside every configured root, or
+excluded by one, are ignored.  Runs in the background; CALLBACK, when
+given, is called with the number of rows written (or nil on failure).
+
+Needs a committed index that matches the current embedding settings --
+there is nothing to update otherwise -- and defers behind a running
+build or update rather than fighting it for the writer lock.  Returns
+non-nil when an update was started or queued."
+  (let ((files (cl-remove-if-not #'cmacs-brigade-memory--indexable-p
+                                 (mapcar #'expand-file-name
+                                         (if (listp files) files (list files))))))
+    (cond
+     ((null files) (when callback (funcall callback 0)) nil)
+     ((not (fboundp 'cmacs-brigade-index-writer-copy))
+      (message "cmacs-brigade: this build cannot update the index incrementally")
+      nil)
+     ((not (cmacs-brigade-memory-index-exists-p))
+      (message "cmacs-brigade: no matching index to update; run M-x cmacs-brigade-memory-build")
+      nil)
+     ((or cmacs-brigade-memory--build cmacs-brigade-memory--update)
+      (dolist (f files)
+        (let ((cell (assoc f cmacs-brigade-memory--update-queue)))
+          (if cell (when callback (push callback (cdr cell)))
+            (push (cons f (and callback (list callback))) cmacs-brigade-memory--update-queue))))
+      t)
+     (t
+      (setq cmacs-brigade-memory--update
+            (list :files files
+                  :callbacks (and callback (list callback))
+                  :pending nil        ; chunks still to embed: (FILE . CHUNK)
+                  :rows nil           ; (META . VECTOR) accumulated, reversed
+                  :t0 (float-time)
+                  :proc nil))
+      (dolist (f files)
+        (let* ((kind (cmacs-brigade-memory--kind-for f))
+               (src (cmacs-brigade-registry-get 'memory-source kind))
+               (chunks (and src (file-readable-p f)
+                            (condition-case err
+                                (funcall (plist-get src :read-chunk) f)
+                              (error (message "cmacs-brigade: skipping %s: %s" f
+                                              (error-message-string err))
+                                     nil)))))
+          (plist-put cmacs-brigade-memory--update :pending
+                     (append (plist-get cmacs-brigade-memory--update :pending)
+                             (mapcar (lambda (c) (cons f c)) chunks)))))
+      (cmacs-brigade-memory--update-step)
+      t))))
+
+(defun cmacs-brigade-memory--update-step ()
+  "Embed the next batch of the running update, or commit it."
+  (when cmacs-brigade-memory--update
+    (let* ((st cmacs-brigade-memory--update)
+           (pending (plist-get st :pending)))
+      (if (null pending)
+          (cmacs-brigade-memory--update-commit)
+        (let ((batch (seq-take pending cmacs-brigade-embed-batch)))
+          (plist-put st :pending (seq-drop pending cmacs-brigade-embed-batch))
+          (plist-put st :proc
+                     (cmacs-brigade-memory--embed-async
+                      (mapcar (lambda (fc) (cmacs-brigade-memory--embed-text (cdr fc))) batch)
+                      (lambda (vecs)
+                        (when cmacs-brigade-memory--update
+                          (cl-loop for (file . chunk) in batch
+                                   for v in vecs
+                                   do (plist-put st :rows
+                                                 (cons (cons (list :path file
+                                                                   :display (cmacs-brigade-memory--display-path file)
+                                                                   :heading (plist-get chunk :heading)
+                                                                   :text (plist-get chunk :text))
+                                                             v)
+                                                       (plist-get st :rows))))
+                          (cmacs-brigade-memory--update-step)))
+                      (lambda (why) (cmacs-brigade-memory--update-done nil (format "%s" why))))))))))
+
+(defun cmacs-brigade-memory--update-commit ()
+  "Write the updated index: old rows minus the files', plus the new rows."
+  (let* ((st cmacs-brigade-memory--update)
+         (files (plist-get st :files))
+         (writer nil))
+    (condition-case err
+        (let* ((ix (cmacs-brigade-memory--ensure-open))
+               (meta (or (cmacs-brigade-memory--load-meta) []))
+               (skip nil) (kept nil))
+          ;; Rows belonging to the files go; everything else is kept in
+          ;; its original order so the metadata stays parallel.
+          (cl-loop for m across meta
+                   for i from 0
+                   do (if (member (plist-get m :path) files)
+                          (push i skip)
+                        (push m kept)))
+          (setq writer (cmacs-brigade-index-writer-new cmacs-brigade-memory-index-dir
+                                                       cmacs-brigade-embed-dim))
+          (cmacs-brigade-index-writer-copy writer ix (nreverse skip))
+          (let ((new (nreverse (plist-get st :rows))))
+            (dolist (r new)
+              (cmacs-brigade-index-writer-add writer (cdr r)))
+            (cmacs-brigade-index-writer-commit writer)
+            (setq writer nil)
+            (cmacs-brigade-memory--write-meta (append (nreverse kept) (mapcar #'car new)))
+            (let ((m (cmacs-brigade-memory-manifest)))
+              (cmacs-brigade-memory--write-manifest
+               (plist-put (plist-put m :count (+ (length kept) (length new)))
+                          :updated-at (format-time-string "%FT%T%z"))))
+            ;; The mapping is the pre-update file; the next search reopens.
+            (cmacs-brigade-memory-close)
+            (cmacs-brigade-memory--update-done (length new) nil)))
+      (error
+       (when writer (ignore-errors (cmacs-brigade-index-writer-abort writer)))
+       (cmacs-brigade-memory--update-done nil (error-message-string err))))))
+
+(defun cmacs-brigade-memory--update-done (n why)
+  "Finish the running update with N rows written, or the failure WHY."
+  (let ((st cmacs-brigade-memory--update))
+    (setq cmacs-brigade-memory--update nil)
+    (if why
+        (message "cmacs-brigade: incremental update failed: %s" why)
+      (message "cmacs-brigade: re-indexed %d file%s (%d chunks) in %.1fs"
+               (length (plist-get st :files))
+               (if (= 1 (length (plist-get st :files))) "" "s")
+               n (- (float-time) (plist-get st :t0))))
+    (dolist (cb (plist-get st :callbacks))
+      (ignore-errors (funcall cb n)))
+    ;; Anything that arrived meanwhile.
+    (when cmacs-brigade-memory--update-queue
+      (let ((queue cmacs-brigade-memory--update-queue))
+        (setq cmacs-brigade-memory--update-queue nil)
+        (cmacs-brigade-memory-update-files
+         (mapcar #'car queue)
+         (let ((cbs (apply #'append (mapcar #'cdr queue))))
+           (and cbs (lambda (k) (dolist (cb cbs) (ignore-errors (funcall cb k)))))))))))
+
 (defun cmacs-brigade-memory--lexical (query limit)
   "Return paths matching QUERY literally, best first, via ripgrep.
 
