@@ -893,6 +893,7 @@ diagonal streak, which reads as a crooked picture rather than as depth."
 ;;;; The menu -------------------------------------------------------
 
 (require 'transient)
+(declare-function cmacs-secondbrain-ingest "cmacs-secondbrain-ingest" (input &optional para tags))
 
 (defun cmacs-secondbrain--menu-var (sym)
   "SYM's value in the viewport the menu was opened from.
@@ -1034,6 +1035,7 @@ version with the legend."
     ("i" "inspector" cmacs-secondbrain-inspector)
     ("p" "preview" cmacs-secondbrain-preview)
     ("W" "close the panes" cmacs-secondbrain-close-panes)
+    ("I" "ingest a file or URL into the notes" cmacs-secondbrain-ingest)
     ("M-?" "keys as text, with the legend" cmacs-secondbrain-help)
     ("q" "quit" quit-window)]])
 
@@ -1090,6 +1092,7 @@ version with the legend."
       (princ "  y          copy its path\n")
       (princ "  i          inspector pane\n")
       (princ "  p          preview pane\n")
+      (princ "  I          ingest a file, directory or URL into the notes\n")
       (princ "  W          close the panes\n\n")
 
       (princ "Shaping the map\n---------------\n")

@@ -39,6 +39,16 @@ raylib's =Color= is a struct and pgtk's is a =void*=; they cannot coexist in one
 - *Rings, not force, by default.* The taxonomy is the message; the structure is secondary.
 - *Hierarchy.* roamgraph has no notion of a parent. This needs one, because the corpus does not fit.
 
+* The ingester
+
+=cmacs-secondbrain-ingest*.el= is the front door: the port of the =sbi= shell script. Its pillars, in the order they were argued for:
+
+- *Every note is a node.* An =:ID:=, the header keywords, an index bullet, related notes by id. A note the graph cannot see is a note that will be rewritten.
+- *Deterministic code before the model.* The model summarises, titles, tags and proposes a place; the filesystem validates the place; the similarity index picks the links. A model asked for related notes invents them.
+- *Asynchronous or it does not ship.* D-Bus and MCP dispatch on the main thread, which under =--gowl= is the compositor. Subprocess sentinels, fetch callbacks, whisper callbacks, model streams; never a blocking call.
+- *Fail one job, not the queue.* A model outage writes a note without a summary; an unreadable file fails its job; a missing program names itself.
+- *Never hard-wrap.* Pandoc gets =--wrap=none=; transcripts and PDFs are re-flowed to one paragraph per line.
+
 * Not implemented
 
 - Skills are faceted gems, not four-pointed stars (needs a custom mesh).
@@ -46,3 +56,5 @@ raylib's =Color= is a struct and pgtk's is a =void*=; they cannot coexist in one
 - No node dragging — =dragging_object= is gated on =editor_active= in the input layer.
 - No folders view; departments group by PARA bucket or by source, not by the literal directory tree.
 - Similarity edges are computed on demand, not maintained as the notes change.
+- No OCR for scanned PDFs; no =.msg= without =msgconvert=; the crawler does not run JavaScript (=--web gsurf= does, one page at a time).
+- The memory index is not updated incrementally after an ingest.

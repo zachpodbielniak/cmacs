@@ -1,0 +1,27 @@
+From: Alice Example <alice@example.com>
+To: Zach <zach@example.org>
+Cc: Bob <bob@example.com>
+Subject: =?UTF-8?Q?Quarterly_plan_=E2=80=93_draft?=
+Date: Mon, 01 Sep 2026 09:15:00 -0400
+Message-ID: <abc123@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="XYZ"
+
+--XYZ
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Hi Zach,
+
+Attached is the draft of the quarterly plan. Two decisions are still open: the hiring freeze and the tooling budget.
+
+Bob owns the budget question by Friday.
+
+Alice
+--XYZ
+Content-Type: application/pdf; name="plan.pdf"
+Content-Disposition: attachment; filename="plan.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQK
+--XYZ--

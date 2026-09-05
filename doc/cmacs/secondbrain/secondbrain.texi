@@ -31,6 +31,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain AI::              Questions the rings make askable.
 * Secondbrain Panes::           The inspector, the preview, and icons.
 * Secondbrain Sources::         Where the data comes from.
+* Secondbrain Ingest::          The front door: files, URLs, media in; Org nodes out.
 * Secondbrain Configuration::   Every knob, and what each one costs.
 * Secondbrain Reading::         Glyphs, sizes and colours.
 * Secondbrain MCP::             Driving it from an agent.
@@ -1033,6 +1034,132 @@ stub --- a built-in scanner walks the tree for @code{:ID:} drawers and
 four rings comes up empty on a machine whose notes are perfectly well
 formed.
 
+@node Secondbrain Ingest
+@section Ingesting: the front door
+
+The visualiser answers @emph{what is in here}.  Ingesting is how things
+get in.  @kbd{M-x cmacs-secondbrain-ingest} (or @kbd{I} in the
+visualiser, or @command{emacsctl sb ingest}, or the
+@code{secondbrain_ingest} MCP tool) takes a file, a directory, a URL, a
+recording, a YouTube video, a web page, a mail, a spreadsheet or a
+paragraph of text and produces @strong{one Org note}: a real org-roam node
+with an @code{:ID:}, the repository's standard header keywords, an AI
+summary, the extracted content, related notes linked by id, and a bullet
+in the @file{00_index.org} of the directory it landed in --- a directory
+chosen by the PARA rules, by you, or by the model.
+
+This is the port of @command{sbi}, the shell script that did the same job
+for a Neovim-and-Markdown second brain, onto what cmacs already has.
+Nothing writes Markdown; nothing shells out to another AI wrapper.
+
+@subsection What goes in
+
+@multitable @columnfractions .25 .35 .4
+@headitem Kind @tab Read with @tab Notes
+@item @file{.org} @tab natively @tab header re-read; an existing @code{:ID:} is kept
+@item Markdown @tab pandoc, else a built-in reader @tab GFM tables, fences, task boxes
+@item rst, LaTeX, RTF @tab pandoc @tab
+@item plain text @tab natively @tab prose to one-line paragraphs; code to a block
+@item HTML, saved pages @tab libxml + pandoc (shr without) @tab article found, chrome dropped
+@item PDF @tab pdftotext, else mutool @tab a scanned PDF says so
+@item EPUB @tab pandoc, else unzip + libxml @tab spine order
+@item MOBI, AZW @tab calibre to EPUB @tab flatpak found
+@item docx xlsx pptx odt ods odp @tab cmacs-office @tab sheets as tables, slides as sections
+@item doc xls ppt @tab LibreOffice, then cmacs-office @tab flatpak found
+@item CSV TSV JSON XML YAML TOML @tab natively @tab tables, then blocks
+@item eml, mbox, Maildir @tab mm-decode @tab attachments listed, never inlined
+@item msg @tab msgconvert @tab
+@item audio, video @tab ffmpeg, embedded whisper @tab timestamped paragraphs
+@item YouTube @tab yt-dlp captions, else whisper @tab metadata, description, chapters
+@item any URL @tab url.el or an offscreen gsurf view @tab by content type
+@item @option{--crawl} @tab BFS, same site, robots.txt @tab one note per page under a site index
+@item zip, tar of pages @tab unpacked @tab as a site
+@item stdin, region, clipboard @tab as text @tab format guessed
+@end multitable
+
+A format is handled by an ordered list of @dfn{strategies}, tried until
+one produces a document: cmacs-native readers first, pandoc second,
+narrower tools last.  When every strategy is unavailable the error names
+the programs that would have helped.  @kbd{!} in the queue buffer shows
+the doctor.
+
+Two habits of the old script are deliberately not reproduced: it
+hard-wrapped everything (every conversion here passes
+@option{--wrap=none}), and it transcribed YouTube audio even when the
+video had captions (captions are asked for first).
+
+@subsection Where it goes
+
+@enumerate
+@item @code{:directory} --- an exact root-relative directory.
+@item @code{:para} + @code{:category} --- a PARA category and a sub path.
+A bare category goes to its @file{personal/} subdirectory
+(@code{cmacs-secondbrain-ingest-default-scope}); a new sub path is created
+with its own index, linked from the parent.
+@item The model --- when nothing is given and
+@code{cmacs-secondbrain-ingest-placement} is @code{detect}.  It sees the
+real directory tree and the repository's placement heuristics and
+answers with a path, a confidence and a reason.  The path must exist,
+must be a PARA category, must not be the archive; below
+@code{cmacs-secondbrain-ingest-placement-min-confidence} it is ignored.
+A proposal that fails goes to @file{00_inbox} with the proposal recorded
+in the note.
+@item @file{00_inbox} otherwise.
+@end enumerate
+
+@subsection What the model does, and does not
+
+One analysis call returns JSON: title, description, tags, summary type,
+placement.  One summary call writes the summary under the type's
+template --- the twenty-seven types of the old script, rewritten to
+produce Org under @code{* Summary}.  The model does @emph{not} choose
+related notes; those come from the brigade memory index restricted to
+the notes root, and only hits with an @code{:ID:} are linked.
+
+The default provider is @code{claude-code} with @code{sonnet}, run in a
+directory with no project in it and without the per-machine sections of
+its default system prompt: a Claude Code started inside a source
+checkout believes it is a coding agent in that project.  (@option{--bare}
+would do the same but also skips the login, so it is off by default.)  Without a model, or with @option{--no-ai}, the note is still
+written.
+
+@subsection Redaction
+
+@option{--sanitize} redacts before the model and before storage.  The
+rules are the old @command{sanitize_data} set, but the ones that cannot
+tell a secret from a number are off by default --- the old bank-account
+rule was @code{\b\d@{8,17@}\b}.  Name them to turn them on.
+
+@subsection Driving it
+
+@table @asis
+@item @kbd{M-x cmacs-secondbrain-ingest}
+A file, directory or URL.  Also @code{-region}, @code{-buffer},
+@code{-clipboard}, @code{-dired}, @code{-record}.
+@item @kbd{M-x cmacs-secondbrain-ingest-queue}
+The queue: @kbd{a} file, @kbd{u} URL, @kbd{p} clipboard, @kbd{RET} visit,
+@kbd{l} log, @kbd{k} cancel, @kbd{r} retry, @kbd{s} summaries,
+@kbd{P} placement, @kbd{!} doctor.
+@item @command{emacsctl sb ingest [FLAGS] URL|FILE|-}
+From a shell; @option{-w} waits.  @code{second-brain} and
+@code{secondbrain} are aliases.  @xref{emacsctl Commands}.
+@item @code{secondbrain_ingest}
+The MCP tool; poll @code{secondbrain_ingest_status}.  Also
+@code{secondbrain_tree}, @code{secondbrain_find}, @code{secondbrain_doctor}.
+@item @code{org.cmacs.Editor1.SecondBrain}
+The D-Bus interface behind both.
+@item @code{(cmacs-secondbrain-ingest-run INPUTS &rest OPTS)}
+From Elisp; @code{cmacs-secondbrain-ingest-wait} for scripts.
+@end table
+
+Every stage that takes time is asynchronous, because the same code runs
+when a D-Bus call arrives on the main thread of a cmacs that may be a
+Wayland compositor.  Hooks: @code{cmacs-secondbrain-ingest-after-note-functions}
+(an INFO plist per note) and @code{cmacs-secondbrain-ingest-after-job-functions}.
+
+Every knob is a @code{defcustom} in the @code{cmacs-secondbrain-ingest}
+group; the reference table is in @file{doc_org/cmacs/secondbrain/reference.org}.
+
 @node Secondbrain Configuration
 @section Configuration
 
@@ -1149,8 +1276,13 @@ colour instead.
 With @option{--with-cmacs-mcp}: @code{secondbrain_open},
 @code{secondbrain_set_layout}, @code{secondbrain_search},
 @code{secondbrain_expand}, @code{secondbrain_node_info},
-@code{secondbrain_stats}, @code{secondbrain_sources} and
-@code{secondbrain_refresh}.
+@code{secondbrain_stats}, @code{secondbrain_sources},
+@code{secondbrain_refresh}, and for the ingester
+@code{secondbrain_ingest}, @code{secondbrain_ingest_status},
+@code{secondbrain_ingest_cancel}, @code{secondbrain_tree},
+@code{secondbrain_find} and @code{secondbrain_doctor}.  Every tool has a
+method on @code{org.cmacs.Editor1.SecondBrain} with the same Elisp
+body, which is what @command{emacsctl sb} calls.
 
 Every interpolated argument goes through the Elisp string escaper: these
 are attacker-controlled tool arguments being spliced into a form that is

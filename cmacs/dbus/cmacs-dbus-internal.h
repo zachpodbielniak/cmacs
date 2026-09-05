@@ -154,6 +154,9 @@ CMACS_DBUS_IFACE_DECL (dbexplorer)
 #ifdef HAVE_CMACS_AI_BRIGADE
 CMACS_DBUS_IFACE_DECL (brigade)
 #endif
+#ifdef HAVE_CMACS_SECONDBRAIN
+CMACS_DBUS_IFACE_DECL (secondbrain)
+#endif
 
 /* Phase 4 desktop integration. */
 guint cmacs_dbus_application_register   (GDBusConnection *, const gchar *, GError **);

@@ -246,4 +246,124 @@ Colours are =0xRRGGBBAA= integers; particles fade to transparent from whatever t
 
 * MCP tools
 
-=secondbrain_open=, =_set_layout=, =_search=, =_expand=, =_node_info=, =_stats=, =_sources=, =_refresh=.
+=secondbrain_open=, =_set_layout=, =_search=, =_expand=, =_node_info=, =_stats=, =_sources=, =_refresh=, and for the ingester =secondbrain_ingest=, =_ingest_status=, =_ingest_cancel=, =_tree=, =_find=, =_doctor=.
+
+* D-Bus: =org.cmacs.Editor1.SecondBrain=
+
+At =/org/cmacs/Editor=. Every method returns one string.
+
+| Method | In | Out |
+|--------+----+-----|
+| =Open= | =b three_d= | "opened" |
+| =SetLayout= | =s kind= | the layout |
+| =Search= | =s query, b semantic= | "ok" |
+| =Expand= | =s id, b collapse= | "changed" / "no change" |
+| =NodeInfo= | =s id= | the record, printed |
+| =Stats= | | counts |
+| =Sources= | | the registered sources |
+| =Refresh= | | "refreshed" |
+| =Ingest= | =s inputs_json, s options_json= | JSON array of queued job statuses (or plans when =dry_run=) |
+| =IngestStatus= | =s id= | JSON status |
+| =IngestList= | | JSON array |
+| =IngestCancel= | =s id= | JSON status |
+| =Tree= | =s para, s category, b files= | JSON array of paths |
+| =Find= | =s query, i limit= | JSON array of hits |
+| =Doctor= | | JSON array of =(name available detail)= |
+
+=Ingest= returns when the jobs are *queued*; the work runs on the editor's main loop and a caller polls =IngestStatus= until =done= is true. Option keys are the snake_case names of the plist keys below.
+
+* emacsctl: the =sb= group
+
+Aliases =second-brain=, =secondbrain=, =second_brain=.
+
+| Verb | Does |
+|------+------|
+| =sb ingest [FLAGS] URLert{}FILEert{}-…= | queue jobs; =-w= waits and prints the final statuses; =--dry-run= plans |
+| =sb jobs= / =sb status ID= / =sb cancel ID= | the queue |
+| =sb tree [-p PARA] [-c PATH] [-f]= | the PARA tree |
+| =sb find [-k N] QUERY…= | search the notes |
+| =sb doctor= | what this host can read |
+| =sb open [true]= / =sb layout KIND= / =sb search Q [true]= / =sb expand [ID] [true]= / =sb node ID= / =sb stats= / =sb sources= / =sb refresh= | the visualiser |
+
+=sb ingest= flags: =-p/--para=, =-c/--category=, =-d/--directory=, =-t/--tags=, =-T/--type=, =--prompt=, =--principle=, =-n/--no-summary=, =-N/--no-ai=, =-s/--sanitize=, =--sanitize-rules RULES=, =-P/--provider=, =-m/--model=, =--name=, =--title=, =-f/--format=, =-i/--stdin=, =--crawl=, =--depth=, =--max-pages=, =--include=, =--exclude=, =-r/--recursive=, =-a/--append=, =--dry-run=, =--no-link=, =--keep-source=, =--root=, =-b/--branch=, =--web=, =-w/--wait=, =--wait-timeout=.
+
+* Ingest: Elisp
+
+Entry points: =cmacs-secondbrain-ingest=, =-ingest-file=, =-ingest-url=, =-ingest-region=, =-ingest-buffer=, =-ingest-clipboard=, =-ingest-dired=, =-ingest-record= / =-record-stop=, =-ingest-queue=.
+
+Programmatic: =(cmacs-secondbrain-ingest-run INPUTS &rest OPTS)= → jobs; =-enqueue=, =-start=, =-cancel=, =-wait=, =-job=, =-jobs=, =-status-json=, =-list-json=, =-from-json=, =-plan=, =-tree=, =-find=, =-find-json=, =-doctor=, =-related-notes=, =-register-in-index=, =-ensure-index=, =-render-note=.
+
+Option plist keys (=cmacs-secondbrain-ingest-normalize-options=): =:para :category :directory :scope :root :branch :tags :type :prompt :principle :no-summary :no-ai :sanitize :provider :model :name :title :description :format :text :crawl :depth :max-pages :include :exclude :wait :recursive :append :review :dry-run :keep-source :link :web-backend :whisper-model :language :callback=.
+
+Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-PREDICATE :run (lambda (file kind) DOC)= and a line in =cmacs-secondbrain-ingest-strategies=; a new summary type is an entry in =cmacs-secondbrain-ingest-summary-templates=; a new redaction rule is a row in =cmacs-secondbrain-ingest-redaction-rules=.
+
+* Ingest: defcustoms
+
+| Name | Default | Meaning |
+|------+---------+---------|
+| =cmacs-secondbrain-ingest-root= | =nil= | notes root; nil = first =cmacs-para-roots= |
+| =cmacs-secondbrain-ingest-placement= | =detect= | =detect= asks the model, =inbox= never does |
+| =cmacs-secondbrain-ingest-placement-min-confidence= | 0.6 | below this the inbox wins |
+| =cmacs-secondbrain-ingest-placement-depth= | 4 | how deep the model may file |
+| =cmacs-secondbrain-ingest-placement-max-dirs= | 400 | largest tree shown to the model |
+| =cmacs-secondbrain-ingest-placement-exclude= | dailies, chats, mirrors, trees | regexps removed from the choices |
+| =cmacs-secondbrain-ingest-default-scope= | ="personal"= | subdirectory under a bare category |
+| =cmacs-secondbrain-ingest-create-directories= | =t= | a new =:category= is created with an index |
+| =cmacs-secondbrain-ingest-provider= | =claude-code= | |
+| =cmacs-secondbrain-ingest-model= | ="sonnet"= | |
+| =cmacs-secondbrain-ingest-cli-directory= | =temporary-file-directory= | where a CLI provider runs |
+| =cmacs-secondbrain-ingest-cli-bare= | =nil= | =claude --bare=; off because it also skips the login |
+| =cmacs-secondbrain-ingest-cli-exclude-dynamic-sections= | =t= | drop cwd/env/memory sections from the CLI system prompt |
+| =cmacs-secondbrain-ingest-ai-timeout= | 600 | seconds per model call |
+| =cmacs-secondbrain-ingest-analysis-max-chars= | 16000 | sample seen by the analysis call |
+| =cmacs-secondbrain-ingest-summary-max-chars= | 150000 | sample seen by the summary call |
+| =cmacs-secondbrain-ingest-summarize= | =t= | |
+| =cmacs-secondbrain-ingest-summary-type= | =auto= | |
+| =cmacs-secondbrain-ingest-summary-templates= | 27 types | type → instructions |
+| =cmacs-secondbrain-ingest-summary-preamble= | Org rules | prepended to every summary prompt |
+| =cmacs-secondbrain-ingest-principle-prompt= | | appended with =:principle= |
+| =cmacs-secondbrain-ingest-placement-guide= | the PARA rules | text the model sees |
+| =cmacs-secondbrain-ingest-suggest-tags= | =t= | |
+| =cmacs-secondbrain-ingest-link-related= | =t= | =* See also= from the memory index |
+| =cmacs-secondbrain-ingest-related-count= | 5 | |
+| =cmacs-secondbrain-ingest-related-min-score= | 0.0 | |
+| =cmacs-secondbrain-ingest-register-index= | =t= | add to =00_index.org= |
+| =cmacs-secondbrain-ingest-update-roam-db= | =t= | =org-roam-db-update-file= when loaded |
+| =cmacs-secondbrain-ingest-refresh-view= | =t= | refresh an open visualiser |
+| =cmacs-secondbrain-ingest-author= | =user-login-name= | =#+authors:= |
+| =cmacs-secondbrain-ingest-filename-style= | =slug= | or =date-slug= |
+| =cmacs-secondbrain-ingest-slug-max-length= | 80 | |
+| =cmacs-secondbrain-ingest-on-collision= | =unique= | =append= / =overwrite= / =error= |
+| =cmacs-secondbrain-ingest-include-content= | =t= | keep the content, not only the summary |
+| =cmacs-secondbrain-ingest-max-content-chars= | 2000000 | |
+| =cmacs-secondbrain-ingest-keep-source= | =nil= | =copy= keeps the original in =.attachments/= |
+| =cmacs-secondbrain-ingest-sanitize= | =nil= | =t= or a list of rule names |
+| =cmacs-secondbrain-ingest-redaction-rules= | 22 rules | =(NAME REGEXP DEFAULT-ON DESCRIPTION)= |
+| =cmacs-secondbrain-ingest-redaction-text= | ="<redacted>"= | |
+| =cmacs-secondbrain-ingest-redaction-label-rule= | =t= | =<redacted:email>= |
+| =cmacs-secondbrain-ingest-youtube-strategy= | =subtitles-then-audio= | |
+| =cmacs-secondbrain-ingest-subtitle-languages= | en, en-orig, en.* | |
+| =cmacs-secondbrain-ingest-ytdlp-extra-args= | =nil= | cookies, proxies |
+| =cmacs-secondbrain-ingest-whisper-model= | =nil= | cmacs-whisper's default |
+| =cmacs-secondbrain-ingest-whisper-threads= | 4 | |
+| =cmacs-secondbrain-ingest-transcript-paragraph-seconds= | 60 | |
+| =cmacs-secondbrain-ingest-transcript-timestamps= | =t= | |
+| =cmacs-secondbrain-ingest-web-backend= | =url= | or =gsurf= |
+| =cmacs-secondbrain-ingest-gsurf-settle= | 1.5 | seconds after load |
+| =cmacs-secondbrain-ingest-user-agent= | | |
+| =cmacs-secondbrain-ingest-fetch-timeout= | 45 | |
+| =cmacs-secondbrain-ingest-fetch-max-bytes= | 20 MiB | |
+| =cmacs-secondbrain-ingest-crawl-depth= | 1 | |
+| =cmacs-secondbrain-ingest-crawl-max-pages= | 50 | |
+| =cmacs-secondbrain-ingest-crawl-wait= | 1.0 | |
+| =cmacs-secondbrain-ingest-crawl-respect-robots= | =t= | |
+| =cmacs-secondbrain-ingest-html-strip-tags= / =-strip-regexp= | | page chrome |
+| =cmacs-secondbrain-ingest-pandoc-args= | =("--wrap=none")= | |
+| =cmacs-secondbrain-ingest-table-max-rows= | 200 | |
+| =cmacs-secondbrain-ingest-programs= | | program → executable |
+| =cmacs-secondbrain-ingest-flatpak-apps= | calibre, LibreOffice | flatpak fallbacks |
+| =cmacs-secondbrain-ingest-extension-kinds= | | extension → kind |
+| =cmacs-secondbrain-ingest-strategies= | | kind → strategies |
+| =cmacs-secondbrain-ingest-parallel-jobs= | 2 | |
+| =cmacs-secondbrain-ingest-verbose= | =nil= | |
+| =cmacs-secondbrain-ingest-log-file= | =nil= | |

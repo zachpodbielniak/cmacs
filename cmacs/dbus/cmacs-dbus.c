@@ -136,6 +136,9 @@ static guint reg_iface_dbexplorer = 0;
 #ifdef HAVE_CMACS_AI_BRIGADE
 static guint reg_iface_brigade  = 0;
 #endif
+#ifdef HAVE_CMACS_SECONDBRAIN
+static guint reg_iface_secondbrain = 0;
+#endif
 
 /* ── Public connection / name accessors ─────────────────────────── */
 
@@ -443,6 +446,12 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_brigade == 0) return FALSE;
 #endif
 
+#ifdef HAVE_CMACS_SECONDBRAIN
+  reg_iface_secondbrain = cmacs_dbus_iface_secondbrain_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_secondbrain == 0) return FALSE;
+#endif
+
   return TRUE;
 }
 
@@ -450,6 +459,11 @@ static void
 unregister_modules (GDBusConnection *conn)
 {
   /* Phase 6 MCP-parity ifaces (reverse registration order). */
+#ifdef HAVE_CMACS_SECONDBRAIN
+  if (reg_iface_secondbrain)
+    { cmacs_dbus_iface_secondbrain_unregister (conn, reg_iface_secondbrain);
+      reg_iface_secondbrain = 0; }
+#endif
 #ifdef HAVE_CMACS_AI_BRIGADE
   if (reg_iface_brigade)
     { cmacs_dbus_iface_brigade_unregister (conn, reg_iface_brigade);

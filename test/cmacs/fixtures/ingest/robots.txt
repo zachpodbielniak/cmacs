@@ -1,0 +1,8 @@
+# comment
+User-agent: Googlebot
+Disallow: /private/
+
+User-agent: *
+Disallow: /admin/
+Disallow: /tmp/
+Allow: /

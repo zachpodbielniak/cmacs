@@ -1,0 +1,17 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.500 align:start position:0%
+welcome<00:00:01.000><c> to</c><00:00:01.500><c> the</c><00:00:02.000><c> talk</c>
+
+00:00:02.500 --> 00:00:04.000 align:start position:0%
+welcome to the talk
+today<00:00:03.000><c> we</c><00:00:03.500><c> cover</c>
+
+00:00:04.000 --> 00:01:05.000 align:start position:0%
+today we cover
+systemd &amp; timers
+
+00:01:05.000 --> 00:01:08.000
+thanks for watching

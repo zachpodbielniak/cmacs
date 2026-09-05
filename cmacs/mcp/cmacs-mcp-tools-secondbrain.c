@@ -4,10 +4,15 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Thin MCP tools that drive the second-brain visualiser by dispatching
- * Elisp.  The MCP `eval' tool already reaches every DEFUN; these add typed
- * schemas so an agent can open the view, switch layouts, expand a
- * department and search it without hand-writing Elisp.
+ * Thin MCP tools that drive the second-brain visualiser and its ingester
+ * by dispatching Elisp.  The MCP `eval' tool already reaches every DEFUN;
+ * these add typed schemas so an agent can open the view, switch layouts,
+ * expand a department, search it, and -- the ones that matter to an
+ * agent doing research -- file things into the notes and find them again,
+ * without hand-writing Elisp.
+ *
+ * D-Bus parity: every tool here has a method on org.cmacs.Editor1.SecondBrain
+ * (cmacs/dbus/cmacs-dbus-iface-secondbrain.c) with the same Elisp body.
  *
  * Every interpolated argument goes through sb_lisp_str: these are
  * attacker-controlled tool arguments being spliced into a form that is
@@ -215,6 +220,211 @@ handle_refresh (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
      SB_BUF));
 }
 
+/* ── The ingester: needs no open view ──────────────────────────────── */
+
+#define SB_INGEST "(progn (require 'cmacs-secondbrain-ingest) "
+
+/* A string member, or NULL when absent or empty. */
+static const gchar *
+sb_str_member (JsonObject *a, const gchar *name)
+{
+  const gchar *v;
+  if (a == NULL || !json_object_has_member (a, name))
+    return NULL;
+  v = json_object_get_string_member_with_default (a, name, NULL);
+  return (v != NULL && *v != '\0') ? v : NULL;
+}
+
+static McpToolResult *
+handle_ingest (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *input = sb_str_member (a, "input");
+  const gchar *text = sb_str_member (a, "text");
+  JsonBuilder *b;
+  JsonGenerator *gen;
+  JsonNode *root;
+  g_autofree gchar *inputs = NULL;
+  g_autofree gchar *options = NULL;
+  g_autofree gchar *qi = NULL;
+  g_autofree gchar *qo = NULL;
+  static const gchar *string_opts[] = {
+    "para", "category", "directory", "tags", "type", "prompt", "provider",
+    "model", "name", "title", "format", "include", "exclude", "root",
+    "branch", "web_backend", "text", "sanitize", NULL
+  };
+  static const gchar *bool_opts[] = {
+    "principle", "no_summary", "no_ai", "crawl", "recursive", "append",
+    "dry_run", "keep_source", NULL
+  };
+  static const gchar *int_opts[] = { "depth", "max_pages", NULL };
+  gint k;
+  (void) s; (void) n; (void) u;
+
+  if (input == NULL && text == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "secondbrain_ingest: give 'input' (a URL "
+                                "or absolute path) or 'text'");
+      return r;
+    }
+
+  /* The inputs array: one URL or path, or none when text is given. */
+  b = json_builder_new ();
+  json_builder_begin_array (b);
+  if (input != NULL)
+    json_builder_add_string_value (b, input);
+  json_builder_end_array (b);
+  root = json_builder_get_root (b);
+  gen = json_generator_new ();
+  json_generator_set_root (gen, root);
+  inputs = json_generator_to_data (gen, NULL);
+  json_node_free (root);
+  g_object_unref (gen);
+  g_object_unref (b);
+
+  /* The options object: copy the members we understand, typed.  Every
+     value came from a model; nothing is interpolated into Elisp except
+     through sb_lisp_str, and the Elisp side validates again. */
+  b = json_builder_new ();
+  json_builder_begin_object (b);
+  for (k = 0; string_opts[k] != NULL; k++)
+    {
+      const gchar *v = sb_str_member (a, string_opts[k]);
+      if (v != NULL)
+        {
+          json_builder_set_member_name (b, string_opts[k]);
+          json_builder_add_string_value (b, v);
+        }
+    }
+  for (k = 0; bool_opts[k] != NULL; k++)
+    if (a && json_object_has_member (a, bool_opts[k])
+        && json_object_get_boolean_member_with_default (a, bool_opts[k], FALSE))
+      {
+        json_builder_set_member_name (b, bool_opts[k]);
+        json_builder_add_boolean_value (b, TRUE);
+      }
+  for (k = 0; int_opts[k] != NULL; k++)
+    if (a && json_object_has_member (a, int_opts[k]))
+      {
+        json_builder_set_member_name (b, int_opts[k]);
+        json_builder_add_int_value (
+          b, json_object_get_int_member_with_default (a, int_opts[k], 0));
+      }
+  if (a && json_object_has_member (a, "link")
+      && !json_object_get_boolean_member_with_default (a, "link", TRUE))
+    {
+      json_builder_set_member_name (b, "link");
+      json_builder_add_boolean_value (b, FALSE);
+    }
+  /* keep_source is a string on the Elisp side ("copy"). */
+  if (a && json_object_has_member (a, "keep_source")
+      && json_object_get_boolean_member_with_default (a, "keep_source", FALSE))
+    {
+      json_builder_set_member_name (b, "keep_source");
+      json_builder_add_string_value (b, "copy");
+    }
+  json_builder_end_object (b);
+  root = json_builder_get_root (b);
+  gen = json_generator_new ();
+  json_generator_set_root (gen, root);
+  options = json_generator_to_data (gen, NULL);
+  json_node_free (root);
+  g_object_unref (gen);
+  g_object_unref (b);
+
+  qi = sb_lisp_str (inputs);
+  qo = sb_lisp_str (options);
+  return sb_eval_result (g_strdup_printf
+    (SB_INGEST "(cmacs-secondbrain-ingest-from-json %s %s))", qi, qo));
+}
+
+static McpToolResult *
+handle_ingest_status (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *id = sb_str_member (a, "id");
+  (void) s; (void) n; (void) u;
+
+  if (id == NULL)
+    return sb_eval_result (g_strdup
+      (SB_INGEST "(cmacs-secondbrain-ingest-list-json))"));
+  {
+    g_autofree gchar *qi = sb_lisp_str (id);
+    return sb_eval_result (g_strdup_printf
+      (SB_INGEST "(cmacs-secondbrain-ingest-status-json %s))", qi));
+  }
+}
+
+static McpToolResult *
+handle_ingest_cancel (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *id = sb_str_member (a, "id");
+  (void) s; (void) n; (void) u;
+
+  if (id == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "secondbrain_ingest_cancel: missing 'id'");
+      return r;
+    }
+  {
+    g_autofree gchar *qi = sb_lisp_str (id);
+    return sb_eval_result (g_strdup_printf
+      (SB_INGEST "(cmacs-secondbrain-ingest-cancel %s)"
+       " (cmacs-secondbrain-ingest-status-json %s))", qi, qi));
+  }
+}
+
+static McpToolResult *
+handle_tree (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *para = sb_str_member (a, "para");
+  const gchar *category = sb_str_member (a, "category");
+  gboolean files = a && json_object_has_member (a, "files")
+    && json_object_get_boolean_member_with_default (a, "files", FALSE);
+  g_autofree gchar *qp = para ? sb_lisp_str (para) : g_strdup ("nil");
+  g_autofree gchar *qc = category ? sb_lisp_str (category) : g_strdup ("nil");
+  (void) s; (void) n; (void) u;
+
+  return sb_eval_result (g_strdup_printf
+    (SB_INGEST "(json-serialize (vconcat"
+     " (cmacs-secondbrain-ingest-tree nil %s %s %s))))",
+     qp, qc, files ? "t" : "nil"));
+}
+
+static McpToolResult *
+handle_find (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *query = sb_str_member (a, "query");
+  gint64 limit = (a && json_object_has_member (a, "limit"))
+    ? json_object_get_int_member_with_default (a, "limit", 10) : 10;
+  (void) s; (void) n; (void) u;
+
+  if (query == NULL)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "secondbrain_find: missing 'query'");
+      return r;
+    }
+  if (limit <= 0) limit = 10;
+  {
+    g_autofree gchar *q = sb_lisp_str (query);
+    return sb_eval_result (g_strdup_printf
+      (SB_INGEST "(cmacs-secondbrain-ingest-find-json %s %d))",
+       q, (gint) limit));
+  }
+}
+
+static McpToolResult *
+handle_doctor (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return sb_eval_result (g_strdup
+    (SB_INGEST "(json-serialize (vconcat (mapcar (lambda (e)"
+     "  (list :name (symbol-name (nth 0 e)) :available (and (nth 1 e) t)"
+     "        :detail (nth 2 e)))"
+     " (cmacs-secondbrain-ingest-doctor)))))"));
+}
+
 static void
 sb_add (McpServer *server, const gchar *name, const gchar *desc,
         const gchar *schema_json, gboolean read_only,
@@ -291,6 +501,77 @@ cmacs_mcp_tools_secondbrain_register (McpServer *server)
   sb_add (server, "secondbrain_refresh",
     "Re-read every enabled source and rebuild the graph.",
     NULL, FALSE, handle_refresh);
+
+  /* The ingester. */
+  sb_add (server, "secondbrain_ingest",
+    "File a URL, a file (PDF, Office, EPUB, mail, audio, video, YouTube, "
+    "HTML, Markdown, data...) or literal text into the user's second brain "
+    "as an Org note: summarised, tagged, placed in the PARA tree, linked to "
+    "related notes and registered in its index.  Returns the QUEUED jobs "
+    "with ids; the work runs asynchronously -- poll secondbrain_ingest_status "
+    "until 'done' is true and read 'note_file'.  Set 'dry_run' to see the "
+    "plan without doing anything.  Paths must be absolute.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"input\":{\"type\":\"string\",\"description\":\"URL or absolute path; omit when text is given\"},"
+    "\"text\":{\"type\":\"string\",\"description\":\"Literal text to ingest\"},"
+    "\"para\":{\"type\":\"string\",\"enum\":[\"inbox\",\"projects\",\"areas\",\"resources\",\"detect\"]},"
+    "\"category\":{\"type\":\"string\",\"description\":\"Sub path under the category, e.g. technical/linux\"},"
+    "\"directory\":{\"type\":\"string\",\"description\":\"Exact root-relative directory, overriding para/category\"},"
+    "\"tags\":{\"type\":\"string\",\"description\":\"Comma-separated tags\"},"
+    "\"type\":{\"type\":\"string\",\"description\":\"Summary template: auto, general, meeting, book, youtube, ...\"},"
+    "\"prompt\":{\"type\":\"string\",\"description\":\"Extra summary instructions\"},"
+    "\"principle\":{\"type\":\"boolean\"},"
+    "\"no_summary\":{\"type\":\"boolean\"},"
+    "\"no_ai\":{\"type\":\"boolean\"},"
+    "\"sanitize\":{\"type\":\"string\",\"description\":\"'t' for the default redaction rules, or a comma list of rule names\"},"
+    "\"title\":{\"type\":\"string\"},"
+    "\"name\":{\"type\":\"string\",\"description\":\"File name seed\"},"
+    "\"format\":{\"type\":\"string\",\"description\":\"Format of text: org, markdown, text, json, csv, html\"},"
+    "\"crawl\":{\"type\":\"boolean\"},"
+    "\"depth\":{\"type\":\"integer\"},"
+    "\"max_pages\":{\"type\":\"integer\"},"
+    "\"append\":{\"type\":\"boolean\"},"
+    "\"link\":{\"type\":\"boolean\",\"description\":\"false to skip related notes\"},"
+    "\"keep_source\":{\"type\":\"boolean\",\"description\":\"Copy the original beside the note\"},"
+    "\"dry_run\":{\"type\":\"boolean\"}}}",
+    FALSE, handle_ingest);
+
+  sb_add (server, "secondbrain_ingest_status",
+    "Status of an ingest job by 'id' (stage, progress, note_file, warnings, "
+    "error, done); without an id, every job.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"id\":{\"type\":\"string\"}}}",
+    TRUE, handle_ingest_status);
+
+  sb_add (server, "secondbrain_ingest_cancel",
+    "Cancel an ingest job by id.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+    FALSE, handle_ingest_cancel);
+
+  sb_add (server, "secondbrain_tree",
+    "List the PARA notes tree as root-relative paths, optionally narrowed "
+    "to one category and sub path, optionally with .org files.  Use it to "
+    "see where a note could be filed.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"para\":{\"type\":\"string\"},"
+    "\"category\":{\"type\":\"string\"},"
+    "\"files\":{\"type\":\"boolean\"}}}",
+    TRUE, handle_tree);
+
+  sb_add (server, "secondbrain_find",
+    "Search the notes for a query: semantic (embeddings + lexical fusion) "
+    "when the memory index exists, text search otherwise.  Returns path, "
+    "title, score and snippet per hit.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"query\":{\"type\":\"string\"},"
+    "\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}",
+    TRUE, handle_find);
+
+  sb_add (server, "secondbrain_doctor",
+    "Which external programs (pandoc, pdftotext, yt-dlp, ffmpeg, ...) and "
+    "cmacs features (office, whisper, ai) the ingester can use on this host.",
+    NULL, TRUE, handle_doctor);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_SECONDBRAIN */

@@ -110,6 +110,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
+| =sb=        | =ingest=, =jobs=, =status=, =cancel=, =tree=, =find=, =doctor=, =open=, =layout=, =search=, =expand=, =node=, =stats=, =sources=, =refresh= (aliases =second-brain=, =secondbrain=) |
 
 * Agents: =brigade spawn= / =brigade send= / =brigade log=
 
@@ -217,6 +218,41 @@ The underlying typed methods are =Editor1.Ai= =Prompt= / =Call= /
 =ListModels= / =OpenChat= / =GenerateImage=, with MCP parity via
 =ai_prompt= / =ai_call= / =ai_list_models= / =ai_open_chat= /
 =generate_image=.
+
+* Second brain: =sb ingest= / =sb tree= / =sb find=
+
+The =sb= group is the notes repository from a shell — the =emacsctl= face of =cmacs-secondbrain-ingest= (see the secondbrain manual). =second-brain=, =secondbrain= and =second_brain= are aliases.
+
+#+begin_src sh
+  emacsctl sb ingest https://youtu.be/dQw4w9WgXcQ            # captions -> summary -> note
+  emacsctl sb ingest -p resources -c technical/linux notes.pdf
+  emacsctl sb ingest -w -t "meeting,work" -T meeting call.mp3 # wait for the note
+  emacsctl sb ingest --crawl --depth 2 --max-pages 30 https://docs.example.com/
+  git log -5 | emacsctl sb ingest -f text --title "Recent commits" -p inbox
+  emacsctl sb ingest --dry-run -o json article.epub          # the plan, no work
+  emacsctl sb ingest -N -p inbox scan.pdf                    # no model at all
+
+  emacsctl sb jobs                                            # the queue
+  emacsctl sb status sbi-3
+  emacsctl sb tree -p resources -c technical                  # sbi --list
+  emacsctl sb tree -f -o raw | fzf                            # every note, pickable
+  emacsctl sb find zfs snapshots                              # sbf
+  emacsctl sb doctor                                          # what this host can read
+#+end_src
+
+=sb ingest= queues jobs and returns their statuses at once; the work — fetching, transcribing, the model — runs on the editor's main loop. =-w/--wait= polls =IngestStatus= from the client until every job is done and prints the final statuses (=--wait-timeout=, default 900 s). Polling from the client rather than blocking in the editor is deliberate: a =--gowl= editor's main thread is the desktop.
+
+Placement: =-p/--para= (=inbox=, =projects=, =areas=, =resources=, =detect=) and =-c/--category= (a sub path), or =-d/--directory= for an exact root-relative directory. Without any, the editor's =cmacs-secondbrain-ingest-placement= decides — by default the model chooses from the real tree and falls back to the inbox when unsure.
+
+Text: =-= as an input, =-i/--stdin=, or a pipe with no positionals reads stdin; =-f/--format= names it (=org=, =markdown=, =text=, =json=, =csv=, =html=) when the guess would be wrong. Relative file paths are resolved in the shell's working directory, not the editor's.
+
+The model: =-T/--type= picks the summary template (=auto= lets the model pick), =--prompt= appends instructions, =--principle= adds a principles section, =-n/--no-summary= skips the summary but still places and tags, =-N/--no-ai= uses no model at all, =-P/--provider= and =-m/--model= override =claude-code= / =sonnet=. =-s/--sanitize= redacts with the default rules; =--sanitize-rules email,phone,bank-account= names rules.
+
+Sites: =--crawl= turns a URL into a site directory with a =00_index.org= and one note per page; =--depth=, =--max-pages=, =--include= and =--exclude= (Emacs regexps) bound it; robots.txt is honoured. A =.zip= or =.tar= of saved pages is a site too. =--web gsurf= fetches through an offscreen WebKit view so JavaScript runs and logins apply.
+
+Other flags: =-t/--tags=, =--title=, =--name= (file-name seed), =-a/--append= (add to an existing note instead of uniquifying), =-r/--recursive= (descend into directories), =--no-link=, =--keep-source= (copy the original into =.attachments/=), =--root DIR=, =-b/--branch NAME= (=ROOT/trees/NAME=, for a notes worktree).
+
+The underlying typed methods are =Editor1.SecondBrain= =Ingest= / =IngestStatus= / =IngestList= / =IngestCancel= / =Tree= / =Find= / =Doctor=, with MCP parity via =secondbrain_ingest= / =secondbrain_ingest_status= / =secondbrain_ingest_cancel= / =secondbrain_tree= / =secondbrain_find= / =secondbrain_doctor=.
 
 * Org buffers: =text insert-org=
 

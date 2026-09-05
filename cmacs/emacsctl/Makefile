@@ -15,7 +15,7 @@ SRCS := ctl-main.c ctl-application.c ctl-error.c \
         ctl-transport.c ctl-transport-dbus.c ctl-transport-ssh.c \
         ctl-frame.c ctl-proxy.c \
         ctl-config.c ctl-repl.c ctl-watcher.c ctl-completion.c \
-        ctl-cmd-core.c ctl-cmd-editor.c ctl-cmd-subsys.c \
+        ctl-cmd-core.c ctl-cmd-editor.c ctl-cmd-subsys.c ctl-cmd-sb.c \
         ctl-cmd-gowl.c
 
 HDRS := ctl.h ctl-ifaces.h ctl-application.h ctl-command.h \
