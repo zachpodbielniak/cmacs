@@ -132,8 +132,10 @@ own @code{bash}, @code{read}, @code{write}, @code{edit}, @code{glob} and
 
 They are genuinely different, and ai-glib refuses to pretend otherwise.
 
-An @strong{HTTP model} is sent a @code{tools} array built from the
-conversation's @code{AiToolExecutor}.  cmacs adopts that executor into
+An @strong{HTTP model}---claude, openai, gemini, grok, ollama,
+@code{openai-compatible} and any endpoint named in
+@code{cmacs-ai-openai-compatible-endpoints}---is sent a @code{tools}
+array built from the conversation's @code{AiToolExecutor}.  cmacs adopts that executor into
 its own handle registry, registers the MCP bridge on it, and sets
 @code{local-tools}.
 
@@ -142,7 +144,10 @@ ignores that array entirely---@code{ai_conversation_set_local_tools}
 silently refuses one.  It is handed an @strong{MCP config} naming this
 cmacs instead: @code{cmacs-brigade-host-provision} mints a random token
 and a 0600 file under @env{XDG_RUNTIME_DIR} describing @command{emacs
---mcp-relay}, and the agent connects back.
+--mcp-relay}, and the agent connects back.  Codex is the one CLI ai-glib
+declares no MCP endpoint kind for, so a codex harness gets no cmacs
+tools; the brigade's own @code{codex} worker delivers them through a
+@env{CODEX_HOME} overlay instead.
 
 The mode line says which is in play, and shows a warning when wiring
 failed.  A provider that silently took no tools is otherwise invisible

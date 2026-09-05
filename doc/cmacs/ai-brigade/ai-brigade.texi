@@ -161,6 +161,15 @@ claude and opencode keep the plain @code{cmacs}: they read a dedicated
 config file, which is neither merged by name nor trust-gated.  That
 asymmetry is why only grok was affected.
 
+Codex takes the same TOML shape as grok and the same
+@code{cmacs-brigade} name, for the same reason: its servers are declared
+as @code{[mcp_servers.NAME]} and merged per name.  What differs is the
+delivery.  grok's overlay @env{GROK_HOME} is built by ai-glib, because
+ai-glib drives that CLI; ai-glib's codex client declares no MCP endpoint
+kind at all, so the brigade's own @code{codex} worker builds the
+@env{CODEX_HOME} overlay itself.  That is also why a codex @emph{chat}
+has no cmacs tools while a codex @emph{brigade agent} does.
+
 A mitigation rather than a guarantee: a project whose @file{.mcp.json}
 happens to use @code{cmacs-brigade} reintroduces it.  @strong{Do not}
 work around it by writing a trusted @file{trusted_folders.toml} into the
@@ -404,6 +413,11 @@ reached by exactly the same path.
 The @code{codex} worker drives OpenAI's @command{codex} CLI as
 @code{codex exec --json}, and differs from the other two CLIs in three
 ways worth knowing.
+
+@vindex cmacs-brigade-codex-program
+@code{cmacs-brigade-codex-program} names the binary (default
+@command{codex}), and @env{CODEX_PATH} overrides it, matching what
+ai-glib does for the same provider.
 
 It runs under a real @dfn{sandbox} rather than a skipped prompt.
 @code{cmacs-brigade-codex-sandbox} (default @code{workspace-write}) is

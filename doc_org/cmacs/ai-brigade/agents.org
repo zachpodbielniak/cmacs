@@ -163,6 +163,10 @@ A worker decides /how/ an agent runs. Five ship, and all five are registered thr
 The =codex= worker differs from the other two CLIs in three ways worth
 knowing.
 
+=cmacs-brigade-codex-program= names the binary (default =codex=), and
+=CODEX_PATH= overrides it, matching what ai-glib does for the same
+provider.
+
 It runs under a real *sandbox* rather than a skipped prompt.
 =cmacs-brigade-codex-sandbox= (default =workspace-write=) is passed as
 =--sandbox=, and codex enforces it: a run that tries to write outside

@@ -112,17 +112,20 @@ the three =cmacs-ai-mcp-bridge-*= knobs =cmacs-ai-chat= already uses.
 
 They are genuinely different, and ai-glib refuses to pretend otherwise.
 
-- An *HTTP model* (claude, openai, gemini, grok, ollama) is sent a =tools= array
+- An *HTTP model* (claude, openai, gemini, grok, ollama, openai-compatible and any endpoint you named in =cmacs-ai-openai-compatible-endpoints=) is sent a =tools= array
   built from the conversation's =AiToolExecutor=. cmacs adopts that executor
   into its own handle registry, registers the MCP bridge on it, and sets
   =local-tools=.
 - A *command-line agent* (claude-code, claude-tmux, opencode, grok-build,
-  antigravity, cursor) runs
+  antigravity, cursor, codex-cli) runs
   its own tools in its own process and ignores that array entirely ---
   =ai_conversation_set_local_tools= silently refuses one. It is handed an *MCP
   config* naming this cmacs instead: =cmacs-brigade-host-provision= mints a
   random token and a 0600 file under =XDG_RUNTIME_DIR= describing
-  =emacs --mcp-relay=, and the agent connects back.
+  =emacs --mcp-relay=, and the agent connects back.  Codex is the one CLI
+  ai-glib declares no MCP endpoint kind for, so a codex harness gets no
+  cmacs tools; the brigade's own =codex= worker delivers them through a
+  =CODEX_HOME= overlay instead.
 
 The mode line says which: =60 tools= for the first, =mcp= for the second, and a
 warning face for *no tools* if wiring failed. That indicator is not decoration

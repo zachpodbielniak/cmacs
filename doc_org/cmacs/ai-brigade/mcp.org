@@ -196,6 +196,7 @@ The agents do not agree on a schema, so =cmacs-brigade-host-provision= takes a
 | =claude= (default) | ={"mcpServers": {...}}= | =--mcp-config PATH= |
 | =opencode= | ={"mcp": {NAME: {"type": "local", ...}}}= | =OPENCODE_CONFIG=PATH= |
 | =grok= | =[mcp_servers.NAME]= TOML | an overlay =GROK_HOME= |
+| =codex= | =[mcp_servers.NAME]= TOML (the same shape) | an overlay =CODEX_HOME=, built by the brigade's own =codex= worker rather than by ai-glib |
 
 The *dialect* is ours, because we own the server being published. The
 *delivery* is ai-glib's, because it is that CLI's own mechanism; a provider
