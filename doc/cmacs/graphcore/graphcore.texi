@@ -246,11 +246,20 @@ them only proves they are flat.  Two terms, sharing one amplitude:
 
 @itemize @bullet
 @item
-The @strong{warp} is a mode-1 bend, and the exponent in it is the whole
-point: @code{ref*tan(tilt)*(r/ref)^2*sin(azimuth)}.  One side of the
-disc lifts while the opposite side drops, and because the height grows
-faster than linearly the inner disc stays flat while the rim turns up
---- the ``integral sign'' a real galaxy has.
+The @strong{bend} is one of two shapes, chosen with
+@code{cmacs_graph_layout_set_galaxy_shape}.  FLARE (the default) is
+@code{ref*tan(tilt)*(r/ref)^2} --- no azimuth term at all, so the disc
+is a rotationally symmetric saucer whose silhouette is the same from
+every direction.  WARP multiplies that by @code{sin(azimuth)}, giving
+the mode-1 ``integral sign'' a real galaxy has, where one side lifts and
+the other drops.
+
+WARP is astrophysically the honest one and is not the default, because
+it has a direction: viewed along its node line the whole disc presents
+as a diagonal streak, which reads as a crooked picture rather than as
+depth.
+
+The exponent is common to both and is the point.
 
 Linear is the trap.  With @code{r*tan(t)*sin(a)} and the in-plane
 coordinate @code{v = r*sin(a)}, the height is exactly @code{tan(t)*v}

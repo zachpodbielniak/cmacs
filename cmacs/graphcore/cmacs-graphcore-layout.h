@@ -123,6 +123,33 @@ extern double cmacs_graph_layout_get_spin (CmacsGraphLayout *l);
 extern void   cmacs_graph_layout_set_ring_gap (CmacsGraphLayout *l, double gap);
 extern double cmacs_graph_layout_get_ring_gap (CmacsGraphLayout *l);
 
+/* What shape the RINGS layout bends its disc into.
+ *
+ * FLARE (the default) is a saucer: the height depends only on the
+ * RADIUS, so the disc dips in the middle and curves up evenly all the
+ * way round.  Being rotationally symmetric is the whole point -- the
+ * silhouette is the same from every azimuth, so the map reads level
+ * however you have orbited it.
+ *
+ * WARP is the mode-1 "integral sign" a real galaxy has: one side of the
+ * disc lifts and the opposite side drops.  Astrophysically the honest
+ * one, and visually it has a direction -- look along its node line and
+ * the whole disc presents as a diagonal streak across the screen, which
+ * reads as the picture being crooked rather than as depth.  Offered,
+ * not defaulted.
+ *
+ * Both are inert at tilt 0 and in 2D. */
+typedef enum
+{
+  CMACS_GRAPH_GALAXY_FLARE = 0,
+  CMACS_GRAPH_GALAXY_WARP
+} CmacsGraphGalaxyShape;
+
+extern void cmacs_graph_layout_set_galaxy_shape (CmacsGraphLayout *l,
+                                                 CmacsGraphGalaxyShape shape);
+extern CmacsGraphGalaxyShape
+            cmacs_graph_layout_get_galaxy_shape (CmacsGraphLayout *l);
+
 /* Maximum out-of-plane angle of the RINGS layout's galaxy warp, in
  * radians; 0 (the default) keeps the rings coplanar.
  *
@@ -133,9 +160,10 @@ extern double cmacs_graph_layout_get_ring_gap (CmacsGraphLayout *l);
  * having.  A per-node thickness rides on top, azimuth-independent, so
  * the disc has substance rather than being a bent sheet.
  *
- * TILT is the warp's crest: there atan(h/r) == TILT exactly.  With the
- * thickness on top, no node exceeds atan(1.34 * tan(TILT)) -- TILT
- * describes the disc, and that expression is the actual ceiling.
+ * TILT is the total arc the disc spans: the drop from the dish's centre
+ * to its rim subtends exactly TILT at the reference radius, and for the
+ * WARP shape the crest reaches it exactly.  With the thickness on top,
+ * no node exceeds atan(1.34 * tan(TILT)).
  *
  * The height axis is Y (a 3D planar layout lies in the world's ground
  * plane, XZ).  Only the RINGS layout warps, and only in 3D: `place_set'

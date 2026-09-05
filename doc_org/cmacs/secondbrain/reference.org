@@ -57,6 +57,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-set-spin BUFFER RADIANS &optional FRAMES= | |
 | =cmacs-secondbrain-set-ring-gap BUFFER GAP= | |
 | =cmacs-secondbrain-set-galaxy-tilt BUFFER DEGREES &optional FRAMES= | 3D rings warp; rings layout only, inert in 2D |
+| =cmacs-secondbrain-set-galaxy-shape BUFFER SHAPE &optional FRAMES= | `flare' (symmetric saucer, the default) or `warp' (one-sided) |
 | =cmacs-secondbrain-band-radius BUFFER RING= | world radius that band was placed at, or nil; grows with population, so never recompute it from the ring index |
 
 ** Collapse
@@ -110,6 +111,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-keep-selection-visible= | =t= | a spatial step that lands off-screen flies the camera |
 | =cmacs-secondbrain-edge-margin= | 48 | pixels of inset for the off-screen test |
 | =cmacs-secondbrain-zoom-step= | 2.0 | wheel notches per =+= / =-=; positive is closer |
+| =cmacs-secondbrain-galaxy-shape= | =flare= | saucer (level from every azimuth) or =warp= (one-sided, has a direction) |
 | =cmacs-secondbrain-galaxy-tilt= | 32.0 | degrees the 3D rings warp out of plane; 0 is flat |
 | =cmacs-secondbrain-drag-nodes= | =t= | left-drag moves and pins a node |
 | =cmacs-secondbrain-auto-rotate= | 0.0 | degrees/second; 0 is still |
@@ -165,6 +167,7 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | =cmacs-secondbrain-recenter= | =f= | fly to the selection and pivot around it |
 | =cmacs-secondbrain-zoom-in= / =-zoom-out= | =+= =-= | toward / away from the camera target |
 | =cmacs-secondbrain-cycle-galaxy-tilt= | =T= | flat / gentle / default / steep |
+| =cmacs-secondbrain-toggle-galaxy-shape= | =M-t= | symmetric saucer / one-sided warp |
 | =cmacs-secondbrain-help= | =?= | every key, and the legend |
 
 * Mouse

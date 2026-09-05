@@ -1398,11 +1398,18 @@ cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
 
   if (concentric)
     {
-      cx = cy = cz = 0.0;
-      /* Half-extents measured about the origin, so the far side of a
+      /* Centred on the axis of symmetry, which is the origin IN THE
+         PLANE and the mid-height on the way up: the layout is concentric
+         in X and Z, and the height axis has no such symmetry -- a
+         saucer rises from its centre, so its mass sits entirely above
+         the plane and aiming at y = 0 would hang the whole map in the
+         top of the frame. */
+      cx = cz = 0.0;
+      cy = 0.5 * ((double) lo[1] + (double) hi[1]);
+      /* Half-extents measured about those centres, so the far side of a
          lopsided rim still fits. */
       w = 2.0 * MAX (fabs ((double) lo[0]), fabs ((double) hi[0]));
-      h = 2.0 * MAX (fabs ((double) lo[1]), fabs ((double) hi[1]));
+      h = (double) hi[1] - (double) lo[1];
       extent = MAX (MAX (w, h),
                     2.0 * MAX (fabs ((double) lo[2]), fabs ((double) hi[2])));
     }

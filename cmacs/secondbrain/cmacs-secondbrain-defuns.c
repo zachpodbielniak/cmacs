@@ -57,6 +57,7 @@ typedef struct
   int               dims;
   double            ring_gap;
   double            galaxy_tilt;   /* radians; 0 = coplanar rings */
+  CmacsGraphGalaxyShape galaxy_shape;
   gboolean          band_guides;
   CmacsGraphLayoutKind kind;
 } SbState;
@@ -246,6 +247,7 @@ sb_relayout (SbState *st, CmacsLibregnumRenderCtx *ctx, int frames)
      the ring gap: every relayout must re-state the shape it wants, so a
      layout switch cannot quietly flatten the disc. */
   cmacs_graph_layout_set_galaxy_tilt (st->layout, st->galaxy_tilt);
+  cmacs_graph_layout_set_galaxy_shape (st->layout, st->galaxy_shape);
 
   if (st->kind == CMACS_GRAPH_LAYOUT_FORCE)
     {
@@ -1493,6 +1495,50 @@ rebuilding the scene.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-secondbrain-set-galaxy-shape",
+       Fcmacs_secondbrain_set_galaxy_shape,
+       Scmacs_secondbrain_set_galaxy_shape, 2, 3, 0,
+       doc: /* Set how BUFFER's 3D disc is bent.  Returns SHAPE.
+
+SHAPE is `flare' or `warp'.  FRAMES, if given, animates the change.
+
+`flare' is a saucer: the height depends only on the radius, so the disc
+dips through the middle and curves up evenly all the way round.  Being
+rotationally symmetric is the point -- the silhouette is the same from
+every direction, so the map reads level however you have orbited it.
+
+`warp' is the mode-1 "integral sign" a real galaxy has: one side lifts
+and the opposite side drops.  Astrophysically the honest one, and
+visually it has a direction -- look along its node line and the whole
+disc presents as a diagonal streak, which reads as a crooked picture
+rather than as depth.  */)
+  (Lisp_Object buffer, Lisp_Object shape, Lisp_Object frames)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  SbState *st;
+  Lisp_Object name;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  name = SYMBOLP (shape) ? SYMBOL_NAME (shape) : shape;
+  CHECK_STRING (name);
+  if (!strcmp (SSDATA (ENCODE_UTF_8 (name)), "warp"))
+    st->galaxy_shape = CMACS_GRAPH_GALAXY_WARP;
+  else if (!strcmp (SSDATA (ENCODE_UTF_8 (name)), "flare"))
+    st->galaxy_shape = CMACS_GRAPH_GALAXY_FLARE;
+  else
+    xsignal2 (Qerror, build_string ("Unknown galaxy shape"), shape);
+
+  sb_relayout (st, ctx, FIXNUMP (frames) ? (int) XFIXNUM (frames) : 0);
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
+                                 st->ring_gap, st->band_guides);
+  cmacs_libregnum_view_request_redraw (v);
+  return shape;
+}
+
 DEFUN ("cmacs-secondbrain-band-radius", Fcmacs_secondbrain_band_radius,
        Scmacs_secondbrain_band_radius, 2, 2, 0,
        doc: /* Return the world radius BUFFER's RING band was placed at.
@@ -1654,6 +1700,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_add_icon);
   defsubr (&Scmacs_secondbrain_clear_icons);
   defsubr (&Scmacs_secondbrain_apply_flags);
+  defsubr (&Scmacs_secondbrain_set_galaxy_shape);
   defsubr (&Scmacs_secondbrain_band_radius);
   defsubr (&Scmacs_secondbrain_fit);
   defsubr (&Scmacs_secondbrain_ring_names);

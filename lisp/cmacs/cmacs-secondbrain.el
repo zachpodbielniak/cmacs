@@ -57,6 +57,8 @@
 (declare-function cmacs-secondbrain-cycle-galaxy-tilt "cmacs-secondbrain-nav")
 (declare-function cmacs-secondbrain-set-match-set "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-set-galaxy-tilt "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-set-galaxy-shape "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-toggle-galaxy-shape "cmacs-secondbrain-nav")
 (declare-function cmacs-libregnum-set-orbit-continuous "cmacs-libregnum-defuns")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
@@ -230,6 +232,26 @@ is a node lost.
 Costs vertices rather than draw calls: the tessellation drops
 automatically for leaves, and again once the map is crowded."
   :type 'boolean
+  :group 'cmacs-secondbrain)
+
+(defcustom cmacs-secondbrain-galaxy-shape 'flare
+  "How the 3D disc is bent: a symmetric saucer, or a one-sided warp.
+
+`flare\=' is a saucer.  The height depends only on the radius, so the
+disc dips through the middle and curves up evenly all the way round.
+Being rotationally symmetric is the point rather than a side effect: the
+silhouette is the same from every direction, so the map reads level
+however you have orbited it.
+
+`warp\=' is the mode-1 \"integral sign\" a real galaxy has -- one side
+lifts and the opposite side drops.  It is the astrophysically honest
+shape and it has a DIRECTION, which is the problem: look along its node
+line and the whole disc presents as a diagonal streak across the screen,
+which reads as a crooked picture rather than as depth.
+
+`M-t\=' toggles.  Applies to the `rings\=' layout in 3D only."
+  :type '(choice (const :tag "Symmetric saucer" flare)
+                 (const :tag "One-sided galaxy warp" warp))
   :group 'cmacs-secondbrain)
 
 (defcustom cmacs-secondbrain-galaxy-tilt 32.0
@@ -502,6 +524,10 @@ useless."
     (when (fboundp 'cmacs-secondbrain-set-glow)
       (ignore-errors
         (cmacs-secondbrain-set-glow buf cmacs-secondbrain-node-glow)))
+    (when (fboundp 'cmacs-secondbrain-set-galaxy-shape)
+      (ignore-errors
+        (cmacs-secondbrain-set-galaxy-shape
+         buf cmacs-secondbrain-galaxy-shape)))
     (when (fboundp 'cmacs-secondbrain-set-galaxy-tilt)
       ;; Set in both views: the flat one zeroes z anyway, so there is no
       ;; branch to get wrong and no state to restore when toggling with
@@ -1285,6 +1311,7 @@ sources."
   "F" #'cmacs-secondbrain-cycle-ring-filter
   "a" #'cmacs-secondbrain-toggle-age-fade
   "T" #'cmacs-secondbrain-cycle-galaxy-tilt
+  "M-t" #'cmacs-secondbrain-toggle-galaxy-shape
   "C-h m" #'describe-mode
   "q" #'quit-window)
 

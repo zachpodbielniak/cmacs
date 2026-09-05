@@ -729,6 +729,24 @@ node into the plane, so it says so rather than appearing to be broken."
     (message "Galaxy tilt %.0f°%s" next
              (if cmacs-secondbrain--3d "" "  (flat view: no effect until v)"))))
 
+(defun cmacs-secondbrain-toggle-galaxy-shape ()
+  "Switch the 3D disc between a symmetric saucer and a one-sided warp.
+
+The saucer reads level from every direction because its height depends
+only on the radius.  The warp is the shape a real galaxy has, and it has
+a direction: look along its node line and the disc presents as a
+diagonal streak, which reads as a crooked picture rather than as depth."
+  (interactive)
+  (let ((next (if (eq cmacs-secondbrain-galaxy-shape 'warp) 'flare 'warp)))
+    (setq-local cmacs-secondbrain-galaxy-shape next)
+    (ignore-errors
+      (cmacs-secondbrain-set-galaxy-shape
+       (current-buffer) next cmacs-secondbrain-transition-frames))
+    (cmacs-secondbrain--animate)
+    (message "Galaxy shape: %s%s"
+             (if (eq next 'warp) "one-sided warp" "symmetric saucer")
+             (if cmacs-secondbrain--3d "" "  (flat view: no effect until v)"))))
+
 ;;;; Help -------------------------------------------------------------
 
 (defun cmacs-secondbrain-help ()
@@ -793,6 +811,7 @@ node into the plane, so it says so rather than appearing to be broken."
       (princ "  f          fly to the selection, and pivot around it\n")
       (princ "  + = -      zoom in / in / out, toward the camera target\n")
       (princ "  T          galaxy tilt: flat / gentle / default / steep\n")
+      (princ "  M-t        galaxy shape: symmetric saucer / one-sided warp\n")
       (princ "  0          frame the whole map\n")
       (princ "  v          flat / 3D\n")
       (princ "  b          background (wallpaper or screensaver)\n")

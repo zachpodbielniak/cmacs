@@ -134,6 +134,7 @@ leaving the buffer.
 @item @kbd{F} @tab cycle the ring filter
 @item @kbd{a} @tab age fade: colour Memory by how recently it changed
 @item @kbd{T} @tab galaxy tilt: flat / gentle / default / steep (3D)
+@item @kbd{M-t} @tab galaxy shape: symmetric saucer / one-sided warp (3D)
 @item @kbd{s} / @kbd{S} @tab spin the rings
 @item @kbd{R} @tab slow auto-rotation on/off
 @item @kbd{u} / @kbd{U} @tab unpin the selection / everything
@@ -545,20 +546,14 @@ So in 3D the disc is @emph{warped}, the way a galaxy is warped.
 Two terms, and the split is the design:
 
 @table @asis
-@item The warp
-A mode-1 bend --- the ``integral sign'' warp real galaxies have.
-Height varies with the azimuth so one side of the map lifts and the
-opposite side drops, and grows with the @emph{square} of the radius so
-the inner disc stays flat and legible while the rim does the moving.
-Coherent rather than random: neighbours stay neighbours, a department
-stays a clump, and the eye reads a shape instead of scatter.
-
-The exponent is the whole feature, and the linear version is a trap
-that reads correctly in the source and is a rigid rotation in the
-picture.  With height = @code{r*tan(t)*sin(a)} and the in-plane
-coordinate @code{v = r*sin(a)}, the height is exactly
-@code{tan(t)*v} --- a @strong{plane}.  Every node moves, nothing bends,
-and orbiting reveals precisely the flat disc the warp exists to get rid
+@item The bend
+Whichever of the two shapes below is selected.  Both grow with the
+@emph{square} of the radius rather than linearly, and that exponent is
+the whole feature.  The linear version reads correctly in the source and
+is a rigid rotation in the picture: with height = @code{r*tan(t)*sin(a)}
+and the in-plane coordinate @code{v = r*sin(a)}, the height is exactly
+@code{tan(t)*v} --- @strong{a plane}.  Every node moves, nothing bends,
+and orbiting reveals precisely the flat disc the bend exists to get rid
 of.  It shipped that way.
 
 @item The thickness
@@ -609,6 +604,36 @@ galaxy presents as a flat streak and the drag appears to stop for no
 reason the picture explains.  In XZ the same two gestures are ``spin the
 galaxy'' and ``raise your eye above it''.
 
+@subsection Two shapes, and why the default is the boring one
+
+@code{cmacs-secondbrain-galaxy-shape} picks between them; @kbd{M-t}
+toggles.
+
+@table @asis
+@item flare
+The default.  A @emph{saucer}: the height depends only on the radius, so
+the disc dips through the middle and curves up evenly all the way round.
+@item warp
+The mode-1 ``integral sign'' a real galaxy has: one side of the disc
+lifts and the opposite side drops.
+@end table
+
+The warp is the astrophysically honest shape and it is not the default,
+because it has a @emph{direction}.  Its node line --- where the height
+crosses zero --- is a fixed axis in world space, and when you orbit
+until you are looking along it the whole map presents as a diagonal
+streak across the screen.  That does not read as depth; it reads as the
+picture being crooked.  The saucer is rotationally symmetric, so its
+silhouette is the same from every azimuth and the map reads level
+however you have turned it.
+
+The saucer rises from zero at the centre rather than being shifted down
+to straddle the plane.  Centring it vertically in the layout would put
+the inner rings a long way below a plane they are only a few units from,
+and @code{atan(h/r)} --- the angle TILT is defined in --- runs away
+toward 90 degrees as @code{r} goes to zero.  The camera centres the
+height axis instead, which is the honest place for that correction.
+
 @subsection The guides go where the bands actually are
 
 A ring guide is drawn at the radius the @emph{layout} placed that band
@@ -633,14 +658,20 @@ polyline the plane is simply where the points are put.)
 
 @subsection Framing is on the origin, not on the bounding box
 
-A closed-form layout is built around the origin, so that is what the
-camera aims at.  The two are not the same point: a department's members
-fan outward from wherever its wedge happens to be, and the outermost
-ring may hold four nodes at four arbitrary angles, so the bounding box
-is lopsided --- and framing it slides the concentric structure the whole
-map is built around off into a corner of its own cloud.  Only the
-@code{force} layout, which puts the graph wherever it settles, is framed
-by its box.
+A closed-form layout is built around the origin @emph{in the plane}, so
+that is what the camera aims at there.  The two are not the same point:
+a department's members fan outward from wherever its wedge happens to
+be, and the outermost ring may hold four nodes at four arbitrary angles,
+so the bounding box is lopsided --- and framing it slides the concentric
+structure the whole map is built around off into a corner of its own
+cloud.
+
+The @emph{height} axis is the exception, and is centred on the content:
+the layout has no symmetry there, and a saucer rises from its centre, so
+aiming at @code{y = 0} would hang the whole map in the top of the frame.
+
+Only the @code{force} layout, which puts the graph wherever it settles,
+is framed by its box on all three axes.
 
 @subsection The orbit runs all the way round
 

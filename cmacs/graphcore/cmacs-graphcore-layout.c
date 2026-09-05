@@ -143,6 +143,7 @@ struct CmacsGraphLayout
   double   spin;        /* RINGS angular offset, radians */
   double   ring_gap;    /* radial distance between bands */
   double   galaxy_tilt; /* max out-of-plane angle, radians; 0 = flat */
+  CmacsGraphGalaxyShape galaxy_shape;
   int      tween_frame; /* frames elapsed in the current tween */
   int      tween_frames;/* 0 = not tweening */
 
@@ -1246,13 +1247,27 @@ graphcore_id_jitter (const gchar *id)
 static double
 graphcore_galaxy_warp (CmacsGraphLayout *l, double r, double angle)
 {
-  double ref, t;
+  double ref, t, amp;
 
   if (l->galaxy_tilt <= 0.0) return 0.0;
   ref = (l->warp_ref > 1e-6) ? l->warp_ref : MAX (r, 1e-6);
   t   = r / ref;
-  return ref * tan (l->galaxy_tilt)
-           * pow (t, GRAPHCORE_GALAXY_WARP_POWER) * sin (angle);
+  amp = ref * tan (l->galaxy_tilt)
+          * pow (t, GRAPHCORE_GALAXY_WARP_POWER);
+
+  if (l->galaxy_shape == CMACS_GRAPH_GALAXY_WARP)
+    return amp * sin (angle);
+
+  /* FLARE: no azimuth term at all, which is what makes the silhouette
+     the same from every direction and therefore level on screen however
+     the view has been orbited.
+     Rising from zero at the centre rather than straddling the plane:
+     shifting the dish down to centre it vertically would put the inner
+     rings a long way below a plane they are only a few units from, and
+     atan(h/r) -- the angle TILT is defined in -- runs away toward 90
+     degrees as r goes to zero.  The camera centres on the height axis
+     instead, which is the honest place for that correction. */
+  return amp;
 }
 
 static double
@@ -1263,13 +1278,12 @@ graphcore_galaxy_z (CmacsGraphLayout *l, CmacsGraphNode *nd,
 
   if (l->galaxy_tilt <= 0.0) return 0.0;
 
-  /* Two terms, two jobs.  The warp is the disc's SHAPE -- it varies with
-     azimuth, so one side lifts and the other drops, and it grows faster
-     than linearly with radius so that it BENDS instead of tilting.  The
-     thickness is its SUBSTANCE -- azimuth-independent, because a real
-     disc is thick everywhere and not only where it bends -- and stays
+  /* Two terms, two jobs.  The warp is the disc's SHAPE, and it grows
+     faster than linearly with radius so that it BENDS instead of
+     tilting.  The thickness is its SUBSTANCE -- always azimuth-
+     independent, because a real disc is thick everywhere -- and stays
      linear in r so the inner disc keeps some depth of its own rather
-     than collapsing to a sheet where the warp has yet to take hold. */
+     than collapsing to a sheet where the bend has yet to take hold. */
   warp  = graphcore_galaxy_warp (l, r, angle);
   thick = r * tan (l->galaxy_tilt) * GRAPHCORE_GALAXY_THICKNESS
             * graphcore_id_jitter (nd->id);
@@ -1629,6 +1643,22 @@ double
 cmacs_graph_layout_get_galaxy_tilt (CmacsGraphLayout *l)
 {
   return l ? l->galaxy_tilt : 0.0;
+}
+
+void
+cmacs_graph_layout_set_galaxy_shape (CmacsGraphLayout *l,
+                                     CmacsGraphGalaxyShape shape)
+{
+  g_return_if_fail (l != NULL);
+  l->galaxy_shape = (shape == CMACS_GRAPH_GALAXY_WARP)
+                      ? CMACS_GRAPH_GALAXY_WARP
+                      : CMACS_GRAPH_GALAXY_FLARE;
+}
+
+CmacsGraphGalaxyShape
+cmacs_graph_layout_get_galaxy_shape (CmacsGraphLayout *l)
+{
+  return l ? l->galaxy_shape : CMACS_GRAPH_GALAXY_FLARE;
 }
 
 double

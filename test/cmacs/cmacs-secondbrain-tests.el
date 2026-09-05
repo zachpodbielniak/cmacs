@@ -2039,6 +2039,51 @@ claim: the guide passes through the hubs of the ring it names."
           ;; inner ring swallow its neighbours.
           (should (> app mem)))))))
 
+(ert-deftest cmacs-secondbrain-test-galaxy-flare-is-level-from-any-azimuth ()
+  "The default disc shape looks the same whichever way you have turned it.
+
+That is the entire reason the default is a saucer rather than the
+mode-1 warp a real galaxy has.  A warp lifts one side of the disc and
+drops the other, so it has a DIRECTION: orbit until you are looking
+along its node line and the whole map presents as a diagonal streak
+across the screen, which reads as a crooked picture rather than as
+depth.  A saucer\='s height depends only on the radius, so its silhouette
+is rotationally symmetric and the map reads level however you orbit.
+
+Asserted on the height PROFILE rather than on a rendered frame: what
+matters is that height is a function of radius alone, which is the
+property a picture can only hint at."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-shape))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 200)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 32 0)
+      (cl-labels
+          ((spread-at-fixed-radius (ring)
+             ;; Over one band every node sits at nearly the same radius,
+             ;; so any spread in height beyond the small per-node
+             ;; thickness means the height depends on the AZIMUTH too.
+             (let (hs)
+               (dolist (n (append nodes nil))
+                 (when (eq (plist-get n :ring) ring)
+                   (let ((p (cmacs-secondbrain-node-position
+                             buf (plist-get n :id))))
+                     (push (nth 1 p) hs))))
+               (if (cdr hs) (- (apply #'max hs) (apply #'min hs)) 0.0))))
+        (cmacs-secondbrain-set-galaxy-shape buf 'warp 0)
+        (cmacs-secondbrain-set-layout buf 'rings 0)
+        (let ((warped (spread-at-fixed-radius 'applications)))
+          (cmacs-secondbrain-set-galaxy-shape buf 'flare 0)
+          (cmacs-secondbrain-set-layout buf 'rings 0)
+          (let ((flared (spread-at-fixed-radius 'applications)))
+            ;; The warp swings the whole band from one extreme to the
+            ;; other around the circle ...
+            (should (> warped 1.0))
+            ;; ... while the saucer leaves only the thickness jitter,
+            ;; which is a small fraction of it.
+            (should (< flared (* 0.5 warped)))))))))
+
 (ert-deftest cmacs-secondbrain-test-galaxy-warp-bends-rather-than-tilts ()
   "The warp BENDS the disc; it is not a rigid tilt of the plane.
 
@@ -2057,6 +2102,8 @@ band must be steeper than the inner one."
     (let ((nodes (cmacs-secondbrain-tests--ring-nodes 200)))
       (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
       (cmacs-secondbrain-set-galaxy-tilt buf 32 0)
+      (when (fboundp 'cmacs-secondbrain-set-galaxy-shape)
+        (cmacs-secondbrain-set-galaxy-shape buf 'warp 0))
       (cmacs-secondbrain-set-layout buf 'rings 0)
       (cl-labels ((steepness (ring)
                     ;; max |height| / radius over one ring: tan(t) at
@@ -2103,10 +2150,22 @@ corner of its own cloud."
       (cmacs-secondbrain-set-graph buf nodes (vector) 3)
       (cmacs-secondbrain-set-layout buf 'rings 0)
       (cmacs-secondbrain-fit buf)
-      (let ((target (plist-get (cmacs-libregnum-camera-state buf) :target)))
+      (let* ((target (plist-get (cmacs-libregnum-camera-state buf) :target)))
         (should target)
-        (dotimes (i 3)
-          (should (< (abs (nth i target)) 0.001)))))))
+        ;; In the PLANE, exactly the origin.
+        (should (< (abs (nth 0 target)) 0.001))
+        (should (< (abs (nth 2 target)) 0.001))
+        ;; The height axis has no such symmetry -- a saucer rises from
+        ;; its centre, so its mass sits above the plane and aiming at
+        ;; y = 0 would hang the whole map in the top of the frame.  That
+        ;; one axis is centred on the content.
+        (let ((zs (mapcar (lambda (n)
+                            (nth 1 (cmacs-secondbrain-node-position
+                                    buf (plist-get n :id))))
+                          (append nodes nil))))
+          (should (< (abs (- (nth 1 target)
+                             (/ (+ (apply #'min zs) (apply #'max zs)) 2.0)))
+                     0.001)))))))
 
 (ert-deftest cmacs-secondbrain-test-3d-layout-is-in-the-ground-plane ()
   "In 3D the disc lies in XZ, with height on Y; in 2D it lies in XY.
@@ -2153,28 +2212,42 @@ the third."
       (should (= 0.0 (funcall extent 2))))))
 
 (ert-deftest cmacs-secondbrain-test-galaxy-tilt-lifts-the-rings ()
-  "In 3D the rings warp out of the plane; at tilt 0 they stay coplanar.
+  "In 3D the rings leave the plane; at tilt 0 they stay coplanar.
 
 The point of the feature: concentric rings viewed in 3D are coplanar,
-so orbiting them only proves they are flat."
+so orbiting them only proves they are flat.
+
+Both shapes are checked, because they leave the plane in different
+directions and the difference is the reason there are two of them: the
+saucer rises everywhere, the warp lifts one side and drops the other."
   (cmacs-secondbrain-tests--skip)
   (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
   (cmacs-secondbrain-tests--with-view buf
     (let ((nodes (cmacs-secondbrain-tests--ring-nodes 40)))
       (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
-      ;; Flat: every z is exactly zero.
+      ;; Flat: every height is exactly zero.
       (cmacs-secondbrain-set-galaxy-tilt buf 0 0)
       (cmacs-secondbrain-set-layout buf 'rings 0)
       (should (cl-every #'zerop (cmacs-secondbrain-tests--zs buf nodes)))
-      ;; Warped: heights spread out, and they are not all the same.
       (cmacs-secondbrain-set-galaxy-tilt buf 24 0)
+      ;; The saucer: heights spread, and the dish rises rather than
+      ;; dipping below the plane it started in.
+      (when (fboundp 'cmacs-secondbrain-set-galaxy-shape)
+        (cmacs-secondbrain-set-galaxy-shape buf 'flare 0))
       (cmacs-secondbrain-set-layout buf 'rings 0)
       (let ((zs (cmacs-secondbrain-tests--zs buf nodes)))
-        (should (> (apply #'max (mapcar #'abs zs)) 1.0))
-        ;; Both signs: the warp lifts one side and drops the other, which
-        ;; is what makes it a warp rather than a cone.
-        (should (cl-some (lambda (z) (> z 0.5)) zs))
-        (should (cl-some (lambda (z) (< z -0.5)) zs))))))
+        (should (> (apply #'max zs) 1.0))
+        ;; Only the small per-node thickness goes below, never the dish.
+        (should (> (apply #'min zs) -1.0)))
+      ;; The warp: both signs, which is what makes it a warp and not a
+      ;; cone -- and what gives it the direction the saucer avoids.
+      (when (fboundp 'cmacs-secondbrain-set-galaxy-shape)
+        (cmacs-secondbrain-set-galaxy-shape buf 'warp 0)
+        (cmacs-secondbrain-set-layout buf 'rings 0)
+        (let ((zs (cmacs-secondbrain-tests--zs buf nodes)))
+          (should (> (apply #'max (mapcar #'abs zs)) 1.0))
+          (should (cl-some (lambda (z) (> z 0.5)) zs))
+          (should (cl-some (lambda (z) (< z -0.5)) zs)))))))
 
 (ert-deftest cmacs-secondbrain-test-galaxy-tilt-respects-the-angle ()
   "The warp reaches about the requested elevation, and no more.
