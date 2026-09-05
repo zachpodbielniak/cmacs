@@ -360,7 +360,7 @@ values.
 
 | Handler   | Params                  | Description                   |
 |-----------+-------------------------+-------------------------------|
-| =notify=  | =("title", "body")=     | Desktop notification via notify-send |
+| =notify=  | =("title", "body")=     | Desktop notification via notify-send (needs a daemon; under gowl see [[file:gowl.org::#notifications][Notifications]]) |
 
 *** DSL Examples
 

@@ -78,7 +78,7 @@ parked conversation cannot hold a slot.
 | =message= | echo area | — |
 | =speak= | reads it aloud | =--with-cmacs-piper= |
 | =sound= | plays a sound | =canberra-gtk-play= or =paplay= |
-| =desktop= | desktop notification | =notify-send= |
+| =desktop= | desktop notification | =notify-send= (needs a running daemon --- under gowl, [[file:../gowl.org::#notifications][cmacs serves one itself]]) |
 | =command= | runs =cmacs-brigade-notify-command= | a script |
 | =receipt= | prints it | =receipt-print= |
 

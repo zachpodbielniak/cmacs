@@ -2735,6 +2735,71 @@ Remove every keybind from the config.
 @end table
 
 @noindent
+Notifications:
+
+@table @code
+@item cmacs-notify-daemon-mode-global
+@vindex cmacs-notify-daemon-mode-global
+Own @code{org.freedesktop.Notifications} and deliver notifications in
+Emacs.  Enabled by @code{cmacs-gowl-mode} unless
+@code{cmacs-gowl-notification-daemon} is nil.
+@item cmacs-notify-daemon-history-buffer
+Show the notification history.
+@item cmacs-notify-daemon-serving-p
+Non-nil when this Emacs is the notification daemon.
+@end table
+
+A gowl session has no notification daemon, so @command{notify-send} and
+every libnotify application are silent in it --- and so are cmacs's own
+three notification senders, which all reach that same D-Bus name:
+@code{cmacs-notify} calls it directly, while @code{cmacs-brigade-notify}
+and podomation's cmacs module shell out to @command{notify-send}.  Under
+gowl, gnuseye's @code{critical} watch alerts and the brigade's away
+digest have been going nowhere.
+
+The name is claimed only if free.  Under GNOME, GNOME Shell owns it and
+enabling this is a no-op that says so: taking it would break GNOME's own
+notifications and gain nothing, since those are already visible.
+
+A notification is a headline in the @file{*notifications*} Org buffer,
+not a toast.  It is searchable, foldable and exportable, and it outlives
+the notification's timeout --- expiry closes the notification and tells
+the sender, but the entry stays.  A notification's actions are links in
+that buffer; following one emits @code{ActionInvoked} back to the
+sending application, so ``Reply'' on a message from any application is a
+keypress in Emacs.  In the buffer, @kbd{a} invokes an action, @kbd{d}
+dismisses, @kbd{k} clears and @kbd{g} refreshes.
+
+@vindex cmacs-notify-daemon-echo
+@vindex cmacs-notify-daemon-echo-urgencies
+@vindex cmacs-notify-daemon-pop-to-buffer-urgencies
+@vindex cmacs-notify-daemon-history-limit
+@vindex cmacs-notify-daemon-default-timeout
+@vindex cmacs-notify-daemon-log-file
+@vindex cmacs-notify-daemon-functions
+Delivery is tuned by @code{cmacs-notify-daemon-echo} and
+@code{-echo-urgencies} (echo-area display, normal and critical by
+default), @code{-pop-to-buffer-urgencies} (critical also displays the
+buffer), @code{-history-limit} (200), @code{-default-timeout} (5000 ms,
+used when the sender asks for the daemon's choice) and
+@code{-log-file} (an Org file appended to, for a log that outlives the
+session).  @code{cmacs-notify-daemon-functions} is a hook run with the
+notification's plist @emph{before} display, so a function on it can
+speak, print or forward the notification without waiting for the user;
+one that signals costs its own output and not the delivery.
+
+@code{Notify}, @code{CloseNotification}, @code{GetCapabilities} and
+@code{GetServerInformation} are implemented, with the
+@code{NotificationClosed} and @code{ActionInvoked} signals.
+@code{replaces_id} supersedes an entry rather than stacking a second
+one, so a progress notification updating itself does not fill history.
+Capabilities claimed are @code{body}, @code{body-hyperlinks},
+@code{actions}, @code{persistence} and @code{icon-static} ---
+deliberately conservative, because a capability is a promise the sender
+cannot check.  @code{body-markup} is not claimed, since the markup would
+show as literal text.
+
+@noindent
 Keybind cheatsheet and media keys:
 
 @table @code
@@ -4526,7 +4591,8 @@ string values.
 @headitem Handler @tab Params @tab Description
 @item @code{notify}
   @tab @code{("title", "body")}
-  @tab Desktop notification via @command{notify-send}
+  @tab Desktop notification via @command{notify-send}, which needs a
+  running daemon (under gowl, see @code{cmacs-notify-daemon-mode-global})
 @end multitable
 
 @subsubsection cmacs DSL Examples

@@ -503,6 +503,88 @@ anything from a YAML config, or a module's own binds --- falls back to
 its action and argument (=spawn: wofi --show drun=), which is still
 more use than a bare action nick.
 
+** Notifications
+:PROPERTIES:
+:CUSTOM_ID: notifications
+:END:
+
+A gowl session has no notification daemon.  Nothing owns
+=org.freedesktop.Notifications=, so =notify-send= and every libnotify
+application are silent in it --- and so are cmacs's own three
+notification senders, which all end up at that same D-Bus name:
+=cmacs-notify= calls it directly, while =cmacs-brigade-notify= and
+podomation's cmacs module shell out to =notify-send=.  Under gowl,
+gnuseye's =critical= watch alerts and the brigade's away digest have
+been going nowhere.
+
+=cmacs-notify-daemon-mode-global= claims the name and implements the
+freedesktop specification, so those three work again and so does every
+other application on the machine.  =cmacs-gowl-mode= enables it on
+start; opt out with =cmacs-gowl-notification-daemon=.
+
+It will not take the name from an existing owner.  Under GNOME, GNOME
+Shell has it and enabling this is a no-op that says so --- stealing it
+would break GNOME's own notifications and gain nothing, since those are
+already visible.
+
+*** Notifications are Org, not toasts
+
+A notification is a headline in =*notifications*=, an Org buffer.  It
+is searchable, foldable and exportable, and it *outlives the
+notification's timeout*: expiry closes the notification and tells the
+sender, but the entry stays.  =M-x cmacs-notify-daemon-history-buffer=
+opens it.
+
+#+begin_example
+* New mail from Alice
+:PROPERTIES:
+:ID-NUM:   4
+:APP:      mailer
+:URGENCY:  normal
+:TIME:     2026-09-05T16:32:53-0400
+:STATE:    closed
+:END:
+Subject: lunch?
+
+  - [[elisp:(cmacs-notify-daemon-invoke-action 4 "reply")][Reply]]
+  - [[elisp:(cmacs-notify-daemon-invoke-action 4 "archive")][Archive]]
+#+end_example
+
+A notification's *actions* are links in that buffer.  Following one
+emits =ActionInvoked= back to the sending application, so "Reply" on a
+message from any application is a keypress in Emacs.  In the buffer:
+=a= invokes an action, =d= dismisses, =k= clears, =g= refreshes.
+
+*** Delivery
+
+| Variable                                       | Default            | Effect                                    |
+|------------------------------------------------+--------------------+-------------------------------------------|
+| =cmacs-notify-daemon-echo=                     | =t=                | show arrivals in the echo area            |
+| =cmacs-notify-daemon-echo-urgencies=           | =(normal critical)= | which urgencies reach the echo area       |
+| =cmacs-notify-daemon-pop-to-buffer-urgencies=  | =(critical)=       | which additionally display the buffer     |
+| =cmacs-notify-daemon-history-limit=            | 200                | entries kept in memory                    |
+| =cmacs-notify-daemon-default-timeout=          | 5000               | ms when the sender says "your choice"     |
+| =cmacs-notify-daemon-log-file=                 | nil                | Org file appended to, for a log that outlives the session |
+| =cmacs-notify-daemon-functions=                | nil                | hook run with the notification's plist    |
+
+The hook runs *before* display, so a function on it can speak the
+notification, print it, or forward it without waiting for the user.  A
+function that signals costs its own output and not the delivery.
+
+*** What is implemented
+
+=Notify=, =CloseNotification=, =GetCapabilities= and
+=GetServerInformation=, plus the =NotificationClosed= and
+=ActionInvoked= signals.  =replaces_id= supersedes an entry rather than
+stacking a second one, so a progress notification updating itself does
+not fill history.  Close reasons are the specification's: 1 expired, 2
+dismissed by the user, 3 closed by the sender.
+
+Capabilities claimed are =body=, =body-hyperlinks=, =actions=,
+=persistence= and =icon-static= --- deliberately conservative, because
+a capability is a promise the sender cannot check.  =body-markup= is
+not claimed, since the markup would show as literal text.
+
 ** Media, volume and brightness keys
 :PROPERTIES:
 :CUSTOM_ID: media-keys

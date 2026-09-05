@@ -341,7 +341,9 @@ gap, because it does not require you to have been present.
 (@code{started}, @code{finished}, @code{failed}, @code{needs-input},
 @code{budget-exceeded}, @code{all-done}, @code{away-quiet}) to the
 notifiers that fire for it.  The shipped notifiers are @code{message},
-@code{speak} (piper), @code{sound}, @code{desktop} (@command{notify-send}),
+@code{speak} (piper), @code{sound}, @code{desktop} (@command{notify-send},
+which needs a running notification daemon --- under gowl, cmacs serves one
+itself; see @code{cmacs-notify-daemon-mode-global}),
 @code{command} (a script, given the event in its environment) and
 @code{receipt}.  A notifier whose @code{:available} predicate returns
 @code{nil} is skipped rather than erroring, and one that signals is caught

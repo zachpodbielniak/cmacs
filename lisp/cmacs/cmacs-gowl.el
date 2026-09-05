@@ -38,6 +38,8 @@
 ;; than required here: the media layer is only useful in a running
 ;; session, and nothing else in this file needs it.
 (declare-function cmacs-gowl-media-install-keybinds "cmacs-gowl-media" ())
+(declare-function cmacs-notify-daemon-mode-global "cmacs-notify-daemon"
+                  (&optional arg))
 
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
@@ -220,6 +222,20 @@ Note: under `--gowl' the compositor IS the Emacs session, so
 Super+Shift+q quits Emacs.  To customise, set this to nil and add
 your own binds with `gowl-add-keybind', or edit
 `cmacs-gowl--install-default-keybinds'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-notification-daemon t
+  "When non-nil, serve org.freedesktop.Notifications on mode enable.
+
+A gowl session has no notification daemon, so `notify-send' and every
+libnotify application are silent in it -- and so are cmacs's own three
+notification senders: `cmacs-notify', `cmacs-brigade-notify' and
+podomation's cmacs module all end up at that same D-Bus name.
+
+Claiming it is conditional: if something already owns the name -- GNOME
+Shell in a GNOME session -- this does nothing and says so.  See
+`cmacs-notify-daemon-mode-global'."
   :type 'boolean
   :group 'cmacs-gowl)
 
@@ -605,6 +621,12 @@ thread is running and applies configuration."
   ;; tag switching, Super+p menu, etc. are all inert.
   (when cmacs-gowl-default-keybindings
     (cmacs-gowl--install-default-keybinds))
+  ;; Serve org.freedesktop.Notifications.  Nothing else does in a gowl
+  ;; session, which is why cmacs's own notification senders are silent
+  ;; in it.  A no-op when something already owns the name.
+  (when cmacs-gowl-notification-daemon
+    (require 'cmacs-notify-daemon)
+    (ignore-errors (cmacs-notify-daemon-mode-global 1)))
   ;; Enable the in-process status bar with its dwm-style tag
   ;; indicator.  Opt-out via `cmacs-gowl-bar-show-tags'.
   (when (and cmacs-gowl-bar-show-tags
