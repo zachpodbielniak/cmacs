@@ -426,7 +426,9 @@ handles (use `cmacs-ai-free-session')."
     cmacs-ai-actions cmacs-ai-mail cmacs-ai-git cmacs-ai-errors
     cmacs-ai-term cmacs-ai-notes cmacs-ai-menu cmacs-ai-context-menu
     cmacs-ai-image cmacs-ai-image-block cmacs-ai-image-chat
-    cmacs-ai-image-menu)
+    cmacs-ai-image-menu
+    ;; The second brain: /ingest, C-c C-b, and the menu action.
+    cmacs-ai-ingest)
   "Submodules that ship with cmacs-ai.")
 
 (defun cmacs-ai-load-all ()

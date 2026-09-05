@@ -54,6 +54,13 @@
 (defvar cmacs-ai-chat--buffers nil
   "List of live cmacs-ai-chat buffers.")
 
+(defvar cmacs-ai-chat-slash-command-functions nil
+  "Functions tried, in order, on a compose line before it goes to the model.
+Each is called with the line and returns non-nil when it consumed it --
+`/image PROMPT' generates an image, `/ingest URL' files a note.  A
+subsystem adds its command with `add-hook'; nothing about the chat has
+to know it exists.")
+
 (defvar-local cmacs-ai-chat-session-pair nil
   "Cons (CLIENT-HANDLE . SESSION-HANDLE) for this chat buffer.")
 
@@ -1196,12 +1203,18 @@ result, and continue the stream until the model stops."
   (interactive)
   (let ((text (cmacs-ai-chat--read-compose)))
     (unless text (user-error "Compose is empty"))
-    (if (and (require 'cmacs-ai-image-chat nil 'noerror)
-             (cmacs-ai-image-chat-slash-command text))
-        ;; `/image PROMPT' generates directly, with no model turn: the
-        ;; compose text was a command to us, not something to send on.
-        ;; `cmacs-ai-chat--read-compose' has already emptied the region.
-        (message "cmacs-ai-image: generating...")
+    (if (progn
+          ;; The slash-command handlers live in lazily loaded files;
+          ;; make sure the shipped ones are on the hook before it runs.
+          (require 'cmacs-ai-image-chat nil 'noerror)
+          (require 'cmacs-ai-ingest nil 'noerror)
+          (run-hook-with-args-until-success
+           'cmacs-ai-chat-slash-command-functions text))
+        ;; `/image PROMPT', `/ingest URL' and friends act directly, with
+        ;; no model turn: the compose text was a command to us, not
+        ;; something to send on.  `cmacs-ai-chat--read-compose' has
+        ;; already emptied the region.
+        nil
       (cmacs-ai-chat--insert-heading
        (current-buffer) (cmacs-ai-chat--user-label) text)
       ;; Persist the user turn before the network round-trip, so the

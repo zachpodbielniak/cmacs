@@ -1020,6 +1020,13 @@ so it blocks for as long as generation takes.
 @code{/image PROMPT} in the compose region generates one directly, with
 no model turn involved.
 
+Slash commands are a hook, @code{cmacs-ai-chat-slash-command-functions}:
+each function sees the compose line and returns non-nil when it consumed
+it.  The second brain adds @code{/ingest} --- @code{/ingest URL},
+@code{/ingest PATH}, @code{/ingest -p resources -c technical/linux URL},
+@code{/ingest -- some text}, or a bare @code{/ingest} (also @kbd{C-c
+C-b}) to file the conversation itself.  @xref{Secondbrain Ingest}.
+
 The @code{generate_image} tool lets the model decide to draw something
 mid-conversation.  It is on by default; set
 @code{cmacs-ai-chat-enable-image-tool} to @code{nil} to withhold it.

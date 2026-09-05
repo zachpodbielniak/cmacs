@@ -158,5 +158,11 @@ send it to the model."
                            (cmacs-ai-image--default-done prompt))
       t)))
 
+(with-eval-after-load 'cmacs-ai-chat
+  (add-hook 'cmacs-ai-chat-slash-command-functions
+            #'cmacs-ai-image-chat-slash-command))
+
+(defvar cmacs-ai-chat-slash-command-functions)
+
 (provide 'cmacs-ai-image-chat)
 ;;; cmacs-ai-image-chat.el ends here

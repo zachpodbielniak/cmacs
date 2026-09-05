@@ -995,6 +995,8 @@ Two ways to get an image out of a chat buffer.
 =/image PROMPT= in the compose region generates one directly, with no
 model turn involved.
 
+Slash commands are a hook, =cmacs-ai-chat-slash-command-functions=: each function sees the compose line and returns non-nil when it consumed it. The second brain adds =/ingest= — =/ingest URL=, =/ingest PATH=, =/ingest -p resources -c technical/linux URL=, =/ingest -- some text=, or a bare =/ingest= (also =C-c C-b=) to file the conversation itself into =cmacs-ai-ingest-chat-directory=. See the secondbrain manual's /Ingesting/ chapter.
+
 The =generate_image= tool lets the model decide to draw something
 mid-conversation.  It is on by default; set
 =cmacs-ai-chat-enable-image-tool= to nil to withhold it.  Generated
