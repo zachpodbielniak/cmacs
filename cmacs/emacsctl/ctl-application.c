@@ -382,8 +382,11 @@ print_help_for (CtlApplication *self, const gchar *prog,
         self->registry, words, n_words, &consumed);
       if (cmd != NULL && !command_hidden_p (ctl_command_get_name (cmd)))
         help = command_help_string (cmd, prog);
-      else if (group_exists (self, words[0]))
-        help = group_help_string (self, prog, words[0]);
+      else if (group_exists (self, ctl_command_registry_canonical (
+                                     self->registry, words[0])))
+        help = group_help_string (self, prog,
+                                  ctl_command_registry_canonical (
+                                    self->registry, words[0]));
     }
 
   if (help == NULL)
@@ -694,7 +697,8 @@ ctl_application_run (CtlApplication *self, gint argc, gchar **argv)
         {
           /* Blame the full attempted command, not just the group:
            * `get nuffers' should not report "unknown command 'get'". */
-          gboolean is_group = group_exists (self, cmd_argv[0]);
+          gboolean is_group = group_exists (
+            self, ctl_command_registry_canonical (self->registry, cmd_argv[0]));
           gchar *attempted = cmd_argc >= 2
             ? g_strdup_printf ("%s %s", cmd_argv[0], cmd_argv[1])
             : g_strdup (cmd_argv[0]);

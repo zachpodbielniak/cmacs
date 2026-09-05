@@ -13,6 +13,7 @@ struct _CtlCommandRegistry
 
   GHashTable *by_name;        /* name -> CtlCommand (owned by ordered) */
   GPtrArray  *ordered;        /* of CtlCommand, owns refs */
+  GHashTable *aliases;        /* alias -> canonical group name */
 };
 
 enum
@@ -31,6 +32,7 @@ ctl_command_registry_finalize (GObject *object)
 {
   CtlCommandRegistry *self = CTL_COMMAND_REGISTRY (object);
   g_hash_table_unref (self->by_name);
+  g_hash_table_unref (self->aliases);
   g_ptr_array_unref (self->ordered);
   G_OBJECT_CLASS (ctl_command_registry_parent_class)->finalize (object);
 }
@@ -52,6 +54,26 @@ ctl_command_registry_init (CtlCommandRegistry *self)
 {
   self->by_name = g_hash_table_new (g_str_hash, g_str_equal);
   self->ordered = g_ptr_array_new_with_free_func (g_object_unref);
+  self->aliases = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                         g_free, g_free);
+}
+
+void
+ctl_command_registry_add_alias (CtlCommandRegistry *self,
+                                const gchar *alias, const gchar *group)
+{
+  g_hash_table_insert (self->aliases, g_strdup (alias), g_strdup (group));
+}
+
+const gchar *
+ctl_command_registry_canonical (CtlCommandRegistry *self, const gchar *word)
+{
+  const gchar *real;
+
+  if (word == NULL)
+    return NULL;
+  real = g_hash_table_lookup (self->aliases, word);
+  return real != NULL ? real : word;
 }
 
 CtlCommandRegistry *
@@ -78,7 +100,9 @@ ctl_command_registry_lookup (CtlCommandRegistry *self, gchar **argv,
 
   if (argc >= 2)
     {
-      gchar *two = g_strdup_printf ("%s %s", argv[0], argv[1]);
+      gchar *two = g_strdup_printf ("%s %s",
+                                    ctl_command_registry_canonical (self, argv[0]),
+                                    argv[1]);
       cmd = g_hash_table_lookup (self->by_name, two);
       g_free (two);
       if (cmd != NULL)
@@ -90,7 +114,8 @@ ctl_command_registry_lookup (CtlCommandRegistry *self, gchar **argv,
     }
   if (argc >= 1)
     {
-      cmd = g_hash_table_lookup (self->by_name, argv[0]);
+      cmd = g_hash_table_lookup (self->by_name,
+                                 ctl_command_registry_canonical (self, argv[0]));
       if (cmd != NULL)
         {
           if (consumed != NULL)

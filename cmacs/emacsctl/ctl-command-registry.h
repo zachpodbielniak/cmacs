@@ -37,6 +37,16 @@ CtlCommand *ctl_command_registry_lookup (CtlCommandRegistry *self,
 CtlCommand *ctl_command_registry_get (CtlCommandRegistry *self,
                                       const gchar *name);
 
+/* Group aliases: `second-brain ingest' resolves as `sb ingest'.  ALIAS
+ * and GROUP are copied.  Lookups canonicalise argv[0] through the
+ * alias table; help and completion call the canonicaliser directly so
+ * an aliased group shows the same verbs as its real name. */
+void         ctl_command_registry_add_alias (CtlCommandRegistry *self,
+                                             const gchar *alias,
+                                             const gchar *group);
+const gchar *ctl_command_registry_canonical (CtlCommandRegistry *self,
+                                             const gchar *word);
+
 /* Registration-ordered iteration. */
 guint       ctl_command_registry_get_n_commands (CtlCommandRegistry *self);
 CtlCommand *ctl_command_registry_get_nth (CtlCommandRegistry *self,
