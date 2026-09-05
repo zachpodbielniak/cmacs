@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 #ifdef HAVE_CMACS_GOWL
 #include "cmacs-gowl.h"
@@ -312,6 +313,19 @@ scr_child_on_frame_buffer (const ScrFrameBuffer *fb, int fd)
       close (fd);
       return;
     }
+  /* The announced dimensions and the fd travel separately; check that
+     the fd really is that big before mapping it, or the first read past
+     its end is a SIGBUS in the compositor's process rather than a
+     dropped frame buffer. */
+  {
+    struct stat sb;
+    if (fstat (fd, &sb) != 0 || sb.st_size < 0
+        || (guint64) sb.st_size < size)
+      {
+        close (fd);
+        return;
+      }
+  }
   map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
   if (map == MAP_FAILED)
     {

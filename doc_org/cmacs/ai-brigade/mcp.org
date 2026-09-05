@@ -31,10 +31,15 @@ JSON-RPC stream.
 
 * What it filters
 
-| Method       | Treatment                                                  |
-|--------------+------------------------------------------------------------|
-| =tools/list=   | pruned to what the allowlist admits                        |
-| =tools/call=   | anything else answered locally, never forwarded            |
+| Method                       | Treatment                                                       |
+|------------------------------+-----------------------------------------------------------------|
+| =tools/list=                 | pruned to what the allowlist admits                             |
+| =tools/call=                 | anything else answered locally, never forwarded                 |
+| =resources/read=, =subscribe= | need the pseudo tool =resources= (=*= covers it), else denied    |
+| =resources/list=, =templates/list= | answered locally with an empty list unless =resources= is granted |
+| =prompts/get=                | needs the pseudo tool =prompts=, else denied                     |
+| =prompts/list=               | empty list unless =prompts= is granted                          |
+| anything that is not one JSON object per line | answered locally with a parse / invalid-request error; never forwarded |
 
 Hiding beats refusing. A model that can see =eval= in the tool list will keep
 trying it and burn turns; one that never learns it exists does not.
@@ -43,18 +48,49 @@ The denial is =-32601= "method not found" rather than a permission code — as f
 as that agent is concerned the tool does not exist, which is also what
 =tools/list= told it.
 
+=resources/read= is gated because it is not a small thing: =buffer://= reads any
+buffer and =file://{+path}= reads any file on disk with no workspace
+confinement. An allowlist of two read-only tools must not hand that over for
+free, so it takes the word =resources= in the allowlist (or =*=). The same holds
+for prompts. A JSON-RPC batch (an array) would carry its own requests past the
+per-method checks, so the relay accepts exactly one object per line and answers
+anything else itself.
+
+The relay reads the gate's two settings from its environment ---
+=CMACS_BRIGADE_RESTRICT_PRIVILEGED= and =CMACS_BRIGADE_BLOCK_RECURSIVE=, written
+by the provisioner from =cmacs-brigade-restrict-privileged-tools= and
+=cmacs-brigade-block-recursive-tools=. It has no Lisp VM, so it cannot read
+those variables itself; before the environment carried them it read the
+uninitialised globals as nil, which meant the recursion block was silently off
+in the relay and the privileged-tools restriction was never honoured for CLI
+agents.
+
 * Provisioning
 
 Before a CLI agent starts, the brigade:
 
-1. mints a fresh random token;
-2. expands the agent's allowlist to concrete tool names;
+1. expands the agent's allowlist to concrete tool names;
+2. opens a *scoped socket* for it (=cmacs-brigade-scope-open=): a second MCP
+   listener inside cmacs, under =XDG_RUNTIME_DIR/cmacs/brigade/=, whose every
+   session registers the full tool set and then removes what the allowlist
+   does not admit --- the same C gate the relay uses, run by the process that
+   owns the tools;
 3. writes a 0600 =.mcp.json= under =XDG_RUNTIME_DIR= naming the relay, with the
-   socket path, the allowlist and the token in its =env= block;
+   scoped socket path, the allowlist, the gate's policy and a token in its
+   =env= block;
 4. hands the path to the worker as =--mcp-config=.
 
-Four decisions worth knowing:
+Five decisions worth knowing:
 
+- *The capability is the socket, not a string.* An earlier design minted a
+  random token that nothing ever verified, beside the path of the unrestricted
+  =cmacs-mcp-<pid>.sock=; an agent with a shell could =nc -U= the socket and
+  have =eval=, and the allowlist was enforced only by a process the agent's own
+  config file described. With a scoped socket, connecting directly yields the
+  scoped surface. =CMACS_BRIGADE_TOKEN= is still exported for callers that key
+  on it, but nothing about access depends on it. In a build without
+  =--with-cmacs-mcp= there is no scope; the plain socket is used and the relay
+  is the only gate, which is what it always was.
 - *The token is random*, never derived from the agent's name or id. Agents quote
   their own context into prompts and logs constantly, so a secret derived from
   something they know about themselves is a secret by construction only.
@@ -87,12 +123,16 @@ agent of nearly everything it was granted.
 
 Two rules the relay enforces with no registry at all:
 
-- =ai_*= and =brigade_*= are refused unconditionally, so an agent cannot spawn
-  agents outside the orchestrator's budget accounting.
+- =ai_*= and =brigade_*= are refused unconditionally while
+  =cmacs-brigade-block-recursive-tools= is non-nil (the default), so an agent
+  cannot spawn agents outside the orchestrator's budget accounting.
 - The *privileged set* — =eval=, =bash=, =shell=, =execute_command=,
   =send_keys=, the C-patching tools, =crispy_eval=, =bacon_eval=, the podomation
-  evaluators — is unreachable through =*= or a group. Granting one is a
-  deliberate act: name it outright or the agent does not get it.
+  evaluators, the gowl input-recording tools and =gsurf_eval_js= — is never
+  reachable through a group, and is withheld from =*= when
+  =cmacs-brigade-restrict-privileged-tools= is set (off by default: the wildcard
+  is the user's call about their own editor). Granting one under the
+  restriction is a deliberate act: name it outright or the agent does not get it.
 
 * The mailbox group
 
@@ -121,14 +161,22 @@ than the account the first agent gives of itself. See [[file:mailbox.org][Mailbo
 
 #+begin_src elisp
 (cmacs-brigade-tool-allowed-p "weather,project_read_file" "weather_now") ;; => t
-(cmacs-brigade-tool-allowed-p "*" "eval")                                ;; => nil
+(cmacs-brigade-tool-allowed-p "*" "eval")                                ;; => t  (default)
+(let ((cmacs-brigade-restrict-privileged-tools t))
+  (cmacs-brigade-tool-allowed-p "*" "eval"))                             ;; => nil
+(cmacs-brigade-tool-allowed-p "project_read_file" "resources")           ;; => nil
 (cmacs-brigade-tool-privileged-p "eval")                                 ;; => t
 (cmacs-brigade-allowlist-expand "weather")                               ;; => "weather_now"
+(cmacs-brigade-scope-open "weather_now,project_read_file")               ;; => "/run/user/1000/cmacs/brigade/mcp-12345-….sock"
+(cmacs-brigade-scope-list)                                               ;; => (("/run/user/…sock" . "weather_now,project_read_file"))
 #+end_src
 
 Verified end to end against a live cmacs: with an allowlist of two tools the
 relay showed *2 of 195*, the permitted call returned a real result, and =eval=
-was denied. With =*=, all 195 were visible except =eval=.
+was denied. With =*= and the restriction on, all 195 were visible except =eval=.
+The scoped socket is covered by =cmacs-brigade-scope-serves-only-the-allowlist=,
+which speaks MCP to it directly and checks that =tools/list= carries the two
+tools and not =eval=.
 
 * External clients
 
@@ -172,8 +220,11 @@ pid is not a secret, is not derived from the agent, and the uuid still carries
 all the unguessability --- which is why the uuid is there at all, since ids reach
 prompts and a path is a disclosure.
 
+Scoped sockets carry the same shape, =mcp-<pid>-<uuid>.sock=, in the same
+directory, and are swept by the same rule.
+
 =cmacs-brigade-host-sweep-stale= runs once per session from the first provision
-and removes any config whose pid is gone *and* which is older than
+and removes any config or socket whose pid is gone *and* which is older than
 =cmacs-brigade-host-stale-age= (default 300s). Both conditions are required:
 =process-attributes= returning nil is weaker than kill(2)'s EPERM rule, since it
 cannot distinguish a dead pid from one this Emacs may not inspect. This mirrors

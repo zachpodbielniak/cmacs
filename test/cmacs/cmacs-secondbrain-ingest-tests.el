@@ -1091,3 +1091,44 @@ interface -- and a test must never drive that session anyway."
 
 (provide 'cmacs-secondbrain-ingest-tests)
 ;;; cmacs-secondbrain-ingest-tests.el ends here
+
+;;; Private hosts
+
+(ert-deftest cmacs-secondbrain-ingest-test-private-host-p ()
+  "Loopback, link-local, RFC 1918 and local names are private; the rest are not."
+  (dolist (h '("localhost" "LOCALHOST" "127.0.0.1" "127.9.9.9" "10.1.2.3"
+               "172.16.0.1" "172.31.255.255" "192.168.1.1" "169.254.1.1"
+               "0.0.0.0" "100.64.0.1" "::1" "fd00::1" "fe80::1"
+               "[::1]" "printer.local" "wiki.internal" "box.home.arpa"
+               "foo.localhost"))
+    (should (cmacs-secondbrain-ingest-private-host-p h)))
+  (dolist (h '("example.com" "8.8.8.8" "172.32.0.1" "192.169.1.1"
+               "100.128.0.1" "2606:4700::1111" "local.example.com"))
+    (should-not (cmacs-secondbrain-ingest-private-host-p h)))
+  (should-not (cmacs-secondbrain-ingest-private-host-p nil)))
+
+(ert-deftest cmacs-secondbrain-ingest-test-fetch-refuses-private-host ()
+  "The fetcher answers a private URL with an error, without touching the network."
+  (let ((cmacs-secondbrain-ingest-allow-private-hosts nil)
+        (result nil))
+    (cl-letf (((symbol-function 'url-retrieve)
+               (lambda (&rest _) (error "url-retrieve must not be called"))))
+      (cmacs-secondbrain-ingest-fetch-url
+       "http://127.0.0.1:8080/secret" (lambda (r) (setq result r))))
+    (should result)
+    (should-not (plist-get result :ok))
+    (should (string-match-p "private host" (plist-get result :error)))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-cli-directory-is-private ()
+  "With the default nil, the CLI cwd is a fresh 0700 directory of our own."
+  (let ((cmacs-secondbrain-ingest-cli-directory nil)
+        (cmacs-secondbrain-ingest--cli-private-dir nil))
+    (unwind-protect
+        (let ((dir (cmacs-secondbrain-ingest--cli-directory)))
+          (should (file-directory-p dir))
+          (should-not (equal (directory-file-name dir)
+                             (directory-file-name temporary-file-directory)))
+          (should (equal (logand (file-modes dir) #o077) 0))
+          ;; Stable across calls within a session.
+          (should (equal dir (cmacs-secondbrain-ingest--cli-directory))))
+      (cmacs-secondbrain-ingest--cli-directory-cleanup))))

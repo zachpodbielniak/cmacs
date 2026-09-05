@@ -56,6 +56,26 @@ When the mode activates it creates an =OrgExDocument=, scans the
 buffer for =#+BEGIN_WIDGET= blocks, instantiates each widget, and
 displays them as overlays.
 
+** Evaluation policy
+
+Two things in a widget document are code rather than data: src blocks
+tagged =#+ATTR_ORGEX: :eval t= and =elisp= widgets (their =:code=
+property is evaluated to produce the widget).  Both run when the buffer
+is scanned -- with =#+ORGEX: t= in the header, that is when the file is
+opened, so a file that arrived by mail, from a clone, or from the second
+brain's ingester would otherwise run whatever it carries.
+
+| Variable | Default | Meaning |
+|----------+---------+---------|
+| =cmacs-org-ex-eval-policy= | =ask= | =ask= prompts once per buffer and remembers the answer; =always= evaluates silently (the old behaviour); =never= skips evaluation, widgets that need no code still work |
+| =cmacs-org-ex-eval-trusted-directories= | =nil= | files below any of these directories are treated as =always= |
+
+A prompt that cannot be shown counts as no: Emacs is non-interactive, or
+the scan came from an RPC surface with =inhibit-interaction= bound.
+=M-x cmacs-org-ex-allow-eval= allows the current buffer after the fact
+and rescans it.  Your own notes tree is the natural entry for the
+trusted list.
+
 * Widget Block Syntax
 
 Widgets are declared using Org special blocks with the type =WIDGET=.

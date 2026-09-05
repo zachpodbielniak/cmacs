@@ -58,15 +58,17 @@ handle_record_audio (McpServer *server, const gchar *name,
                    ? json_object_get_string_member_with_default (arguments, "output_path", NULL)
                    : NULL;
   g_autoptr (GError) err = NULL;
+  g_autofree gchar *eout = out ? cmacs_dispatch_lisp_escape (out) : NULL;
+  g_autofree gchar *out_form = eout
+    ? g_strdup_printf ("\"%s\"", eout)
+    : g_strdup ("(expand-file-name "
+                "(format-time-string \"audio-%Y%m%d-%H%M%S.wav\") "
+                "cmacs-audio-output-dir)");
   g_autofree gchar *res =
     ca_eval (&err,
              "(progn (require 'cmacs-audio) "
              "(cmacs-audio-record-to-file %s %g) %g)",
-             out ? g_strdup_printf ("\"%s\"", out)
-                 : g_strdup ("(expand-file-name "
-                              "(format-time-string \"audio-%%Y%%m%%d-%%H%%M%%S.wav\") "
-                              "cmacs-audio-output-dir)"),
-             seconds, seconds);
+             out_form, seconds, seconds);
   if (!res)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -95,12 +97,14 @@ handle_transcribe (McpServer *server, const gchar *name,
       return r;
     }
   g_autoptr (GError) err = NULL;
+  g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
+  g_autofree gchar *elang = cmacs_dispatch_lisp_escape (lang ? lang : "en");
   g_autofree gchar *res =
     ca_eval (&err,
              "(progn (require 'cmacs-whisper) "
              "(cdr (assq :text (cmacs-whisper-transcribe-file "
              "(cmacs-whisper-model-path) \"%s\" \"%s\"))))",
-             path, lang ? lang : "en");
+             epath, elang);
   if (!res)
     {
       McpToolResult *r = mcp_tool_result_new (TRUE);
@@ -144,6 +148,8 @@ handle_synthesize_speech (McpServer *server, const gchar *name,
       return r;
     }
   g_autoptr (GError) err = NULL;
+  g_autofree gchar *etext = cmacs_dispatch_lisp_escape (text);
+  g_autofree gchar *eout = out ? cmacs_dispatch_lisp_escape (out) : NULL;
   g_autofree gchar *res;
   if (out)
     res = ca_eval (&err,
@@ -152,11 +158,11 @@ handle_synthesize_speech (McpServer *server, const gchar *name,
       "(cmacs-piper-voice-path) \"%s\"))) "
       "(with-temp-file \"%s\" "
       "(set-buffer-multibyte nil) (insert pcm)) \"%s\"))",
-      text, out, out);
+      etext, eout, eout);
   else
     res = ca_eval (&err,
       "(progn (require 'cmacs-piper) "
-      "(cmacs-piper-speak-async \"%s\") \"ok\")", text);
+      "(cmacs-piper-speak-async \"%s\") \"ok\")", etext);
   McpToolResult *r = mcp_tool_result_new (res == NULL);
   mcp_tool_result_add_text (r, res ? res : (err ? err->message : "speak failed"));
   return r;

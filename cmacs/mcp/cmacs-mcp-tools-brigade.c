@@ -27,14 +27,19 @@
 #ifdef HAVE_CMACS_MCP
 #ifdef HAVE_CMACS_AI_BRIGADE
 
+#include "lisp.h"
 #include "cmacs-mcp-tools.h"
 #include "cmacs-eval-dispatch.h"
+#include "cmacs-glib-loop.h"
 #include "cmacs-brigade.h"
 
 #include <mcp.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
+#include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Escape for interpolation into a quoted Lisp string.  Every argument
  * here is untrusted input from an external agent, so this is the
@@ -248,6 +253,234 @@ cmacs_mcp_tools_brigade_register (McpServer *server)
 
   cmacs_brigade_registry_init ();
   cmacs_brigade_registry_foreach (publish_one, server);
+}
+
+/* ── Scoped sockets ───────────────────────────────────────────────────
+ *
+ * A capability token that nothing verifies is a comment.  For a long
+ * time the token minted in `cmacs-brigade-host-provision' was exactly
+ * that: written into the agent's config beside CMACS_BRIGADE_SOCKET,
+ * which named the plain cmacs-mcp-<pid>.sock, read back by nobody.  The
+ * allowlist was enforced only by the relay, a process the agent's own
+ * config file describes, so an agent with a shell could `nc -U` the
+ * socket and have `eval'.
+ *
+ * A scope is a second McpUnixSocketServer, one per provision, whose
+ * session-created handler registers the full tool set and then removes
+ * everything the allowlist does not admit -- the same C gate the relay
+ * applies, run in the process that owns the tools.  Resources and
+ * prompts are registered only when the allowlist grants their pseudo
+ * tool.  Connecting to the socket directly therefore yields the scoped
+ * surface, not the whole editor; the relay stays as the stdio adapter
+ * and as defence in depth.
+ *
+ * The socket lives in the 0700 brigade runtime directory.  Its path is
+ * not itself a secret (socket paths are listable through /proc/net/unix
+ * by anyone): the directory mode is what keeps other users out, and a
+ * same-user process could always read the config file anyway.  What the
+ * scope closes is the gap between "can reach the socket" and "gets
+ * everything" -- the thing the token was supposed to close and did not. */
+
+typedef struct
+{
+  gchar               *path;
+  gchar               *allowlist;
+  McpUnixSocketServer *server;
+} CmacsBrigadeScope;
+
+static GHashTable *cmacs_brigade__scopes = NULL;   /* path -> scope */
+
+static void
+scope_free (gpointer p)
+{
+  CmacsBrigadeScope *sc = p;
+
+  if (sc == NULL)
+    return;
+  if (sc->server != NULL)
+    {
+      mcp_unix_socket_server_stop (sc->server);
+      g_clear_object (&sc->server);
+    }
+  if (sc->path != NULL && g_unlink (sc->path) != 0 && errno != ENOENT)
+    g_debug ("cmacs-brigade: could not remove %s: %s", sc->path,
+             g_strerror (errno));
+  g_free (sc->path);
+  g_free (sc->allowlist);
+  g_free (sc);
+}
+
+/* Register the scoped surface on a fresh session's McpServer. */
+static void
+scope_session_created (McpUnixSocketServer *unix_server,
+                       McpServer *server, gpointer user_data)
+{
+  CmacsBrigadeScope *sc = user_data;
+  CmacsBrigadePolicy policy;
+  GList *tools, *l;
+  GPtrArray *drop;
+  guint i;
+
+  (void) unix_server;
+
+  cmacs_brigade_policy_from_lisp (&policy);
+
+  /* Everything, then subtract: the built-in tools are registered by a
+   * dozen per-subsystem functions and this is the one place that must
+   * not drift from what a full session gets. */
+  cmacs_mcp_register_all_tools (server);
+
+  drop = g_ptr_array_new_with_free_func (g_free);
+  tools = mcp_server_list_tools (server);
+  for (l = tools; l != NULL; l = l->next)
+    {
+      const gchar *name = mcp_tool_get_name (MCP_TOOL (l->data));
+
+      if (name != NULL
+          && !cmacs_brigade_tool_allowed_with_policy (sc->allowlist, name,
+                                                      &policy))
+        g_ptr_array_add (drop, g_strdup (name));
+    }
+  g_list_free_full (tools, g_object_unref);
+
+  for (i = 0; i < drop->len; i++)
+    mcp_server_remove_tool (server, g_ptr_array_index (drop, i));
+  g_ptr_array_unref (drop);
+
+  if (cmacs_brigade_tool_allowed_with_policy (sc->allowlist,
+                                              CMACS_BRIGADE_PSEUDO_RESOURCES,
+                                              &policy))
+    cmacs_mcp_register_resources (server);
+  if (cmacs_brigade_tool_allowed_with_policy (sc->allowlist,
+                                              CMACS_BRIGADE_PSEUDO_PROMPTS,
+                                              &policy))
+    cmacs_mcp_register_prompts (server);
+}
+
+static gchar *
+scope_dir (GError **error)
+{
+  gchar *dir = g_build_filename (g_get_user_runtime_dir (), "cmacs",
+                                 "brigade", NULL);
+
+  if (g_mkdir_with_parents (dir, 0700) != 0)
+    {
+      g_set_error (error, G_FILE_ERROR, g_file_error_from_errno (errno),
+                   "cannot create %s: %s", dir, g_strerror (errno));
+      g_free (dir);
+      return NULL;
+    }
+  /* mkdir_with_parents leaves an existing directory's mode alone; this
+   * one holds live capabilities, so insist. */
+  (void) g_chmod (dir, 0700);
+  return dir;
+}
+
+DEFUN ("cmacs-brigade-scope-open", Fcmacs_brigade_scope_open,
+       Scmacs_brigade_scope_open, 1, 1, 0,
+       doc: /* Open a per-agent MCP socket that serves only ALLOWLIST.
+Returns the socket path.  A client connecting to it sees the tools
+ALLOWLIST admits (evaluated by the same C gate the relay uses, with
+the current `cmacs-brigade-restrict-privileged-tools' and
+`cmacs-brigade-block-recursive-tools'), resources only if ALLOWLIST
+grants "resources", prompts only if it grants "prompts".  "*" covers
+both.
+
+This is what makes a provision a capability: an agent that reaches
+the socket directly, bypassing `emacs --mcp-relay', still gets the
+scoped surface.  Close it with `cmacs-brigade-scope-close'.  Signals
+an error if the socket cannot be created.  */)
+  (Lisp_Object allowlist)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *dir = NULL;
+  g_autofree gchar *uuid = NULL;
+  g_autofree gchar *name = NULL;
+  CmacsBrigadeScope *sc;
+  GMainContext *ctx;
+
+  CHECK_STRING (allowlist);
+
+  dir = scope_dir (&error);
+  if (dir == NULL)
+    xsignal1 (Qerror, build_string (error->message));
+
+  if (cmacs_brigade__scopes == NULL)
+    cmacs_brigade__scopes =
+      g_hash_table_new_full (g_str_hash, g_str_equal, g_free, scope_free);
+
+  /* Pid first so a sweep after a crash can tell whose it was. */
+  uuid = g_uuid_string_random ();
+  name = g_strdup_printf ("mcp-%ld-%s.sock", (long) getpid (), uuid);
+
+  sc = g_new0 (CmacsBrigadeScope, 1);
+  sc->path = g_build_filename (dir, name, NULL);
+  sc->allowlist = g_strdup (SSDATA (allowlist));
+  sc->server = mcp_unix_socket_server_new ("cmacs-brigade-scope",
+                                            PACKAGE_VERSION, sc->path);
+  mcp_unix_socket_server_set_instructions (sc->server,
+    "cmacs MCP server, scoped to one agent's allowlist.  Only the tools "
+    "listed by tools/list are available on this socket.\n");
+  g_signal_connect (sc->server, "session-created",
+                    G_CALLBACK (scope_session_created), sc);
+
+  ctx = cmacs_glib_get_context ();
+  g_main_context_push_thread_default (ctx);
+  if (!mcp_unix_socket_server_start (sc->server, &error))
+    {
+      g_main_context_pop_thread_default (ctx);
+      scope_free (sc);
+      xsignal1 (Qerror, build_string (error->message));
+    }
+  g_main_context_pop_thread_default (ctx);
+  (void) g_chmod (sc->path, 0600);
+
+  g_hash_table_replace (cmacs_brigade__scopes, g_strdup (sc->path), sc);
+  return build_string (sc->path);
+}
+
+DEFUN ("cmacs-brigade-scope-close", Fcmacs_brigade_scope_close,
+       Scmacs_brigade_scope_close, 1, 1, 0,
+       doc: /* Close the scoped MCP socket at PATH.
+Disconnects its clients and removes the socket file.  Returns t if a
+scope was open there, nil otherwise.  */)
+  (Lisp_Object path)
+{
+  CHECK_STRING (path);
+  if (cmacs_brigade__scopes == NULL)
+    return Qnil;
+  return g_hash_table_remove (cmacs_brigade__scopes, SSDATA (path))
+    ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-brigade-scope-list", Fcmacs_brigade_scope_list,
+       Scmacs_brigade_scope_list, 0, 0, 0,
+       doc: /* Return the open scoped sockets as a list of (PATH . ALLOWLIST).  */)
+  (void)
+{
+  Lisp_Object out = Qnil;
+  GHashTableIter it;
+  gpointer k, v;
+
+  if (cmacs_brigade__scopes == NULL)
+    return Qnil;
+  g_hash_table_iter_init (&it, cmacs_brigade__scopes);
+  while (g_hash_table_iter_next (&it, &k, &v))
+    {
+      CmacsBrigadeScope *sc = v;
+      out = Fcons (Fcons (build_string (sc->path),
+                          build_string (sc->allowlist)),
+                   out);
+    }
+  return out;
+}
+
+void
+syms_of_cmacs_mcp_tools_brigade (void)
+{
+  defsubr (&Scmacs_brigade_scope_open);
+  defsubr (&Scmacs_brigade_scope_close);
+  defsubr (&Scmacs_brigade_scope_list);
 }
 
 #endif /* HAVE_CMACS_AI_BRIGADE */

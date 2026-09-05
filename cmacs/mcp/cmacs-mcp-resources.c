@@ -25,6 +25,7 @@ handle_buffer_resource (McpServer   *server,
   const gchar *name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ename = NULL;
   g_autofree gchar *content = NULL;
   McpResourceContents *rc;
 
@@ -37,10 +38,11 @@ handle_buffer_resource (McpServer   *server,
   else
     name = uri;
 
+  ename = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
     "  (buffer-substring-no-properties (point-min) (point-max)))",
-    name);
+    ename);
 
   content = cmacs_dispatch_eval (expr, &error);
   if (content == NULL)
@@ -114,6 +116,7 @@ handle_variable_resource (McpServer   *server,
   const gchar *name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ename = NULL;
   g_autofree gchar *content = NULL;
   McpResourceContents *rc;
 
@@ -125,8 +128,12 @@ handle_variable_resource (McpServer   *server,
   else
     name = uri;
 
+  /* `intern' of a quoted string, not a bare symbol spliced into the
+     source: a name is data, and "nil) (delete-directory ...) (car '(x"
+     used to read as three forms. */
+  ename = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
-    "(prin1-to-string (symbol-value '%s))", name);
+    "(prin1-to-string (symbol-value (intern \"%s\")))", ename);
 
   content = cmacs_dispatch_eval (expr, &error);
   if (content == NULL)
@@ -158,7 +165,7 @@ handle_process_resource (McpServer   *server,
   else
     name = uri;
 
-  escaped = g_strescape (name, NULL);
+  escaped = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
     "(let ((p (get-process \"%s\")))"
     "  (if (and p (process-buffer p)"
@@ -221,9 +228,13 @@ handle_screenshot_resource (McpServer   *server,
   (void) uri;
   (void) user_data;
 
-  path = g_strdup_printf ("%s/cmacs-mcp-frame-%u.png",
-                          g_get_tmp_dir (), g_random_int ());
-  expr = g_strdup_printf ("(gowl-screenshot 'desktop \"%s\" t)", path);
+  path = cmacs_mcp_temp_path ("cmacs-mcp-frame-XXXXXX.png");
+  if (path == NULL)
+    return NULL;
+  {
+    g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
+    expr = g_strdup_printf ("(gowl-screenshot 'desktop \"%s\" t)", epath);
+  }
 
   str = cmacs_dispatch_eval (expr, &error);
   if (str == NULL

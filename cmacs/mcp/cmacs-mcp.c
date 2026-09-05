@@ -251,6 +251,11 @@ cmacs_mcp_do_start (GError **error)
     }
   g_main_context_pop_thread_default (ctx);
 
+  /* The runtime directory is 0700 already; the socket's own mode is
+     belt and braces for a session where XDG_RUNTIME_DIR is unset and
+     GLib fell back to ~/.cache. */
+  (void) g_chmod (socket_path, 0600);
+
   return TRUE;
 }
 
@@ -334,6 +339,9 @@ syms_of_cmacs_mcp (void)
   defsubr (&Scmacs_mcp_session_count);
   defsubr (&Scmacs_mcp_start);
   defsubr (&Scmacs_mcp_stop);
+#ifdef HAVE_CMACS_AI_BRIGADE
+  syms_of_cmacs_mcp_tools_brigade ();
+#endif
 }
 
 void

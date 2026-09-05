@@ -315,7 +315,7 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-create-directories= | =t= | a new =:category= is created with an index |
 | =cmacs-secondbrain-ingest-provider= | =claude-code= | |
 | =cmacs-secondbrain-ingest-model= | ="sonnet"= | |
-| =cmacs-secondbrain-ingest-cli-directory= | =temporary-file-directory= | where a CLI provider runs |
+| =cmacs-secondbrain-ingest-cli-directory= | =nil= | where a CLI provider runs; nil is a private 0700 per-session directory (a shared =/tmp= would let another user plant a =CLAUDE.md= or =.claude/settings.json= for every summary) |
 | =cmacs-secondbrain-ingest-cli-bare= | =nil= | =claude --bare=; off because it also skips the login |
 | =cmacs-secondbrain-ingest-cli-exclude-dynamic-sections= | =t= | drop cwd/env/memory sections from the CLI system prompt |
 | =cmacs-secondbrain-ingest-ai-timeout= | 600 | seconds per model call |
@@ -357,6 +357,7 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-user-agent= | | |
 | =cmacs-secondbrain-ingest-fetch-timeout= | 45 | |
 | =cmacs-secondbrain-ingest-fetch-max-bytes= | 20 MiB | |
+| =cmacs-secondbrain-ingest-allow-private-hosts= | =nil= | fetch loopback / link-local / RFC 1918 / =.local= hosts (checked on the request and on every redirect); off because the ingester is reachable from chat and from agents |
 | =cmacs-secondbrain-ingest-crawl-depth= | 1 | |
 | =cmacs-secondbrain-ingest-crawl-max-pages= | 50 | |
 | =cmacs-secondbrain-ingest-crawl-wait= | 1.0 | |

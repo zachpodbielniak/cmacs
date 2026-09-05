@@ -14,8 +14,8 @@
  *
  *   1. in-process HTTP agents  -- as an AiTool on the agent's executor
  *   2. CLI agents (claude-code / opencode) -- as an MCP tool reached
- *      through the `emacs --mcp-relay' bridge, scoped by the agent's
- *      capability token
+ *      through the `emacs --mcp-relay' bridge, on a per-agent scoped
+ *      socket that serves only the agent's allowlist
  *   3. external MCP clients    -- on cmacs's existing MCP server
  *
  * Everything the shipped features use goes through the same public
@@ -90,6 +90,37 @@ extern guint cmacs_brigade_registry_size    (void);
  * rewrite the function that decides what it is allowed to do.  */
 extern gboolean cmacs_brigade_tool_allowed (const gchar *allowlist,
                                             const gchar *tool_name);
+
+/* The two settings that shape a decision, as a value.  The editor fills
+ * it from `cmacs-brigade-restrict-privileged-tools' and
+ * `cmacs-brigade-block-recursive-tools'; the relay -- which has no Lisp
+ * VM and therefore no variables -- fills it from the environment the
+ * editor wrote into its config (CMACS_BRIGADE_RESTRICT_PRIVILEGED,
+ * CMACS_BRIGADE_BLOCK_RECURSIVE).  cmacs_brigade_tool_allowed is the
+ * editor-side convenience; anything without a Lisp VM must use the
+ * _with_policy form. */
+typedef struct
+{
+  gboolean restrict_privileged;   /* "*" and groups skip the privileged set */
+  gboolean block_recursive;       /* refuse ai_* / brigade_* outright */
+} CmacsBrigadePolicy;
+
+#define CMACS_BRIGADE_ENV_RESTRICT_PRIVILEGED "CMACS_BRIGADE_RESTRICT_PRIVILEGED"
+#define CMACS_BRIGADE_ENV_BLOCK_RECURSIVE     "CMACS_BRIGADE_BLOCK_RECURSIVE"
+
+extern void cmacs_brigade_policy_from_lisp (CmacsBrigadePolicy *out);
+extern void cmacs_brigade_policy_from_env  (CmacsBrigadePolicy *out);
+extern gboolean cmacs_brigade_tool_allowed_with_policy
+  (const gchar *allowlist, const gchar *tool_name,
+   const CmacsBrigadePolicy *policy);
+
+/* Pseudo tool names an allowlist can grant for the non-tool halves of
+ * the MCP surface.  "*" covers both; a scoped agent has to be given them
+ * by name.  resources/read reaches every buffer and any file on disk
+ * (file://{+path} has no workspace confinement), so it is not something
+ * an allowlist of two read-only tools should hand over for free. */
+#define CMACS_BRIGADE_PSEUDO_RESOURCES "resources"
+#define CMACS_BRIGADE_PSEUDO_PROMPTS   "prompts"
 
 /* True when TOOL_NAME is in the privileged set that is denied unless an
  * allowlist names it explicitly (never via "*" or a group).  */

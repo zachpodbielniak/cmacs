@@ -19,6 +19,16 @@
 /* Start the compositor dispatch thread. */
 extern void cmacs_gowl_start_thread (void);
 
+/* Launch COMMAND (a shell-style command line, parsed with
+ * g_shell_parse_argv -- no shell is involved) as a client of the running
+ * compositor: WAYLAND_DISPLAY and the toolkit hints point at gowl's own
+ * socket.  On success stores the child's pid in *PID and returns TRUE;
+ * on failure sets *ERROR.  The one implementation behind `gowl-spawn',
+ * the bacon/D-Bus/MCP Spawn dispatch and anything else that wants a
+ * client started. */
+extern gboolean cmacs_gowl_spawn_command (const gchar *command,
+                                          GPid *pid, GError **error);
+
 /* The running --gowl compositor, or NULL when gowl is not active.  Other
  * cmacs subsystems (e.g. cmacs-screensaver) use this to push raw frames into
  * the wallpaper / lock-screen sinks. */

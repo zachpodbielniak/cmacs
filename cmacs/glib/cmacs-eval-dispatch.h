@@ -69,8 +69,19 @@ extern void cmacs_dispatch_callback_invokeN (uint64_t cookie,
 /* Drop without invoking (cancellation path). */
 extern void cmacs_dispatch_callback_drop    (uint64_t cookie);
 
+/* Quote S for splicing inside a Lisp string literal: `"' and `\' get a
+   backslash, everything else (newlines, UTF-8) passes through verbatim.
+   Use this, never g_strescape, whose octal escapes the Lisp reader turns
+   into raw bytes.  NULL is treated as "".  Caller g_frees. */
+gchar *cmacs_dispatch_lisp_escape (const gchar *s);
+
+/* Quote S for splicing inside a JSON string literal.  NULL is treated
+   as "".  Caller g_frees. */
+gchar *cmacs_dispatch_json_escape (const gchar *s);
+
 /* Evaluate EXPRESSION as elisp.  On success, return the printed
-   result (caller must g_free).  On error, set *ERROR and return NULL. */
+   result (caller must g_free).  On error -- including a reader error
+   in EXPRESSION itself -- set *ERROR and return NULL. */
 gchar *cmacs_dispatch_eval (const gchar *expression, GError **error);
 
 /* Evaluate EXPRESSION as elisp.  Like cmacs_dispatch_eval, but when the

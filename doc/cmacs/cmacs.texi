@@ -4957,6 +4957,18 @@ DEFUN bridge and an Elisp layer.
 Activate with @code{#+ORGEX: t} in the file header or
 @code{M-x cmacs-org-ex-mode}.
 
+Two things in a widget document are code rather than data: src blocks
+tagged @code{#+ATTR_ORGEX: :eval t} and @code{elisp} widgets, both of
+which run when the buffer is scanned---with @code{#+ORGEX: t}, when the
+file is opened.  @code{cmacs-org-ex-eval-policy} decides whether they
+may: @code{ask} (the default) prompts once per buffer and remembers the
+answer, @code{always} evaluates silently, @code{never} skips them.  A
+prompt that cannot be shown (non-interactive Emacs, or a scan from an
+RPC surface) counts as no.  Files under
+@code{cmacs-org-ex-eval-trusted-directories} are evaluated without
+asking; @code{M-x cmacs-org-ex-allow-eval} allows a buffer after the
+fact and rescans it.
+
 Widget types: @code{slider} (GTK), @code{web} (WebKit), @code{buffer}
 (file embed), @code{elisp} / @code{crispy} / @code{bacon} (code
 evaluation).
@@ -5466,6 +5478,13 @@ to talk to the user's session.
 
 @file{/tmp/} has the @code{tmp_t} label, which @code{cupsd_t} can
 manage freely.
+
+Because @file{/tmp/} is world-writable, whoever creates
+@file{/tmp/cmacs-print-<uid>} first owns it.  Both ends therefore
+check before using it: the backend refuses a symlink or a directory
+owned by another uid (and only creates the directory when absent),
+and @code{cmacs-print--ensure-spool-dir} refuses to watch anything that
+is not a real directory owned by this uid with mode 0700.
 
 A periodic @code{cmacs-print-poll-interval} drain (default 30 s) is the
 belt-and-suspenders fallback for daemon-without-frame setups where

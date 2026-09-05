@@ -59,6 +59,7 @@ handle_send_to_process (McpServer   *server,
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
   g_autofree gchar *escaped = NULL;
+  g_autofree gchar *eproc = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -76,10 +77,11 @@ handle_send_to_process (McpServer   *server,
       return result;
     }
 
-  escaped = g_strescape (input, NULL);
+  escaped = cmacs_dispatch_lisp_escape (input);
+  eproc = cmacs_dispatch_lisp_escape (process_name);
   expr = g_strdup_printf (
-    "(process-send-string \"%s\" \"%s\") t",
-    process_name, escaped);
+    "(progn (process-send-string \"%s\" \"%s\") t)",
+    eproc, escaped);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);

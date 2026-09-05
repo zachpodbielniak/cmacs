@@ -59,6 +59,7 @@ handle_get_buffer_content (McpServer   *server,
   const gchar *buffer_name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
   gint64 start = 0, end = 0;
@@ -81,16 +82,17 @@ handle_get_buffer_content (McpServer   *server,
   if (json_object_has_member (arguments, "end"))
     end = json_object_get_int_member (arguments, "end");
 
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
   if (start > 0 && end > 0)
     expr = g_strdup_printf (
       "(with-current-buffer \"%s\""
       "  (buffer-substring-no-properties %ld %ld))",
-      buffer_name, (long) start, (long) end);
+      ebuf, (long) start, (long) end);
   else
     expr = g_strdup_printf (
       "(with-current-buffer \"%s\""
       "  (buffer-substring-no-properties (point-min) (point-max)))",
-      buffer_name);
+      ebuf);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -110,6 +112,7 @@ handle_set_buffer_content (McpServer   *server,
   const gchar *buffer_name, *content;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   g_autofree gchar *escaped = NULL;
   McpToolResult *result;
@@ -130,13 +133,14 @@ handle_set_buffer_content (McpServer   *server,
     }
 
   /* Escape content for embedding in an Elisp string literal. */
-  escaped = g_strescape (content, NULL);
+  escaped = cmacs_dispatch_lisp_escape (content);
 
   if (json_object_has_member (arguments, "start"))
     start = json_object_get_int_member (arguments, "start");
   if (json_object_has_member (arguments, "end"))
     end = json_object_get_int_member (arguments, "end");
 
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
   if (start > 0 && end > 0)
     expr = g_strdup_printf (
       "(with-current-buffer \"%s\""
@@ -144,14 +148,14 @@ handle_set_buffer_content (McpServer   *server,
       "  (goto-char %ld)"
       "  (insert \"%s\")"
       "  t)",
-      buffer_name, (long) start, (long) end, (long) start, escaped);
+      ebuf, (long) start, (long) end, (long) start, escaped);
   else
     expr = g_strdup_printf (
       "(with-current-buffer \"%s\""
       "  (erase-buffer)"
       "  (insert \"%s\")"
       "  t)",
-      buffer_name, escaped);
+      ebuf, escaped);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -171,6 +175,7 @@ handle_create_buffer (McpServer   *server,
   const gchar *buffer_name, *content;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -187,20 +192,21 @@ handle_create_buffer (McpServer   *server,
       return result;
     }
 
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
   content = json_object_get_string_member_with_default (arguments, "content", NULL);
   if (content != NULL)
     {
-      g_autofree gchar *escaped = g_strescape (content, NULL);
+      g_autofree gchar *escaped = cmacs_dispatch_lisp_escape (content);
       expr = g_strdup_printf (
         "(with-current-buffer (get-buffer-create \"%s\")"
         "  (insert \"%s\")"
         "  (buffer-name))",
-        buffer_name, escaped);
+        ebuf, escaped);
     }
   else
     expr = g_strdup_printf (
       "(buffer-name (get-buffer-create \"%s\"))",
-      buffer_name);
+      ebuf);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -220,6 +226,7 @@ handle_kill_buffer (McpServer   *server,
   const gchar *buffer_name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -236,7 +243,8 @@ handle_kill_buffer (McpServer   *server,
       return result;
     }
 
-  expr = g_strdup_printf ("(kill-buffer \"%s\")", buffer_name);
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
+  expr = g_strdup_printf ("(kill-buffer \"%s\")", ebuf);
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
   mcp_tool_result_add_text (result,
@@ -255,6 +263,7 @@ handle_switch_to_buffer (McpServer   *server,
   const gchar *buffer_name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -271,8 +280,9 @@ handle_switch_to_buffer (McpServer   *server,
       return result;
     }
 
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
   expr = g_strdup_printf (
-    "(buffer-name (switch-to-buffer \"%s\"))", buffer_name);
+    "(buffer-name (switch-to-buffer \"%s\"))", ebuf);
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
   mcp_tool_result_add_text (result,
@@ -291,6 +301,7 @@ handle_save_buffer (McpServer   *server,
   const gchar *buffer_name;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ebuf = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -314,6 +325,7 @@ handle_save_buffer (McpServer   *server,
      as an `inhibited-interaction' error instead of wedging the request
      in a recursive edit -- name the offending character so the caller
      can act on it rather than just seeing "interaction inhibited". */
+  ebuf = cmacs_dispatch_lisp_escape (buffer_name);
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
     " (condition-case nil (progn (save-buffer) t)"
@@ -327,7 +339,7 @@ handle_save_buffer (McpServer   *server,
     "               (format \": char at %%d cannot be encoded in %%s\""
     "                       pos cs)"
     "             \" (a prompt no MCP client can answer)\"))))))",
-    buffer_name);
+    ebuf);
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
   mcp_tool_result_add_text (result,

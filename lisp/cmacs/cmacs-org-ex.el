@@ -52,6 +52,88 @@
   :group 'cmacs
   :prefix "cmacs-org-ex-")
 
+(defcustom cmacs-org-ex-eval-policy 'ask
+  "Whether org-ex may evaluate Emacs Lisp found in an Org file.
+
+Two things in a widget document are code, not data: src blocks tagged
+`#+ATTR_ORGEX: :eval t', and `elisp' widgets whose `:code' property is
+evaluated to produce the widget.  Both run when the mode scans the
+buffer, which with `#+ORGEX: t' in the header means when the file is
+opened -- so this is the same decision `org-confirm-babel-evaluate'
+guards, for a file that may have arrived by mail, from a clone, or
+from the second brain's ingester.
+
+`ask' (the default) prompts once per buffer the first time evaluation
+would happen, and remembers the answer for that buffer.  When there is
+nobody to ask -- the buffer is being scanned from an RPC surface with
+`inhibit-interaction' bound, or Emacs is non-interactive -- an
+unanswered question counts as no.  `always' evaluates without asking
+(the behaviour before this option existed) and `never' skips
+evaluation entirely; widgets that do not need code still work.
+
+Files under `cmacs-org-ex-eval-trusted-directories' are evaluated
+without a prompt regardless."
+  :type '(choice (const :tag "Ask once per buffer" ask)
+                 (const :tag "Always evaluate" always)
+                 (const :tag "Never evaluate" never))
+  :group 'cmacs-org-ex)
+
+(defcustom cmacs-org-ex-eval-trusted-directories nil
+  "Directories whose Org files org-ex may evaluate without asking.
+
+Each entry is a directory; a file anywhere below one of them (after
+`file-truename') is treated as `always' under
+`cmacs-org-ex-eval-policy'.  Your own notes tree is the natural entry."
+  :type '(repeat directory)
+  :group 'cmacs-org-ex)
+
+(defvar-local cmacs-org-ex--eval-decision nil
+  "The remembered answer for this buffer: `allow', `deny', or nil (not asked).")
+
+(defun cmacs-org-ex--trusted-file-p (file)
+  "Non-nil when FILE lies under one of the trusted directories."
+  (when (and file cmacs-org-ex-eval-trusted-directories)
+    (let ((truename (file-truename file)))
+      (cl-some (lambda (dir)
+                 (string-prefix-p (file-name-as-directory
+                                   (file-truename (expand-file-name dir)))
+                                  truename))
+               cmacs-org-ex-eval-trusted-directories))))
+
+(defun cmacs-org-ex--eval-allowed-p ()
+  "Decide, for the current buffer, whether embedded Lisp may run.
+
+Applies `cmacs-org-ex-eval-policy', the trusted directories, and the
+per-buffer memory.  A prompt that cannot be shown is a no: RPC
+dispatch binds `inhibit-interaction', and the question must never
+turn into an error that aborts the scan halfway."
+  (cond
+   ((eq cmacs-org-ex-eval-policy 'never) nil)
+   ((eq cmacs-org-ex-eval-policy 'always) t)
+   ((cmacs-org-ex--trusted-file-p buffer-file-name) t)
+   ((eq cmacs-org-ex--eval-decision 'allow) t)
+   ((eq cmacs-org-ex--eval-decision 'deny) nil)
+   ((or noninteractive (bound-and-true-p inhibit-interaction)) nil)
+   (t
+    (let ((answer (condition-case nil
+                      (yes-or-no-p
+                       (format "org-ex: %s wants to evaluate Emacs Lisp on load.  Allow? "
+                               (if buffer-file-name
+                                   (file-name-nondirectory buffer-file-name)
+                                 (buffer-name))))
+                    (error nil))))
+      (setq cmacs-org-ex--eval-decision (if answer 'allow 'deny))
+      answer))))
+
+(defun cmacs-org-ex-allow-eval ()
+  "Allow embedded Lisp in the current buffer and rescan it.
+Use after answering no to the load-time prompt, or when the policy is
+`ask' and the buffer was opened non-interactively."
+  (interactive)
+  (setq cmacs-org-ex--eval-decision 'allow)
+  (when (bound-and-true-p cmacs-org-ex-mode)
+    (cmacs-org-ex--scan-buffer)))
+
 (defcustom cmacs-org-ex-default-width 400
   "Default widget width in pixels."
   :type 'integer
@@ -455,8 +537,10 @@ and its language is emacs-lisp."
                   attrs))))
 
 (defun cmacs-org-ex--eval-src-block (element)
-  "Evaluate an emacs-lisp src block ELEMENT if marked for auto-eval."
-  (when (cmacs-org-ex--eval-src-block-p element)
+  "Evaluate an emacs-lisp src block ELEMENT if marked for auto-eval.
+Subject to `cmacs-org-ex-eval-policy' (see `cmacs-org-ex--eval-allowed-p')."
+  (when (and (cmacs-org-ex--eval-src-block-p element)
+             (cmacs-org-ex--eval-allowed-p))
     (let ((code (org-element-property :value element)))
       (when code
         (condition-case err

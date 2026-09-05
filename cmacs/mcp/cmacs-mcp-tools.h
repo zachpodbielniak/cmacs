@@ -95,6 +95,9 @@ void cmacs_mcp_tools_dbexplorer_register (McpServer *server);
  * Walks the live registry rather than a static table, because a tool can
  * be registered at any point after startup. */
 void cmacs_mcp_tools_brigade_register (McpServer *server);
+/* DEFUNs for per-agent scoped sockets (`cmacs-brigade-scope-open' and
+ * friends).  Called from syms_of_cmacs_mcp. */
+void syms_of_cmacs_mcp_tools_brigade (void);
 #endif
 
 void cmacs_mcp_register_resources (McpServer *server);
@@ -108,6 +111,16 @@ JsonNode *cmacs_mcp_schema_from_string (const gchar *json_str);
    on failure RESULT is left untouched and PATH is not removed. */
 gboolean cmacs_mcp_result_add_png_file (McpToolResult *result,
                                         const gchar   *path);
+
+/* Create a private scratch file for a tool to write into and return its
+   path (caller g_frees, and unlinks when done -- cmacs_mcp_result_add_png_file
+   does the unlink itself).  TEMPLATE is a basename containing "XXXXXX",
+   e.g. "cmacs-mcp-frame-XXXXXX.png".  The file is created 0600 with
+   O_EXCL under the user's runtime directory, never in the shared tmp
+   directory under a guessable name, so another local user cannot plant
+   a symlink where a screenshot is about to be written.  NULL on
+   failure. */
+gchar *cmacs_mcp_temp_path (const gchar *template);
 
 #endif /* HAVE_CMACS_MCP */
 #endif /* CMACS_MCP_TOOLS_H */

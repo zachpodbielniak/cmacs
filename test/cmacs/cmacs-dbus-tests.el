@@ -347,3 +347,47 @@ hang the request (and the editor) until a human answered the prompt."
 (provide 'cmacs-dbus-tests)
 
 ;;; cmacs-dbus-tests.el ends here
+
+(ert-deftest cmacs-dbus-eval-malformed-expression-is-an-error ()
+  "A form the reader cannot parse is an ordinary error reply.
+
+The expression used to be `read' before the condition-case was
+installed, so an unbalanced paren from any RPC client signalled inside
+the GLib dispatch: an abort when `waiting_for_input' was set, a
+non-local exit through g_main_context_dispatch otherwise.  Now the
+reader runs inside the guard and the client gets the reader's message."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Eval"
+                  "(+ 1 2")))
+      (should (string-match-p "end.of.file\\|End of file\\|error" out))
+      ;; And the service is still alive afterwards.
+      (should (string-match-p
+               "42"
+               (cmacs-dbus-tests--gdbus
+                "call" "--session" "--dest" dest
+                "--object-path" "/org/cmacs/Editor"
+                "--method" "org.cmacs.Editor1.Eval" "(+ 40 2)"))))))
+
+(ert-deftest cmacs-dbus-eval-non-ascii-round-trips ()
+  "UTF-8 survives the Lisp string quoting on the way in and out.
+
+The old escaper emitted octal for every byte above 0x7f, which the
+reader turned into raw bytes: a search for \"é\" never matched."
+  (skip-unless (fboundp 'cmacs-dbus-start))
+  (skip-unless (executable-find "gdbus"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Eval"
+                  "(string-match-p \"é\" \"café\")")))
+      (should (string-match-p "3" out)))))

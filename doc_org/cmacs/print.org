@@ -225,7 +225,7 @@ All defcustoms live in =lisp/cmacs/cmacs-print.el=.
 | =cmacs-print-rasterizer-program=    | ="pdftocairo"=                                       | External rasteriser (path is fine)       |
 | =cmacs-print-pdfinfo-program=       | ="pdfinfo"=                                          | External metadata reader                 |
 | =cmacs-print-debug=                 | =nil=                                                | Log every step to =*cmacs-print-log*=    |
-| =cmacs-print-spool-dir=             | =/tmp/cmacs-print-<uid>=                             | Where the CUPS backend drops PDFs        |
+| =cmacs-print-spool-dir=             | =/tmp/cmacs-print-<uid>=                             | Where the CUPS backend drops PDFs; must be a real directory owned by this uid with mode 0700 -- a symlink, a foreign owner or group/world bits are refused by both the watcher and the backend, since anyone can create a path under =/tmp= first |
 | =cmacs-print-watch-spool=           | =t=                                                  | Auto-start the file-notify watcher       |
 | =cmacs-print-poll-interval=         | =30=                                                 | Belt-and-suspenders periodic drain (s)   |
 

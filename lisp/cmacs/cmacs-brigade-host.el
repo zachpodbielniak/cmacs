@@ -8,17 +8,24 @@
 ;; Gives an agent a way to reach cmacs's tools, scoped to what it is
 ;; allowed, and takes it away again when the run ends.
 ;;
-;; The arrangement: mint a random token, write a 0600 `.mcp.json' naming
-;; `emacs --mcp-relay' with that token and the agent's expanded
-;; allowlist, and hand the path to the worker.  The relay enforces the
-;; allowlist in a process with no Lisp VM.
+;; The arrangement: open a per-agent *scoped socket* in cmacs that
+;; serves only the agent's expanded allowlist (`cmacs-brigade-scope-open',
+;; enforced by the C gate inside the editor), write a 0600 `.mcp.json'
+;; naming `emacs --mcp-relay' with that socket, the allowlist and the
+;; gate's policy in its env block, and hand the path to the worker.  The
+;; relay applies the same allowlist again in a process with no Lisp VM;
+;; the socket is what makes the provision a capability rather than a
+;; suggestion, because an agent that reaches it directly still gets only
+;; the scoped surface.
 ;;
 ;; Three decisions worth knowing:
 ;;
-;;   - The token is random, never derived from the agent's name or id.
-;;     Agents quote their own context into prompts and logs constantly;
-;;     a secret derived from something they know about themselves is a
-;;     secret by construction only.
+;;   - The capability is the socket, not a string.  An earlier version
+;;     minted a random token that nothing ever verified, next to the
+;;     path of the unrestricted cmacs-mcp-<pid>.sock: a shell was all it
+;;     took to walk around the relay.  A token is still minted and
+;;     exported (CMACS_BRIGADE_TOKEN) for callers that key on it, but
+;;     nothing about access depends on it.
 ;;
 ;;   - The config goes in XDG_RUNTIME_DIR, not the workspace.  A
 ;;     `.mcp.json' in a project is user-authored, usually git-tracked,
@@ -181,17 +188,36 @@ about the 0600 write, the revoke-before-provision and the sweep."
          (fmt (or format 'claude))
          (emit (or (alist-get fmt cmacs-brigade-host-config-formats)
                    #'cmacs-brigade-host--config-claude))
-         (env (list :CMACS_BRIGADE_SOCKET (cmacs-mcp-socket-path)
+         ;; The scoped socket is the enforcement; the relay's copy of the
+         ;; allowlist below is defence in depth.  Without the DEFUN (an
+         ;; MCP-less build) the plain socket is used and the relay is the
+         ;; only gate, which is what it always was.
+         (scope (cmacs-brigade-host--open-scope expanded))
+         (socket (or scope (cmacs-mcp-socket-path)))
+         ;; The gate's two settings travel with the allowlist so the
+         ;; relay -- which has no Lisp VM and cannot read them -- reaches
+         ;; the same answers the editor does.
+         (restrict (if (bound-and-true-p cmacs-brigade-restrict-privileged-tools)
+                       "1" "0"))
+         (block (if (and (boundp 'cmacs-brigade-block-recursive-tools)
+                         (not cmacs-brigade-block-recursive-tools))
+                    "0" "1"))
+         (env (list :CMACS_BRIGADE_SOCKET socket
                     :CMACS_BRIGADE_ALLOW expanded
-                    :CMACS_BRIGADE_TOKEN token))
+                    :CMACS_BRIGADE_TOKEN token
+                    :CMACS_BRIGADE_RESTRICT_PRIVILEGED restrict
+                    :CMACS_BRIGADE_BLOCK_RECURSIVE block))
          (config (funcall emit (cmacs-brigade--relay-command)
                           (list "--mcp-relay")
                           (if (eq fmt 'grok)
                               ;; TOML wants an alist, not a plist.
-                              (list (cons "CMACS_BRIGADE_SOCKET"
-                                          (cmacs-mcp-socket-path))
+                              (list (cons "CMACS_BRIGADE_SOCKET" socket)
                                     (cons "CMACS_BRIGADE_ALLOW" expanded)
-                                    (cons "CMACS_BRIGADE_TOKEN" token))
+                                    (cons "CMACS_BRIGADE_TOKEN" token)
+                                    (cons "CMACS_BRIGADE_RESTRICT_PRIVILEGED"
+                                          restrict)
+                                    (cons "CMACS_BRIGADE_BLOCK_RECURSIVE"
+                                          block))
                             env))))
     (make-directory dir t)
     (set-file-modes dir #o700)
@@ -202,15 +228,31 @@ about the 0600 write, the revoke-before-provision and the sweep."
     (with-file-modes #o600
       (with-temp-file path
         (insert (if (stringp config) config (json-serialize config)))))
-    (puthash agent-id (list :path path :token token :format fmt)
+    (puthash agent-id (list :path path :token token :format fmt
+                            :scope scope :socket socket)
              cmacs-brigade--provisions)
-    (list :path path :token token :format fmt)))
+    (list :path path :token token :format fmt :scope scope :socket socket)))
+
+(defun cmacs-brigade-host--open-scope (allowlist)
+  "Open a scoped socket serving ALLOWLIST, or nil when unavailable.
+Failure is reported, not signalled: a provision without a scope still
+works through the relay, and refusing to run an agent because a socket
+could not be bound would be the wrong trade."
+  (when (fboundp 'cmacs-brigade-scope-open)
+    (condition-case err
+        (cmacs-brigade-scope-open allowlist)
+      (error
+       (message "cmacs-brigade: scoped socket unavailable, relay-only: %s"
+                (error-message-string err))
+       nil))))
 
 (defun cmacs-brigade-host-revoke (agent-id)
   "Withdraw AGENT-ID's tool access.  Returns non-nil if there was any."
   (let ((p (gethash agent-id cmacs-brigade--provisions)))
     (when p
       (ignore-errors (delete-file (plist-get p :path)))
+      (when (and (plist-get p :scope) (fboundp 'cmacs-brigade-scope-close))
+        (ignore-errors (cmacs-brigade-scope-close (plist-get p :scope))))
       (remhash agent-id cmacs-brigade--provisions)
       t)))
 
@@ -256,7 +298,9 @@ judge by."
           (now (float-time))
           (n 0))
       (when (file-directory-p dir)
-        (dolist (f (directory-files dir t "\\`mcp-[0-9]+-.*\\.json\\'"))
+        ;; Configs and scoped sockets share the mcp-<pid>-<uuid> shape;
+        ;; a socket whose owner is gone has nobody listening on it.
+        (dolist (f (directory-files dir t "\\`mcp-[0-9]+-.*\\.\\(?:json\\|sock\\)\\'"))
           (when (string-match "mcp-\\([0-9]+\\)-" (file-name-nondirectory f))
             (let ((pid (string-to-number (match-string 1 (file-name-nondirectory f))))
                   (age (- now (float-time (file-attribute-modification-time

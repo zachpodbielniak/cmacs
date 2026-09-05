@@ -65,7 +65,29 @@ fi
 # + mode 0700 + owner=user keeps prints private from other accounts on
 # multi-user systems.
 SPOOL="/tmp/cmacs-print-${TARGET_UID}"
-install -d -m 0700 -o "$USER_ARG" -g "$USER_ARG" "$SPOOL"
+# The spool is under a world-writable directory, so whoever created the
+# path first owns it.  A symlink here would make `install -d' (running
+# as root) chown whatever it points at, and a directory belonging to
+# another user would receive this user's documents.  Refuse both; only
+# create when absent, and re-check ownership afterwards.
+if [ -L "$SPOOL" ]; then
+  echo "ERROR: cmacs-print: $SPOOL is a symlink; refusing" >&2
+  exit 1
+fi
+if [ -e "$SPOOL" ]; then
+  if [ ! -d "$SPOOL" ]; then
+    echo "ERROR: cmacs-print: $SPOOL exists and is not a directory" >&2
+    exit 1
+  fi
+  SPOOL_OWNER="$(stat -c %u "$SPOOL" 2>/dev/null || echo -1)"
+  if [ "$SPOOL_OWNER" != "$TARGET_UID" ]; then
+    echo "ERROR: cmacs-print: $SPOOL is owned by uid $SPOOL_OWNER, not $TARGET_UID; refusing" >&2
+    exit 1
+  fi
+  chmod 0700 "$SPOOL"
+else
+  install -d -m 0700 -o "$USER_ARG" -g "$USER_ARG" "$SPOOL"
+fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
 SAFE_TITLE="$(printf '%s' "$TITLE" | tr -c '[:alnum:]._-' '_' | cut -c1-80)"

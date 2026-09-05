@@ -43,7 +43,7 @@ project_error (const gchar *message)
 
 /* Wrap BODY (elisp using the bound symbols `root' and `target') in the
    workspace-root resolution and path-confinement prelude.  ESCAPED_PATH
-   is a g_strescape'd relative or absolute path.  Caller frees. */
+   is a lisp-escaped relative or absolute path.  Caller frees. */
 static gchar *
 project_expr (const gchar *escaped_path, const gchar *body)
 {
@@ -101,7 +101,7 @@ handle_project_read_file (McpServer *s, const gchar *n,
   if (path == NULL)
     return project_error ("Missing required argument: path");
 
-  ep = g_strescape (path, NULL);
+  ep = cmacs_dispatch_lisp_escape (path);
   expr = project_expr (ep,
     "(if (file-readable-p target)"
     "    (let ((sz (file-attribute-size (file-attributes target))))"
@@ -138,8 +138,8 @@ handle_project_write_file (McpServer *s, const gchar *n,
     return project_error (
       "Missing required arguments: path, content");
 
-  ep = g_strescape (path, NULL);
-  ecnt = g_strescape (content, NULL);
+  ep = cmacs_dispatch_lisp_escape (path);
+  ecnt = cmacs_dispatch_lisp_escape (content);
   body = g_strdup_printf (
     "(progn"
     "  (make-directory (file-name-directory target) t)"
@@ -172,7 +172,7 @@ handle_project_list_files (McpServer *s, const gchar *n,
   (void) s; (void) n; (void) u;
 
   directory = json_object_get_string_member_with_default (a, "directory", NULL);
-  ed = g_strescape (directory ? directory : ".", NULL);
+  ed = cmacs_dispatch_lisp_escape (directory ? directory : ".");
   expr = project_expr (ed,
     "(if (file-directory-p target)"
     "    (let ((entries (seq-remove"
@@ -213,7 +213,7 @@ handle_project_find_files (McpServer *s, const gchar *n,
   if (pattern == NULL)
     return project_error ("Missing required argument: pattern");
 
-  epat = g_strescape (pattern, NULL);
+  epat = cmacs_dispatch_lisp_escape (pattern);
   body = g_strdup_printf (
     "(let ((hits (directory-files-recursively"
     "             root \"%s\" nil"

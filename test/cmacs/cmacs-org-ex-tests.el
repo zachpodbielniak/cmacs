@@ -465,3 +465,76 @@
 
 (provide 'cmacs-org-ex-tests)
 ;;; cmacs-org-ex-tests.el ends here
+
+;;; Load-time evaluation policy
+
+;; The policy predicate is pure Elisp; it needs the library, not the C
+;; subsystem, so these run in every build.
+(require 'cmacs-org-ex)
+
+(ert-deftest cmacs-org-ex-test-eval-policy-never-and-always ()
+  "`never' refuses and `always' allows without touching the buffer memory."
+  (with-temp-buffer
+    (let ((cmacs-org-ex-eval-policy 'never))
+      (should-not (cmacs-org-ex--eval-allowed-p)))
+    (let ((cmacs-org-ex-eval-policy 'always))
+      (should (cmacs-org-ex--eval-allowed-p)))
+    (should-not cmacs-org-ex--eval-decision)))
+
+(ert-deftest cmacs-org-ex-test-eval-policy-ask-cannot-prompt-means-no ()
+  "With nobody to ask, `ask' is a no -- and never an error mid-scan."
+  (with-temp-buffer
+    (let ((cmacs-org-ex-eval-policy 'ask)
+          (inhibit-interaction t))
+      (should-not (cmacs-org-ex--eval-allowed-p)))
+    (let ((cmacs-org-ex-eval-policy 'ask)
+          (noninteractive t))
+      (should-not (cmacs-org-ex--eval-allowed-p)))))
+
+(ert-deftest cmacs-org-ex-test-eval-policy-remembers-the-answer ()
+  "The buffer-local decision short-circuits the prompt both ways."
+  (with-temp-buffer
+    (let ((cmacs-org-ex-eval-policy 'ask))
+      (setq cmacs-org-ex--eval-decision 'allow)
+      (should (cmacs-org-ex--eval-allowed-p))
+      (setq cmacs-org-ex--eval-decision 'deny)
+      (should-not (cmacs-org-ex--eval-allowed-p))
+      (cmacs-org-ex-allow-eval)
+      (should (cmacs-org-ex--eval-allowed-p)))))
+
+(ert-deftest cmacs-org-ex-test-eval-policy-trusted-directory ()
+  "A file under a trusted directory is `always'; one outside is not."
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-org-ex-trust" t)))
+         (inside (expand-file-name "note.org" dir))
+         (outside (make-temp-file "cmacs-org-ex-outside" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file inside (insert "#+ORGEX: t\n"))
+          (dolist (case (list (cons inside t) (cons outside nil)))
+            (with-temp-buffer
+              (setq buffer-file-name (car case))
+              (let ((cmacs-org-ex-eval-policy 'ask)
+                    (cmacs-org-ex-eval-trusted-directories (list dir))
+                    (inhibit-interaction t))
+                (should (eq (and (cmacs-org-ex--eval-allowed-p) t)
+                            (cdr case)))))))
+      (delete-directory dir t)
+      (delete-file outside))))
+
+(ert-deftest cmacs-org-ex-test-eval-src-block-respects-policy ()
+  "A tagged src block is not evaluated when the policy says no."
+  (require 'org)
+  (with-temp-buffer
+    (insert "#+ORGEX: t\n#+ATTR_ORGEX: :eval t\n#+begin_src emacs-lisp\n"
+            "(setq cmacs-org-ex-tests--ran t)\n#+end_src\n")
+    (org-mode)
+    (let ((cmacs-org-ex-eval-policy 'never))
+      (defvar cmacs-org-ex-tests--ran nil)
+      (setq cmacs-org-ex-tests--ran nil)
+      (org-element-map (org-element-parse-buffer) 'src-block
+        #'cmacs-org-ex--eval-src-block)
+      (should-not cmacs-org-ex-tests--ran))
+    (let ((cmacs-org-ex-eval-policy 'always))
+      (org-element-map (org-element-parse-buffer) 'src-block
+        #'cmacs-org-ex--eval-src-block)
+      (should cmacs-org-ex-tests--ran))))

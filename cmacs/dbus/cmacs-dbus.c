@@ -678,10 +678,13 @@ cmacs_dbus_start_internal (GError **error)
       return NULL;
     }
 
-  /* Register each enabled module.  Errors abort start. */
+  /* Register each enabled module.  Errors abort start.  The connection
+     is closed, not just unreffed: GDBusConnection keeps itself alive
+     while the bus is up, so an unref alone leaks a live connection. */
   if (!register_modules (dbus_conn, error))
     {
       unregister_modules (dbus_conn);
+      g_dbus_connection_close_sync (dbus_conn, NULL, NULL);
       g_object_unref (dbus_conn);
       dbus_conn = NULL;
       return NULL;
@@ -728,6 +731,7 @@ cmacs_dbus_stop_internal (void)
 
   unregister_modules (dbus_conn);
 
+  g_dbus_connection_close_sync (dbus_conn, NULL, NULL);
   g_object_unref (dbus_conn);
   dbus_conn = NULL;
 
@@ -760,9 +764,12 @@ root.  */)
   name = cmacs_dbus_start_internal (&err);
   if (name == NULL)
     {
-      gchar *msg = err ? g_strdup (err->message) : g_strdup ("unknown error");
+      /* `error' never returns, so the message is copied into a Lisp
+         string first and the GError freed before signalling. */
+      Lisp_Object msg = build_string (err ? err->message : "unknown error");
       if (err) g_error_free (err);
-      error ("cmacs-dbus-start: %s", msg);
+      xsignal1 (Qerror, CALLN (Fconcat, build_string ("cmacs-dbus-start: "),
+                               msg));
     }
 
   {

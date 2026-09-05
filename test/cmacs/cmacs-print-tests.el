@@ -214,3 +214,41 @@ bare basename — the org file lives inside the per-print directory."
 
 (provide 'cmacs-print-tests)
 ;;; cmacs-print-tests.el ends here
+
+;;; ---------------------------------------------------------------------
+;;; Spool directory ownership
+;;; ---------------------------------------------------------------------
+
+(ert-deftest cmacs-print-spool-dir-accepts-own-private-directory ()
+  "A 0700 directory we own passes; the watcher may attach."
+  (let ((dir (make-temp-file "cmacs-print-spool" t)))
+    (unwind-protect
+        (progn
+          (set-file-modes dir #o700)
+          (should (cmacs-print--spool-dir-safe-p dir))
+          (let ((cmacs-print-spool-dir dir))
+            (should (equal (cmacs-print--ensure-spool-dir) dir))))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-print-spool-dir-rejects-symlink-and-loose-modes ()
+  "A symlink, or group/world bits, is refused rather than adopted.
+
+/tmp is world-writable, so whoever creates /tmp/cmacs-print-<uid>
+first owns it; auto-importing from a directory another user prepared
+is the thing this check exists to stop."
+  (let* ((real (make-temp-file "cmacs-print-real" t))
+         (link (concat (make-temp-file "cmacs-print-link") "-l")))
+    (unwind-protect
+        (progn
+          (set-file-modes real #o700)
+          (make-symbolic-link real link)
+          (should-not (cmacs-print--spool-dir-safe-p link))
+          (let ((cmacs-print-spool-dir link))
+            (should-error (cmacs-print--ensure-spool-dir)))
+          (set-file-modes real #o755)
+          (should-not (cmacs-print--spool-dir-safe-p real))
+          (let ((cmacs-print-spool-dir real))
+            (should-error (cmacs-print--ensure-spool-dir))))
+      (ignore-errors (delete-file link))
+      (ignore-errors (delete-file (substring link 0 -2)))
+      (delete-directory real t))))

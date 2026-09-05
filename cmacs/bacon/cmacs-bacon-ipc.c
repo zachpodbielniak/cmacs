@@ -145,6 +145,58 @@ ipc_send_void_result (int fd, gint64 id)
   ipc_send_result (fd, id, "nil");
 }
 
+/* A string member of PARAMS, or NULL when PARAMS is absent, the member
+   is missing, or it is not a string.  json_object_get_string_member
+   g-warns and returns NULL on a missing member, and the handlers used to
+   pass that NULL straight into build_string -- a frame from the child
+   with a typo in it crashed the editor. */
+static gint64
+ipc_param_int (JsonObject *params, const gchar *key)
+{
+  if (params == NULL)
+    return 0;
+  return json_object_get_int_member_with_default (params, key, 0);
+}
+
+static gdouble
+ipc_param_double (JsonObject *params, const gchar *key)
+{
+  if (params == NULL)
+    return 0.0;
+  return json_object_get_double_member_with_default (params, key, 0.0);
+}
+
+static gboolean
+ipc_param_bool (JsonObject *params, const gchar *key)
+{
+  if (params == NULL)
+    return FALSE;
+  return json_object_get_boolean_member_with_default (params, key, FALSE);
+}
+
+static const gchar *
+ipc_param_string (JsonObject *params, const gchar *key)
+{
+  if (params == NULL)
+    return NULL;
+  return json_object_get_string_member_with_default (params, key, NULL);
+}
+
+/* Reply with an error naming the missing parameter.  Every handler that
+   needs a string goes through IPC_REQUIRE_STRING so the check cannot be
+   forgotten on the next method added. */
+#define IPC_REQUIRE_STRING(var, key)                                    \
+  do {                                                                  \
+    var = ipc_param_string (params, key);                               \
+    if (var == NULL)                                                    \
+      {                                                                 \
+        g_autofree gchar *m_ =                                          \
+          g_strdup_printf ("missing string parameter: %s", key);        \
+        ipc_send_error (ipc->fd, id, m_);                               \
+        return;                                                         \
+      }                                                                 \
+  } while (0)
+
 /* ── Request dispatch (runs from idle callback) ───────────────────── */
 
 static void
@@ -156,7 +208,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
 
   if (g_strcmp0 (method, "Eval") == 0)
     {
-      const gchar *expr = json_object_get_string_member (params, "expression");
+      const gchar *expr;
+      IPC_REQUIRE_STRING (expr, "expression");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_eval (expr, &err);
       if (result != NULL)
@@ -172,20 +225,24 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "FindFile") == 0)
     {
-      const gchar *path = json_object_get_string_member (params, "path");
+      const gchar *path;
+      IPC_REQUIRE_STRING (path, "path");
       cmacs_dispatch_find_file (path);
       ipc_send_void_result (ipc->fd, id);
     }
   else if (g_strcmp0 (method, "Message") == 0)
     {
-      const gchar *text = json_object_get_string_member (params, "text");
+      const gchar *text;
+      IPC_REQUIRE_STRING (text, "text");
       cmacs_dispatch_message (text);
       ipc_send_void_result (ipc->fd, id);
     }
   else if (g_strcmp0 (method, "GiRequire") == 0)
     {
-      const gchar *ns = json_object_get_string_member (params, "namespace");
-      const gchar *ver = json_object_get_string_member (params, "version");
+      const gchar *ns;
+      IPC_REQUIRE_STRING (ns, "namespace");
+      const gchar *ver;
+      IPC_REQUIRE_STRING (ver, "version");
       GError *err = NULL;
       gboolean ok = cmacs_dispatch_gi_require (ns, ver, &err);
       if (err != NULL)
@@ -198,9 +255,14 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GiCall") == 0)
     {
-      const gchar *ns = json_object_get_string_member (params, "namespace");
-      const gchar *func = json_object_get_string_member (params, "function");
-      JsonArray *args_json = json_object_get_array_member (params, "args");
+      const gchar *ns;
+      IPC_REQUIRE_STRING (ns, "namespace");
+      const gchar *func;
+      IPC_REQUIRE_STRING (func, "function");
+      JsonArray *args_json =
+        (params != NULL && json_object_has_member (params, "args")
+         && JSON_NODE_HOLDS_ARRAY (json_object_get_member (params, "args")))
+        ? json_object_get_array_member (params, "args") : NULL;
       guint n_args = args_json ? json_array_get_length (args_json) : 0;
       const gchar **args;
       GError *err = NULL;
@@ -209,7 +271,14 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
 
       args = g_new (const gchar *, n_args);
       for (i = 0; i < n_args; i++)
-        args[i] = json_array_get_string_element (args_json, i);
+        {
+          JsonNode *el = json_array_get_element (args_json, i);
+          /* A non-string element reads as nil rather than dereferencing
+             a NULL further down. */
+          args[i] = (el != NULL && JSON_NODE_HOLDS_VALUE (el)
+                     && json_node_get_value_type (el) == G_TYPE_STRING)
+            ? json_node_get_string (el) : "nil";
+        }
 
       result = cmacs_dispatch_gi_call (ns, func, args, (gint)n_args, &err);
       g_free (args);
@@ -227,7 +296,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GiListFunctions") == 0)
     {
-      const gchar *ns = json_object_get_string_member (params, "namespace");
+      const gchar *ns;
+      IPC_REQUIRE_STRING (ns, "namespace");
       gchar **funcs = cmacs_dispatch_gi_list_functions (ns);
       gchar *joined = g_strjoinv ("\n", funcs);
       ipc_send_result (ipc->fd, id, joined);
@@ -270,7 +340,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSpawn") == 0)
     {
-      const gchar *command = json_object_get_string_member (params, "command");
+      const gchar *command;
+      IPC_REQUIRE_STRING (command, "command");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_spawn (command, &err);
       if (result != NULL)
@@ -301,10 +372,10 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlAddKeybind") == 0)
     {
-      const gchar *key = json_object_get_string_member (params, "key");
-      gint action = (gint)json_object_get_int_member (params, "action");
-      const gchar *arg = json_object_has_member (params, "arg")
-        ? json_object_get_string_member (params, "arg") : NULL;
+      const gchar *key;
+      IPC_REQUIRE_STRING (key, "key");
+      gint action = (gint)ipc_param_int (params, "action");
+      const gchar *arg = ipc_param_string (params, "arg") ? ipc_param_string (params, "arg") : NULL;
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_add_keybind (key, action, arg,
                                                          &err);
@@ -336,13 +407,11 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlAddRule") == 0)
     {
-      const gchar *app_id = json_object_has_member (params, "app_id")
-        ? json_object_get_string_member (params, "app_id") : NULL;
-      const gchar *title = json_object_has_member (params, "title")
-        ? json_object_get_string_member (params, "title") : NULL;
-      guint32 tags = (guint32)json_object_get_int_member (params, "tags");
-      gboolean floating = json_object_get_boolean_member (params, "floating");
-      gint monitor = (gint)json_object_get_int_member (params, "monitor");
+      const gchar *app_id = ipc_param_string (params, "app_id") ? ipc_param_string (params, "app_id") : NULL;
+      const gchar *title = ipc_param_string (params, "title") ? ipc_param_string (params, "title") : NULL;
+      guint32 tags = (guint32)ipc_param_int (params, "tags");
+      gboolean floating = ipc_param_bool (params, "floating");
+      gint monitor = (gint)ipc_param_int (params, "monitor");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_add_rule (app_id, title, tags,
                                                       floating, monitor, &err);
@@ -359,7 +428,7 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMfact") == 0)
     {
-      gdouble mfact = json_object_get_double_member (params, "mfact");
+      gdouble mfact = ipc_param_double (params, "mfact");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_mfact (mfact, &err);
       if (result != NULL)
@@ -375,7 +444,7 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetNmaster") == 0)
     {
-      gint n = (gint)json_object_get_int_member (params, "n");
+      gint n = (gint)ipc_param_int (params, "n");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_nmaster (n, &err);
       if (result != NULL)
@@ -391,7 +460,7 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlViewTags") == 0)
     {
-      guint32 tagmask = (guint32)json_object_get_int_member (params, "tagmask");
+      guint32 tagmask = (guint32)ipc_param_int (params, "tagmask");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_view_tags (tagmask, &err);
       if (result != NULL)
@@ -452,8 +521,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlConfigGet") == 0)
     {
-      const gchar *property = json_object_get_string_member (params,
-                                                              "property");
+      const gchar *property;
+      IPC_REQUIRE_STRING (property, "property");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_config_get (property, &err);
       if (result != NULL)
@@ -469,9 +538,9 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlFindClient") == 0)
     {
-      const gchar *pattern = json_object_get_string_member (params, "pattern");
-      const gchar *by = json_object_has_member (params, "by")
-        ? json_object_get_string_member (params, "by") : "app-id";
+      const gchar *pattern;
+      IPC_REQUIRE_STRING (pattern, "pattern");
+      const gchar *by = ipc_param_string (params, "by") ? ipc_param_string (params, "by") : "app-id";
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_find_client (pattern, by, &err);
       if (result != NULL)
@@ -487,7 +556,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlMonitorInfo") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_monitor_info (name, &err);
       if (result != NULL)
@@ -503,7 +573,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlMonitorModes") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_monitor_modes (name, &err);
       if (result != NULL)
@@ -519,10 +590,11 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMonitorMode") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
-      gint w = (gint)json_object_get_int_member (params, "width");
-      gint h = (gint)json_object_get_int_member (params, "height");
-      gint refresh = (gint)json_object_get_int_member (params, "refresh_mhz");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
+      gint w = (gint)ipc_param_int (params, "width");
+      gint h = (gint)ipc_param_int (params, "height");
+      gint refresh = (gint)ipc_param_int (params, "refresh_mhz");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_monitor_mode (name, w, h,
                                                               refresh, &err);
@@ -539,7 +611,8 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlMonitorPosition") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_monitor_position (name, &err);
       if (result != NULL)
@@ -555,9 +628,10 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMonitorPosition") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
-      gint x = (gint)json_object_get_int_member (params, "x");
-      gint y = (gint)json_object_get_int_member (params, "y");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
+      gint x = (gint)ipc_param_int (params, "x");
+      gint y = (gint)ipc_param_int (params, "y");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_monitor_pos (name, x, y, &err);
       if (result != NULL)
@@ -573,8 +647,9 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMonitorEnabled") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
-      gboolean en = json_object_get_boolean_member (params, "enabled");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
+      gboolean en = ipc_param_bool (params, "enabled");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_monitor_enabled (name, en,
                                                                  &err);
@@ -591,8 +666,9 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMonitorScale") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
-      gdouble scale = json_object_get_double_member (params, "scale");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
+      gdouble scale = ipc_param_double (params, "scale");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_monitor_scale (name, scale,
                                                                &err);
@@ -609,8 +685,9 @@ ipc_handle_request (CmacsBaconIpc *ipc, IpcRequest *req)
     }
   else if (g_strcmp0 (method, "GowlSetMonitorTransform") == 0)
     {
-      const gchar *name = json_object_get_string_member (params, "name");
-      gint xform = (gint)json_object_get_int_member (params, "transform");
+      const gchar *name;
+      IPC_REQUIRE_STRING (name, "name");
+      gint xform = (gint)ipc_param_int (params, "transform");
       GError *err = NULL;
       gchar *result = cmacs_dispatch_gowl_set_monitor_transform (name,
                                                                     xform,
@@ -731,10 +808,12 @@ ipc_try_extract_message (CmacsBaconIpc *ipc, IpcRequest **req_out)
 
   /* Build the request. */
   req = g_new0 (IpcRequest, 1);
-  req->id = json_object_get_int_member (obj, "id");
-  req->method = g_strdup (json_object_get_string_member (obj, "method"));
+  req->id = json_object_get_int_member_with_default (obj, "id", 0);
+  req->method = g_strdup (
+    json_object_get_string_member_with_default (obj, "method", ""));
 
-  if (json_object_has_member (obj, "params"))
+  if (json_object_has_member (obj, "params")
+      && JSON_NODE_HOLDS_OBJECT (json_object_get_member (obj, "params")))
     {
       req->params = json_object_ref (
         json_object_get_object_member (obj, "params"));

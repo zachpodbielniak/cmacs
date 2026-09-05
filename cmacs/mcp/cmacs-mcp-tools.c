@@ -13,6 +13,9 @@
 
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
 
 /* ── Schema helper ────────────────────────────────────────────────── */
 
@@ -49,6 +52,28 @@ cmacs_mcp_result_add_png_file (McpToolResult *result, const gchar *path)
   mcp_tool_result_add_image (result, b64, "image/png");
   g_unlink (path);
   return TRUE;
+}
+
+/* ── Scratch files ────────────────────────────────────────────────── */
+
+gchar *
+cmacs_mcp_temp_path (const gchar *template)
+{
+  gchar *path;
+  gint fd;
+
+  if (template == NULL || strstr (template, "XXXXXX") == NULL)
+    return NULL;
+
+  path = g_build_filename (g_get_user_runtime_dir (), template, NULL);
+  fd = g_mkstemp_full (path, O_RDWR | O_CREAT | O_EXCL, 0600);
+  if (fd < 0)
+    {
+      g_free (path);
+      return NULL;
+    }
+  close (fd);
+  return path;
 }
 
 /* ── Master registration ──────────────────────────────────────────── */

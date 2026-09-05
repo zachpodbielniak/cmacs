@@ -884,13 +884,61 @@ Fragments are dropped and duplicates removed; used by the crawler."
     (or (and name (ignore-errors (check-coding-system (intern (downcase name)))))
         'utf-8)))
 
-(defun cmacs-secondbrain-ingest-fetch-url (url callback)
+(defcustom cmacs-secondbrain-ingest-allow-private-hosts nil
+  "Whether a URL may point at this machine or the local network.
+
+nil, the default, refuses to fetch loopback, link-local and RFC 1918
+addresses, \"localhost\" and \".local\"/\".internal\" names.  The ingester
+is reachable from chat surfaces and from agents, and \"ingest this
+URL\" must not become a way to read an internal service into the notes
+repo.  Set to t to ingest from a local wiki or a LAN server; the check
+is by name and literal address, so it is a guard against mistakes and
+casual misuse, not a substitute for network policy."
+  :type 'boolean
+  :group 'cmacs-secondbrain-ingest)
+
+(defun cmacs-secondbrain-ingest-private-host-p (host)
+  "Non-nil when HOST names this machine or a private network address."
+  (when (stringp host)
+    (let ((h (downcase (string-trim host "\\[" "\\]"))))
+      (or (member h '("localhost" "localhost.localdomain" "0.0.0.0" "::" "::1"))
+          (string-suffix-p ".localhost" h)
+          (string-suffix-p ".local" h)
+          (string-suffix-p ".internal" h)
+          (string-suffix-p ".home.arpa" h)
+          ;; IPv4 literals: loopback, link-local, RFC 1918, CGNAT, "this".
+          (and (string-match-p "\\`[0-9]+\\(\\.[0-9]+\\)\\{3\\}\\'" h)
+               (let* ((o (mapcar #'string-to-number (split-string h "\\.")))
+                      (a (nth 0 o)) (b (nth 1 o)))
+                 (or (= a 127) (= a 10) (= a 0)
+                     (and (= a 169) (= b 254))
+                     (and (= a 172) (<= 16 b 31))
+                     (and (= a 192) (= b 168))
+                     (and (= a 100) (<= 64 b 127)))))
+          ;; IPv6 literals: loopback, unique-local, link-local, v4-mapped.
+          (and (string-match-p ":" h)
+               (or (string-prefix-p "fc" h) (string-prefix-p "fd" h)
+                   (string-prefix-p "fe8" h) (string-prefix-p "fe9" h)
+                   (string-prefix-p "fea" h) (string-prefix-p "feb" h)
+                   (string-prefix-p "::ffff:" h)))))))
+
+(cl-defun cmacs-secondbrain-ingest-fetch-url (url callback)
   "Fetch URL asynchronously and call CALLBACK with the result.
 
 CALLBACK receives a plist: (:ok t :status N :content-type STRING :body
 STRING :url FINAL-URL) on success, where :body is decoded text for a
 text type and raw unibyte bytes otherwise, or (:ok nil :error MESSAGE).
-Returns a function that cancels the fetch."
+Returns a function that cancels the fetch.
+
+Refuses private hosts unless `cmacs-secondbrain-ingest-allow-private-hosts'."
+  (let ((host (url-host (url-generic-parse-url url))))
+    (when (and (not cmacs-secondbrain-ingest-allow-private-hosts)
+               (cmacs-secondbrain-ingest-private-host-p host))
+      (funcall callback
+               (list :ok nil
+                     :error (format "refusing to fetch private host %s (see `cmacs-secondbrain-ingest-allow-private-hosts')"
+                                    host)))
+      (cl-return-from cmacs-secondbrain-ingest-fetch-url #'ignore)))
   (let* ((url-request-extra-headers
           (list (cons "User-Agent" cmacs-secondbrain-ingest-user-agent)
                 (cons "Accept" "text/html,application/xhtml+xml,application/pdf,text/plain,*/*;q=0.8")))
@@ -920,6 +968,16 @@ Returns a function that cancels the fetch."
                                   (ctype nil) (final (or (car (last (plist-get status :redirect)))
                                                          url))
                                   (body nil))
+                             ;; `url-retrieve' follows redirects itself, so
+                             ;; the host that answered may not be the host
+                             ;; that was asked: a public URL bouncing to
+                             ;; 127.0.0.1 is the classic way round a check
+                             ;; on the original.
+                             (when (and (not cmacs-secondbrain-ingest-allow-private-hosts)
+                                        (cmacs-secondbrain-ingest-private-host-p
+                                         (url-host (url-generic-parse-url final))))
+                               (error "redirected to private host %s (see `cmacs-secondbrain-ingest-allow-private-hosts')"
+                                      (url-host (url-generic-parse-url final))))
                              (goto-char (point-min))
                              (when (re-search-forward "^content-type:[ \t]*\\(.*\\)$" nil t)
                                (setq ctype (downcase (string-trim (match-string 1)))))

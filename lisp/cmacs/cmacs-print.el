@@ -459,15 +459,38 @@ the CUPS backend's fallback path drops PDFs there."
 Prevents double-import when both `created' and `renamed' events fire
 for the same file, or when the drain races with the watcher.")
 
+(defun cmacs-print--spool-dir-safe-p (dir)
+  "Non-nil when DIR is a directory we own, not a symlink, and private.
+
+The spool lives under /tmp, which anyone on the machine can write to.
+Whoever creates /tmp/cmacs-print-<uid> first owns it, so before
+watching -- and auto-importing whatever appears there -- check that it
+really is ours: a real directory (not a symlink into someone else's
+tree), owned by this uid, with no group or world bits.  Anything else
+is refused rather than adopted."
+  (let ((attrs (file-attributes dir 'integer)))
+    (and attrs
+         (eq (file-attribute-type attrs) t)          ; a directory, not a symlink
+         (not (file-symlink-p dir))
+         (eql (file-attribute-user-id attrs) (user-uid))
+         (zerop (logand (file-modes dir) #o077)))))
+
 (defun cmacs-print--ensure-spool-dir ()
   "Create `cmacs-print-spool-dir' with mode 0700 if absent.  Returns the path.
 The CUPS backend creates this too (with the user as owner via
 `install -d -o USER'), but cmacs may start before the first print job
-fires the backend, in which case the watcher needs a target to attach to."
+fires the backend, in which case the watcher needs a target to attach to.
+
+Signals an error instead of returning a directory that fails
+`cmacs-print--spool-dir-safe-p', so the watcher never attaches to a
+path another local user pre-created."
   (let ((dir (expand-file-name cmacs-print-spool-dir)))
-    (unless (file-directory-p dir)
+    (unless (file-exists-p dir)
       (with-file-modes #o700
         (make-directory dir t)))
+    (unless (cmacs-print--spool-dir-safe-p dir)
+      (error "cmacs-print: refusing spool directory %s: not a private directory owned by uid %d (symlink, foreign owner, or group/world bits) -- remove it or set `cmacs-print-spool-dir'"
+             dir (user-uid)))
     dir))
 
 (defun cmacs-print--spool-pdf-p (path)

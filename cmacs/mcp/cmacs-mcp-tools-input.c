@@ -28,6 +28,7 @@ handle_send_keys (McpServer   *server,
   const gchar *keys;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ekeys = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -53,13 +54,14 @@ handle_send_keys (McpServer   *server,
      request (and leave the editor in a recursive edit) forever.
      with-timeout's timer runs inside that read and unwinds instead,
      turning the wedge into an error reply. */
+  ekeys = cmacs_dispatch_lisp_escape (keys);
   expr = g_strdup_printf (
     "(with-timeout (%d (error \"send_keys: key sequence left Emacs"
     " waiting for input\"))"
     " (let ((inhibit-interaction nil))"
     "  (execute-kbd-macro (kbd \"%s\"))"
     "  t))",
-    CMACS_MCP_SEND_KEYS_TIMEOUT, keys);
+    CMACS_MCP_SEND_KEYS_TIMEOUT, ekeys);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -79,6 +81,7 @@ handle_execute_command (McpServer   *server,
   const gchar *command;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *ecmd = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -95,8 +98,12 @@ handle_execute_command (McpServer   *server,
       return result;
     }
 
+  /* Interned from a string rather than spliced as a bare symbol: a
+     "name" carrying a space or a paren used to be read as more forms.
+     `intern' of a nonsense name is a void-function error, not a call. */
+  ecmd = cmacs_dispatch_lisp_escape (command);
   expr = g_strdup_printf (
-    "(call-interactively '%s)", command);
+    "(call-interactively (intern \"%s\"))", ecmd);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);

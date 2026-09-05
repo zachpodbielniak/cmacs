@@ -17,6 +17,9 @@
 #include "lisp.h"
 #include "keyboard.h"
 #include "cmacs-eval-dispatch.h"
+#ifdef HAVE_CMACS_GOWL
+#include "cmacs-gowl.h"
+#endif
 
 #include <glib.h>
 #include <stdatomic.h>
@@ -235,7 +238,7 @@ dispatch_eval_error (Lisp_Object err)
  * tool, which drives a keyboard macro) opt back in by binding
  * `inhibit-interaction' to nil inside the form they submit. */
 static Lisp_Object
-dispatch_safe_eval (Lisp_Object form)
+dispatch_guarded (Lisp_Object (*body) (Lisp_Object), Lisp_Object arg)
 {
   Lisp_Object result;
   specpdl_ref count = SPECPDL_INDEX ();
@@ -243,12 +246,38 @@ dispatch_safe_eval (Lisp_Object form)
   if (was_waiting)
     clear_waiting_for_input ();
   specbind (intern ("inhibit-interaction"), Qt);
-  result = internal_condition_case_1 (dispatch_eval_body, form,
-                                      Qt, dispatch_eval_error);
+  result = internal_condition_case_1 (body, arg, Qt, dispatch_eval_error);
   unbind_to (count, Qnil);
   if (was_waiting)
     set_waiting_for_input (input_available_clear_time);
   return result;
+}
+
+static Lisp_Object
+dispatch_safe_eval (Lisp_Object form)
+{
+  return dispatch_guarded (dispatch_eval_body, form);
+}
+
+/* Read the first form of STRING and evaluate it.  Runs INSIDE the
+   condition-case, which is the point: the reader signals on unbalanced
+   parens or a bad escape exactly like `eval' signals on a bad form, and
+   every caller here is an RPC gateway feeding it text from a client.
+   Reading before the guard was installed let a malformed expression
+   escape through g_main_context_dispatch -- an emacs_abort when
+   waiting_for_input was set (signal_or_quit's "impossible" branch), a
+   non-local exit through GLib's dispatch loop otherwise.  */
+static Lisp_Object
+dispatch_read_eval_body (Lisp_Object string)
+{
+  return Feval (Fcar (Fread_from_string (string, Qnil, Qnil)), Qnil);
+}
+
+static Lisp_Object
+dispatch_safe_read_eval (const gchar *expression)
+{
+  return dispatch_guarded (dispatch_read_eval_body,
+                           build_string (expression));
 }
 
 static gboolean
@@ -264,10 +293,9 @@ dispatch_result_is_error (Lisp_Object result)
 gchar *
 cmacs_dispatch_eval (const gchar *expression, GError **error)
 {
-  Lisp_Object form, result, printed;
+  Lisp_Object result, printed;
 
-  form = Fcar (Fread_from_string (build_string (expression), Qnil, Qnil));
-  result = dispatch_safe_eval (form);
+  result = dispatch_safe_read_eval (expression);
 
   if (dispatch_result_is_error (result))
     {
@@ -284,10 +312,9 @@ cmacs_dispatch_eval (const gchar *expression, GError **error)
 gchar *
 cmacs_dispatch_eval_string (const gchar *expression, GError **error)
 {
-  Lisp_Object form, result, printed;
+  Lisp_Object result, printed;
 
-  form = Fcar (Fread_from_string (build_string (expression), Qnil, Qnil));
-  result = dispatch_safe_eval (form);
+  result = dispatch_safe_read_eval (expression);
 
   if (dispatch_result_is_error (result))
     {
@@ -304,6 +331,63 @@ cmacs_dispatch_eval_string (const gchar *expression, GError **error)
 
   printed = Fprin1_to_string (result, Qnil, Qnil);
   return g_strdup (SSDATA (printed));
+}
+
+/* ── String quoting for generated Lisp and JSON ───────────────────────
+ *
+ * Every RPC surface builds Lisp source with printf, so an argument that
+ * lands inside a string literal has to be quoted for the Lisp reader.
+ * Only `"' and `\' can end or escape a literal; everything else,
+ * newlines and non-ASCII included, is taken verbatim by `read'.
+ *
+ * This deliberately replaces g_strescape: that emits every byte at or
+ * above 0x80 as an octal escape, and the reader turns "\303\251" into
+ * two raw bytes rather than the character they encode (lread.c: octal
+ * escapes yield BYTE8_TO_CHAR), so a search for "é" through the MCP
+ * edit tools never matched and an insert showed up as \303\251.  */
+gchar *
+cmacs_dispatch_lisp_escape (const gchar *s)
+{
+  GString *out = g_string_new (NULL);
+
+  for (; s != NULL && *s != '\0'; s++)
+    {
+      if (*s == '"' || *s == '\\')
+        g_string_append_c (out, '\\');
+      g_string_append_c (out, *s);
+    }
+  return g_string_free (out, FALSE);
+}
+
+/* Quote S for use inside a JSON string literal (RFC 8259 section 7).
+ * UTF-8 passes through; only the two structural characters and the
+ * control range are escaped.  A window title with a quote in it used to
+ * make `gowl_list_clients' return something no JSON parser accepts.  */
+gchar *
+cmacs_dispatch_json_escape (const gchar *s)
+{
+  GString *out = g_string_new (NULL);
+
+  for (; s != NULL && *s != '\0'; s++)
+    {
+      guchar c = (guchar) *s;
+      switch (c)
+        {
+        case '"':  g_string_append (out, "\\\""); break;
+        case '\\': g_string_append (out, "\\\\"); break;
+        case '\b': g_string_append (out, "\\b"); break;
+        case '\f': g_string_append (out, "\\f"); break;
+        case '\n': g_string_append (out, "\\n"); break;
+        case '\r': g_string_append (out, "\\r"); break;
+        case '\t': g_string_append (out, "\\t"); break;
+        default:
+          if (c < 0x20)
+            g_string_append_printf (out, "\\u%04x", (guint) c);
+          else
+            g_string_append_c (out, (gchar) c);
+        }
+    }
+  return g_string_free (out, FALSE);
 }
 
 /* The org walker behind Edit.GetOrgContent and the MCP
@@ -429,10 +513,10 @@ cmacs_dispatch_org_content (const gchar *buffer, const gchar *match,
   gchar *expr;
   gchar *result;
 
-  escaped_buffer = g_strescape (buffer != NULL ? buffer : "", NULL);
+  escaped_buffer = cmacs_dispatch_lisp_escape (buffer != NULL ? buffer : "");
   if (match != NULL && *match != '\0')
     {
-      gchar *escaped_match = g_strescape (match, NULL);
+      gchar *escaped_match = cmacs_dispatch_lisp_escape (match);
       match_form = g_strdup_printf ("\"%s\"", escaped_match);
       g_free (escaped_match);
     }
@@ -459,7 +543,7 @@ cmacs_dispatch_org_content (const gchar *buffer, const gchar *match,
    org-find-olp for slash paths); missing path components are created
    bottom-up when CREATE.  The child-heading star count derives from
    the live target level, which is why this runs in the editor rather
-   than in the client.  %s placeholders are filled with g_strescape'd
+   than in the client.  %s placeholders are filled with lisp-escaped
    values; %% survives printf as a literal % for elisp format. */
 static const gchar *org_insert_template =
   "(with-current-buffer (if (string= \"%s\" \"\")"
@@ -566,16 +650,16 @@ cmacs_dispatch_org_insert (const gchar *buffer, const gchar *text,
   gchar *expr;
   gchar *result;
 
-  e_buffer = g_strescape (buffer != NULL ? buffer : "", NULL);
-  e_heading = g_strescape (heading != NULL ? heading : "", NULL);
-  e_position = g_strescape (position != NULL ? position : "", NULL);
-  e_wrap = g_strescape (wrap != NULL ? wrap : "", NULL);
-  e_lang = g_strescape (lang != NULL ? lang : "", NULL);
-  e_drawer = g_strescape (drawer != NULL ? drawer : "", NULL);
-  e_child = g_strescape (child != NULL ? child : "", NULL);
-  e_todo = g_strescape (todo != NULL ? todo : "", NULL);
-  e_tags = g_strescape (tags != NULL ? tags : "", NULL);
-  e_text = g_strescape (text != NULL ? text : "", NULL);
+  e_buffer = cmacs_dispatch_lisp_escape (buffer != NULL ? buffer : "");
+  e_heading = cmacs_dispatch_lisp_escape (heading != NULL ? heading : "");
+  e_position = cmacs_dispatch_lisp_escape (position != NULL ? position : "");
+  e_wrap = cmacs_dispatch_lisp_escape (wrap != NULL ? wrap : "");
+  e_lang = cmacs_dispatch_lisp_escape (lang != NULL ? lang : "");
+  e_drawer = cmacs_dispatch_lisp_escape (drawer != NULL ? drawer : "");
+  e_child = cmacs_dispatch_lisp_escape (child != NULL ? child : "");
+  e_todo = cmacs_dispatch_lisp_escape (todo != NULL ? todo : "");
+  e_tags = cmacs_dispatch_lisp_escape (tags != NULL ? tags : "");
+  e_text = cmacs_dispatch_lisp_escape (text != NULL ? text : "");
 
   expr = g_strdup_printf (org_insert_template,
                           e_buffer, e_buffer,
@@ -651,28 +735,43 @@ cmacs_dispatch_gi_require (const gchar *ns, const gchar *ver,
   return !NILP (result);
 }
 
+/* SPEC is (NS FUNC ARG-STRING...).  Each argument string is read as one
+   Lisp expression, then (gi-call NS FUNC ARG...) is evaluated -- all
+   inside the guard, see dispatch_read_eval_body.  */
+static Lisp_Object
+dispatch_gi_call_body (Lisp_Object spec)
+{
+  Lisp_Object ns = XCAR (spec);
+  Lisp_Object func = XCAR (XCDR (spec));
+  Lisp_Object tail = XCDR (XCDR (spec));
+  Lisp_Object args = Qnil;
+
+  for (; CONSP (tail); tail = XCDR (tail))
+    args = Fcons (Fcar (Fread_from_string (XCAR (tail), Qnil, Qnil)), args);
+  args = Fnreverse (args);
+
+  return Feval (Fcons (intern ("gi-call"), Fcons (ns, Fcons (func, args))),
+                Qnil);
+}
+
 gchar *
 cmacs_dispatch_gi_call (const gchar *ns, const gchar *func,
                         const gchar *const *args, gint n_args,
                         GError **error)
 {
-  Lisp_Object args_list, form, result, printed;
+  Lisp_Object args_list, spec, result, printed;
   gint i;
 
-  /* Build args list from strings, reading each as a Lisp expression. */
+  /* The argument strings are Lisp source from the client; they are read
+     inside the guard (dispatch_gi_call_body), not here, for the reason
+     dispatch_read_eval_body gives. */
   args_list = Qnil;
   for (i = n_args - 1; i >= 0; i--)
-    {
-      Lisp_Object parsed =
-        Fcar (Fread_from_string (build_string (args[i]), Qnil, Qnil));
-      args_list = Fcons (parsed, args_list);
-    }
+    args_list = Fcons (build_string (args[i] ? args[i] : "nil"), args_list);
 
-  /* Build: (gi-call "NS" "func" arg1 arg2 ...) */
-  form = Fcons (intern ("gi-call"),
-                Fcons (build_string (ns),
-                       Fcons (build_string (func), args_list)));
-  result = dispatch_safe_eval (form);
+  spec = Fcons (build_string (ns),
+                Fcons (build_string (func), args_list));
+  result = dispatch_guarded (dispatch_gi_call_body, spec);
 
   if (dispatch_result_is_error (result))
     {
@@ -757,14 +856,17 @@ cmacs_dispatch_gowl_list_clients (GError **error)
       gint x, y, w, h;
       gowl_client_get_geometry (c, &x, &y, &w, &h);
 
+      g_autofree gchar *jt =
+        cmacs_dispatch_json_escape (gowl_client_get_title (c));
+      g_autofree gchar *ja =
+        cmacs_dispatch_json_escape (gowl_client_get_app_id (c));
+
       if (l != clients) g_string_append_c (buf, ',');
       g_string_append_printf (buf,
         "{\"id\":%u,\"title\":\"%s\",\"app-id\":\"%s\","
         "\"tags\":%u,\"floating\":%s,\"fullscreen\":%s,"
         "\"pid\":%d,\"geometry\":[%d,%d,%d,%d]}",
-        gowl_client_get_id (c),
-        gowl_client_get_title (c) ? : "",
-        gowl_client_get_app_id (c) ? : "",
+        gowl_client_get_id (c), jt, ja,
         gowl_client_get_tags (c),
         gowl_client_get_floating (c) ? "true" : "false",
         gowl_client_get_fullscreen (c) ? "true" : "false",
@@ -780,6 +882,7 @@ cmacs_dispatch_gowl_focused_client (GError **error)
 {
   GowlClient *c;
   gint x, y, w, h;
+  g_autofree gchar *jt = NULL, *ja = NULL;
 
   GOWL_DISPATCH_CHECK ();
 
@@ -788,13 +891,13 @@ cmacs_dispatch_gowl_focused_client (GError **error)
     return g_strdup ("nil");
 
   gowl_client_get_geometry (c, &x, &y, &w, &h);
+  jt = cmacs_dispatch_json_escape (gowl_client_get_title (c));
+  ja = cmacs_dispatch_json_escape (gowl_client_get_app_id (c));
   return g_strdup_printf (
     "{\"id\":%u,\"title\":\"%s\",\"app-id\":\"%s\","
     "\"tags\":%u,\"floating\":%s,\"pid\":%d,"
     "\"geometry\":[%d,%d,%d,%d]}",
-    gowl_client_get_id (c),
-    gowl_client_get_title (c) ? : "",
-    gowl_client_get_app_id (c) ? : "",
+    gowl_client_get_id (c), jt, ja,
     gowl_client_get_tags (c),
     gowl_client_get_floating (c) ? "true" : "false",
     gowl_client_get_pid (c),
@@ -804,25 +907,20 @@ cmacs_dispatch_gowl_focused_client (GError **error)
 gchar *
 cmacs_dispatch_gowl_spawn (const gchar *command, GError **error)
 {
-  const gchar *socket;
-  gchar *env_cmd;
-  GError *spawn_err = NULL;
+  GPid pid = 0;
 
   GOWL_DISPATCH_CHECK ();
 
-  socket = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
-  env_cmd = g_strdup_printf ("WAYLAND_DISPLAY=%s %s",
-                             socket ? socket : "", command);
+  /* Same path as the `gowl-spawn' DEFUN: parse the command line into
+     argv and set WAYLAND_DISPLAY (and the toolkit hints) in the child's
+     environment.  The previous "WAYLAND_DISPLAY=x cmd" string handed to
+     g_spawn_command_line_async never worked -- that function does not
+     use a shell, so it tried to exec a program named WAYLAND_DISPLAY=x
+     and every Spawn over bacon, D-Bus and MCP failed.  */
+  if (!cmacs_gowl_spawn_command (command, &pid, error))
+    return NULL;
 
-  if (!g_spawn_command_line_async (env_cmd, &spawn_err))
-    {
-      g_free (env_cmd);
-      g_propagate_error (error, spawn_err);
-      return NULL;
-    }
-
-  g_free (env_cmd);
-  return g_strdup ("t");
+  return g_strdup_printf ("%ld", (long) pid);
 }
 
 gchar *
@@ -842,16 +940,21 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
       gint x, y, w, h;
       gowl_monitor_get_geometry (m, &x, &y, &w, &h);
 
+      g_autofree gchar *jn =
+        cmacs_dispatch_json_escape (gowl_monitor_get_name (m));
+      g_autofree gchar *jl =
+        cmacs_dispatch_json_escape (gowl_monitor_get_layout_symbol (m));
+
       if (l != monitors) g_string_append_c (buf, ',');
       g_string_append_printf (buf,
         "{\"name\":\"%s\",\"mfact\":%.2f,\"nmaster\":%d,"
         "\"tags\":%u,\"layout\":\"%s\","
         "\"enabled\":%s,\"scale\":%.2f,\"transform\":%d,",
-        gowl_monitor_get_name (m) ? : "",
+        jn,
         gowl_monitor_get_mfact (m),
         gowl_monitor_get_nmaster (m),
         gowl_monitor_get_tags (m),
-        gowl_monitor_get_layout_symbol (m) ? : "",
+        jl,
         gowl_monitor_get_enabled (m) ? "true" : "false",
         gowl_monitor_get_scale (m),
         gowl_monitor_get_transform (m));
@@ -925,12 +1028,13 @@ cmacs_dispatch_gowl_list_keybinds (GError **error)
       GowlKeybindEntry *kb = &g_array_index (keybinds, GowlKeybindEntry, i);
       gchar *key_str = gowl_keybind_to_string (kb->modifiers, kb->keysym);
 
+      g_autofree gchar *jk = cmacs_dispatch_json_escape (key_str);
+      g_autofree gchar *jarg = cmacs_dispatch_json_escape (kb->arg);
+
       if (i > 0) g_string_append_c (buf, ',');
       g_string_append_printf (buf,
         "{\"key\":\"%s\",\"action\":%d,\"arg\":\"%s\"}",
-        key_str ? key_str : "",
-        kb->action,
-        kb->arg ? kb->arg : "");
+        jk, kb->action, jarg);
       g_free (key_str);
     }
   g_string_append_c (buf, ']');
@@ -1162,6 +1266,7 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
 {
   GowlClient *c;
   gint x, y, w, h;
+  g_autofree gchar *jt = NULL, *ja = NULL;
 
   GOWL_DISPATCH_CHECK ();
 
@@ -1176,12 +1281,12 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
     return g_strdup ("nil");
 
   gowl_client_get_geometry (c, &x, &y, &w, &h);
+  jt = cmacs_dispatch_json_escape (gowl_client_get_title (c));
+  ja = cmacs_dispatch_json_escape (gowl_client_get_app_id (c));
   return g_strdup_printf (
     "{\"id\":%u,\"title\":\"%s\",\"app-id\":\"%s\","
     "\"tags\":%u,\"geometry\":[%d,%d,%d,%d]}",
-    gowl_client_get_id (c),
-    gowl_client_get_title (c) ? : "",
-    gowl_client_get_app_id (c) ? : "",
+    gowl_client_get_id (c), jt, ja,
     gowl_client_get_tags (c),
     x, y, w, h);
 }
@@ -1201,6 +1306,7 @@ cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
   GList *modes, *ml;
   GString *buf;
   gint x, y, w, h;
+  g_autofree gchar *jn = NULL, *jl = NULL;
 
   GOWL_DISPATCH_CHECK ();
 
@@ -1210,17 +1316,19 @@ cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
 
   gowl_monitor_get_geometry (m, &x, &y, &w, &h);
 
+  jn = cmacs_dispatch_json_escape (gowl_monitor_get_name (m));
+  jl = cmacs_dispatch_json_escape (gowl_monitor_get_layout_symbol (m));
   buf = g_string_new ("{");
   g_string_append_printf (buf,
     "\"name\":\"%s\",\"mfact\":%.2f,\"nmaster\":%d,"
     "\"tags\":%u,\"layout\":\"%s\","
     "\"enabled\":%s,\"scale\":%.2f,\"transform\":\"%s\","
     "\"geometry\":[%d,%d,%d,%d],",
-    gowl_monitor_get_name (m) ? : "",
+    jn,
     gowl_monitor_get_mfact (m),
     gowl_monitor_get_nmaster (m),
     gowl_monitor_get_tags (m),
-    gowl_monitor_get_layout_symbol (m) ? : "",
+    jl,
     gowl_monitor_get_enabled (m) ? "true" : "false",
     gowl_monitor_get_scale (m),
     transform_names[gowl_monitor_get_transform (m) & 7],

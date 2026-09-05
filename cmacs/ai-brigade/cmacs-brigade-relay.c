@@ -20,19 +20,44 @@
  * protocol-only for the same reason -- a stray message would corrupt
  * the JSON-RPC stream.
  *
- * Filtering happens in two places:
+ * Filtering covers the whole request surface, not only tool calls:
  *
- *   tools/list  responses are pruned to what the allowlist admits, so
- *               the agent never learns a forbidden tool exists.  Hiding
- *               is better than refusing: a model that can see `eval'
- *               will keep trying it and burn turns.
- *   tools/call  requests for anything else are answered locally with a
- *               JSON-RPC error and never reach cmacs.
+ *   tools/list       responses are pruned to what the allowlist admits,
+ *                    so the agent never learns a forbidden tool exists.
+ *                    Hiding is better than refusing: a model that can
+ *                    see `eval' will keep trying it and burn turns.
+ *   tools/call       requests for anything else are answered locally
+ *                    with a JSON-RPC error and never reach cmacs.
+ *   resources/...    need the pseudo tool "resources" in the allowlist
+ *                    ("*" covers it).  resources/read reaches every
+ *                    buffer and, through file://, any file on disk, so
+ *                    an allowlist of two read-only tools must not hand
+ *                    it over for free.  The list methods are answered
+ *                    locally with empty lists so the client sees
+ *                    nothing rather than an error.
+ *   prompts/...      likewise, behind the pseudo tool "prompts".
+ *   anything that is not a JSON object -- an array (a JSON-RPC batch),
+ *                    a scalar, or text that does not parse -- is
+ *                    answered locally with an error.  Forwarding it
+ *                    "for cmacs to reject" was the one path that
+ *                    bypassed every check above.
+ *
+ * The policy the gate applies (whether "*" covers the privileged set,
+ * whether ai_* / brigade_* are refused) comes from the environment too
+ * (cmacs_brigade_policy_from_env): this process has no Lisp VM, and the
+ * Lisp variables the editor consults read as nil here.
  *
  * The allowlist arrives as CMACS_BRIGADE_ALLOW in the environment,
  * written into the agent's 0600 .mcp.json `env' block.  It is not a
  * command-line argument because argv is world-readable through /proc,
  * and the token beside it must not be.
+ *
+ * What the relay is and is not: with a scoped socket
+ * (`cmacs-brigade-scope-open'), CMACS_BRIGADE_SOCKET names a per-agent
+ * listener that already applies the same allowlist server-side, and the
+ * relay is defence in depth plus the stdio adapter.  Against a plain
+ * cmacs-mcp-<pid>.sock the relay is the only gate, and an agent that
+ * can open sockets itself can walk around it.
  */
 
 #include <config.h>
@@ -57,13 +82,77 @@
  * without a cap a hostile or wedged peer can drive us to OOM. */
 #define RELAY_MAX_LINE (16 * 1024 * 1024)
 
+/* A line reader with a hard cap on the line it will assemble.
+ * GDataInputStream's read_line grows without bound and only lets the
+ * caller measure the line after it has been allocated, which is not a
+ * guard against a peer that never sends a newline. */
 typedef struct
 {
-  const gchar     *allowlist;
-  GDataInputStream *from_cmacs;
-  GOutputStream    *to_cmacs;
-  GOutputStream    *to_agent;
+  GInputStream *in;
+  GByteArray   *buf;
+  gsize         max;
+  gboolean      eof;
+} RelayReader;
+
+typedef struct
+{
+  const gchar        *allowlist;
+  CmacsBrigadePolicy  policy;
+  RelayReader         from_cmacs;
+  GOutputStream      *to_cmacs;
+  GOutputStream      *to_agent;
 } RelayCtx;
+
+static void
+relay_reader_init (RelayReader *r, GInputStream *in, gsize max)
+{
+  r->in  = g_object_ref (in);
+  r->buf = g_byte_array_new ();
+  r->max = max;
+  r->eof = FALSE;
+}
+
+/* Next line without its newline, or NULL at EOF or when a line exceeds
+ * the cap (the caller stops either way).  Caller g_frees. */
+static gchar *
+relay_reader_line (RelayReader *r)
+{
+  for (;;)
+    {
+      guint8 *nl = r->buf->len
+        ? memchr (r->buf->data, '\n', r->buf->len) : NULL;
+
+      if (nl != NULL)
+        {
+          gsize n = (gsize) (nl - r->buf->data);
+          gchar *line = g_strndup ((const gchar *) r->buf->data, n);
+          g_byte_array_remove_range (r->buf, 0, (guint) (n + 1));
+          return line;
+        }
+      if (r->buf->len > r->max)
+        return NULL;                          /* cap: refuse to grow */
+      if (r->eof)
+        {
+          if (r->buf->len == 0)
+            return NULL;
+          {
+            gchar *line = g_strndup ((const gchar *) r->buf->data,
+                                     r->buf->len);
+            g_byte_array_set_size (r->buf, 0);
+            return line;
+          }
+        }
+      {
+        guint8 chunk[65536];
+        gssize got = g_input_stream_read (r->in, chunk, sizeof chunk,
+                                          NULL, NULL);
+        if (got <= 0)
+          r->eof = TRUE;
+        else
+          g_byte_array_append (r->buf, chunk, (guint) got);
+      }
+    }
+}
 
 /* Write LINE plus a newline, flushing so the peer sees it immediately.
  * Returns FALSE when the far end has gone. */
@@ -82,7 +171,8 @@ relay_write (GOutputStream *out, const gchar *line)
 
 /* Emit a JSON-RPC error for ID without troubling cmacs. */
 static gboolean
-relay_deny (GOutputStream *to_agent, JsonNode *id, const gchar *message)
+relay_deny_code (GOutputStream *to_agent, JsonNode *id, gint code,
+                 const gchar *message)
 {
   g_autoptr (JsonBuilder) b = json_builder_new ();
   g_autoptr (JsonNode) root = NULL;
@@ -99,12 +189,49 @@ relay_deny (GOutputStream *to_agent, JsonNode *id, const gchar *message)
   json_builder_set_member_name (b, "error");
   json_builder_begin_object (b);
   json_builder_set_member_name (b, "code");
-  /* -32601 "method not found" rather than a permission code: as far as
-   * this agent is concerned the tool does not exist, which is also what
-   * tools/list told it. */
-  json_builder_add_int_value (b, -32601);
+  json_builder_add_int_value (b, code);
   json_builder_set_member_name (b, "message");
   json_builder_add_string_value (b, message);
+  json_builder_end_object (b);
+  json_builder_end_object (b);
+
+  root = json_builder_get_root (b);
+  text = json_to_string (root, FALSE);
+  return relay_write (to_agent, text);
+}
+
+/* -32601 "method not found" rather than a permission code: as far as
+ * this agent is concerned the tool does not exist, which is also what
+ * tools/list told it. */
+static gboolean
+relay_deny (GOutputStream *to_agent, JsonNode *id, const gchar *message)
+{
+  return relay_deny_code (to_agent, id, -32601, message);
+}
+
+/* Answer ID locally with {"<member>": []} -- how a list method reads
+ * when the allowlist covers none of what it lists. */
+static gboolean
+relay_reply_empty_list (GOutputStream *to_agent, JsonNode *id,
+                        const gchar *member)
+{
+  g_autoptr (JsonBuilder) b = json_builder_new ();
+  g_autoptr (JsonNode) root = NULL;
+  g_autofree gchar *text = NULL;
+
+  json_builder_begin_object (b);
+  json_builder_set_member_name (b, "jsonrpc");
+  json_builder_add_string_value (b, "2.0");
+  json_builder_set_member_name (b, "id");
+  if (id != NULL)
+    json_builder_add_value (b, json_node_copy (id));
+  else
+    json_builder_add_null_value (b);
+  json_builder_set_member_name (b, "result");
+  json_builder_begin_object (b);
+  json_builder_set_member_name (b, member);
+  json_builder_begin_array (b);
+  json_builder_end_array (b);
   json_builder_end_object (b);
   json_builder_end_object (b);
 
@@ -116,7 +243,7 @@ relay_deny (GOutputStream *to_agent, JsonNode *id, const gchar *message)
 /* Prune a tools/list result to the tools the allowlist admits.
  * Returns a newly allocated line, or NULL to forward unchanged. */
 static gchar *
-relay_filter_tools_list (JsonObject *root, const gchar *allowlist)
+relay_filter_tools_list (JsonObject *root, const RelayCtx *ctx)
 {
   JsonObject *result;
   JsonArray *tools, *kept;
@@ -138,7 +265,9 @@ relay_filter_tools_list (JsonObject *root, const gchar *allowlist)
       const gchar *name = t ? json_object_get_string_member_with_default
         (t, "name", NULL) : NULL;
 
-      if (name != NULL && cmacs_brigade_tool_allowed (allowlist, name))
+      if (name != NULL
+          && cmacs_brigade_tool_allowed_with_policy (ctx->allowlist, name,
+                                                     &ctx->policy))
         json_array_add_element (kept, json_node_copy (el));
     }
 
@@ -150,39 +279,93 @@ relay_filter_tools_list (JsonObject *root, const gchar *allowlist)
   }
 }
 
+/* True when the allowlist grants pseudo tool NAME ("resources",
+ * "prompts").  The policy is applied too, so a "*" that has been told
+ * to withhold privileged tools still grants these -- they are not
+ * privileged, they are simply not free. */
+static gboolean
+relay_pseudo_allowed (const RelayCtx *ctx, const gchar *name)
+{
+  return cmacs_brigade_tool_allowed_with_policy (ctx->allowlist, name,
+                                                 &ctx->policy);
+}
+
 /* Handle one line from the agent.  Returns FALSE to stop the relay. */
 static gboolean
 relay_from_agent (RelayCtx *ctx, const gchar *line)
 {
   g_autoptr (JsonParser) parser = json_parser_new ();
+  JsonNode *root_node;
   JsonObject *root;
+  JsonNode *id;
   const gchar *method;
 
-  if (!json_parser_load_from_data (parser, line, -1, NULL)
-      || !JSON_NODE_HOLDS_OBJECT (json_parser_get_root (parser)))
-    /* Not our business to validate the peer's JSON -- forward it and
-     * let cmacs answer with a parse error. */
-    return relay_write (ctx->to_cmacs, line);
+  /* Blank lines are keep-alives some clients emit; nothing to filter. */
+  if (line[0] == '\0')
+    return TRUE;
 
-  root = json_node_get_object (json_parser_get_root (parser));
+  if (!json_parser_load_from_data (parser, line, -1, NULL))
+    return relay_deny_code (ctx->to_agent, NULL, -32700, "Parse error");
+
+  root_node = json_parser_get_root (parser);
+  if (root_node == NULL || !JSON_NODE_HOLDS_OBJECT (root_node))
+    /* A JSON-RPC batch (an array) would carry its own requests past
+     * every check below, and a scalar is not a request at all.  Neither
+     * is forwarded. */
+    return relay_deny_code (ctx->to_agent, NULL, -32600,
+                            "Invalid Request: the relay accepts one "
+                            "JSON-RPC object per line");
+
+  root = json_node_get_object (root_node);
   method = json_object_get_string_member_with_default (root, "method", NULL);
+  id = json_object_has_member (root, "id")
+    ? json_object_get_member (root, "id") : NULL;
 
   if (g_strcmp0 (method, "tools/call") == 0)
     {
-      JsonObject *params = json_object_get_object_member (root, "params");
+      JsonObject *params = json_object_has_member (root, "params")
+        && JSON_NODE_HOLDS_OBJECT (json_object_get_member (root, "params"))
+        ? json_object_get_object_member (root, "params") : NULL;
       const gchar *name = params
         ? json_object_get_string_member_with_default (params, "name", NULL)
         : NULL;
 
-      if (name == NULL || !cmacs_brigade_tool_allowed (ctx->allowlist, name))
+      if (name == NULL
+          || !cmacs_brigade_tool_allowed_with_policy (ctx->allowlist, name,
+                                                      &ctx->policy))
         {
           g_autofree gchar *msg =
             g_strdup_printf ("Unknown tool: %s", name ? name : "(unnamed)");
-          return relay_deny (ctx->to_agent,
-                             json_object_has_member (root, "id")
-                             ? json_object_get_member (root, "id") : NULL,
-                             msg);
+          return relay_deny (ctx->to_agent, id, msg);
         }
+    }
+  else if (g_strcmp0 (method, "resources/read") == 0
+           || g_strcmp0 (method, "resources/subscribe") == 0
+           || g_strcmp0 (method, "resources/unsubscribe") == 0)
+    {
+      if (!relay_pseudo_allowed (ctx, CMACS_BRIGADE_PSEUDO_RESOURCES))
+        return relay_deny (ctx->to_agent, id, "Unknown resource");
+    }
+  else if (g_strcmp0 (method, "resources/list") == 0)
+    {
+      if (!relay_pseudo_allowed (ctx, CMACS_BRIGADE_PSEUDO_RESOURCES))
+        return relay_reply_empty_list (ctx->to_agent, id, "resources");
+    }
+  else if (g_strcmp0 (method, "resources/templates/list") == 0)
+    {
+      if (!relay_pseudo_allowed (ctx, CMACS_BRIGADE_PSEUDO_RESOURCES))
+        return relay_reply_empty_list (ctx->to_agent, id,
+                                       "resourceTemplates");
+    }
+  else if (g_strcmp0 (method, "prompts/get") == 0)
+    {
+      if (!relay_pseudo_allowed (ctx, CMACS_BRIGADE_PSEUDO_PROMPTS))
+        return relay_deny (ctx->to_agent, id, "Unknown prompt");
+    }
+  else if (g_strcmp0 (method, "prompts/list") == 0)
+    {
+      if (!relay_pseudo_allowed (ctx, CMACS_BRIGADE_PSEUDO_PROMPTS))
+        return relay_reply_empty_list (ctx->to_agent, id, "prompts");
     }
 
   return relay_write (ctx->to_cmacs, line);
@@ -201,7 +384,7 @@ relay_from_cmacs (RelayCtx *ctx, const gchar *line)
     return relay_write (ctx->to_agent, line);
 
   root = json_node_get_object (json_parser_get_root (parser));
-  filtered = relay_filter_tools_list (root, ctx->allowlist);
+  filtered = relay_filter_tools_list (root, ctx);
   return relay_write (ctx->to_agent, filtered ? filtered : line);
 }
 
@@ -217,12 +400,9 @@ relay_downstream (gpointer data)
 
   for (;;)
     {
-      gsize len = 0;
-      g_autofree gchar *line =
-        g_data_input_stream_read_line (ctx->from_cmacs, &len, NULL, NULL);
+      g_autofree gchar *line = relay_reader_line (&ctx->from_cmacs);
 
-      if (line == NULL) break;                 /* cmacs closed */
-      if (len > RELAY_MAX_LINE) break;
+      if (line == NULL) break;                 /* cmacs closed, or a line over the cap */
       if (!relay_from_cmacs (ctx, line)) break;
     }
   /* Losing either side ends the session; the agent must not be left
@@ -237,10 +417,15 @@ cmacs_brigade_relay_main (int argc, char **argv)
   g_autoptr (GSocketClient) client = NULL;
   g_autoptr (GSocketConnection) conn = NULL;
   g_autoptr (GSocketAddress) addr = NULL;
-  g_autoptr (GDataInputStream) from_agent = NULL;
   g_autoptr (GError) err = NULL;
   const gchar *sock, *allow;
-  RelayCtx ctx = { 0 };
+  /* Static, not on this frame: the downstream thread keeps using the
+   * context after the agent closes stdin and this function returns.
+   * With the context on the stack that return freed it under the
+   * thread's feet, and the process died in g_byte_array_append on the
+   * way out instead of exiting cleanly. */
+  static RelayCtx ctx;
+  static RelayReader from_agent;
   GInputStream *stdin_stream;
 
   (void) argc;
@@ -273,34 +458,42 @@ cmacs_brigade_relay_main (int argc, char **argv)
     }
 
   ctx.allowlist  = allow;
+  cmacs_brigade_policy_from_env (&ctx.policy);
   ctx.to_cmacs   = g_io_stream_get_output_stream (G_IO_STREAM (conn));
-  ctx.from_cmacs = g_data_input_stream_new (
-    g_io_stream_get_input_stream (G_IO_STREAM (conn)));
+  relay_reader_init (&ctx.from_cmacs,
+                     g_io_stream_get_input_stream (G_IO_STREAM (conn)),
+                     RELAY_MAX_LINE);
   ctx.to_agent   = g_unix_output_stream_new (STDOUT_FILENO, FALSE);
-
-  g_data_input_stream_set_newline_type (ctx.from_cmacs,
-                                        G_DATA_STREAM_NEWLINE_TYPE_LF);
 
   g_thread_new ("brigade-relay-down", relay_downstream, &ctx);
 
   stdin_stream = g_unix_input_stream_new (STDIN_FILENO, FALSE);
-  from_agent = g_data_input_stream_new (stdin_stream);
-  g_data_input_stream_set_newline_type (from_agent,
-                                        G_DATA_STREAM_NEWLINE_TYPE_LF);
+  relay_reader_init (&from_agent, stdin_stream, RELAY_MAX_LINE);
 
   for (;;)
     {
-      gsize len = 0;
-      g_autofree gchar *line =
-        g_data_input_stream_read_line (from_agent, &len, NULL, NULL);
+      g_autofree gchar *line = relay_reader_line (&from_agent);
 
-      if (line == NULL) break;                 /* agent closed */
-      if (len > RELAY_MAX_LINE) break;
+      if (line == NULL) break;                 /* agent closed, or a line over the cap */
       if (!relay_from_agent (&ctx, line)) break;
     }
 
+  /* The agent is gone.  Half-close the socket -- our write side only --
+   * so cmacs sees EOF and can still deliver replies to anything it is
+   * mid-way through; the downstream thread forwards those and exits the
+   * process when cmacs closes its side.  Bounded: a cmacs that never
+   * closes must not keep a relay alive for a dead agent. */
+  {
+    GSocket *gsock = g_socket_connection_get_socket (conn);
+    int i;
+
+    if (gsock != NULL)
+      g_socket_shutdown (gsock, FALSE, TRUE, NULL);
+    for (i = 0; i < 50; i++)
+      g_usleep (100 * 1000);
+  }
   g_object_unref (stdin_stream);
-  return 0;
+  exit (0);
 }
 
 /* Never-return entry point, called from main() before Emacs starts.

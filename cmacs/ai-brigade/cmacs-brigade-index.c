@@ -287,12 +287,27 @@ cmacs_brigade_index_open (const gchar *dir, GError **error)
 
   /* The declared count must match the file, or a scan walks off the
    * mapping.  This is the check that turns a half-written index from a
-   * SIGSEGV into a message. */
+   * SIGSEGV into a message.  The product is checked for overflow first:
+   * a header claiming 2^40 rows of dim 2^30 wraps to a small `need',
+   * passes the size test, and the scan then reads past the mapping
+   * anyway -- the exact failure the test exists to prevent. */
   {
-    /* guint64 * guint32 promotes to guint64, which is what gsize is
-     * on every platform this builds for -- no cast needed, and
-     * -Wuseless-cast objects to one. */
-    gsize need = sizeof hdr + hdr.count * hdr.dim * sizeof (guint16);
+    guint64 row_bytes;
+    gsize need;
+
+    if (hdr.dim == 0 || hdr.dim > G_MAXUINT32 / sizeof (guint16)
+        || hdr.count > (G_MAXSIZE - sizeof hdr)
+                       / ((guint64) hdr.dim * sizeof (guint16)))
+      {
+        close (fd);
+        g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_INVAL,
+                     "memory index at %s has an impossible shape "
+                     "(dim %u, %" G_GUINT64_FORMAT " vectors); rebuild it",
+                     dir, hdr.dim, hdr.count);
+        return NULL;
+      }
+    row_bytes = (guint64) hdr.dim * sizeof (guint16);
+    need = sizeof hdr + hdr.count * row_bytes;
     if ((gsize) sb.st_size < need)
       {
         close (fd);

@@ -161,7 +161,12 @@ check_total_size (zip_t *za, guint64 max_total, GError **error)
       if ((st.valid & ZIP_STAT_SIZE) == 0)
         continue;
 
-      total += st.size;
+      /* Saturate rather than wrap: two members each declaring 2^63
+         bytes must not sum to something under the cap. */
+      if (st.size > max_total || total > max_total - st.size)
+        total = max_total + 1;
+      else
+        total += st.size;
       if (total > max_total)
         {
           g_set_error (error, CMACS_OFFICE_ZIP_ERROR,

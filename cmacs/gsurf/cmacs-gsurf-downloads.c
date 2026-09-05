@@ -63,6 +63,33 @@ download_dir (void)
   return g_strdup (dir);
 }
 
+/* Reduce a server-suggested filename to something safe to create under
+   the download directory: basename only (no path), no control
+   characters, and never a dotfile -- a site must not be able to write
+   ~/Downloads/.bashrc-lookalikes, and "." / ".." are not names at all.
+   Always returns a non-empty g_malloc'd string. */
+static char *
+download_safe_name (const char *suggested)
+{
+  g_autofree char *base = g_path_get_basename (suggested);
+  GString *out = g_string_new (NULL);
+  const char *p;
+
+  for (p = base; *p != '\0'; p++)
+    {
+      guchar c = (guchar) *p;
+      g_string_append_c (out, (c < 0x20 || c == 0x7f || c == '/') ? '_' : (char) c);
+    }
+  /* Leading dots become underscores: keeps the extension, drops the
+     hidden-file property. */
+  while (out->len > 0 && out->str[0] == '.')
+    out->str[0] = '_';
+  if (out->len == 0 || g_strcmp0 (out->str, "_") == 0
+      || g_strcmp0 (out->str, "__") == 0)
+    g_string_assign (out, "download");
+  return g_string_free (out, FALSE);
+}
+
 /* If PATH already exists, return a de-duplicated sibling ("name (1).ext",
    ...).  Always returns a freshly g_malloc'd path. */
 static char *
@@ -150,7 +177,7 @@ on_decide_destination (WebKitDownload *download, const gchar *suggested,
   g_mkdir_with_parents (dir, 0700);
 
   const char *name = (suggested && *suggested) ? suggested : "download";
-  g_autofree char *safe = g_path_get_basename (name);  /* strip any path */
+  g_autofree char *safe = download_safe_name (name);
   g_autofree char *want = g_build_filename (dir, safe, NULL);
   char *path = dedup_path (want);
 

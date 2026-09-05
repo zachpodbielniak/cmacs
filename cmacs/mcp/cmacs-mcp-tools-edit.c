@@ -136,9 +136,9 @@ handle_edit_buffer (McpServer *s, const gchar *n,
   if (json_object_has_member (a, "replace_all"))
     replace_all = json_object_get_boolean_member (a, "replace_all");
 
-  eb = g_strescape (buffer, NULL);
-  eo = g_strescape (old_string, NULL);
-  en = g_strescape (new_string, NULL);
+  eb = cmacs_dispatch_lisp_escape (buffer);
+  eo = cmacs_dispatch_lisp_escape (old_string);
+  en = cmacs_dispatch_lisp_escape (new_string);
 
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
@@ -182,9 +182,9 @@ handle_replace_in_buffer (McpServer *s, const gchar *n,
     return edit_error (
       "Missing required arguments: buffer, regexp, replacement");
 
-  eb = g_strescape (buffer, NULL);
-  er = g_strescape (regexp, NULL);
-  ep = g_strescape (replacement, NULL);
+  eb = cmacs_dispatch_lisp_escape (buffer);
+  er = cmacs_dispatch_lisp_escape (regexp);
+  ep = cmacs_dispatch_lisp_escape (replacement);
 
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
@@ -215,8 +215,8 @@ handle_search_buffer (McpServer *s, const gchar *n,
   if (buffer == NULL || regexp == NULL)
     return edit_error ("Missing required arguments: buffer, regexp");
 
-  eb = g_strescape (buffer, NULL);
-  er = g_strescape (regexp, NULL);
+  eb = cmacs_dispatch_lisp_escape (buffer);
+  er = cmacs_dispatch_lisp_escape (regexp);
 
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
@@ -255,7 +255,7 @@ handle_goto_line (McpServer *s, const gchar *n,
     return edit_error ("Missing required arguments: buffer, line");
   line = json_object_get_int_member (a, "line");
 
-  eb = g_strescape (buffer, NULL);
+  eb = cmacs_dispatch_lisp_escape (buffer);
   expr = g_strdup_printf (
     "(with-current-buffer \"%s\""
     "  (goto-char (point-min))"
@@ -287,11 +287,11 @@ handle_project_grep (McpServer *s, const gchar *n,
   directory = json_object_get_string_member_with_default (a, "directory", NULL);
   file_glob = json_object_get_string_member_with_default (a, "file_glob", NULL);
 
-  er = g_strescape (regexp, NULL);
+  er = cmacs_dispatch_lisp_escape (regexp);
 
   if (directory != NULL)
     {
-      ed = g_strescape (directory, NULL);
+      ed = cmacs_dispatch_lisp_escape (directory);
       dir_form = g_strdup_printf ("\"%s\"", ed);
     }
   else
@@ -299,7 +299,7 @@ handle_project_grep (McpServer *s, const gchar *n,
 
   if (file_glob != NULL)
     {
-      eg = g_strescape (file_glob, NULL);
+      eg = cmacs_dispatch_lisp_escape (file_glob);
       include = g_strdup_printf (" \"--include=%s\"", eg);
     }
   else

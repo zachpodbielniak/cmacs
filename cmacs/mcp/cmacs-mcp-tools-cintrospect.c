@@ -104,8 +104,9 @@ handle_symbol_info (McpServer *s, const gchar *n, JsonObject *args, gpointer u)
       mcp_tool_result_add_text (r, "missing required arg: name");
       return r;
     }
+  g_autofree gchar *ename = cmacs_dispatch_lisp_escape (name);
   g_autofree gchar *expr = g_strdup_printf (
-    "(prin1-to-string (cmacs-c-symbol-info \"%s\"))", name);
+    "(prin1-to-string (cmacs-c-symbol-info \"%s\"))", ename);
   return eval_tool (expr);
 }
 
@@ -120,8 +121,9 @@ handle_type_info (McpServer *s, const gchar *n, JsonObject *args, gpointer u)
       mcp_tool_result_add_text (r, "missing required arg: name");
       return r;
     }
+  g_autofree gchar *ename = cmacs_dispatch_lisp_escape (name);
   g_autofree gchar *expr = g_strdup_printf (
-    "(prin1-to-string (cmacs-c-type-info \"%s\"))", name);
+    "(prin1-to-string (cmacs-c-type-info \"%s\"))", ename);
   return eval_tool (expr);
 }
 
@@ -136,8 +138,9 @@ handle_function_source (McpServer *s, const gchar *n, JsonObject *args, gpointer
       mcp_tool_result_add_text (r, "missing required arg: name");
       return r;
     }
+  g_autofree gchar *ename = cmacs_dispatch_lisp_escape (name);
   g_autofree gchar *expr = g_strdup_printf (
-    "(prin1-to-string (cmacs-c-function-source \"%s\"))", name);
+    "(prin1-to-string (cmacs-c-function-source \"%s\"))", ename);
   return eval_tool (expr);
 }
 
@@ -168,8 +171,9 @@ handle_defun_info (McpServer *s, const gchar *n, JsonObject *args, gpointer u)
       mcp_tool_result_add_text (r, "missing required arg: symbol");
       return r;
     }
+  g_autofree gchar *esym = cmacs_dispatch_lisp_escape (sym);
   g_autofree gchar *expr = g_strdup_printf (
-    "(prin1-to-string (cmacs-c-defun-info (intern \"%s\")))", sym);
+    "(prin1-to-string (cmacs-c-defun-info (intern \"%s\")))", esym);
   return eval_tool (expr);
 }
 
@@ -243,11 +247,12 @@ handle_patch_defun (McpServer *s, const gchar *n, JsonObject *args, gpointer u)
       return r;
     }
   gint64 addr = json_object_get_int_member (args, "addr");
+  g_autofree gchar *esym = cmacs_dispatch_lisp_escape (sym);
   g_autofree gchar *expr = g_strdup_printf (
     "(condition-case err"
     " (progn (cmacs-c-patch-defun (intern \"%s\") %ld) \"ok\")"
     " (error (format \"%%S\" err)))",
-    sym, (long) addr);
+    esym, (long) addr);
   return eval_tool (expr);
 }
 
@@ -264,8 +269,9 @@ handle_unpatch_defun (McpServer *s, const gchar *n, JsonObject *args, gpointer u
       mcp_tool_result_add_text (r, "required: symbol (string)");
       return r;
     }
+  g_autofree gchar *esym = cmacs_dispatch_lisp_escape (sym);
   g_autofree gchar *expr = g_strdup_printf (
-    "(prin1-to-string (cmacs-c-unpatch-defun (intern \"%s\")))", sym);
+    "(prin1-to-string (cmacs-c-unpatch-defun (intern \"%s\")))", esym);
   return eval_tool (expr);
 }
 

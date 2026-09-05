@@ -366,7 +366,7 @@ handle_gowl_focus_client (McpServer *s, const gchar *n,
       mcp_tool_result_add_text (r, "Missing required argument: pattern");
       return r;
     }
-  ep = g_strescape (pattern, NULL);
+  ep = cmacs_dispatch_lisp_escape (pattern);
   expr = g_strdup_printf (
     "(let ((c (gowl-find-client \"%s\" '%s)))"
     "  (if c (progn (gowl-focus-client c) \"focused\")"
@@ -390,7 +390,7 @@ handle_gowl_close_client (McpServer *s, const gchar *n,
       mcp_tool_result_add_text (r, "Missing required argument: pattern");
       return r;
     }
-  ep = g_strescape (pattern, NULL);
+  ep = cmacs_dispatch_lisp_escape (pattern);
   expr = g_strdup_printf (
     "(let ((c (gowl-find-client \"%s\" '%s)))"
     "  (if c (progn (gowl-close-client c) \"closed\")"
@@ -424,7 +424,7 @@ handle_gowl_set_client_geometry (McpServer *s, const gchar *n,
   y = json_object_get_int_member (a, "y");
   w = json_object_get_int_member (a, "width");
   h = json_object_get_int_member (a, "height");
-  ep = g_strescape (pattern, NULL);
+  ep = cmacs_dispatch_lisp_escape (pattern);
   expr = g_strdup_printf (
     "(let ((c (gowl-find-client \"%s\" '%s)))"
     "  (if c (progn (gowl-client-set-geometry c %ld %ld %ld %ld)"
@@ -450,7 +450,7 @@ handle_gowl_set_layout (McpServer *s, const gchar *n,
       mcp_tool_result_add_text (r, "Missing required argument: layout");
       return r;
     }
-  el = g_strescape (layout, NULL);
+  el = cmacs_dispatch_lisp_escape (layout);
   expr = g_strdup_printf (
     "(progn (gowl-set-layout \"%s\") \"layout set\")", el);
   return gowl_eval (expr);
@@ -508,7 +508,7 @@ handle_gowl_screenshot (McpServer *s, const gchar *n,
 
   if (pattern != NULL)
     {
-      g_autofree gchar *ep = g_strescape (pattern, NULL);
+      g_autofree gchar *ep = cmacs_dispatch_lisp_escape (pattern);
       expr = g_strdup_printf (
         "(let ((c (gowl-find-client \"%s\" '%s)))"
         "  (if c (let ((shot (gowl-screenshot-client c)))"

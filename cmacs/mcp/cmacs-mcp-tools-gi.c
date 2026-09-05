@@ -127,8 +127,11 @@ handle_gi_describe (McpServer   *server,
       return result;
     }
 
-  expr = g_strdup_printf (
-    "(gi-describe \"%s\" \"%s\")", ns, symbol);
+  {
+    g_autofree gchar *ens = cmacs_dispatch_lisp_escape (ns);
+    g_autofree gchar *esym = cmacs_dispatch_lisp_escape (symbol);
+    expr = g_strdup_printf ("(gi-describe \"%s\" \"%s\")", ens, esym);
+  }
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
   mcp_tool_result_add_text (result,

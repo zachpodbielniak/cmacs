@@ -63,6 +63,7 @@ handle_describe_function (McpServer   *server,
   const gchar *symbol;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *esym = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -79,15 +80,16 @@ handle_describe_function (McpServer   *server,
       return result;
     }
 
+  esym = cmacs_dispatch_lisp_escape (symbol);
   expr = g_strdup_printf (
-    "(let ((sym '%s))"
+    "(let ((sym (intern \"%s\")))"
     "  (if (fboundp sym)"
     "    (format \"%%s\\n\\nArgs: %%s\\n\\n%%s\""
     "      sym"
     "      (or (help-function-arglist sym t) \"()\")"
     "      (or (documentation sym t) \"No documentation.\"))"
     "    (format \"%%s is not a known function\" sym)))",
-    symbol);
+    esym);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -107,6 +109,7 @@ handle_describe_variable (McpServer   *server,
   const gchar *symbol;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *esym = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -123,8 +126,9 @@ handle_describe_variable (McpServer   *server,
       return result;
     }
 
+  esym = cmacs_dispatch_lisp_escape (symbol);
   expr = g_strdup_printf (
-    "(let ((sym '%s))"
+    "(let ((sym (intern \"%s\")))"
     "  (if (boundp sym)"
     "    (format \"%%s\\n\\nValue: %%S\\n\\n%%s\""
     "      sym"
@@ -132,7 +136,7 @@ handle_describe_variable (McpServer   *server,
     "      (or (documentation-property sym 'variable-documentation t)"
     "          \"No documentation.\"))"
     "    (format \"%%s is void\" sym)))",
-    symbol);
+    esym);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -152,6 +156,7 @@ handle_apropos (McpServer   *server,
   const gchar *pattern;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *epat = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -168,9 +173,10 @@ handle_apropos (McpServer   *server,
       return result;
     }
 
+  epat = cmacs_dispatch_lisp_escape (pattern);
   expr = g_strdup_printf (
     "(mapconcat #'symbol-name (apropos-internal \"%s\") \"\\n\")",
-    pattern);
+    epat);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);
@@ -190,6 +196,7 @@ handle_completions (McpServer   *server,
   const gchar *prefix;
   g_autoptr (GError) error = NULL;
   g_autofree gchar *expr = NULL;
+  g_autofree gchar *epre = NULL;
   g_autofree gchar *result_str = NULL;
   McpToolResult *result;
 
@@ -206,10 +213,11 @@ handle_completions (McpServer   *server,
       return result;
     }
 
+  epre = cmacs_dispatch_lisp_escape (prefix);
   expr = g_strdup_printf (
     "(let ((comps (all-completions \"%s\" obarray)))"
     "  (mapconcat #'identity (seq-take comps 100) \"\\n\"))",
-    prefix);
+    epre);
 
   result_str = cmacs_dispatch_eval (expr, &error);
   result = mcp_tool_result_new (result_str == NULL);

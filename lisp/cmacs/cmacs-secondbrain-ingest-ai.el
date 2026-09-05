@@ -352,7 +352,7 @@ an object at all."
 
 ;;;; Talking to the model ------------------------------------------------
 
-(defcustom cmacs-secondbrain-ingest-cli-directory temporary-file-directory
+(defcustom cmacs-secondbrain-ingest-cli-directory nil
   "Working directory for a CLI provider's subprocess.
 
 A command-line agent resolves CLAUDE.md, the .claude directory and the
@@ -360,9 +360,45 @@ repository from where it starts, and cmacs usually starts in a source
 checkout.  Run there, the summariser believes it is a coding agent in
 that project -- the first live run of this file answered a JSON request
 with a question about the ingest code it found around itself.  Point it
-at somewhere with no project in it."
-  :type 'directory
+at somewhere with no project in it.
+
+nil, the default, means a private empty directory created for this
+Emacs session (see `cmacs-secondbrain-ingest--cli-directory').  It used
+to default to `temporary-file-directory' itself, which on a shared
+machine is somewhere another user can leave a CLAUDE.md -- or a
+.claude/settings.json defining hooks -- for every summary to pick up."
+  :type '(choice (const :tag "Private per-session directory" nil)
+                 directory)
   :group 'cmacs-secondbrain-ingest)
+
+(defvar cmacs-secondbrain-ingest--cli-private-dir nil
+  "The per-session private directory, once created.")
+
+(defun cmacs-secondbrain-ingest--cli-directory ()
+  "Return the directory a CLI provider should start in, creating it if needed.
+Honours `cmacs-secondbrain-ingest-cli-directory' when set; otherwise a
+0700 directory of our own under `temporary-file-directory', made once
+per session and removed on exit."
+  (cond
+   ((and cmacs-secondbrain-ingest-cli-directory
+         (file-directory-p cmacs-secondbrain-ingest-cli-directory))
+    cmacs-secondbrain-ingest-cli-directory)
+   (cmacs-secondbrain-ingest-cli-directory nil)
+   (t
+    (unless (and cmacs-secondbrain-ingest--cli-private-dir
+                 (file-directory-p cmacs-secondbrain-ingest--cli-private-dir))
+      ;; `make-temp-file' creates it 0700 with an unpredictable name.
+      (setq cmacs-secondbrain-ingest--cli-private-dir
+            (file-name-as-directory (make-temp-file "cmacs-sbi-cli-" t)))
+      (add-hook 'kill-emacs-hook #'cmacs-secondbrain-ingest--cli-directory-cleanup))
+    cmacs-secondbrain-ingest--cli-private-dir)))
+
+(defun cmacs-secondbrain-ingest--cli-directory-cleanup ()
+  "Remove the per-session private CLI directory."
+  (when (and cmacs-secondbrain-ingest--cli-private-dir
+             (file-directory-p cmacs-secondbrain-ingest--cli-private-dir))
+    (ignore-errors (delete-directory cmacs-secondbrain-ingest--cli-private-dir t))
+    (setq cmacs-secondbrain-ingest--cli-private-dir nil)))
 
 (defcustom cmacs-secondbrain-ingest-cli-bare nil
   "Run the Claude Code CLI with --bare.
@@ -403,10 +439,9 @@ prompt and has nothing to look up.  nil leaves the CLI's defaults."
   "Keep a CLI provider CLIENT away from whatever project cmacs sits in,
 and away from its tools."
   (when (and (fboundp 'cmacs-ai-client-cli-p) (ignore-errors (cmacs-ai-client-cli-p client)))
-    (when (and cmacs-secondbrain-ingest-cli-directory
-               (file-directory-p cmacs-secondbrain-ingest-cli-directory))
-      (ignore-errors (cmacs-ai-client-set-working-directory
-                      client cmacs-secondbrain-ingest-cli-directory)))
+    (let ((dir (cmacs-secondbrain-ingest--cli-directory)))
+      (when dir
+        (ignore-errors (cmacs-ai-client-set-working-directory client dir))))
     (when (fboundp 'cmacs-ai-client-set-cli-option)
       (when cmacs-secondbrain-ingest-cli-bare
         (ignore-errors (cmacs-ai-client-set-cli-option client "bare" t)))

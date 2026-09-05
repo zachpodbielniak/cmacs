@@ -352,3 +352,100 @@ either interchangeably."
 (provide 'cmacs-brigade-registry-tests)
 
 ;;; cmacs-brigade-registry-tests.el ends here
+
+;;; The gate's newer members and the pseudo tools
+
+(ert-deftest cmacs-brigade-gate-recording-and-js-are-privileged ()
+  "Input recording and browser JavaScript joined the privileged set.
+
+Both hand an agent something the user did not type for it: what they
+really type, and their logged-in sessions.  Named outright they work;
+with the restriction on, `*' no longer sweeps them in."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (dolist (tool '("gowl_start_recording" "gowl_drain_recording"
+                  "gowl_stop_recording" "gsurf_eval_js"))
+    (should (cmacs-brigade-tool-privileged-p tool))
+    (should (cmacs-brigade-tool-allowed-p tool tool))
+    (let ((cmacs-brigade-restrict-privileged-tools t))
+      (should-not (cmacs-brigade-tool-allowed-p "*" tool)))))
+
+(ert-deftest cmacs-brigade-gate-pseudo-tools-follow-the-allowlist ()
+  "`resources' and `prompts' are granted by `*' or by name, never for free.
+
+The relay gates resources/read and prompts/get on these, so an
+allowlist of two read-only tools does not also hand over every buffer
+and any file on disk through file://."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (should (cmacs-brigade-tool-allowed-p "*" "resources"))
+  (should (cmacs-brigade-tool-allowed-p "resources,project_read_file" "resources"))
+  (should-not (cmacs-brigade-tool-allowed-p "project_read_file" "resources"))
+  (should (cmacs-brigade-tool-allowed-p "prompts" "prompts"))
+  (should-not (cmacs-brigade-tool-allowed-p "project_read_file" "prompts")))
+
+(ert-deftest cmacs-brigade-gate-recursion-block-is-a-switch ()
+  "`cmacs-brigade-block-recursive-tools' nil lets ai_* through by name.
+
+The default stays t; the point is that the editor's answer and the
+relay's answer come from the same explicit policy value, which the
+provisioner exports as CMACS_BRIGADE_BLOCK_RECURSIVE."
+  (skip-unless (fboundp 'cmacs-brigade-tool-allowed-p))
+  (should-not (cmacs-brigade-tool-allowed-p "ai_call" "ai_call"))
+  (let ((cmacs-brigade-block-recursive-tools nil))
+    (should (cmacs-brigade-tool-allowed-p "ai_call" "ai_call"))))
+
+;;; Scoped sockets
+
+(ert-deftest cmacs-brigade-scope-open-close-round-trip ()
+  "A scope is a real socket in the runtime dir, listed while open, gone after."
+  (skip-unless (fboundp 'cmacs-brigade-scope-open))
+  (let ((path (cmacs-brigade-scope-open "project_read_file")))
+    (unwind-protect
+        (progn
+          (should (stringp path))
+          (should (file-exists-p path))
+          (should (string-match-p "/cmacs/brigade/mcp-[0-9]+-" path))
+          (should (equal (file-modes path) #o600))
+          (should (assoc path (cmacs-brigade-scope-list)))
+          (should (equal (cdr (assoc path (cmacs-brigade-scope-list)))
+                         "project_read_file")))
+      (should (cmacs-brigade-scope-close path)))
+    (should-not (file-exists-p path))
+    (should-not (assoc path (cmacs-brigade-scope-list)))
+    (should-not (cmacs-brigade-scope-close path))))
+
+(ert-deftest cmacs-brigade-scope-serves-only-the-allowlist ()
+  "A client on the scoped socket sees the allowlisted tools and nothing else.
+
+Talks MCP over the socket with `make-network-process': initialize, then
+tools/list.  This is the property the whole arrangement exists for --
+the allowlist is enforced by the process that owns the tools, so the
+relay is no longer the only thing between an agent and `eval'."
+  (skip-unless (fboundp 'cmacs-brigade-scope-open))
+  (let* ((path (cmacs-brigade-scope-open "project_read_file,project_root"))
+         (out "")
+         (proc (make-network-process
+                :name "brigade-scope-test" :family 'local :service path
+                :noquery t :coding 'utf-8-unix
+                :filter (lambda (_p s) (setq out (concat out s))))))
+    (unwind-protect
+        (progn
+          (process-send-string
+           proc
+           (concat "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                   "\"params\":{\"protocolVersion\":\"2024-11-05\","
+                   "\"capabilities\":{},\"clientInfo\":{\"name\":\"ert\","
+                   "\"version\":\"0\"}}}\n"
+                   "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+                   "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n"))
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (< (float-time) deadline)
+                        (not (string-match-p "\"id\":2" out)))
+              (accept-process-output proc 0.1)
+              (sit-for 0.05)))
+          (should (string-match-p "\"id\":2" out))
+          (should (string-match-p "project_read_file" out))
+          (should (string-match-p "project_root" out))
+          (should-not (string-match-p "\"name\":\"eval\"" out))
+          (should-not (string-match-p "\"name\":\"get_buffer_content\"" out)))
+      (ignore-errors (delete-process proc))
+      (cmacs-brigade-scope-close path))))

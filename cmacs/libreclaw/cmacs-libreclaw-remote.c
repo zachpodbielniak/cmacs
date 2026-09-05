@@ -277,9 +277,16 @@ Returns t on dispatch.  */)
   if (cmacs_bridge_client != NULL)
     remote_teardown_client ();
 
-  /* The bridge dispatches inbound MCP frames onto its main context;
-   * use cmacs's GLib context (the one the GLib loop hook pumps)
-   * so signal handlers always run on the main thread. */
+  /* The bridge dispatches inbound frames onto the context it is given.
+   * This is the GLib *default* context on purpose: libreclaw's WebSocket
+   * transport (libsoup) attaches its sources to the thread-default
+   * context of the thread that created it, and on the pgtk build that
+   * is the default context pumped by xg_select -- which also runs on the
+   * Emacs main thread.  The handlers below therefore run on the main
+   * thread either way; what they must NOT assume is that they came
+   * through cmacs_glib_dispatch's waiting_for_input guard, which is why
+   * each one goes through cmacs_libreclaw_dispatch_* (guarded) rather
+   * than calling Lisp directly. */
   ctx = g_main_context_default ();
   cmacs_bridge_client = lc_bridge_client_new (ctx);
 

@@ -21,6 +21,10 @@
  *      `cmacs-brigade-restrict-privileged-tools' is set; by default the
  *      wildcard grants everything an agent could call.
  *
+ * The decision takes an explicit CmacsBrigadePolicy rather than reading
+ * Lisp variables inline, because one of its two callers has no Lisp VM
+ * (see cmacs_brigade_policy_from_env).
+ *
  * The gate is a filter, not just a check: an in-process agent is handed
  * an executor containing only the tools it passed, so an unauthorised
  * call is not merely refused, it is unrepresentable.  The predicate is
@@ -61,6 +65,14 @@ static const gchar *const cmacs_brigade__privileged[] = {
   "bacon_eval",
   "podomation_eval_dsl",
   "podomation_repl_eval",
+  /* Recording what the user really types is a different permission
+   * from typing for them; gowl gates it behind its own config key too,
+   * but an agent should have to be named for it, not swept in by "*". */
+  "gowl_start_recording",
+  "gowl_drain_recording",
+  "gowl_stop_recording",
+  /* JavaScript in the user's logged-in browser sessions. */
+  "gsurf_eval_js",
   NULL
 };
 
@@ -99,8 +111,63 @@ blocked_outright (const gchar *tool_name)
   return FALSE;
 }
 
+/* ── Policy ──────────────────────────────────────────────────────────
+ *
+ * The two knobs that shape a decision live in Lisp variables inside the
+ * editor.  The relay has no Lisp VM: it runs before syms_of_* and reads
+ * the same globals as all-zero, which happens to be nil.  For a long
+ * time that meant the relay quietly disagreed with the editor -- the
+ * recursion block (default t) was off there, and a user who set
+ * `cmacs-brigade-restrict-privileged-tools' was not honoured for CLI
+ * agents at all.  So the policy is an explicit value: the editor reads
+ * it from its variables, the relay from environment the editor wrote
+ * next to the allowlist, and neither ever touches a Lisp global it
+ * cannot be sure exists.  */
+
+void
+cmacs_brigade_policy_from_lisp (CmacsBrigadePolicy *out)
+{
+  out->restrict_privileged = !NILP (Vcmacs_brigade_restrict_privileged_tools);
+  out->block_recursive     = !NILP (Vcmacs_brigade_block_recursive_tools);
+}
+
+/* "1"/"true"/"t"/"yes" mean set; anything else (including unset) means
+ * DEF.  Mirrors the defaults of the two DEFVARs below so a relay started
+ * by an older config file behaves like the editor's defaults. */
+static gboolean
+env_flag (const gchar *name, gboolean def)
+{
+  const gchar *v = g_getenv (name);
+
+  if (v == NULL || v[0] == '\0') return def;
+  return g_strcmp0 (v, "1") == 0 || g_ascii_strcasecmp (v, "true") == 0
+         || g_ascii_strcasecmp (v, "t") == 0
+         || g_ascii_strcasecmp (v, "yes") == 0;
+}
+
+void
+cmacs_brigade_policy_from_env (CmacsBrigadePolicy *out)
+{
+  out->restrict_privileged
+    = env_flag (CMACS_BRIGADE_ENV_RESTRICT_PRIVILEGED, FALSE);
+  out->block_recursive
+    = env_flag (CMACS_BRIGADE_ENV_BLOCK_RECURSIVE, TRUE);
+}
+
 gboolean
 cmacs_brigade_tool_allowed (const gchar *allowlist, const gchar *tool_name)
+{
+  CmacsBrigadePolicy policy;
+
+  cmacs_brigade_policy_from_lisp (&policy);
+  return cmacs_brigade_tool_allowed_with_policy (allowlist, tool_name,
+                                                 &policy);
+}
+
+gboolean
+cmacs_brigade_tool_allowed_with_policy (const gchar *allowlist,
+                                        const gchar *tool_name,
+                                        const CmacsBrigadePolicy *policy)
 {
   g_auto (GStrv) entries = NULL;
   g_autofree gchar *group = NULL;
@@ -110,18 +177,19 @@ cmacs_brigade_tool_allowed (const gchar *allowlist, const gchar *tool_name)
   /* Fail closed on anything malformed or empty. */
   if (tool_name == NULL || tool_name[0] == '\0') return FALSE;
   if (allowlist == NULL || allowlist[0] == '\0') return FALSE;
-  if (!NILP (Vcmacs_brigade_block_recursive_tools)
-      && blocked_outright (tool_name))
+  if (policy == NULL) return FALSE;
+  if (policy->block_recursive && blocked_outright (tool_name))
     return FALSE;
 
   /* Off by default: "*" hands over everything, the privileged set
    * included.  Setting `cmacs-brigade-restrict-privileged-tools' puts
    * those back behind naming each one outright. */
-  privileged = !NILP (Vcmacs_brigade_restrict_privileged_tools)
+  privileged = policy->restrict_privileged
                && cmacs_brigade_tool_privileged (tool_name);
 
   /* Resolve the tool's group once, so a group grant can be matched
-   * without holding the registry lock inside the scan loop. */
+   * without holding the registry lock inside the scan loop.  (The relay
+   * has an empty registry; groups were expanded before it started.) */
   {
     CmacsBrigadeTool *t = cmacs_brigade_registry_lookup (tool_name);
     if (t != NULL)
@@ -254,11 +322,19 @@ DEFUN ("cmacs-brigade-tool-allowed-p", Fcmacs_brigade_tool_allowed_p,
        doc: /* Return t if ALLOWLIST authorises calling TOOL-NAME.
 
 ALLOWLIST is a comma-separated string of tool names and/or group names.
-The literal "*" grants every ordinary tool but never a privileged one
-\(`eval', `bash', the C-patching tools and friends), which must be named
-outright.  Tools whose names begin with "ai_" or "brigade_" are refused
-unconditionally, so an agent cannot spawn agents outside the
-orchestrator's budget accounting.
+The literal "*" grants every ordinary tool.  Whether it also grants the
+privileged set \(`eval', `bash', the C-patching tools and friends) is
+decided by `cmacs-brigade-restrict-privileged-tools': nil, the default,
+lets "*" cover them; t puts them back behind being named outright.  A
+group grant never reaches a privileged tool.  While
+`cmacs-brigade-block-recursive-tools' is non-nil (the default), tools
+whose names begin with "ai_" or "brigade_" are refused unconditionally,
+so an agent cannot spawn agents outside the orchestrator's budget
+accounting.
+
+The same two settings are exported to a CLI agent's relay as
+CMACS_BRIGADE_RESTRICT_PRIVILEGED and CMACS_BRIGADE_BLOCK_RECURSIVE when
+its config is written, so the relay's answer matches this one.
 
 This is a read-only view of the C gate, exposed so configurations and
 tests can ask what an agent would be permitted.  Answering nil here does
@@ -301,8 +377,9 @@ DEFUN ("cmacs-brigade-tool-privileged-p", Fcmacs_brigade_tool_privileged_p,
        Scmacs_brigade_tool_privileged_p, 1, 1, 0,
        doc: /* Return t if TOOL-NAME is in the privileged set.
 
-Privileged tools are denied unless an allowlist names them explicitly --
-a "*" or a group grant never reaches them.  */)
+A group grant never reaches a privileged tool, and neither does "*"
+while `cmacs-brigade-restrict-privileged-tools' is non-nil; naming the
+tool outright always does.  */)
   (Lisp_Object tool_name)
 {
   CHECK_STRING (tool_name);

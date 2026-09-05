@@ -21,6 +21,8 @@
 
 ;;; Code:
 
+(declare-function cmacs-org-ex--eval-allowed-p "cmacs-org-ex" ())
+
 (require 'cl-lib)
 
 (defvar cmacs-org-ex--widget-types (make-hash-table :test 'equal)
@@ -153,6 +155,10 @@ widget displaying the error."
   (let ((code (cdr (assoc "code" props))))
     (unless code
       (error "Elisp widget requires :code property"))
+    ;; Same gate as the auto-evaluated src blocks: an `elisp' widget IS
+    ;; code in the file, and `#+ORGEX: t' runs it on open.
+    (unless (cmacs-org-ex--eval-allowed-p)
+      (error "Elisp widget not evaluated: see `cmacs-org-ex-eval-policy'"))
     (condition-case err
         (let ((result (eval (car (read-from-string code)) t)))
           (cond

@@ -19,6 +19,8 @@
 #include "cmacs-mcp-tools.h"
 #include "cmacs-eval-dispatch.h"
 
+#include <glib/gstdio.h>
+
 #if defined(HAVE_CMACS_BACON) || defined(HAVE_CMACS_CRISPY) \
   || defined(HAVE_CMACS_PODOMATION) || defined(HAVE_CMACS_VIDEO)
 
@@ -60,7 +62,7 @@ handle_bacon_eval (McpServer *s, const gchar *n,
   if (command == NULL)
     return shell_error ("Missing required argument: command");
 
-  ec = g_strescape (command, NULL);
+  ec = cmacs_dispatch_lisp_escape (command);
   expr = g_strdup_printf (
     "(let ((r (bacon-eval \"%s\")))"
     "  (format \"exit %%d\\n%%s\" (car r) (cdr r)))",
@@ -85,7 +87,7 @@ handle_crispy_eval (McpServer *s, const gchar *n,
   if (code == NULL)
     return shell_error ("Missing required argument: code");
 
-  ec = g_strescape (code, NULL);
+  ec = cmacs_dispatch_lisp_escape (code);
   expr = g_strdup_printf (
     "(format \"crispy exit code: %%d\" (crispy-eval \"%s\"))", ec);
   return shell_dispatch (expr);
@@ -119,8 +121,8 @@ podomation_data_alist (JsonObject *data)
       g_autofree gchar *ek = NULL, *ev = NULL;
       if (val == NULL)
         continue;
-      ek = g_strescape (key, NULL);
-      ev = g_strescape (val, NULL);
+      ek = cmacs_dispatch_lisp_escape (key);
+      ev = cmacs_dispatch_lisp_escape (val);
       g_string_append_printf (s, " (cons \"%s\" \"%s\")", ek, ev);
     }
   g_list_free (members);
@@ -141,7 +143,7 @@ handle_podomation_emit_event (McpServer *s, const gchar *n,
   if (event == NULL)
     return shell_error ("Missing required argument: event");
 
-  ee = g_strescape (event, NULL);
+  ee = cmacs_dispatch_lisp_escape (event);
   data = podomation_data_alist (
     json_object_has_member (a, "data")
       ? json_object_get_object_member (a, "data") : NULL);
@@ -174,7 +176,7 @@ handle_podomation_eval_dsl (McpServer *s, const gchar *n,
   if (dsl == NULL)
     return shell_error ("Missing required argument: dsl");
 
-  ed = g_strescape (dsl, NULL);
+  ed = cmacs_dispatch_lisp_escape (dsl);
   expr = g_strdup_printf (
     "(progn (cmacs-podomation-eval-dsl \"%s\") \"DSL evaluated\")", ed);
   return shell_dispatch (expr);
@@ -210,7 +212,7 @@ handle_podomation_load_file (McpServer *s, const gchar *n,
   if (file == NULL)
     return shell_error ("Missing required argument: file");
 
-  ef = g_strescape (file, NULL);
+  ef = cmacs_dispatch_lisp_escape (file);
   expr = g_strdup_printf (
     "(let ((path (expand-file-name \"%s\")))"
     "  (cmacs-podomation-load-file path)"
@@ -285,7 +287,7 @@ handle_podomation_repl_eval (McpServer *s, const gchar *n,
   if (line == NULL)
     return shell_error ("Missing required argument: line");
 
-  el = g_strescape (line, NULL);
+  el = cmacs_dispatch_lisp_escape (line);
   expr = g_strdup_printf (
     "(let ((r (cmacs-podomation-repl-eval \"%s\")))"
     "  (format \"%%s: %%s\" (car r) (or (cdr r) \"\")))",
@@ -320,20 +322,28 @@ handle_video_snapshot (McpServer *s, const gchar *n,
     return shell_error ("Missing required argument: handle");
   handle = json_object_get_int_member (a, "handle");
 
-  path = g_strdup_printf ("%s/cmacs-mcp-video-%u.png",
-                          g_get_tmp_dir (), g_random_int ());
-  expr = g_strdup_printf (
-    "(cmacs-video-snapshot-to-file %ld \"%s\")",
-    (long) handle, path);
+  path = cmacs_mcp_temp_path ("cmacs-mcp-video-XXXXXX.png");
+  if (path == NULL)
+    return shell_error ("cannot create a scratch file for the snapshot");
+  {
+    g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
+    expr = g_strdup_printf (
+      "(cmacs-video-snapshot-to-file %ld \"%s\")",
+      (long) handle, epath);
+  }
 
   str = cmacs_dispatch_eval (expr, &error);
   if (str == NULL)
-    return shell_error (error->message);
+    {
+      g_unlink (path);
+      return shell_error (error->message);
+    }
 
   result = mcp_tool_result_new (FALSE);
   if (!cmacs_mcp_result_add_png_file (result, path))
     {
       mcp_tool_result_unref (result);
+      g_unlink (path);
       return shell_error (
         "No frame available yet for that video handle");
     }

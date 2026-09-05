@@ -251,11 +251,11 @@ handle_add_audio (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
   const gchar *path = json_object_get_string_member_with_default (a, "path", NULL);
   gdouble vol = json_object_has_member (a, "volume")
     ? json_object_get_double_member (a, "volume") : 1.0;
+  g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path ? path : "");
   (void) s; (void) n; (void) u;
   return vs_eval_result (g_strdup_printf
-    ("(cmacs-vidstudio-add-audio-file %" G_GINT64_FORMAT " %s %"
-     G_GINT64_FORMAT " %g)", h,
-     path ? g_strdup_printf ("\"%s\"", path) : "\"\"", from, vol));
+    ("(cmacs-vidstudio-add-audio-file %" G_GINT64_FORMAT " \"%s\" %"
+     G_GINT64_FORMAT " %g)", h, epath, from, vol));
 }
 
 void

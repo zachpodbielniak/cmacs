@@ -81,15 +81,24 @@ handle_force_redraw (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 static McpToolResult *
 handle_dump_screen (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
-  g_autofree gchar *path = g_build_filename (g_get_tmp_dir (),
-                                             "cmacs-lrgterm-dump.png", NULL);
+  g_autofree gchar *path = cmacs_mcp_temp_path ("cmacs-lrgterm-dump-XXXXXX.png");
+  g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
   g_autoptr (GError) error = NULL;
-  g_autofree gchar *elisp = lt_with_frame (g_strdup_printf
-    ("(progn (redisplay t) (lrg-capture-screen \"%s\" f) \"ok\")", path));
-  g_autofree gchar *out = cmacs_dispatch_eval (elisp, &error);
+  g_autofree gchar *elisp = NULL;
+  g_autofree gchar *out = NULL;
   McpToolResult *result;
 
   (void) s; (void) n; (void) a; (void) u;
+  if (path == NULL)
+    {
+      result = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (result,
+                                "cannot create a scratch file for the dump");
+      return result;
+    }
+  elisp = lt_with_frame (g_strdup_printf
+    ("(progn (redisplay t) (lrg-capture-screen \"%s\" f) \"ok\")", epath));
+  out = cmacs_dispatch_eval (elisp, &error);
   if (out == NULL || g_strcmp0 (out, "ok") != 0
       || !g_file_test (path, G_FILE_TEST_EXISTS))
     {

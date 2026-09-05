@@ -2651,26 +2651,24 @@ or `pid' (PATTERN is a PID integer). */)
  * PROCESS CONTROL
  * ══════════════════════════════════════════════════════════════════════ */
 
-DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
-       doc: /* Launch COMMAND as a Wayland client.
-Returns the child process PID as an integer. */)
-  (Lisp_Object command)
+gboolean
+cmacs_gowl_spawn_command (const gchar *command, GPid *pid, GError **error)
 {
-  GError *err = NULL;
   const gchar *socket;
   gchar **argv;
   gchar **envp;
   GPid child_pid = 0;
+  gboolean ok;
 
-  CHECK_STRING (command);
-  GOWL_CHECK_RUNNING ();
-
-  if (!g_shell_parse_argv (SSDATA (command), NULL, &argv, &err))
+  if (cmacs_gowl_compositor == NULL)
     {
-      Lisp_Object msg = build_string (err->message);
-      g_error_free (err);
-      xsignal1 (Qgowl_error, msg);
+      g_set_error_literal (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED,
+                           "gowl compositor not running");
+      return FALSE;
     }
+
+  if (!g_shell_parse_argv (command, NULL, &argv, error))
+    return FALSE;
 
   /* Build environment: inherit current env, set Wayland hints. */
   socket = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
@@ -2700,19 +2698,34 @@ Returns the child process PID as an integer. */)
     }
   }
 
-  if (!g_spawn_async (NULL, argv, envp,
-                      G_SPAWN_SEARCH_PATH, NULL, NULL,
-                      &child_pid, &err))
+  ok = g_spawn_async (NULL, argv, envp, G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &child_pid, error);
+  g_strfreev (argv);
+  g_strfreev (envp);
+
+  if (ok && pid != NULL)
+    *pid = child_pid;
+  return ok;
+}
+
+DEFUN ("gowl-spawn", Fgowl_spawn, Sgowl_spawn, 1, 1, 0,
+       doc: /* Launch COMMAND as a Wayland client.
+Returns the child process PID as an integer. */)
+  (Lisp_Object command)
+{
+  GError *err = NULL;
+  GPid child_pid = 0;
+
+  CHECK_STRING (command);
+  GOWL_CHECK_RUNNING ();
+
+  if (!cmacs_gowl_spawn_command (SSDATA (command), &child_pid, &err))
     {
-      g_strfreev (argv);
-      g_strfreev (envp);
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
       xsignal1 (Qgowl_error, msg);
     }
 
-  g_strfreev (argv);
-  g_strfreev (envp);
   return make_fixnum ((EMACS_INT) child_pid);
 }
 

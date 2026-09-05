@@ -49,8 +49,8 @@ A registered capability becomes callable by:
 in-process HTTP agents, as a tool on the agent's executor;
 @item
 CLI agents (@command{claude-code}, @command{opencode}), as an MCP tool
-reached through the @option{--mcp-relay} bridge, scoped by that agent's
-capability token;
+reached through the @option{--mcp-relay} bridge, on a per-agent scoped
+socket that serves only that agent's allowlist;
 @item
 external MCP clients, on cmacs's existing MCP server.
 @end enumerate
@@ -81,10 +81,17 @@ agent that blocks or errors in-process takes the desktop with it, so
 agents run in supervised children.
 
 @item Capability scoping is real
-Each agent gets a randomly minted token and a 0600 @file{.mcp.json} under
-@env{XDG_RUNTIME_DIR}; the allowlist is enforced in C at the tool dispatch
-point.  An allowlist implemented in Lisp is bypassable by any agent that
-reaches @code{eval}, so it is not implemented there.
+Each agent gets its own @dfn{scoped socket}
+(@code{cmacs-brigade-scope-open}): a second MCP listener under
+@env{XDG_RUNTIME_DIR}@file{/cmacs/brigade/} whose sessions register the
+full tool set and then remove everything the agent's allowlist does not
+admit, so a client that reaches the socket directly still sees only the
+scoped surface.  A 0600 @file{.mcp.json} names that socket for the relay,
+which applies the same allowlist again.  The gate is C at the tool
+dispatch point: an allowlist implemented in Lisp is bypassable by any
+agent that reaches @code{eval}, so it is not implemented there.  (An
+earlier design minted a token that nothing verified beside the path of
+the unrestricted socket; the socket is what closed that gap.)
 @end table
 
 @node Brigade Requirements
@@ -246,18 +253,42 @@ Two rules the relay enforces with no registry at all:
 @itemize @bullet
 @item
 Tools named @code{ai_*} or @code{brigade_*} are refused
-unconditionally, so an agent cannot spawn agents outside the
-orchestrator's budget accounting.
+unconditionally while @code{cmacs-brigade-block-recursive-tools} is
+non-@code{nil} (the default), so an agent cannot spawn agents outside
+the orchestrator's budget accounting.
 @item
 The @dfn{privileged set}---@code{eval}, @code{bash}, @code{shell},
 @code{execute_command}, @code{send_keys}, the C-patching tools,
-@code{crispy_eval}, @code{bacon_eval}---is unreachable through
-@samp{*} or a group.  Granting one is a deliberate act: name it
+@code{crispy_eval}, @code{bacon_eval}, the podomation evaluators, the
+gowl input-recording tools and @code{gsurf_eval_js}---is never
+reachable through a group, and is withheld from @samp{*} when
+@code{cmacs-brigade-restrict-privileged-tools} is set (off by default).
+Granting one under the restriction is a deliberate act: name it
 outright or the agent does not get it.
 @end itemize
 
+The relay reads both settings from its environment
+(@env{CMACS_BRIGADE_RESTRICT_PRIVILEGED},
+@env{CMACS_BRIGADE_BLOCK_RECURSIVE}), which the provisioner writes from
+the two variables: the relay has no Lisp VM and cannot consult them
+itself.
+
+Beyond tool calls, the relay gates @code{resources/read} and
+@code{prompts/get} on the pseudo tools @samp{resources} and
+@samp{prompts} (@samp{*} covers both; the list methods answer with
+empty lists otherwise), and refuses anything that is not one JSON-RPC
+object per line rather than forwarding it.
+
 @defun cmacs-brigade-tool-allowed-p allowlist tool-name
 Return non-@code{nil} if @var{allowlist} authorises @var{tool-name}.
+@end defun
+
+@defun cmacs-brigade-scope-open allowlist
+Open a scoped MCP socket serving only @var{allowlist} and return its
+path.  @code{cmacs-brigade-scope-close} closes it;
+@code{cmacs-brigade-scope-list} lists the open ones as
+@code{(@var{path} . @var{allowlist})} pairs.  Provisioning calls these
+for you.
 @end defun
 
 @defun cmacs-brigade-allowlist-expand allowlist
@@ -1190,9 +1221,9 @@ arriving later moves it @code{done} @result{} @code{queued} @result{}
 @code{running}, which is the same transition a retry has always made.
 
 Across a turn the session, the isolation, the working directory and the
-tool allowlist all survive.  The capability token does not --- it is
-minted fresh each turn, which is strictly better than one long-lived
-credential.  Neither does the concurrency slot: an idle conversation must
+tool allowlist all survive.  The scoped socket and its config do
+not --- they are minted fresh each turn, which is strictly better than
+one long-lived credential.  Neither does the concurrency slot: an idle conversation must
 never hold a slot a queued task could use.
 
 Only a clean @code{done} keeps the conversation.  A failure, a
@@ -1235,8 +1266,7 @@ The log is deliberately richer than what the model is replayed: replay
 compacts tool traffic away to keep a long conversation affordable, while
 the log keeps all of it.  Per-tool entries are recorded for in-process
 agents; a CLI agent reaches its tools over the MCP relay, whose protocol
-carries the capability token but not the task id, so its individual calls
-cannot be attributed.  Its messages, replies and state changes are all
+carries no task id, so its individual calls cannot be attributed.  Its messages, replies and state changes are all
 still there.
 
 @subsection Bounds

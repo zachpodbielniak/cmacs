@@ -112,16 +112,57 @@ fd_send_json (int fd, JsonNode *root)
     return ok;
 }
 
-/* Read a length-prefixed JSON message from fd. */
+/* Like fd_read_exact, but gives up once DEADLINE_US (monotonic) passes.
+ * poll() only says the first byte is there; a peer that stalls after a
+ * partial frame must not park the caller in read() forever. */
+static gboolean
+fd_read_exact_deadline (int fd, guint8 *buf, gsize n, gint64 deadline_us)
+{
+    gsize off = 0;
+    while (off < n)
+    {
+        struct pollfd pfd;
+        gint64 now = g_get_monotonic_time ();
+        int timeout_ms;
+        gssize r;
+
+        if (now >= deadline_us)
+            return FALSE;
+        timeout_ms = (int) ((deadline_us - now + 999) / 1000);
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        if (poll (&pfd, 1, timeout_ms) <= 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return FALSE;
+        }
+        r = read (fd, buf + off, n - off);
+        if (r <= 0)
+        {
+            if (r < 0 && (errno == EINTR || errno == EAGAIN))
+                continue;
+            return FALSE;
+        }
+        off += (gsize)r;
+    }
+    return TRUE;
+}
+
+/* Read a length-prefixed JSON message from fd.  DEADLINE_US bounds the
+ * whole frame (0 = block). */
 static JsonNode *
-fd_recv_json (int fd)
+fd_recv_json_deadline (int fd, gint64 deadline_us)
 {
     guint32 net_len, msg_len;
     guint8 *buf;
     JsonParser *parser;
     JsonNode *root = NULL;
+    gboolean ok = deadline_us > 0
+        ? fd_read_exact_deadline (fd, (guint8 *)&net_len, 4, deadline_us)
+        : fd_read_exact (fd, (guint8 *)&net_len, 4);
 
-    if (!fd_read_exact (fd, (guint8 *)&net_len, 4))
+    if (!ok)
         return NULL;
 
     msg_len = GUINT32_FROM_BE (net_len);
@@ -129,7 +170,10 @@ fd_recv_json (int fd)
         return NULL;
 
     buf = g_malloc (msg_len + 1);
-    if (!fd_read_exact (fd, buf, msg_len))
+    ok = deadline_us > 0
+        ? fd_read_exact_deadline (fd, buf, msg_len, deadline_us)
+        : fd_read_exact (fd, buf, msg_len);
+    if (!ok)
     {
         g_free (buf);
         return NULL;
@@ -149,23 +193,34 @@ fd_recv_json (int fd)
     return root;
 }
 
-/* Read a length-prefixed JSON message with a timeout (milliseconds). */
-static JsonNode *
-fd_recv_json_timeout (int fd, int timeout_ms)
+/* Read frames until the reply whose "id" is ID arrives (30 s overall).
+ * A stray or stale frame is dropped rather than misattributed. */
+static JsonObject *
+fd_wait_reply (int fd, gint64 id, JsonNode **root_out)
 {
-    struct pollfd pfd;
-    int ret;
+    gint64 deadline = g_get_monotonic_time () + (gint64) 30 * G_USEC_PER_SEC;
 
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+    for (;;)
+    {
+        JsonNode *resp_root = fd_recv_json_deadline (fd, deadline);
+        JsonObject *resp_obj;
 
-    ret = poll (&pfd, 1, timeout_ms);
-    if (ret <= 0)
-        return NULL;
-    if (!(pfd.revents & POLLIN))
-        return NULL;
-
-    return fd_recv_json (fd);
+        if (resp_root == NULL)
+            return NULL;
+        if (!JSON_NODE_HOLDS_OBJECT (resp_root))
+        {
+            json_node_unref (resp_root);
+            continue;
+        }
+        resp_obj = json_node_get_object (resp_root);
+        if (json_object_get_int_member_with_default (resp_obj, "id", -1) != id)
+        {
+            json_node_unref (resp_root);
+            continue;
+        }
+        *root_out = resp_root;
+        return resp_obj;
+    }
 }
 
 /* ── FD transport call implementation ──────────────────────────────── */
@@ -250,20 +305,19 @@ fd_transport_call (CmacsApiTransport *t, const gchar *method,
     json_node_unref (req_root);
     json_object_unref (req_obj);
 
-    /* 30s timeout to avoid deadlock. */
-    resp_root = fd_recv_json_timeout (t->u.fd, 30000);
-    if (resp_root == NULL)
+    /* 30s timeout to avoid deadlock; the reply is matched by id. */
+    resp_obj = fd_wait_reply (t->u.fd, id, &resp_root);
+    if (resp_obj == NULL)
     {
         g_set_error (error, CMACS_TRANSPORT_ERROR, 1,
                      "failed to read IPC response");
         return NULL;
     }
 
-    resp_obj = json_node_get_object (resp_root);
-
     if (json_object_has_member (resp_obj, "error"))
     {
-        const gchar *msg = json_object_get_string_member (resp_obj, "error");
+        const gchar *msg = json_object_get_string_member_with_default (
+            resp_obj, "error", "unknown IPC error");
         g_set_error (error, CMACS_TRANSPORT_ERROR, 1, "%s", msg);
         json_node_unref (resp_root);
         return NULL;
@@ -273,7 +327,8 @@ fd_transport_call (CmacsApiTransport *t, const gchar *method,
         const gchar *result_str;
         GVariant *result;
 
-        result_str = json_object_get_string_member (resp_obj, "result");
+        result_str = json_object_get_string_member_with_default (
+            resp_obj, "result", NULL);
 
         if (g_strcmp0 (method, "Eval") == 0
             || g_strcmp0 (method, "GiCall") == 0)
