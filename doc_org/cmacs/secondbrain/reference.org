@@ -81,6 +81,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-node-id-at BUFFER INDEX= | the inverse |
 | =cmacs-secondbrain-set-isolate BUFFER ON= | dim outside the selection's neighbourhood |
 | =cmacs-secondbrain-set-ring-filter BUFFER RING= | keep one ring; =nil= keeps all |
+| =cmacs-secondbrain-set-keep-set BUFFER IDS= | keep only these ids lit (vector; =[]= keeps nothing, nil lifts); the tag filter's path into the scene; composes with the ring filter |
 | =cmacs-secondbrain-fit BUFFER= | |
 | =cmacs-secondbrain-ring-names= | innermost first |
 
@@ -131,6 +132,8 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 | =cmacs-secondbrain-background-image= | =nil= | wallpaper file for =image= |
 | =cmacs-secondbrain-wallpaper-dirs= | see defcustom | offered by the picker; any path still accepted |
 | =cmacs-secondbrain-hover-highlights-links= | =t= | hover lights the node and what it links to (not its department) |
+| =cmacs-secondbrain-filter-mode= | =any= | how several active tags combine: =any= or =all= |
+| =cmacs-secondbrain-tags-width= | 0.24 | width of the tag palette pane |
 | =cmacs-secondbrain-particles= | =t= | ambient drift + event bursts |
 | =cmacs-secondbrain-particle-fps= | 24 | standing redraw clock while particles are on |
 | =cmacs-secondbrain-label-size= | 15 | base label height, at the reference viewport |
@@ -151,7 +154,7 @@ Plus =cmacs-roamgraph-similarity-edges=, which gives roamgraph the same overlay.
 
 * Keys
 
-Press =?= in the map (=cmacs-secondbrain-help=) for the full table plus the legend; the manual has the same list.  The map is =cmacs-secondbrain-mode-map=, deriving from =cmacs-libregnum-mode-map=.
+Press =?= in the map (=cmacs-secondbrain-menu=, a transient showing each toggle's state) or =M-?= (=cmacs-secondbrain-help=, plain text with the legend); the manual has the same list.  The map is =cmacs-secondbrain-mode-map=, deriving from =cmacs-libregnum-mode-map=.
 
 The mode declares Evil *emacs state* for itself.  It has to: =evil-set-initial-state= is looked up per mode, so inheriting from a parent that declares it is not enough, and without it =h=, =j=, =k=, =l=, =n=, =a=, =e= and =c= are Evil motions — which is what made this a mouse-only tool under Doom.
 
@@ -173,12 +176,26 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 | =cmacs-secondbrain-reset-view= | =z= | clear search, ring filter and isolate |
 | =cmacs-secondbrain-recenter= | =f= | fly to the selection and pivot around it |
 | =cmacs-secondbrain-zoom-in= / =-zoom-out= | =+= =-= | toward / away from the camera target |
-| =cmacs-secondbrain-cycle-galaxy-tilt= | =T= | flat / gentle / default / steep |
-| =cmacs-secondbrain-toggle-galaxy-shape= | =M-t= | symmetric saucer / one-sided warp |
-| =cmacs-secondbrain-toggle-dressing= | =M-d= | band lanes and the galactic core |
-| =cmacs-secondbrain-toggle-starfield= | =*= | world-space stars |
-| =cmacs-secondbrain-replay-intro= | =M-i= | fly in again from the fitted view |
-| =cmacs-secondbrain-help= | =?= | every key, and the legend |
+| =cmacs-secondbrain-tags= | =F t= | the tag palette pane |
+| =cmacs-secondbrain-filter-pick= | =F f= | pick tags by name |
+| =cmacs-secondbrain-filter-toggle-mode= | =F m= | any / all of the active tags |
+| =cmacs-secondbrain-filter-clear= | =F c= | clear the tag filter |
+| =cmacs-secondbrain-cycle-ring-filter= | =F r= | all rings, then each alone |
+| =cmacs-secondbrain-toggle-isolate= | =F x=, =x= | the selection's neighbourhood only |
+| =cmacs-secondbrain-toggle-view= | =t v=, =v= | flat / 3D |
+| =cmacs-secondbrain-toggle-glow= | =t g= | halos |
+| =cmacs-secondbrain-toggle-particles= | =t p= | particles |
+| =cmacs-secondbrain-toggle-dressing= | =t d= | band lanes and the galactic core |
+| =cmacs-secondbrain-toggle-starfield= | =t s= | world-space stars |
+| =cmacs-secondbrain-toggle-hover-highlight= | =t h= | hover lights links |
+| =cmacs-secondbrain-toggle-age-fade= | =t a= | colour Memory by staleness |
+| =cmacs-secondbrain-toggle-rotate= | =t r= | slow auto-rotation |
+| =cmacs-secondbrain-set-background-interactive= | =t b= | background / wallpaper |
+| =cmacs-secondbrain-cycle-galaxy-tilt= | =t t= | flat / gentle / default / steep |
+| =cmacs-secondbrain-toggle-galaxy-shape= | =t w= | symmetric saucer / one-sided warp |
+| =cmacs-secondbrain-replay-intro= | =t i= | fly in again from the fitted view |
+| =cmacs-secondbrain-menu= | =?= | every key as a transient menu, toggles with state |
+| =cmacs-secondbrain-help= | =M-?= | every key as text, and the legend |
 
 * Mouse
 

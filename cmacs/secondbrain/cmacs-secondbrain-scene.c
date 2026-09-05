@@ -134,6 +134,12 @@ typedef struct
   gboolean   isolate;      /* dim everything outside the selection's
                               neighbourhood */
   gint       ring_filter;  /* CmacsSbRing to keep, or -1 for all */
+  GHashTable *keep;        /* node id -> present: the tag/category
+                              filter's keep set, or NULL for "everything".
+                              A paint-time decision like the ring filter,
+                              for the same reason: DIM belongs to search,
+                              and a second writer of it is the two-owners
+                              bug. */
 } SceneState;
 
 /* A node is a flat disc without one.  raylib draws an unlit sphere in a
@@ -238,6 +244,7 @@ scene_state_free (gpointer p)
   if (st->node_glow) g_array_free (st->node_glow, TRUE);
   if (st->node_emit)   g_array_free (st->node_emit, TRUE);
   if (st->edge_emit)   g_array_free (st->edge_emit, TRUE);
+  if (st->keep)        g_hash_table_unref (st->keep);
   g_free (st);
 }
 
@@ -983,6 +990,15 @@ node_filtered_out (SceneState *st, CmacsGraph *g, const guint8 *near,
       && kind_of (nd) != CMACS_SB_KIND_CENTRE
       && (gint) nd->ring != st->ring_filter)
     return TRUE;
+  /* The keep set: whatever the Lisp side's tag/category filter decided
+     survives.  The centre is exempt for the same reason as above; a hub
+     is the Lisp side's call -- it puts a department's hub in the set
+     when any member is kept, so a filtered map still shows which wedges
+     the survivors live in. */
+  if (st->keep
+      && kind_of (nd) != CMACS_SB_KIND_CENTRE
+      && !(nd->id && g_hash_table_contains (st->keep, nd->id)))
+    return TRUE;
   if (st->isolate && near && near[i] == 0)
     return TRUE;
   return FALSE;
@@ -1495,6 +1511,32 @@ cmacs_secondbrain_scene_isolate_p (CmacsLibregnumRenderCtx *r)
 {
   SceneState *st = scene_state (r, FALSE);
   return st ? st->isolate : FALSE;
+}
+
+void
+cmacs_secondbrain_scene_set_keep_set (CmacsLibregnumRenderCtx *r,
+                                      const char *const *ids, guint n)
+{
+  SceneState *st = scene_state (r, TRUE);
+  guint i;
+
+  if (!st) return;
+  if (st->keep) g_hash_table_unref (st->keep);
+  st->keep = NULL;
+  if (!ids) return;
+  /* An EMPTY set is a real filter that keeps nothing -- the honest
+     answer to "show me the nodes tagged X" when nothing is.  NULL ids
+     is the only way to say "no filter". */
+  st->keep = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  for (i = 0; i < n; i++)
+    if (ids[i]) g_hash_table_add (st->keep, g_strdup (ids[i]));
+}
+
+gboolean
+cmacs_secondbrain_scene_keep_set_p (CmacsLibregnumRenderCtx *r)
+{
+  SceneState *st = scene_state (r, FALSE);
+  return st && st->keep != NULL;
 }
 
 void

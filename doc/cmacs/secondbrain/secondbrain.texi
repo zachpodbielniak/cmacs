@@ -23,6 +23,7 @@ set), which needs @option{--with-cmacs-libregnum} and
 * Secondbrain ARMS::            The four layers, and why they matter.
 * Secondbrain Getting Started:: Opening it, and the keys.
 * Secondbrain Galaxy::          Why the 3D view is a warped disc.
+* Secondbrain Tags::            Filtering by tag and category.
 * Secondbrain Dressing::        Lanes, a core, a sky, breath, the fly-in.
 * Secondbrain Layouts::         Four layouts, all animated.
 * Secondbrain Search::          Three tiers, cheapest first.
@@ -99,8 +100,9 @@ put fourteen hundred labels over the map.  It is suppressed while a search is
 active, because a search is a deliberate question and a stray pointer
 movement must not silently answer a different one.  @kbd{H} toggles it.
 
-Press @kbd{?} in the map for this table plus the legend, without
-leaving the buffer.
+Press @kbd{?} in the map for all of this as a menu that also shows each
+toggle's current state; @kbd{M-?} is the plain-text version with the
+legend.
 
 @multitable @columnfractions .22 .78
 @headitem Key @tab Moving around
@@ -117,45 +119,63 @@ leaving the buffer.
 @end multitable
 
 @multitable @columnfractions .22 .78
-@headitem Key @tab Finding things
+@headitem Key @tab Finding and filtering
 @item @kbd{/} @tab incremental search; matches light, the rest dims
 @item @kbd{n} @kbd{N} @tab next / previous match
 @item @kbd{M-/} @tab semantic search (embeddings)
 @item @kbd{~} @tab nodes similar to the selection
-@item @kbd{z} @tab reset: clears search, ring filter and isolate
+@item @kbd{F t} @tab the tag palette: every tag and category, as toggles
+@item @kbd{F f} @tab pick tags by name, with completion
+@item @kbd{F m} @tab keep nodes with any of the active tags, or with all
+@item @kbd{F r} @tab cycle the ring filter
+@item @kbd{F x} (@kbd{x}) @tab isolate the selection's neighbourhood
+@item @kbd{F c} @tab clear the tag filter
+@item @kbd{F z} (@kbd{z}) @tab reset: clears the search and every filter
 @end multitable
 
 @multitable @columnfractions .22 .78
-@headitem Key @tab Everything else
-@item @kbd{?} @tab every key, and how to read the map
-@item @key{RET} / @kbd{O} @tab open the node's file, here or in another window
-@item @kbd{y} @tab copy the node's path
-@item @kbd{i} / @kbd{p} / @kbd{W} @tab inspector / preview / close the panes
+@headitem Key @tab Shaping the map
 @item @key{TAB} @tab expand or collapse the selected node
 @item @kbd{e} / @kbd{c} @tab expand all / collapse all
 @item @kbd{1} @kbd{2} @kbd{3} @kbd{4} @tab Force / Circle / Hex / Rings layout
-@item @kbd{x} @tab isolate the selection's neighbourhood
-@item @kbd{F} @tab cycle the ring filter
-@item @kbd{a} @tab age fade: colour Memory by how recently it changed
-@item @kbd{T} @tab galaxy tilt: flat / gentle / default / steep (3D)
-@item @kbd{M-t} @tab galaxy shape: symmetric saucer / one-sided warp (3D)
-@item @kbd{M-d} @tab dressing: band lanes and the galactic core
-@item @kbd{*} @tab world-space stars (they parallax; the wallpaper does not)
-@item @kbd{M-i} @tab replay the opening fly-in
 @item @kbd{s} / @kbd{S} @tab spin the rings
-@item @kbd{R} @tab slow auto-rotation on/off
 @item @kbd{u} / @kbd{U} @tab unpin the selection / everything
+@item @kbd{g} @tab re-read every source
+@end multitable
+
+@multitable @columnfractions .22 .78
+@headitem Key @tab Toggles and looks (@kbd{t} then a key)
+@item @kbd{t v} (@kbd{v}) @tab flat / 3D
+@item @kbd{t g} @tab node glow
+@item @kbd{t p} @tab particles
+@item @kbd{t d} @tab dressing: band lanes and the galactic core
+@item @kbd{t s} @tab world-space stars (they parallax; the wallpaper does not)
+@item @kbd{t h} @tab hover: light what the node links to
+@item @kbd{t a} @tab age fade: colour Memory by how recently it changed
+@item @kbd{t r} @tab slow auto-rotation
+@item @kbd{t b} @tab pick the background (or a wallpaper image)
+@item @kbd{t t} @tab galaxy tilt: flat / gentle / default / steep (3D)
+@item @kbd{t w} @tab galaxy shape: symmetric saucer / one-sided warp (3D)
+@item @kbd{t i} @tab replay the opening fly-in
+@end multitable
+
+@multitable @columnfractions .22 .78
+@headitem Key @tab Camera, opening, help
 @item @kbd{f} @tab fly to the selection, and pivot the camera around it
 @item @kbd{+} @kbd{=} @kbd{-} @tab zoom in / in / out, toward the camera's target
 @item @kbd{0} @tab frame the whole graph
-@item @kbd{v} @tab toggle flat / 3D
-@item @kbd{b} @tab pick the background (or a wallpaper image)
-@item @kbd{G} @tab node glow on/off
-@item @kbd{P} @tab particle effects on/off
-@item @kbd{H} @tab hover link-highlighting on/off
-@item @kbd{g} @tab re-read every source
+@item @key{RET} / @kbd{O} @tab open the node's file, here or in another window
+@item @kbd{y} @tab copy the node's path
+@item @kbd{i} / @kbd{p} / @kbd{W} @tab inspector / preview / close the panes
+@item @kbd{?} @tab the menu: every key, with each toggle's current state
+@item @kbd{M-?} @tab the same as plain text, with the legend
 @item @kbd{q} @tab quit
 @end multitable
+
+One prefix for the toggles rather than a capital letter each: there were
+twelve of them scattered over @kbd{G} @kbd{P} @kbd{H} @kbd{a} @kbd{R}
+@kbd{T} @kbd{M-t} @kbd{M-d} @kbd{*} @kbd{M-i} @kbd{b}, and nobody could
+hold that.  @kbd{t} then a mnemonic letter is a rule you can carry.
 
 @subsection Why single keys work here at all
 
@@ -699,6 +719,50 @@ answers in [-90, 90] degrees.  The camera's up vector carries the other
 half of the state.  Read it back without also correcting the azimuth by
 half a turn and the camera teleports to the mirror-image viewpoint on
 the first inverted drag --- a valid view, and completely wrong.
+
+@node Secondbrain Tags
+@section Filtering by tag and category
+
+``Show me only the notes about X.''  The map's other narrowing tools are
+structural---a ring, a department, the selection's neighbourhood.  Tags
+and categories are the one axis that cuts @emph{across} the structure:
+a @code{finance} tag lives in projects, areas and resources at once, and
+it is the axis the author chose, note by note.
+
+Memory nodes carry their org @code{#+filetags:} (either form) as
+@code{:tags} and their @code{#+category:} as @code{:category}, from the
+org-roam database when there is one and from the file scanner when there
+is not.
+
+@subsection The palette (@kbd{F t})
+
+A pane beside the map listing every tag and every category, most used
+first.  Each row is a toggle: a coloured bar for the tag's weight
+(logarithmic, because the counts span three orders of magnitude), the
+name, the count.  @key{RET}, @key{SPC} or a click flips it; @kbd{a}
+switches between keeping nodes with @emph{any} active tag and with
+@emph{all} of them; @kbd{c} clears; @kbd{n}/@kbd{p} walk the rows.  The
+header line says what is active and how many nodes survive.
+
+@subsection The quick picker (@kbd{F f})
+
+@code{completing-read-multiple} over the same tags (categories prefixed
+@code{@@}), each annotated with its count.  An empty choice clears the
+filter.
+
+@subsection What the filter does to the map
+
+The active tags reduce to a @emph{keep set} of ids---tags combine per
+@code{cmacs-secondbrain-filter-mode}, categories as @emph{any}, and both
+kinds together narrow---plus every ancestor of a kept node, so the
+department a survivor lives in stays lit.  The set goes to the scene in
+one call (@code{cmacs-secondbrain-set-keep-set}), which dims everything
+outside it at paint time: the same mechanism as the ring filter, so the
+two compose, a search match still lights through, and nothing fights the
+search over the DIM flag.  An active filter that matches nothing reaches
+the scene as an @emph{empty vector}, because in Lisp the empty list is
+@code{nil} and @code{nil} means ``lift the filter''.  The mode line
+shows the filter as @code{[#finance #fire @@money]}; @kbd{z} clears it.
 
 @node Secondbrain Dressing
 @section The dressing: lanes, a core, a sky, breath, and the fly-in

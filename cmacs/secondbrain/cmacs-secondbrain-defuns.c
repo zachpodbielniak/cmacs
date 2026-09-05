@@ -893,6 +893,64 @@ Returns the new state.  */)
   return NILP (on) ? Qnil : Qt;
 }
 
+DEFUN ("cmacs-secondbrain-set-keep-set", Fcmacs_secondbrain_set_keep_set,
+       Scmacs_secondbrain_set_keep_set, 2, 2, 0,
+       doc: /* Keep only the nodes whose ids are in IDS lit in BUFFER.
+
+IDS is a vector (or list) of id strings, or nil to lift the filter.  An
+EMPTY VECTOR is a real filter that keeps nothing -- the honest picture
+of "the nodes tagged X" when there are none.  It has to be a vector: in
+Lisp the empty list IS nil, so a list can never say "keep nothing".
+
+Everything outside the set is painted dim and its links near-invisible,
+exactly as under the ring filter, and the two compose.  The centre is
+always kept.  A search MATCH still lights up through it.  This is how
+the tag and category filter reaches the scene; the decision of what is
+in the set belongs to Lisp, which owns the tags.
+
+Repaints immediately.  Returns the number of ids kept, or nil when the
+filter was lifted.  */)
+  (Lisp_Object buffer, Lisp_Object ids)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  const char **arr = NULL;
+  guint n = 0, i;
+  Lisp_Object tail;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  if (NILP (ids))
+    cmacs_secondbrain_scene_set_keep_set (ctx, NULL, 0);
+  else
+    {
+      /* Two arguments to `append', because its LAST argument is
+         returned as-is rather than copied: (append [v]) is the vector
+         itself, and CHECK_LIST then rejects the very thing this was
+         meant to convert. */
+      Lisp_Object args[2] = { ids, Qnil };
+      Lisp_Object seq = VECTORP (ids) ? Fappend (2, args) : ids;
+      CHECK_LIST (seq);
+      n = (guint) list_length (seq);
+      arr = g_new0 (const char *, n ? n : 1);
+      i = 0;
+      for (tail = seq; CONSP (tail); tail = XCDR (tail))
+        {
+          Lisp_Object id = XCAR (tail);
+          if (STRINGP (id)) arr[i++] = SSDATA (id);
+        }
+      cmacs_secondbrain_scene_set_keep_set (ctx, arr, i);
+      n = i;
+      g_free (arr);
+    }
+  cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return NILP (ids) ? Qnil : make_fixnum (n);
+}
+
 DEFUN ("cmacs-secondbrain-set-ring-filter", Fcmacs_secondbrain_set_ring_filter,
        Scmacs_secondbrain_set_ring_filter, 1, 2, 0,
        doc: /* Keep only RING at full strength in BUFFER; nil shows every ring.
@@ -1706,6 +1764,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_set_dressing);
   defsubr (&Scmacs_secondbrain_set_isolate);
   defsubr (&Scmacs_secondbrain_set_ring_filter);
+  defsubr (&Scmacs_secondbrain_set_keep_set);
   defsubr (&Scmacs_secondbrain_set_link_phase);
   defsubr (&Scmacs_secondbrain_set_pinned);
   defsubr (&Scmacs_secondbrain_move_node);

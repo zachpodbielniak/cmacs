@@ -116,6 +116,15 @@ extern gboolean cmacs_secondbrain_scene_isolate_p
  * The centre is exempt -- it belongs to every ring.  Composes with
  * isolate and with search: a search MATCH still lights up through a
  * filter.  Takes effect on the next apply_flags. */
+/* The tag/category keep set: only these node ids (plus the centre) keep
+   their colour; the rest recede exactly as under the ring filter.  NULL
+   IDS lifts the filter; an empty set is a filter that keeps nothing.
+   Ids are copied. */
+extern void     cmacs_secondbrain_scene_set_keep_set
+                              (CmacsLibregnumRenderCtx *r,
+                               const char *const *ids, guint n);
+extern gboolean cmacs_secondbrain_scene_keep_set_p
+                              (CmacsLibregnumRenderCtx *r);
 extern void cmacs_secondbrain_scene_set_ring_filter
                         (CmacsLibregnumRenderCtx *r, gint ring);
 extern gint cmacs_secondbrain_scene_ring_filter

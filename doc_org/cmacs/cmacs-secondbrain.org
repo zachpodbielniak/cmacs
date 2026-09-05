@@ -52,7 +52,7 @@ Once open, a department's members occupy a contiguous *wedge* of the ring sized 
 
 ** Keys
 
-Press =?= in the map for this table plus the legend, without leaving the buffer.
+Press =?= in the map for all of this as a menu that also shows each toggle's current state; =M-?= is the plain-text version with the legend.
 
 *** Moving around
 
@@ -68,7 +68,7 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =o= | jump to a link of the selection, by name |
 | =J= | jump to *any* node, by name |
 
-*** Finding things
+*** Finding and filtering
 
 | Key | Does |
 |-----+------|
@@ -76,39 +76,56 @@ Press =?= in the map for this table plus the legend, without leaving the buffer.
 | =n= =N= | next / previous match |
 | =M-/= | semantic search (embeddings) |
 | =~= | nodes similar to the selection |
-| =z= | reset — clears the search, the ring filter and isolate |
+| =F t= | the *tag palette*: every tag and category in the map, as toggles |
+| =F f= | pick tags by name, with completion |
+| =F m= | keep nodes with *any* of the active tags, or with *all* of them |
+| =F r= | cycle the ring filter |
+| =F x= (=x=) | isolate the selection's neighbourhood |
+| =F c= | clear the tag filter |
+| =F z= (=z=) | reset — clears the search and every filter |
 
-*** Everything else
+*** Shaping the map
 
 | Key | Does |
 |-----+------|
-| =?= | every key, and how to read the map |
-| =RET= / =O= | open the node's file, here or in another window |
-| =y= | copy the node's path |
-| =i= / =p= / =W= | inspector / preview / close the panes |
 | =TAB= | expand or collapse the selection |
 | =e= / =c= | expand all / collapse all |
 | =1= =2= =3= =4= | Force / Circle / Hex / Rings layout |
-| =x= | isolate the selection's neighbourhood |
-| =F= | cycle the ring filter |
-| =a= | age fade: colour Memory by staleness |
-| =T= | galaxy tilt: flat / gentle / default / steep (3D) |
-| =M-t= | galaxy shape: symmetric saucer / one-sided warp (3D) |
-| =M-d= | dressing: band lanes and the galactic core |
-| =*= | world-space stars (they parallax; the wallpaper does not) |
-| =M-i= | replay the opening fly-in |
 | =s= / =S= | spin the rings |
-| =R= | slow auto-rotation on/off |
 | =u= / =U= | unpin the selection / everything |
+| =g= | re-read every source |
+
+*** Toggles and looks — =t= then a key
+
+One prefix rather than a capital letter each. There were twelve of these scattered over =G= =P= =H= =a= =R= =T= =M-t= =M-d= =*= =M-i= =b=, and nobody could hold that; =t= then a mnemonic letter is a rule you can carry, and =?= shows them all with their current state.
+
+| Key | Does |
+|-----+------|
+| =t v= (=v=) | flat / 3D |
+| =t g= | node glow |
+| =t p= | particles |
+| =t d= | dressing: band lanes and the galactic core |
+| =t s= | world-space stars (they parallax; the wallpaper does not) |
+| =t h= | hover: light what the node links to |
+| =t a= | age fade: colour Memory by staleness |
+| =t r= | slow auto-rotation |
+| =t b= | pick the background (or a wallpaper image) |
+| =t t= | galaxy tilt: flat / gentle / default / steep (3D) |
+| =t w= | galaxy shape: symmetric saucer / one-sided warp (3D) |
+| =t i= | replay the opening fly-in |
+
+*** Camera, opening, help
+
+| Key | Does |
+|-----+------|
 | =f= | fly to the selection, and pivot the camera around it |
 | =+= =-= (=+= also on ~=~) | zoom in / out, toward the camera's target |
 | =0= | frame the whole graph |
-| =v= | toggle flat / 3D |
-| =b= | pick the background (or a wallpaper image) |
-| =G= | node glow on/off |
-| =P= | particle effects on/off |
-| =H= | hover link-highlighting on/off |
-| =g= | re-read every source |
+| =RET= / =O= | open the node's file, here or in another window |
+| =y= | copy the node's path |
+| =i= / =p= / =W= | inspector / preview / close the panes |
+| =?= | the *menu*: every key, with each toggle's current state |
+| =M-?= | the same as plain text, with the legend |
 | =q= | quit |
 
 *** Why single keys work here at all
@@ -245,6 +262,26 @@ The honest cost: particles advance on wall-clock time inside the render pass, so
 =cmacs-secondbrain--fit-window-now= resizes the framebuffer to the window's *body* pixel size — the text area, with fringes, margins and the mode line excluded — and =window-size-change-functions= re-runs it, coalesced through a 0.06 s idle timer, whenever the window changes.
 
 This is not cosmetic, and neither is the word /body/. The picture, the click mapping and the framebuffer are a three-party contract: the pgtk overlay and the =--lrg= backend paint the view into =window_box TEXT_AREA=, the input layer maps clicks against that same box, and this hook sizes the FBO to match. Any party on a different rect puts every click somewhere other than where it was aimed. Both failure modes have shipped: before the hook existed nothing was clickable at all, and later the /paint/ used the full window rect against a text-area click mapping — offset by the fringes and the mode line's share of the height — so every node had to be clicked above and to the right of where it was drawn.
+
+* Filtering by tag and category
+
+"Show me only the notes about X." The map's other narrowing tools are structural — a ring, a department, the selection's neighbourhood. Tags and categories are the one axis that cuts /across/ the structure: a =finance= tag lives in projects, areas and resources at once, and it is the axis the author chose, note by note, so it is the most deliberate signal the notes carry.
+
+Memory nodes carry their org =#+filetags:= (either form, =:a:b:= or =a b=) as =:tags= and their =#+category:= as =:category=, from the org-roam database when there is one (tags from its =tags= table, the category from the node's stored properties) and from the file scanner when there is not.
+
+*** The palette — =F t=
+
+A pane beside the map listing every tag and every category, most used first. Each row is a toggle: a coloured bar for the tag's weight (logarithmic — the counts span three orders of magnitude, and on a linear scale every tag but the biggest is one cell wide), the name, the count. =RET=, =SPC= or a click flips it; =a= switches between keeping nodes with /any/ active tag and with /all/ of them; =c= clears; =n=/=p= (or =j=/=k=) walk the rows; =/= searches the palette itself. The header line says what is active and how many nodes survive. A tag's colour is hashed from its name, so it is the same every session.
+
+*** The quick picker — =F f=
+
+=completing-read-multiple= over the same tags (categories prefixed =@=), each annotated with its count, for when you already know the name. An empty choice clears the filter.
+
+*** What the filter does to the map
+
+The active tags reduce to a *keep set* of ids: tags combine per =cmacs-secondbrain-filter-mode= (=any= by default; =all= on request), categories combine as /any/ among themselves, and when both kinds are active a node must satisfy both — switching on a category on top of a tag can only mean "and within this category". Every ancestor of a kept node is kept too, so the department a survivor lives in stays lit and the filtered map still shows /where/ the matches are; a lone bright dot in a dim ring says less than a lit wedge does.
+
+The set is handed to the scene in one call (=cmacs-secondbrain-set-keep-set=), which dims everything outside it *at paint time* — the same mechanism as the ring filter, deliberately: it composes with the ring filter, a search match still lights through it, and it never fights the search over the DIM flag, which belongs to search alone. An active filter that matches nothing reaches the scene as an *empty vector*, because in Lisp the empty list is =nil= and =nil= means "lift the filter"; the honest picture of "the notes tagged X" when there are none is a dark map, not an unfiltered one. The mode line shows the active filter as =[#finance #fire @money]=; =z= clears it along with everything else.
 
 * The dressing: lanes, a core, a sky, breath, and the fly-in
 

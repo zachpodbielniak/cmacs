@@ -602,6 +602,33 @@ and the thing under the pointer was the one thing you could not read."
         (cmacs-secondbrain--on-hover (current-buffer) 1 "c")
         (should (equal flagged '("c")))))))
 
+(ert-deftest cmacs-secondbrain-test-hover-on-a-hub-lights-its-department ()
+  "Hovering a department hub lights every member; hovering a leaf does not.
+
+A hub has one link of its own -- to the centre -- and IS its members,
+so its neighbourhood is the department.  A leaf's is its links, and
+only its links: the department rule on leaves was the fourteen-hundred-
+label map."
+  (skip-unless (fboundp 'cmacs-secondbrain--on-hover))
+  (with-temp-buffer
+    (let ((flagged 'unset))
+      (cl-letf (((symbol-function 'cmacs-secondbrain--flag-ids)
+                 (lambda (ids) (setq flagged ids)))
+                ((symbol-function 'cmacs-secondbrain-node-at)
+                 (lambda (_buf id)
+                   (if (equal id "hub") '(:id "hub" :kind hub) '(:kind file)))))
+        (cmacs-secondbrain--build-groups
+         '((:id "hub" :ring memory :department "d" :kind hub)
+           (:id "a" :ring memory :department "d" :parent "hub")
+           (:id "b" :ring memory :department "d" :parent "hub"))
+         '((:from "centre" :to "hub")))
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "hub")
+        (should (member "a" flagged))
+        (should (member "b" flagged))
+        (should (member "centre" flagged))
+        (cmacs-secondbrain--on-hover (current-buffer) 1 "a")
+        (should (equal flagged '("a")))))))
+
 (ert-deftest cmacs-secondbrain-test-hover-does-not-clobber-a-search ()
   "A search survives the pointer moving over the graph.
 
@@ -1239,6 +1266,7 @@ So `M-x customize-group' shows the whole surface with its documentation,
 rather than half of it plus some variables a reader has to find by
 grepping."
   (skip-unless (boundp 'cmacs-secondbrain-background))
+  (require 'cmacs-secondbrain-filter)
   (let ((members (mapcar #'car (get 'cmacs-secondbrain 'custom-group)))
         (missing nil))
     (should members)
@@ -1266,7 +1294,10 @@ grepping."
                    cmacs-secondbrain-starfield-radius
                    cmacs-secondbrain-glow-breath
                    cmacs-secondbrain-intro
-                   cmacs-secondbrain-intro-seconds))
+                   cmacs-secondbrain-intro-seconds
+                   cmacs-secondbrain-hover-highlights-links
+                   cmacs-secondbrain-filter-mode
+                   cmacs-secondbrain-tags-width))
       (unless (and (custom-variable-p sym) (memq sym members))
         (push sym missing)))
     (should (equal nil (nreverse missing)))))
@@ -1843,21 +1874,92 @@ error -- indistinguishable from the key doing nothing."
     ;; An empty needle is not a match-everything.
     (should-not (cmacs-secondbrain--matches-for ""))))
 
-(ert-deftest cmacs-secondbrain-test-every-key-is-bound-to-a-command ()
-  "Every key in the map runs a real, interactive command.
+(defun cmacs-secondbrain-tests--keymap-leaves (km)
+  "Every non-keymap binding reachable from KM, prefix maps included.
+A menu-item cons (\"desc\" . MAP) is descended like a bare map."
+  (let (out)
+    (cl-labels ((walk (m)
+                  (map-keymap
+                   (lambda (_ev def)
+                     (when (and (consp def) (stringp (car def)))
+                       (setq def (cdr def)))
+                     (cond ((keymapp def) (walk def))
+                           ((and def (symbolp def)) (push def out))))
+                   m)))
+      (walk km))
+    out))
 
-A keymap entry naming a function that never got defined -- or that
-lives in a file nobody requires -- fails only when a user presses that
-key, which is the worst possible time to find out."
+(ert-deftest cmacs-secondbrain-test-every-key-is-bound-to-a-command ()
+  "Every key in the map -- prefix maps included -- runs a real command.
+
+A keymap entry naming a function that never got defined, or that lives
+in a file nobody requires, fails only when a user presses that key,
+which is the worst possible time to find out.  Walking into the `t' and
+`F' prefixes matters: a flat walk saw two keymaps and nothing under
+them, so every toggle could have been unbound and this would have
+passed."
   (skip-unless (boundp 'cmacs-secondbrain-mode-map))
   (require 'cmacs-secondbrain-nav)
-  (let ((missing nil))
-    (map-keymap
-     (lambda (_event def)
-       (when (and (symbolp def) def (not (keymapp def)))
-         (unless (commandp def) (push def missing))))
-     cmacs-secondbrain-mode-map)
-    (should-not missing)))
+  (require 'cmacs-secondbrain-filter)
+  (let ((leaves (cmacs-secondbrain-tests--keymap-leaves cmacs-secondbrain-mode-map))
+        (missing nil))
+    (should (> (length leaves) 60))
+    (dolist (def leaves)
+      (unless (commandp def) (push def missing)))
+    (should-not missing)
+    ;; And the prefixes are really there, under the keys the docs name.
+    ;; `keymap-lookup' resolves the ("desc" . MAP) menu item to MAP.
+    (should (keymapp (keymap-lookup cmacs-secondbrain-mode-map "t")))
+    (should (keymapp (keymap-lookup cmacs-secondbrain-mode-map "F")))
+    (should (eq (keymap-lookup cmacs-secondbrain-mode-map "t g")
+                'cmacs-secondbrain-toggle-glow))
+    (should (eq (keymap-lookup cmacs-secondbrain-mode-map "F t")
+                'cmacs-secondbrain-tags))))
+
+(ert-deftest cmacs-secondbrain-test-menu-names-only-real-commands ()
+  "Every suffix in the `?' menu is a command that exists.
+
+The menu is the map's table of contents; an entry that names a command
+nobody defined is a key that does nothing, discovered by the person who
+went looking for help."
+  (skip-unless (fboundp 'cmacs-secondbrain-menu))
+  (require 'cmacs-secondbrain-nav)
+  (let ((layout (get 'cmacs-secondbrain-menu 'transient--layout))
+        (cmds nil))
+    (should layout)
+    ;; The layout is [LEVEL nil (GROUP...)], a group is [CLASS PLIST
+    ;; (CHILD...)], and a suffix is (CLASS :key K :description D
+    ;; :command C) -- a list whose car is the class symbol and whose cdr
+    ;; is the plist.  Test for that shape BEFORE recursing into lists,
+    ;; or the walk descends into the plist's elements and never sees it
+    ;; whole.
+    (cl-labels ((walk (x)
+                  (cond ((vectorp x) (mapc #'walk x))
+                        ((and (consp x) (symbolp (car x)) (keywordp (cadr x)))
+                         (when (plist-get (cdr x) :command)
+                           (push (plist-get (cdr x) :command) cmds)))
+                        ((and (listp x) (not (eq (car-safe x) 'lambda)))
+                         (mapc #'walk x)))))
+      (walk layout))
+    (should (> (length cmds) 40))
+    (should-not (cl-remove-if #'commandp cmds))))
+
+(ert-deftest cmacs-secondbrain-test-menu-toggle-descriptions-read-the-viewport ()
+  "A toggle's description reports the VIEWPORT's state, not the menu buffer's.
+
+Transient draws in its own buffer; the toggles are buffer-locals of the
+viewport.  Reading `symbol-value' there would show every toggle at its
+default, which is a lie exactly when a user has changed one."
+  (skip-unless (fboundp 'cmacs-secondbrain--menu-toggle))
+  (with-temp-buffer
+    (setq-local cmacs-secondbrain-node-glow nil)
+    (let* ((transient--original-buffer (current-buffer))
+           (desc (funcall (cmacs-secondbrain--menu-toggle
+                           "glow" 'cmacs-secondbrain-node-glow))))
+      (should (string-match-p "off" desc))
+      (setq-local cmacs-secondbrain-node-glow t)
+      (should (string-match-p "on" (funcall (cmacs-secondbrain--menu-toggle
+                                             "glow" 'cmacs-secondbrain-node-glow)))))))
 
 (defun cmacs-secondbrain-tests--cam-dist (buf)
   "Distance from BUF's camera to its target."
@@ -2677,6 +2779,170 @@ back to where the intro was."
     (cl-letf (((symbol-function 'cmacs-secondbrain-attached-p) #'ignore))
       (cmacs-secondbrain--stop-animation t))
     (should-not cmacs-secondbrain--intro)))
+
+;;;; The tag and category filter -----------------------------------------
+
+(defun cmacs-secondbrain-tests--tagged-nodes ()
+  "A small map with tags, categories and a department to light."
+  '((:id "hub" :title "hub" :kind hub :ring memory :department "d")
+    (:id "a" :title "A" :kind file :ring memory :parent "hub"
+         :tags ("finance" "fire") :category "money")
+    (:id "b" :title "B" :kind file :ring memory :parent "hub"
+         :tags ("finance") :category "money")
+    (:id "c" :title "C" :kind file :ring memory :parent "hub"
+         :tags ("emacs") :category "tech")
+    (:id "z" :title "Z" :kind skill :ring skills)))
+
+(ert-deftest cmacs-secondbrain-test-filter-index-counts-tags-and-categories ()
+  "The index knows every tag and category, most used first."
+  (skip-unless (require 'cmacs-secondbrain-filter nil t))
+  (with-temp-buffer
+    (cmacs-secondbrain-filter-build-index (cmacs-secondbrain-tests--tagged-nodes))
+    (should (equal (cmacs-secondbrain-filter-tags)
+                   '(("finance" . 2) ("emacs" . 1) ("fire" . 1))))
+    (should (equal (cmacs-secondbrain-filter-categories)
+                   '(("money" . 2) ("tech" . 1))))
+    (should-not (cmacs-secondbrain-filter-active-p))
+    (should-not (cmacs-secondbrain-filter-keep-ids))))
+
+(ert-deftest cmacs-secondbrain-test-filter-keeps-matches-and-their-hubs ()
+  "A tag keeps the nodes carrying it AND the department they live in.
+
+A lone bright dot in a dim ring says less than a lit wedge: the hub is
+kept so the filtered map still shows WHERE the survivors are."
+  (skip-unless (require 'cmacs-secondbrain-filter nil t))
+  (with-temp-buffer
+    (cmacs-secondbrain-filter-build-index (cmacs-secondbrain-tests--tagged-nodes))
+    (setq cmacs-secondbrain--filter-tags '("emacs"))
+    (should (equal (sort (cmacs-secondbrain-filter-keep-ids) #'string<)
+                   '("c" "hub")))))
+
+(ert-deftest cmacs-secondbrain-test-filter-any-and-all ()
+  "Several tags combine as ANY by default and as ALL on request; a
+category on top of a tag always narrows."
+  (skip-unless (require 'cmacs-secondbrain-filter nil t))
+  (with-temp-buffer
+    (cmacs-secondbrain-filter-build-index (cmacs-secondbrain-tests--tagged-nodes))
+    (setq cmacs-secondbrain--filter-tags '("finance" "emacs"))
+    (let ((cmacs-secondbrain-filter-mode 'any))
+      (should (equal (sort (cmacs-secondbrain-filter-keep-ids) #'string<)
+                     '("a" "b" "c" "hub"))))
+    (let ((cmacs-secondbrain-filter-mode 'all))
+      ;; Nothing carries both -- an honest empty answer, not nil.
+      (should (equal (cmacs-secondbrain-filter-keep-ids) nil))
+      (should (cmacs-secondbrain-filter-active-p)))
+    (setq cmacs-secondbrain--filter-tags '("finance" "fire"))
+    (let ((cmacs-secondbrain-filter-mode 'all))
+      (should (equal (sort (cmacs-secondbrain-filter-keep-ids) #'string<)
+                     '("a" "hub"))))
+    (setq cmacs-secondbrain--filter-tags '("finance")
+          cmacs-secondbrain--filter-categories '("tech"))
+    (should (equal (cmacs-secondbrain-filter-keep-ids) nil))
+    (setq cmacs-secondbrain--filter-categories '("money"))
+    (should (equal (sort (cmacs-secondbrain-filter-keep-ids) #'string<)
+                   '("a" "b" "hub")))))
+
+(ert-deftest cmacs-secondbrain-test-filter-summary-names-the-filter ()
+  "The mode-line summary lists tags as #tag and categories as @cat."
+  (skip-unless (require 'cmacs-secondbrain-filter nil t))
+  (with-temp-buffer
+    (setq cmacs-secondbrain--filter-tags '("fire" "finance")
+          cmacs-secondbrain--filter-categories '("money"))
+    (should (equal (cmacs-secondbrain-filter-summary) "#finance #fire @money"))
+    (setq-local cmacs-secondbrain-filter-mode 'all)
+    (should (equal (cmacs-secondbrain-filter-summary) "#finance&#fire&@money"))
+    (setq cmacs-secondbrain--filter-tags nil cmacs-secondbrain--filter-categories nil)
+    (should-not (cmacs-secondbrain-filter-summary))))
+
+(ert-deftest cmacs-secondbrain-test-filter-palette-renders-and-toggles ()
+  "The palette lists every tag with its count, and RET on a row toggles it.
+
+Rendered against a fake viewport buffer -- the palette reads only
+buffer-locals and the index, so no display is needed to prove its rows
+and its toggle are right."
+  (skip-unless (require 'cmacs-secondbrain-filter nil t))
+  (let ((origin (generate-new-buffer " *sb-origin*"))
+        applied)
+    (unwind-protect
+        (progn
+          (with-current-buffer origin
+            (cmacs-secondbrain-filter-build-index
+             (cmacs-secondbrain-tests--tagged-nodes)))
+          (cl-letf (((symbol-function 'cmacs-secondbrain--origin)
+                     (lambda () origin))
+                    ((symbol-function 'cmacs-secondbrain-set-keep-set)
+                     (lambda (_buf ids) (setq applied ids) (and ids (length ids)))))
+            (let ((pane (cmacs-secondbrain-tags-render)))
+              (with-current-buffer pane
+                (let ((text (buffer-string)))
+                  (should (string-match-p "finance 2" text))
+                  (should (string-match-p "emacs 1" text))
+                  (should (string-match-p "money 2" text))
+                  (should (string-match-p "Tags (3)" text))
+                  (should (string-match-p "Categories (2)" text)))
+                ;; Toggle finance from its row.
+                (goto-char (point-min))
+                (re-search-forward "finance")
+                (cmacs-secondbrain-tags-toggle)
+                (should (equal (buffer-local-value 'cmacs-secondbrain--filter-tags
+                                                   origin)
+                               '("finance")))
+                ;; The scene got a VECTOR of the kept ids, hub included.
+                (should (vectorp applied))
+                (should (member "hub" (append applied nil)))
+                (should (member "a" (append applied nil)))
+                (should-not (member "c" (append applied nil)))
+                ;; The row now reads as on, and the header says what is kept.
+                (should (string-match-p "● " (buffer-string)))
+                (should (string-match-p "#finance" (format "%s" header-line-format)))
+                ;; And clearing empties both.
+                (cmacs-secondbrain-filter-clear t)
+                (should-not (buffer-local-value 'cmacs-secondbrain--filter-tags origin))
+                (should-not applied)))))
+      (ignore-errors (kill-buffer "*second brain: tags*"))
+      (kill-buffer origin))))
+
+(ert-deftest cmacs-secondbrain-test-filetags-parse-both-forms ()
+  "The scanner reads `:a:b:' and `a b' filetags alike, dropping blanks."
+  (skip-unless (fboundp 'cmacs-secondbrain--parse-filetags))
+  (should (equal (cmacs-secondbrain--parse-filetags ":finance:fire:") '("finance" "fire")))
+  (should (equal (cmacs-secondbrain--parse-filetags "finance fire") '("finance" "fire")))
+  (should (equal (cmacs-secondbrain--parse-filetags " : : ") nil))
+  (should (equal (cmacs-secondbrain--parse-filetags "a a") '("a"))))
+
+(ert-deftest cmacs-secondbrain-test-keep-set-dims-the-rest ()
+  "The keep set reaches the scene: kept nodes stay lit, the rest recede.
+
+Asserted on the frame, standing close to the node that is dropped, so a
+real dimming moves the mean by more than rounding -- and an EMPTY VECTOR
+is a filter that keeps nothing, distinct from nil which lifts it."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-keep-set)
+                    (fboundp 'cmacs-libregnum-mean-color)))
+  (cmacs-secondbrain-tests--with-view buf
+    (cmacs-libregnum-set-background buf 'none 0 0)
+    (cmacs-secondbrain-set-dressing buf nil)
+    (cmacs-secondbrain-set-glow buf nil)
+    (cmacs-secondbrain-set-graph
+     buf (vector (list :id "a" :title "A" :kind 'hub :ring 'memory)
+                 (list :id "b" :title "B" :kind 'hub :ring 'skills))
+     (vector) 3)
+    (let ((p (cmacs-secondbrain-node-position buf "a")))
+      (cmacs-libregnum-set-camera
+       buf (list (nth 0 p) (nth 1 p) (+ (nth 2 p) 1.6)) p 45.0))
+    (let ((lit (cmacs-libregnum-mean-color buf)))
+      (should (eql 1 (cmacs-secondbrain-set-keep-set buf ["b"])))
+      (let ((dim (cmacs-libregnum-mean-color buf)))
+        (should (> (apply #'+ (cl-subseq lit 0 3))
+                   (+ 8 (apply #'+ (cl-subseq dim 0 3))))))
+      (should (eql 1 (cmacs-secondbrain-set-keep-set buf ["a"])))
+      (should (equal lit (cmacs-libregnum-mean-color buf)))
+      ;; Keep nothing: darker still than keeping "a".
+      (should (eql 0 (cmacs-secondbrain-set-keep-set buf [])))
+      (should-not (equal lit (cmacs-libregnum-mean-color buf)))
+      ;; nil lifts it.
+      (should-not (cmacs-secondbrain-set-keep-set buf nil))
+      (should (equal lit (cmacs-libregnum-mean-color buf))))))
 
 (provide 'cmacs-secondbrain-tests)
 

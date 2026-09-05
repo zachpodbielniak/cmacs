@@ -162,7 +162,8 @@ Returns a plist (:nodes VECTOR :edges VECTOR)."
                           (cmacs-roamgraph-db--multi-map
                            (sqlite-select db "SELECT node_id, ref FROM refs"))))
                (node-rows (sqlite-select
-                           db "SELECT id, file, level, pos, title FROM nodes"))
+                           db "SELECT id, file, level, pos, title, properties
+                               FROM nodes"))
                ;; Only id links are topology.  A live notes tree also
                ;; carries thousands of https/file/fuzzy links whose
                ;; endpoints are not nodes at all; including them would
@@ -181,6 +182,14 @@ Returns a plist (:nodes VECTOR :edges VECTOR)."
                    (level (or (cmacs-roamgraph-db--unwrap (nth 2 r)) 0))
                    (pos   (or (cmacs-roamgraph-db--unwrap (nth 3 r)) 1))
                    (title (cmacs-roamgraph-db--unwrap (nth 4 r)))
+                   ;; `properties' is a prin1'd alist of the node's org
+                   ;; properties; CATEGORY is the one worth surfacing.
+                   ;; Guarded: a malformed value is one node without a
+                   ;; category, not a failed fetch.
+                   (props (ignore-errors
+                            (cmacs-roamgraph-db--unwrap (nth 5 r))))
+                   (category (and (listp props)
+                                  (cdr (assoc "CATEGORY" props))))
                    (group (cmacs-roamgraph-db--group file)))
               (when id
                 (push (list :id id
@@ -189,6 +198,7 @@ Returns a plist (:nodes VECTOR :edges VECTOR)."
                             :level (if (numberp level) level 0)
                             :pos (if (numberp pos) pos 1)
                             :tags (nreverse (gethash id tags))
+                            :category (and (stringp category) category)
                             :aliases (nreverse (gethash id aliases))
                             :refs (and refs (nreverse (gethash id refs)))
                             :group group

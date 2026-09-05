@@ -65,6 +65,15 @@
 (declare-function cmacs-libregnum-camera-state "cmacs-libregnum-defuns")
 (declare-function cmacs-libregnum-set-camera "cmacs-libregnum-defuns")
 (declare-function cmacs-secondbrain-set-dressing "cmacs-secondbrain-defuns")
+(declare-function cmacs-secondbrain-menu "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-tags "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-pick "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-toggle-mode "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-clear "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-build-index "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-apply "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-active-p "cmacs-secondbrain-filter")
+(declare-function cmacs-secondbrain-filter-summary "cmacs-secondbrain-filter")
 (declare-function cmacs-secondbrain-scene-index "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-node-id-at "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-supported-p "cmacs-secondbrain-defuns")
@@ -931,6 +940,10 @@ itself -- and drops the libregnum animation clock with it."
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
       (cmacs-secondbrain-fit buf)
       (cmacs-secondbrain--build-groups nodes edges)
+      (when (fboundp 'cmacs-secondbrain-filter-build-index)
+        (cmacs-secondbrain-filter-build-index nodes)
+        ;; A rebuild replaces the scene, and the keep set with it.
+        (cmacs-secondbrain-filter-apply buf))
       (setq cmacs-secondbrain--hovered nil)
       ;; After the scene, always: icons and emitters both key on world
       ;; positions and live in lists cleared with the drawables.
@@ -1268,8 +1281,19 @@ over the map."
           (setq cmacs-secondbrain--hovered path)
           (cmacs-secondbrain--flag-ids
            (and path
-                (cons path (and cmacs-secondbrain--links
-                                (gethash path cmacs-secondbrain--links))))))))))
+                (append
+                 (list path)
+                 (and cmacs-secondbrain--links
+                      (gethash path cmacs-secondbrain--links))
+                 ;; A department hub has no links of its own worth
+                 ;; showing -- one, to the centre -- and IS its members,
+                 ;; so hovering it lights the whole department.  A leaf
+                 ;; never does: that was the fourteen-hundred-label map.
+                 (let ((node (cmacs-secondbrain-node-at buffer path)))
+                   (and (eq (plist-get node :kind) 'hub)
+                        cmacs-secondbrain--group-of
+                        (gethash (gethash path cmacs-secondbrain--group-of)
+                                 cmacs-secondbrain--groups)))))))))))
 
 ;;;; Particles --------------------------------------------------------
 
@@ -1450,8 +1474,45 @@ sources."
   (cmacs-secondbrain-refresh)
   (message "Age fade %s" (if cmacs-secondbrain-age-fade "on" "off")))
 
+(defvar-keymap cmacs-secondbrain-toggle-map
+  :doc "Prefix map on `t': every on/off switch and look setting.
+
+One prefix rather than a capital letter each, because there were twelve
+of them scattered over `G' `P' `H' `a' `R' `T' `M-t' `M-d' `*' `M-i' `b'
+and nobody could hold that.  `t' then a mnemonic letter; `?' shows them
+all with their current state."
+  "g" #'cmacs-secondbrain-toggle-glow
+  "p" #'cmacs-secondbrain-toggle-particles
+  "d" #'cmacs-secondbrain-toggle-dressing
+  "s" #'cmacs-secondbrain-toggle-starfield
+  "h" #'cmacs-secondbrain-toggle-hover-highlight
+  "a" #'cmacs-secondbrain-toggle-age-fade
+  "r" #'cmacs-secondbrain-toggle-rotate
+  "v" #'cmacs-secondbrain-toggle-view
+  "b" #'cmacs-secondbrain-set-background-interactive
+  "t" #'cmacs-secondbrain-cycle-galaxy-tilt
+  "w" #'cmacs-secondbrain-toggle-galaxy-shape
+  "i" #'cmacs-secondbrain-replay-intro)
+
+(defvar-keymap cmacs-secondbrain-filter-map
+  :doc "Prefix map on `F': every way of narrowing the map.
+
+Tags, categories, the ring filter and isolate all live here, with `F z'
+undoing all of them at once."
+  "t" #'cmacs-secondbrain-tags
+  "f" #'cmacs-secondbrain-filter-pick
+  "m" #'cmacs-secondbrain-filter-toggle-mode
+  "r" #'cmacs-secondbrain-cycle-ring-filter
+  "x" #'cmacs-secondbrain-toggle-isolate
+  "c" #'cmacs-secondbrain-filter-clear
+  "z" #'cmacs-secondbrain-reset-view)
+
 (defvar-keymap cmacs-secondbrain-mode-map
-  :doc "Keymap for `cmacs-secondbrain-mode'."
+  :doc "Keymap for `cmacs-secondbrain-mode'.
+
+Three tiers of single keys -- spatial, topological, hierarchical -- then
+two prefixes: `t' for every toggle and look, `F' for every filter.  `?'
+opens a menu of all of it, with each toggle's current state."
   ;; Spatial tier: the nearest node in that screen direction.
   "h" #'cmacs-secondbrain-move-left
   "j" #'cmacs-secondbrain-move-down
@@ -1472,55 +1533,60 @@ sources."
   ;; Hierarchical tier: the ARMS one.
   "^" #'cmacs-secondbrain-up
   "m" #'cmacs-secondbrain-down
+  "TAB" #'cmacs-secondbrain-toggle-collapse
+  "e" #'cmacs-secondbrain-expand-all
+  "c" #'cmacs-secondbrain-collapse-all-cmd
   "1" #'cmacs-secondbrain-layout-force
   "2" #'cmacs-secondbrain-layout-circle
   "3" #'cmacs-secondbrain-layout-hex
   "4" #'cmacs-secondbrain-layout-rings
-  "TAB" #'cmacs-secondbrain-toggle-collapse
-  "e" #'cmacs-secondbrain-expand-all
-  "c" #'cmacs-secondbrain-collapse-all-cmd
+  ;; Finding.
   "/" #'cmacs-secondbrain-find
   "J" #'cmacs-secondbrain-jump
   "n" #'cmacs-secondbrain-search-next
   "N" #'cmacs-secondbrain-search-prev
-  "z" #'cmacs-secondbrain-reset-view
-  "?" #'cmacs-secondbrain-help
   "M-/" #'cmacs-secondbrain-search-semantic
   "~" #'cmacs-secondbrain-find-similar
+  "x" #'cmacs-secondbrain-toggle-isolate
+  "z" #'cmacs-secondbrain-reset-view
+  ;; Opening and panes.
   "RET" #'cmacs-secondbrain-visit
-  "O" (lambda () (interactive) (cmacs-secondbrain-visit t))
+  "O" #'cmacs-secondbrain-visit-other-window
   "y" #'cmacs-secondbrain-copy-path
-  "g" #'cmacs-secondbrain-refresh
-  "0" #'cmacs-secondbrain-fit-cmd
-  "s" #'cmacs-secondbrain-spin
-  "S" #'cmacs-secondbrain-spin-back
   "i" #'cmacs-secondbrain-inspector
   "p" #'cmacs-secondbrain-preview
   "W" #'cmacs-secondbrain-close-panes
-  "v" #'cmacs-secondbrain-toggle-view
-  "R" #'cmacs-secondbrain-toggle-rotate
-  "u" #'cmacs-secondbrain-unpin
-  "U" #'cmacs-secondbrain-unpin-all
+  "g" #'cmacs-secondbrain-refresh
+  ;; Camera and arrangement.
+  "0" #'cmacs-secondbrain-fit-cmd
   "f" #'cmacs-secondbrain-recenter
   "+" #'cmacs-secondbrain-zoom-in
   "=" #'cmacs-secondbrain-zoom-in
   "-" #'cmacs-secondbrain-zoom-out
   "<kp-add>" #'cmacs-secondbrain-zoom-in
   "<kp-subtract>" #'cmacs-secondbrain-zoom-out
-  "b" #'cmacs-secondbrain-set-background-interactive
-  "P" #'cmacs-secondbrain-toggle-particles
-  "H" #'cmacs-secondbrain-toggle-hover-highlight
-  "G" #'cmacs-secondbrain-toggle-glow
-  "x" #'cmacs-secondbrain-toggle-isolate
-  "F" #'cmacs-secondbrain-cycle-ring-filter
-  "a" #'cmacs-secondbrain-toggle-age-fade
-  "T" #'cmacs-secondbrain-cycle-galaxy-tilt
-  "M-t" #'cmacs-secondbrain-toggle-galaxy-shape
-  "M-d" #'cmacs-secondbrain-toggle-dressing
-  "*" #'cmacs-secondbrain-toggle-starfield
-  "M-i" #'cmacs-secondbrain-replay-intro
+  "s" #'cmacs-secondbrain-spin
+  "S" #'cmacs-secondbrain-spin-back
+  "u" #'cmacs-secondbrain-unpin
+  "U" #'cmacs-secondbrain-unpin-all
+  "v" #'cmacs-secondbrain-toggle-view
+  ;; Help.
+  "?" #'cmacs-secondbrain-menu
+  "M-?" #'cmacs-secondbrain-help
   "C-h m" #'describe-mode
   "q" #'quit-window)
+
+;; The two prefixes, bound as menu items so `which-key' and `describe-
+;; keymap' show what they are rather than "Prefix Command".
+(define-key cmacs-secondbrain-mode-map "t"
+            (cons "toggles & looks" cmacs-secondbrain-toggle-map))
+(define-key cmacs-secondbrain-mode-map "F"
+            (cons "filters" cmacs-secondbrain-filter-map))
+
+(defun cmacs-secondbrain-visit-other-window ()
+  "Open the selected node's file in another window."
+  (interactive)
+  (cmacs-secondbrain-visit t))
 
 (defun cmacs-secondbrain-toggle-hover-highlight ()
   "Turn hover link-highlighting on or off."
@@ -1559,6 +1625,9 @@ sources."
          (when cmacs-secondbrain--ring-filter
            (format "  [%s]" cmacs-secondbrain--ring-filter))
          (when cmacs-secondbrain--isolate "  [isolate]")
+         (when (and (fboundp 'cmacs-secondbrain-filter-active-p)
+                    (cmacs-secondbrain-filter-active-p))
+           (format "  [%s]" (cmacs-secondbrain-filter-summary)))
          (when cmacs-secondbrain-age-fade "  [age]"))
       (error ""))))
 
@@ -1582,6 +1651,9 @@ teardown, the Evil `C-w' handoff and `<escape>'.
   ;; the view is exactly when it is needed.
   (require 'cmacs-secondbrain-ai)
   (require 'cmacs-secondbrain-panes)
+  ;; The tag filter reads the collected graph and the panes' origin
+  ;; tracking, so it loads last.
+  (require 'cmacs-secondbrain-filter)
   (setq-local cursor-type nil)
   (buffer-disable-undo)
   (setq-local mode-line-format

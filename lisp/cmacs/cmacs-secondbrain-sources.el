@@ -282,6 +282,16 @@ than silently truncated."
   :type 'integer
   :group 'cmacs-secondbrain)
 
+(defun cmacs-secondbrain--parse-filetags (text)
+  "Split an org `#+filetags:\=' value TEXT into a list of tag strings.
+
+Accepts both forms org does -- `:a:b:\=' and `a b\=' -- and never
+returns an empty string as a tag."
+  (delete-dups
+   (delq nil (mapcar (lambda (tg) (let ((tg (string-trim tg)))
+                                    (and (not (equal tg "")) tg)))
+                     (split-string (or text "") "[:[:space:]]+" t)))))
+
 (defun cmacs-secondbrain--scan-org-tree ()
   "Scan the PARA tree for org-roam nodes without the database.
 
@@ -318,15 +328,27 @@ is its name, and every `[[id:...]]' is an edge."
           (let ((id (and (re-search-forward
                           "^[ \t]*:ID:[ \t]+\\([0-9a-fA-F-]+\\)" nil t)
                          (match-string 1)))
-                (title nil))
+                (title nil) (tags nil) (category nil))
             (goto-char (point-min))
             (when (re-search-forward "^#\\+title:[ \t]*\\(.*\\)$" nil t)
               (setq title (string-trim (match-string 1))))
+            ;; Tags and category, the two org keywords that classify a
+            ;; file as a whole.  Both the `:a:b:' and the space-separated
+            ;; filetags forms are accepted; org itself takes either.
+            (goto-char (point-min))
+            (when (re-search-forward "^#\\+filetags:[ \t]*\\(.*\\)$" nil t)
+              (setq tags (cmacs-secondbrain--parse-filetags (match-string 1))))
+            (goto-char (point-min))
+            (when (re-search-forward "^#\\+category:[ \t]*\\(.*\\)$" nil t)
+              (setq category (string-trim (match-string 1)))
+              (when (equal category "") (setq category nil)))
             (when id
               (puthash id t by-id)
               (push (list :id id
                           :title (or title (file-name-base file))
-                          :file file)
+                          :file file
+                          :tags tags
+                          :category category)
                     nodes)
               ;; Links out.  Collected even when the target has not been
               ;; seen yet; dangling ones are dropped at the end.
@@ -438,6 +460,11 @@ easy to get subtly wrong."
                     :title (plist-get node :title)
                     :kind 'file
                     :file file
+                    ;; What the note says it is about, for the tag and
+                    ;; category filter.  Carried through untouched: the
+                    ;; filter owns the interpretation.
+                    :tags (plist-get node :tags)
+                    :category (plist-get node :category)
                     ;; PARA is the department taxonomy for Memory: it is
                     ;; how the tree is actually organised, so grouping by
                     ;; anything else would be inventing a second one.

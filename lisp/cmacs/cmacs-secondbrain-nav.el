@@ -648,7 +648,7 @@ needed to show you where you landed."
       (cmacs-secondbrain--nav-goto (gethash pick table) t))))
 
 (defun cmacs-secondbrain-reset-view ()
-  "Clear the search, the ring filter and isolate mode in one key.
+  "Clear the search, the tag filter, the ring filter and isolate in one key.
 
 Four independent ways to narrow the map is three too many to unwind one
 at a time, and a half-cleared map that still hides things is how you
@@ -661,6 +661,8 @@ end up believing a department is empty."
         cmacs-secondbrain--spatial-trail nil)
   (ignore-errors (cmacs-secondbrain-set-ring-filter (current-buffer) nil))
   (ignore-errors (cmacs-secondbrain-set-isolate (current-buffer) nil))
+  (when (fboundp 'cmacs-secondbrain-filter-clear)
+    (ignore-errors (cmacs-secondbrain-filter-clear t)))
   (force-mode-line-update)
   (message "View reset"))
 
@@ -747,6 +749,151 @@ diagonal streak, which reads as a crooked picture rather than as depth."
              (if (eq next 'warp) "one-sided warp" "symmetric saucer")
              (if cmacs-secondbrain--3d "" "  (flat view: no effect until v)"))))
 
+;;;; The menu -------------------------------------------------------
+
+(require 'transient)
+
+(defun cmacs-secondbrain--menu-var (sym)
+  "SYM's value in the viewport the menu was opened from.
+
+Transient draws its menu in its own buffer; the toggles live in the
+viewport's buffer-locals, so a plain `symbol-value' would describe the
+wrong buffer -- every toggle would show its default, whatever it was."
+  (let ((b (and (boundp 'transient--original-buffer) transient--original-buffer)))
+    (if (buffer-live-p b) (buffer-local-value sym b) (symbol-value sym))))
+
+(defun cmacs-secondbrain--menu-toggle (label sym &optional pred)
+  "Describe toggle LABEL with SYM's state; PRED, if given, decides it."
+  (lambda ()
+    (let ((on (if pred (funcall pred (cmacs-secondbrain--menu-var sym))
+                (cmacs-secondbrain--menu-var sym))))
+      (format "%-18s %s" label
+              (propertize (if on "on" "off")
+                          'face (if on 'success 'shadow))))))
+
+(transient-define-prefix cmacs-secondbrain-menu ()
+  "Every key in the second brain, with each toggle's current state.
+
+Press a key to run it.  Toggles keep the menu open so several can be
+flipped in a row; everything else closes it.  `M-?' is the plain-text
+version with the legend."
+  [:description "second brain"
+   ["Move"
+    ("h" "left" cmacs-secondbrain-move-left)
+    ("j" "down" cmacs-secondbrain-move-down)
+    ("k" "up" cmacs-secondbrain-move-up)
+    ("l" "right" cmacs-secondbrain-move-right)
+    ("]" "follow a link" cmacs-secondbrain-follow-link)
+    ("[" "back" cmacs-secondbrain-back)
+    (">" "next in department" cmacs-secondbrain-next-sibling)
+    ("<" "previous" cmacs-secondbrain-prev-sibling)
+    ("^" "up to the department" cmacs-secondbrain-up)
+    ("m" "down into it" cmacs-secondbrain-down)
+    ("o" "a link, by name…" cmacs-secondbrain-goto-link)
+    ("J" "any node, by name…" cmacs-secondbrain-jump)]
+   ["Find & filter"
+    ("/" "search…" cmacs-secondbrain-find)
+    ("n" "next match" cmacs-secondbrain-search-next)
+    ("N" "previous match" cmacs-secondbrain-search-prev)
+    ("M-/" "semantic search…" cmacs-secondbrain-search-semantic)
+    ("~" "similar to selection" cmacs-secondbrain-find-similar)
+    ("F t" "tag palette" cmacs-secondbrain-tags)
+    ("F f" "pick tags…" cmacs-secondbrain-filter-pick)
+    ("F m" cmacs-secondbrain-filter-toggle-mode :transient t
+     :description (lambda ()
+                    (format "%-18s %s" "tags combine as"
+                            (propertize
+                             (upcase (symbol-name
+                                      (cmacs-secondbrain--menu-var
+                                       'cmacs-secondbrain-filter-mode)))
+                             'face 'help-key-binding))))
+    ("F r" cmacs-secondbrain-cycle-ring-filter :transient t
+     :description (lambda ()
+                    (format "%-18s %s" "ring filter"
+                            (let ((r (cmacs-secondbrain--menu-var
+                                      'cmacs-secondbrain--ring-filter)))
+                              (propertize (if r (symbol-name r) "off")
+                                          'face (if r 'success 'shadow))))))
+    ("x" cmacs-secondbrain-toggle-isolate :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "isolate" 'cmacs-secondbrain--isolate))
+    ("F c" "clear the tag filter" cmacs-secondbrain-filter-clear)
+    ("z" "reset every filter" cmacs-secondbrain-reset-view)]
+   ["Shape"
+    ("TAB" "expand / collapse" cmacs-secondbrain-toggle-collapse)
+    ("e" "expand all" cmacs-secondbrain-expand-all)
+    ("c" "collapse all" cmacs-secondbrain-collapse-all-cmd)
+    ("1" "force layout" cmacs-secondbrain-layout-force)
+    ("2" "circle layout" cmacs-secondbrain-layout-circle)
+    ("3" "hex layout" cmacs-secondbrain-layout-hex)
+    ("4" "rings layout" cmacs-secondbrain-layout-rings)
+    ("s" "spin" cmacs-secondbrain-spin :transient t)
+    ("S" "spin back" cmacs-secondbrain-spin-back :transient t)
+    ("u" "unpin selection" cmacs-secondbrain-unpin)
+    ("U" "unpin everything" cmacs-secondbrain-unpin-all)
+    ("g" "re-read every source" cmacs-secondbrain-refresh)]]
+  [["Looks"
+    ("t g" cmacs-secondbrain-toggle-glow :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "glow" 'cmacs-secondbrain-node-glow))
+    ("t p" cmacs-secondbrain-toggle-particles :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "particles" 'cmacs-secondbrain-particles))
+    ("t d" cmacs-secondbrain-toggle-dressing :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "lanes & core" 'cmacs-secondbrain-dressing))
+    ("t s" cmacs-secondbrain-toggle-starfield :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "stars" 'cmacs-secondbrain-starfield
+                    (lambda (v) (and (numberp v) (> v 0)))))
+    ("t h" cmacs-secondbrain-toggle-hover-highlight :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "hover lights links" 'cmacs-secondbrain-hover-highlights-links))
+    ("t a" cmacs-secondbrain-toggle-age-fade :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "age fade" 'cmacs-secondbrain-age-fade))
+    ("t b" "background…" cmacs-secondbrain-set-background-interactive)
+    ("t t" cmacs-secondbrain-cycle-galaxy-tilt :transient t
+     :description (lambda ()
+                    (format "%-18s %s" "galaxy tilt"
+                            (propertize
+                             (format "%.0f°" (cmacs-secondbrain--menu-var
+                                              'cmacs-secondbrain-galaxy-tilt))
+                             'face 'help-key-binding))))
+    ("t w" cmacs-secondbrain-toggle-galaxy-shape :transient t
+     :description (lambda ()
+                    (format "%-18s %s" "galaxy shape"
+                            (propertize
+                             (symbol-name (cmacs-secondbrain--menu-var
+                                           'cmacs-secondbrain-galaxy-shape))
+                             'face 'help-key-binding))))]
+   ["Camera"
+    ("f" "fly to the selection" cmacs-secondbrain-recenter)
+    ("0" "frame the whole map" cmacs-secondbrain-fit-cmd)
+    ("+" "zoom in" cmacs-secondbrain-zoom-in :transient t)
+    ("-" "zoom out" cmacs-secondbrain-zoom-out :transient t)
+    ("t v" cmacs-secondbrain-toggle-view :transient t
+     :description (lambda ()
+                    (format "%-18s %s" "view"
+                            (propertize
+                             (if (cmacs-secondbrain--menu-var 'cmacs-secondbrain--3d)
+                                 "3D" "flat")
+                             'face 'help-key-binding))))
+    ("t r" cmacs-secondbrain-toggle-rotate :transient t
+     :description ,(cmacs-secondbrain--menu-toggle
+                    "auto-rotate" 'cmacs-secondbrain-auto-rotate
+                    (lambda (v) (and (numberp v) (/= v 0.0)))))
+    ("t i" "replay the fly-in" cmacs-secondbrain-replay-intro)]
+   ["Open"
+    ("RET" "open the file" cmacs-secondbrain-visit)
+    ("O" "…in another window" cmacs-secondbrain-visit-other-window)
+    ("y" "copy its path" cmacs-secondbrain-copy-path)
+    ("i" "inspector" cmacs-secondbrain-inspector)
+    ("p" "preview" cmacs-secondbrain-preview)
+    ("W" "close the panes" cmacs-secondbrain-close-panes)
+    ("M-?" "keys as text, with the legend" cmacs-secondbrain-help)
+    ("q" "quit" quit-window)]])
+
 ;;;; Help -------------------------------------------------------------
 
 (defun cmacs-secondbrain-help ()
@@ -800,28 +947,38 @@ diagonal streak, which reads as a crooked picture rather than as depth."
       (princ "  TAB        expand or collapse the selection\n")
       (princ "  e c        expand all / collapse all\n")
       (princ "  1 2 3 4    force / circle / hex / rings layout\n")
-      (princ "  x          isolate the selection's neighbourhood\n")
-      (princ "  F          cycle the ring filter\n")
-      (princ "  a          age fade: colour Memory by staleness\n")
       (princ "  s S        spin the rings\n")
-      (princ "  R          slow auto-rotation\n")
-      (princ "  u U        unpin the selection / everything\n\n")
+      (princ "  u U        unpin the selection / everything\n")
+      (princ "  g          re-read every source\n\n")
 
-      (princ "Camera and looks\n----------------\n")
+      (princ "Filters  (F then a key)\n-----------------------\n")
+      (princ "  F t        tag palette: every tag and category as a toggle\n")
+      (princ "  F f        pick tags by name\n")
+      (princ "  F m        keep nodes with ANY / ALL of the active tags\n")
+      (princ "  F r        cycle the ring filter\n")
+      (princ "  F x  (x)   isolate the selection's neighbourhood\n")
+      (princ "  F c        clear the tag filter\n")
+      (princ "  F z  (z)   reset every filter and the search\n\n")
+
+      (princ "Toggles and looks  (t then a key)\n---------------------------------\n")
+      (princ "  t v  (v)   flat / 3D\n")
+      (princ "  t g        node glow\n")
+      (princ "  t p        particles\n")
+      (princ "  t d        dressing: band lanes and the galactic core\n")
+      (princ "  t s        world-space stars (they parallax; the wallpaper does not)\n")
+      (princ "  t h        hover: light what the node links to\n")
+      (princ "  t a        age fade: colour Memory by staleness\n")
+      (princ "  t r        slow auto-rotation\n")
+      (princ "  t b        background (wallpaper or screensaver)\n")
+      (princ "  t t        galaxy tilt: flat / gentle / default / steep\n")
+      (princ "  t w        galaxy shape: symmetric saucer / one-sided warp\n")
+      (princ "  t i        replay the opening fly-in\n\n")
+
+      (princ "Camera\n------\n")
       (princ "  f          fly to the selection, and pivot around it\n")
       (princ "  + = -      zoom in / in / out, toward the camera target\n")
-      (princ "  T          galaxy tilt: flat / gentle / default / steep\n")
-      (princ "  M-t        galaxy shape: symmetric saucer / one-sided warp\n")
-      (princ "  M-d        dressing: band lanes and the galactic core\n")
-      (princ "  *          world-space stars (they parallax; the wallpaper does not)\n")
-      (princ "  M-i        replay the opening fly-in\n")
       (princ "  0          frame the whole map\n")
-      (princ "  v          flat / 3D\n")
-      (princ "  b          background (wallpaper or screensaver)\n")
-      (princ "  G          node glow\n")
-      (princ "  P          particles\n")
-      (princ "  H          hover: light what the node links to\n")
-      (princ "  g          re-read every source\n")
+      (princ "  ?          this, as a menu showing each toggle's state\n")
       (princ "  q          quit\n\n")
 
       (princ "Reading the map\n---------------\n")
