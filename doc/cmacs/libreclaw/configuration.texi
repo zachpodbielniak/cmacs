@@ -89,7 +89,16 @@ Customization knobs:
 @item cmacs-libreclaw-default-workspace
 Target directory (default @file{~/.libreclaw}).
 @item cmacs-libreclaw-default-ai-provider
-Symbol @samp{claude}, @samp{openai}, or @samp{both}.
+Symbol @samp{claude}, @samp{openai}, or @samp{both}.  These three are
+what libreclaw's @dfn{hatch} API emits, not the providers libreclaw can
+run: its @code{LcHatchAiKind} enum has exactly these values, so the
+generated starter config offers no more.  The runtime set is wider ---
+@code{provider: "codex-cli"}, @code{"opencode"}, @code{"grok-build"},
+@code{"antigravity"}, @code{"cursor"} and the claude spellings are all
+accepted in the YAML --- so an agent on anything else is one edit to the
+generated file, not a different generator.  cmacs passes the provider
+string through untouched and validates nothing, which is why a provider
+libreclaw gains works here the day libreclaw gains it.
 @item cmacs-libreclaw-default-prompt
 Prompt string baked into the Local channel.
 @item cmacs-libreclaw-auto-generate-config

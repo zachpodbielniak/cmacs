@@ -30,6 +30,69 @@ with =--with-cmacs-libreclaw= when both are enabled.
 | =grok-build=     | CLI      | =grok= on PATH (or =GROK_PATH=)      |
 | =antigravity=    | CLI      | =agy= on PATH                        |
 | =cursor=         | CLI      | =cursor-agent= on PATH               |
+| =codex-cli=      | CLI      | =codex= on PATH (or =CODEX_PATH=)    |
+| =openai-compatible= | HTTP  | =OPENAI_COMPATIBLE_BASE_URL= / =_API_KEY= |
+
+** Codex
+
+=codex-cli= (spelled =codex= too) drives OpenAI's =codex exec= through
+ai-glib. Run =codex login= once; there is no API key to set here.
+
+Its models are codex's own ids --- =gpt-6-astra= (the default),
+=gpt-5.6-sol=, =gpt-5.6-terra=, =gpt-5.6-luna=, =gpt-5.5=,
+=gpt-5.4-mini=, =gpt-5.3-codex-spark= --- and =cmacs-ai-list-models=
+returns them without a network round trip.
+
+Codex is the one CLI here that enforces a *sandbox* rather than asking
+for approval: =read-only=, =workspace-write= or =danger-full-access=,
+set through =cmacs-ai-client-set-cli-option= on the =sandbox= property.
+NULL means read-only, so an agent expected to edit its own tree needs
+=workspace-write= saying so. There is no prompt to skip: ai-glib always
+passes =--ask-for-approval never=, and skip-permissions would only add
+=--dangerously-bypass-approvals-and-sandbox=, which removes the sandbox
+outright.
+
+ai-glib's codex client declares no MCP config surface, so a codex chat
+in cmacs has no cmacs tools. The brigade's own =codex= worker does
+deliver them --- see the brigade manual --- because it spawns the CLI
+itself and can hand it a =CODEX_HOME=.
+
+** Your own OpenAI-compatible servers
+
+=openai-compatible= talks to anything speaking OpenAI's Chat Completions
+protocol: vLLM, llama.cpp's server, LM Studio, a hosted gateway. On its
+own it reads =OPENAI_COMPATIBLE_BASE_URL= and =OPENAI_COMPATIBLE_API_KEY=
+from the environment, which is one server.
+
+A base URL is not a setting you have one of, so name them instead:
+
+#+begin_src elisp
+(setq cmacs-ai-openai-compatible-endpoints
+      '((vllm     :base-url "http://localhost:8000/v1"
+                  :model "Qwen/Qwen3-32B" :api-key "")
+        (together :base-url "https://api.together.xyz/v1"
+                  :model "deepseek-ai/DeepSeek-V3"
+                  :api-key-env "TOGETHER_API_KEY")))
+#+end_src
+
+Each name is then a provider in every sense: =M-x cmacs-ai-chat-with-provider=
+completes on =vllm=, =cmacs-ai-prompt-sync= takes it, the harness builds
+it, =cmacs-ai-textops-provider= can be set to it, and a brigade agent can
+carry =vllm/Qwen3-32B= as its model.
+
+| Key | Meaning |
+|-----+---------|
+| =:base-url= | the API root. An origin gets =/v1= appended; a URL with a path *is* the root. Never =/chat/completions= |
+| =:model= | default model id for this server |
+| =:api-key= | the token. =""= means send no =Authorization= header, which is what a local server wants |
+| =:api-key-env= | environment variable holding the token, read when =:api-key= is absent. Prefer it: a customize file is often in a git repository |
+| =:image-model= | for =cmacs-ai-image-*= |
+| =:embedding-model= | for =cmacs-ai-embed= |
+
+The properties are set on the client rather than left to ai-glib's
+fallback chain, and that is the point: the environment and =AiConfig=
+hold *one* URL between them, so two endpoints resolved through them
+would be the same server twice.
 
 =grok= and =grok-build= are two different backends, not two names for one. =grok= is xAI's HTTP API and takes API model ids; =grok-build= wraps the agentic =grok= CLI and takes /its/ model ids (=grok-4.6=, =grok-4.5=), which the API rejects and vice versa. Run =grok models= to see what the installed CLI offers.
 

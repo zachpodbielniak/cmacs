@@ -392,11 +392,49 @@ to hear the status.
 @node Brigade Workers
 @section Workers
 
-A worker decides @emph{how} an agent runs.  Four ship---@code{inproc}
-(the default), @code{claude-code}, @code{opencode} and @code{shell}---and
-all four are registered through the public
+A worker decides @emph{how} an agent runs.  Five ship---@code{inproc}
+(the default), @code{claude-code}, @code{opencode}, @code{codex} and
+@code{shell}---and all five are registered through the public
 @code{cmacs-brigade-register-worker}, so one you register yourself is
 reached by exactly the same path.
+
+@subsection The codex worker
+
+@vindex cmacs-brigade-codex-sandbox
+The @code{codex} worker drives OpenAI's @command{codex} CLI as
+@code{codex exec --json}, and differs from the other two CLIs in three
+ways worth knowing.
+
+It runs under a real @dfn{sandbox} rather than a skipped prompt.
+@code{cmacs-brigade-codex-sandbox} (default @code{workspace-write}) is
+passed as @option{--sandbox}, and codex enforces it: a run that tries to
+write outside the workspace fails rather than asking.  claude's
+@option{--dangerously-skip-permissions} removes a prompt; this is a
+boundary.
+
+Its tools arrive through a @env{CODEX_HOME} @dfn{overlay}, not a config
+flag.  Codex reads MCP servers from @file{CODEX_HOME/config.toml} and has
+no @option{--mcp-config}, so the worker builds a directory holding just
+that file---the user's own config first, our
+@code{[mcp_servers.cmacs-brigade]} table appended---and symlinks every
+other entry of the real Codex home into it, @file{auth.json} above all.
+Writing into @file{~/.codex/config.toml} was not an option: it is the
+user's, agents run concurrently, and a crash would leave a server
+declared there for every later codex run.  The overlay lives in
+@code{cmacs-brigade-runtime-dir}, not the shared temp directory, because
+codex refuses to create its PATH helpers under one.
+
+It reports as JSONL, not one object.  @code{codex exec --json} streams an
+event per line, so the worker reads @code{thread.started} for the session
+id, the last @code{agent_message} item for the reply and
+@code{turn.completed} for usage.  Codex reports no cost, so the budget
+sees tokens and zero dollars rather than a figure invented from a price
+list.
+
+An HTTP provider---including one of your own from
+@code{cmacs-ai-openai-compatible-endpoints}, as @samp{my-vllm/qwen3}
+---implies no worker and stays on @code{inproc}, which is what gives it
+the full tool loop.
 
 @code{inproc} runs the tool loop inside cmacs against the provider's HTTP
 API.  It is the default because it honours @code{:MODEL:} and the tool

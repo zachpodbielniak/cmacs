@@ -69,8 +69,15 @@ them over MCP instead."
 (defconst cmacs-brigade-cli-providers
   '((claude-code . claude-code)
     (opencode    . opencode)
-    (claude-tmux . claude-code))
-  "Providers that are a CLI, and the worker each implies.")
+    (claude-tmux . claude-code)
+    (codex-cli   . codex)
+    (codex       . codex))
+  "Providers that are a CLI, and the worker each implies.
+
+An HTTP provider is absent on purpose and runs under `inproc', which is
+also where a name from `cmacs-ai-openai-compatible-endpoints' lands: it
+is an HTTP server, so the in-process tool loop drives it and every
+brigade tool works.")
 
 (defun cmacs-brigade-resolve-worker (agent)
   "Return the worker AGENT should run under.
@@ -91,6 +98,26 @@ in the model string picks its own worker; otherwise
 (defcustom cmacs-brigade-opencode-program "opencode"
   "Program used by the `opencode' worker."
   :type 'string
+  :group 'cmacs-brigade)
+
+(defcustom cmacs-brigade-codex-program "codex"
+  "Program used by the `codex' worker.
+
+OpenAI's Codex CLI, driven as `codex exec'.  CODEX_PATH overrides it,
+matching what ai-glib does for the same provider."
+  :type 'string
+  :group 'cmacs-brigade)
+
+(defcustom cmacs-brigade-codex-sandbox "workspace-write"
+  "Sandbox codex runs under: read-only, workspace-write or danger-full-access.
+
+Codex enforces this itself, which is a real boundary rather than a
+prompt the model is asked to respect -- so it is set explicitly here
+rather than left to the CLI's default.  `workspace-write' matches what
+an agent with an isolation backend is expected to do: change its own
+worktree and nothing else."
+  :type '(choice (const "read-only") (const "workspace-write")
+                 (const "danger-full-access") string)
   :group 'cmacs-brigade)
 
 (defcustom cmacs-brigade-ollama-program "ollama"
@@ -403,6 +430,25 @@ pending."
                ;; "vendor/model" spelling survives ours.
                (when model (list "--model"
                                  (cdr (cmacs-brigade--split-model model))))))
+      ('codex
+       (append (list (or (getenv "CODEX_PATH") cmacs-brigade-codex-program)
+                     "exec"
+                     ;; JSONL, so the run reports its own events rather
+                     ;; than us scraping prose.
+                     "--json"
+                     ;; Codex enforces this itself.  Unlike claude's
+                     ;; --dangerously-skip-permissions, which removes a
+                     ;; prompt, this is a real boundary: a run that tries
+                     ;; to write outside the workspace fails rather than
+                     ;; asking.
+                     "--sandbox" cmacs-brigade-codex-sandbox)
+               ;; Resume rather than start fresh.  `codex exec resume ID'
+               ;; is a subcommand, not a flag, so it cannot simply be
+               ;; appended like claude's --resume.
+               (when (and session-id (not (string-empty-p session-id)))
+                 (list "resume" session-id))
+               (when model
+                 (list "--model" (cdr (cmacs-brigade--split-model model))))))
       ;; opencode has no flag for it; the same thing is an environment
       ;; variable, applied in `cmacs-brigade--worker-env'.
       ('shell (list "bash" "-c" (format "cat %s | bash"
@@ -415,11 +461,73 @@ pending."
 opencode expresses what claude does with a flag as an environment
 variable; this mirrors what ai-glib sets for the same purpose.")
 
-(defun cmacs-brigade--worker-env (worker env)
-  "Environment for WORKER, on top of ENV."
-  (if (eq worker 'opencode)
-      (cons (cons "OPENCODE_PERMISSION" cmacs-brigade-opencode-allow-all) env)
-    env))
+(defun cmacs-brigade--codex-home ()
+  "The Codex home directory a run should start from."
+  (or (getenv "CODEX_HOME")
+      (expand-file-name ".codex" (or (getenv "HOME") "~"))))
+
+(defun cmacs-brigade--codex-overlay (config)
+  "Build a CODEX_HOME overlay whose config.toml carries CONFIG's servers.
+
+Codex reads its MCP servers from CODEX_HOME/config.toml, and there is no
+flag that points at another file the way claude's --mcp-config does.
+Writing into the user's own ~/.codex/config.toml is out of the question:
+it is theirs, agents run concurrently, and a crash would leave an
+orphaned server declared there for every later codex run, brigade or not.
+
+So the overlay is a directory of its own holding just config.toml, with
+every other entry of the real home symlinked in -- auth.json above all,
+or the run arrives unauthenticated and the failure reads as a model
+error.  The `-c mcp_servers...' override would have avoided the
+directory entirely, and is not used: that puts the socket path and token
+in argv, which is world-readable through /proc.
+
+Returns the overlay directory, or nil when there is nothing to deliver."
+  (when (and config (file-readable-p config))
+    (let* ((parent (progn
+                     (make-directory cmacs-brigade-runtime-dir t)
+                     (set-file-modes cmacs-brigade-runtime-dir #o700)
+                     cmacs-brigade-runtime-dir))
+           ;; Not the shared temp directory: codex refuses to create its
+           ;; PATH helper binaries under one and says so on every run,
+           ;; and the runtime directory is 0700 and already where this
+           ;; agent's other credentials live.
+           (temporary-file-directory (file-name-as-directory parent))
+           (dir (make-temp-file "cmacs-brigade-codex" t))
+           (real (cmacs-brigade--codex-home)))
+      (set-file-modes dir #o700)
+      (when (file-directory-p real)
+        (dolist (entry (directory-files real nil "\\`[^.]" t))
+          (unless (equal entry "config.toml")
+            (ignore-errors
+              (make-symbolic-link (expand-file-name entry real)
+                                  (expand-file-name entry dir) t)))))
+      ;; The user's own config first, so their settings survive, then our
+      ;; server table appended -- the same shape and the same reasoning
+      ;; as the grok dialect in cmacs-brigade-host.el.
+      (with-file-modes #o600
+        (with-temp-file (expand-file-name "config.toml" dir)
+          (let ((user-config (expand-file-name "config.toml" real)))
+            (when (file-readable-p user-config)
+              (insert-file-contents user-config)
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))))
+          (insert-file-contents config)))
+      dir)))
+
+(defun cmacs-brigade--worker-env (worker env &optional endpoint)
+  "Environment for WORKER, on top of ENV.
+
+ENDPOINT is the provisioned MCP config, which codex takes as a whole
+CODEX_HOME rather than as a file path."
+  (pcase worker
+    ('opencode
+     (cons (cons "OPENCODE_PERMISSION" cmacs-brigade-opencode-allow-all) env))
+    ('codex
+     (let ((overlay (cmacs-brigade--codex-overlay
+                     (and endpoint (plist-get endpoint :path)))))
+       (if overlay (cons (cons "CODEX_HOME" overlay) env) env)))
+    (_ env)))
 
 (defun cmacs-brigade--start-process (task-id agent prompt cwd env endpoint)
   "Spawn AGENT's worker for TASK-ID.  Returns the process."
@@ -437,7 +545,7 @@ variable; this mirrors what ai-glib sets for the same purpose.")
          (default-directory (or cwd default-directory))
          (process-environment
           (append (mapcar (lambda (c) (format "%s=%s" (car c) (cdr c)))
-                          (cmacs-brigade--worker-env worker env))
+                          (cmacs-brigade--worker-env worker env endpoint))
                   process-environment))
          (buf (generate-new-buffer (format " *brigade-%s*" task-id)))
          proc)
@@ -771,6 +879,60 @@ Returns the text to keep.  RAW unchanged when it is not a report."
              (round (* 1000000 (or cost 0))))))
         (if (stringp text) text raw)))))
 
+(defun cmacs-brigade--parse-codex-report (raw task-id)
+  "Extract the answer from codex's JSONL RAW, recording TASK-ID's usage.
+
+Codex does not print one report the way claude does; `codex exec --json'
+streams a JSONL event per line, so the whole-object parser above reads
+none of it and would hand the caller the raw stream as the answer.
+
+The three lines that matter:
+
+  thread.started   carries thread_id, which is what `codex exec resume'
+                   takes -- so it is the session id
+  item.completed   with an agent_message item; the last one is the reply
+  turn.completed   carries the usage
+
+Anything else -- reasoning, command executions, MCP tool calls -- is the
+work, not the answer, and is dropped here the same way the claude
+report's intermediate turns are.  Returns RAW unchanged when not one
+line parses, so a crash or a usage message still reaches the caller."
+  (let ((sid nil) (text nil) (in 0) (out 0) (turns 0) (saw nil))
+    (dolist (line (split-string (or raw "") "\n" t "[ \t\r]+"))
+      (let ((json (condition-case nil
+                      (json-parse-string line :object-type 'alist
+                                         :array-type 'list
+                                         :null-object nil :false-object nil)
+                    (error nil))))
+        (when (consp json)
+          (setq saw t)
+          (let ((type (alist-get 'type json)))
+            (cond
+             ((equal type "thread.started")
+              (setq sid (alist-get 'thread_id json)))
+             ((equal type "turn.completed")
+              (let ((u (alist-get 'usage json)))
+                (setq turns (1+ turns)
+                      in  (+ in  (or (alist-get 'input_tokens u) 0))
+                      out (+ out (or (alist-get 'output_tokens u) 0)))))
+             ((equal type "item.completed")
+              (let ((item (alist-get 'item json)))
+                (when (equal (alist-get 'type item) "agent_message")
+                  ;; The last one wins: a turn can produce several, and
+                  ;; the closing message is the reply.
+                  (setq text (alist-get 'text item))))))))))
+    (when (and (stringp sid) (not (string-empty-p sid))
+               (cmacs-brigade-conversation-p task-id))
+      (cmacs-brigade-conversation-put task-id :session-id sid))
+    (when (and saw (or (> turns 0) (> in 0) (> out 0))
+               (fboundp 'cmacs-brigade-task-progress-add))
+      ;; Codex reports no cost, so the budget sees tokens and zero
+      ;; dollars rather than a number invented from a price list that
+      ;; would be wrong the week it changed.
+      (ignore-errors
+        (cmacs-brigade-task-progress-add task-id turns in out 0)))
+    (if (stringp text) text raw)))
+
 (defun cmacs-brigade--json-object (raw)
   "Parse RAW as a JSON object, or nil.
 
@@ -814,17 +976,22 @@ warning on stdout before its report."
 ;; neither: piping a follow-up to bash produces a process that has never
 ;; seen the first message, and calling that a continuation would be a lie
 ;; the caller has no way to detect.
-(dolist (w '((claude-code "Drive the claude CLI in --print mode." t t)
-             (opencode    "Drive the opencode CLI." t t)
+(dolist (w `((claude-code "Drive the claude CLI in --print mode." t t
+                          ,#'cmacs-brigade--parse-cli-report)
+             (opencode    "Drive the opencode CLI." t t
+                          ,#'cmacs-brigade--parse-cli-report)
+             (codex       "Drive OpenAI's codex CLI as `codex exec'." t t
+                          ,#'cmacs-brigade--parse-codex-report)
              (shell       "Pipe the prompt to bash.  Mostly for testing."
-                          nil nil)))
+                          nil nil nil)))
   (cmacs-brigade-register-worker
    :name (nth 0 w)
    :description (nth 1 w)
    :start #'cmacs-brigade--worker-subprocess
    :cancel #'cmacs-brigade--cancel-process
-   ;; shell has no report to read; its stdout is the answer.
-   :parse-output (when (nth 2 w) #'cmacs-brigade--parse-cli-report)
+   ;; shell has no report to read; its stdout is the answer.  codex
+   ;; streams JSONL rather than printing one object, so it reads its own.
+   :parse-output (nth 4 w)
    :supports-session (nth 3 w)))
 
 
@@ -924,7 +1091,17 @@ warning on stdout before its report."
             (cmacs-brigade-conversation-put
              task-id :isolation isolation :prepared prepared
              :cwd (plist-get prepared :cwd) :allowlist allowlist))
-          (setq endpoint (cmacs-brigade-host-provision task-id allowlist))
+          ;; The dialect follows the provider: an opencode, grok or codex
+          ;; agent needs its own config shape, and passing no :format
+          ;; handed every one of them claude's .mcp.json -- which they
+          ;; read as nothing at all.
+          (setq endpoint
+                (cmacs-brigade-host-provision
+                 task-id allowlist
+                 :format (and (fboundp 'cmacs-brigade-host-format-for-provider)
+                              (cmacs-brigade-host-format-for-provider
+                               (car (cmacs-brigade--split-model
+                                     (plist-get agent :model)))))))
           (setq proc (funcall (plist-get worker :start)
                               task-id agent
                               (cond

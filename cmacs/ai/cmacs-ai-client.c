@@ -77,6 +77,69 @@ cmacs_ai_client_unregister (guint handle)
 
 /* ── Provider construction ──────────────────────────────────────── */
 
+/* The string value of KEY in the endpoint plist EP, or NULL.  Only
+ * strings are honoured: a number or a symbol in a URL slot is a config
+ * mistake worth ignoring rather than coercing into something plausible. */
+static const gchar *
+cmacs_ai__endpoint_string (Lisp_Object ep, const char *key)
+{
+  Lisp_Object v = plist_get (ep, intern (key));
+  return STRINGP (v) ? SSDATA (v) : NULL;
+}
+
+/* Build an OpenAI-compatible client from one `cmacs-ai-openai-compatible-endpoints'
+ * entry.
+ *
+ * :api-key-env names an environment variable rather than holding the
+ * secret, which is what keeps a token out of a customize file that
+ * often lives in a git repository.  An explicit :api-key still wins, and
+ * an empty string is meaningful to ai-glib -- it disables the
+ * Authorization header for a local server that wants none, which is a
+ * different thing from "unset, go look elsewhere". */
+static void
+cmacs_ai__apply_endpoint (Lisp_Object ep, gpointer c)
+{
+  const gchar *base_url = cmacs_ai__endpoint_string (ep, ":base-url");
+  const gchar *api_key  = cmacs_ai__endpoint_string (ep, ":api-key");
+  const gchar *key_env  = cmacs_ai__endpoint_string (ep, ":api-key-env");
+  const gchar *model    = cmacs_ai__endpoint_string (ep, ":model");
+  const gchar *image    = cmacs_ai__endpoint_string (ep, ":image-model");
+  const gchar *embed    = cmacs_ai__endpoint_string (ep, ":embedding-model");
+
+  if (base_url != NULL)
+    g_object_set (c, "base-url", base_url, NULL);
+  if (api_key == NULL && key_env != NULL)
+    api_key = g_getenv (key_env);
+  if (api_key != NULL)
+    g_object_set (c, "api-key", api_key, NULL);
+  if (model != NULL)
+    g_object_set (c, "model", model, NULL);
+  if (image != NULL)
+    g_object_set (c, "image-model", image, NULL);
+  if (embed != NULL)
+    g_object_set (c, "embedding-model", embed, NULL);
+}
+
+static AiOpenAICompatibleClient *
+cmacs_ai__openai_compatible_from_endpoint (Lisp_Object ep)
+{
+  AiOpenAICompatibleClient *c = ai_openai_compatible_client_new ();
+  cmacs_ai__apply_endpoint (ep, c);
+  return c;
+}
+
+void
+cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov)
+{
+  Lisp_Object ep;
+
+  if (prov == NULL || !AI_IS_OPENAI_COMPATIBLE_CLIENT (prov))
+    return;
+  ep = cmacs_ai_openai_compatible_endpoint (sym);
+  if (!NILP (ep))
+    cmacs_ai__apply_endpoint (ep, prov);
+}
+
 static AiProvider *
 cmacs_ai__make_client (Lisp_Object provider_sym)
 {
@@ -102,6 +165,21 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
     return AI_PROVIDER (ai_antigravity_client_new ());
   if (EQ (provider_sym, intern ("cursor")))
     return AI_PROVIDER (ai_cursor_client_new ());
+  if (EQ (provider_sym, intern ("codex-cli"))
+      || EQ (provider_sym, intern ("codex")))
+    return AI_PROVIDER (ai_codex_cli_client_new ());
+  if (cmacs_ai_openai_compatible_symbol_p (provider_sym))
+    return AI_PROVIDER (ai_openai_compatible_client_new ());
+  {
+    /* A user-named endpoint: one AiOpenAICompatibleClient configured
+     * from its entry, so `my-vllm' is a provider everywhere a built-in
+     * name is.  Properties are set rather than left to ai-glib's
+     * fallback chain precisely so two endpoints can differ -- the
+     * environment and AiConfig hold one URL between them. */
+    Lisp_Object ep = cmacs_ai_openai_compatible_endpoint (provider_sym);
+    if (!NILP (ep))
+      return AI_PROVIDER (cmacs_ai__openai_compatible_from_endpoint (ep));
+  }
   return NULL;
 }
 
@@ -110,7 +188,7 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
  * The registry holds AiProvider implementors of two unrelated GObject
  * hierarchies: AiClient (HTTP API providers) and AiCliClient
  * (claude-code / opencode / claude-tmux / grok-build / antigravity /
- * cursor).  Calling
+ * cursor / codex-cli).  Calling
  * ai_client_* on a CLI client is a CRITICAL + silent no-op, so every
  * property access routes on the instance type. */
 
@@ -157,7 +235,9 @@ DEFUN ("cmacs-ai-client-new", Fcmacs_ai_client_new,
        Scmacs_ai_client_new, 1, 2, 0,
        doc: /* Create an ai-glib client for PROVIDER.
 PROVIDER is one of the symbols: claude, openai, gemini, grok, ollama,
-claude-code, opencode, claude-tmux, grok-build, antigravity, cursor.
+claude-code, opencode, claude-tmux, grok-build, antigravity, cursor,
+codex-cli.  Also any name in `cmacs-ai-openai-compatible-endpoints',
+which is an OpenAI-compatible HTTP server of your own.
 Optional MODEL is a
 string (passed to `ai-client-set-model').  Returns an integer handle.
 Free with `cmacs-ai-client-free'.  */)
@@ -319,7 +399,7 @@ DEFUN ("cmacs-ai-client-cli-p", Fcmacs_ai_client_cli_p,
        doc: /* Return t when HANDLE drives a command-line agent.
 
 The CLI providers (claude-code, opencode, claude-tmux, grok-build,
-antigravity, cursor) are
+antigravity, cursor, codex-cli) are
 a different GObject hierarchy from the HTTP ones, and they ignore the
 tools argument entirely -- ai-glib discards it.  A caller that wants the
 model to have tools must therefore hand a CLI provider an MCP config

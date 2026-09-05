@@ -1464,3 +1464,126 @@ this line\"."
                (lambda () (error "should not be consulted"))))
       (cmacs-brigade-dashboard-send "carry on" "explicit-id")
       (should (equal '(("explicit-id" . "carry on")) sent)))))
+
+;;; Codex: worker, dialect and report parsing
+
+(ert-deftest cmacs-brigade-codex-provider-picks-the-codex-worker ()
+  "A codex-cli model resolves to the codex worker, not inproc.
+
+Running a CLI provider through the in-process loop drops every tool
+silently, which is the reason this mapping exists at all."
+  (skip-unless (fboundp 'cmacs-brigade-resolve-worker))
+  (should (eq 'codex (cmacs-brigade-resolve-worker
+                      '(:model "codex-cli/gpt-6-astra"))))
+  (should (eq 'codex (cmacs-brigade-resolve-worker '(:model "codex/gpt-5.5"))))
+  ;; An explicit worker still wins over the provider's implication.
+  (should (eq 'inproc (cmacs-brigade-resolve-worker
+                       '(:model "codex-cli/gpt-6-astra" :worker inproc)))))
+
+(ert-deftest cmacs-brigade-openai-compatible-runs-in-process ()
+  "An HTTP endpoint has no CLI, so it stays on the in-process worker.
+
+A user's own server reaches the tool loop, which means a brigade agent
+pointed at it gets every brigade tool -- the thing a CLI agent has to go
+through MCP for."
+  (skip-unless (fboundp 'cmacs-brigade-resolve-worker))
+  (let ((cmacs-brigade-worker 'inproc))
+    (should (eq 'inproc (cmacs-brigade-resolve-worker
+                         '(:model "my-vllm/qwen3"))))
+    (should (eq 'inproc (cmacs-brigade-resolve-worker
+                         '(:model "openai-compatible/qwen3"))))))
+
+(ert-deftest cmacs-brigade-codex-gets-its-own-config-dialect ()
+  "codex-cli provisions TOML, not claude's JSON.
+
+Handing codex a .mcp.json is not an error it reports; it reads nothing
+and the agent runs with no tools at all."
+  (skip-unless (fboundp 'cmacs-brigade-host-format-for-provider))
+  (should (eq 'codex (cmacs-brigade-host-format-for-provider 'codex-cli)))
+  (should (eq 'codex (cmacs-brigade-host-format-for-provider 'codex)))
+  (let ((toml (cmacs-brigade-host--config-codex
+               "/usr/bin/emacs" '("--mcp-relay")
+               '(("CMACS_BRIGADE_SOCKET" . "/run/user/1000/x.sock")))))
+    (should (string-match-p "\\[mcp_servers\\.cmacs-brigade\\]" toml))
+    (should (string-match-p "command = \"/usr/bin/emacs\"" toml))
+    (should (string-match-p "--mcp-relay" toml))
+    (should (string-match-p "CMACS_BRIGADE_SOCKET" toml))))
+
+(ert-deftest cmacs-brigade-codex-argv-is-sandboxed ()
+  "The codex worker runs `codex exec' under an explicit sandbox."
+  (skip-unless (fboundp 'cmacs-brigade--worker-command))
+  (let* ((argv (cmacs-brigade--worker-command
+                'codex '(:model "codex-cli/gpt-6-astra") "/tmp/p" nil nil)))
+    (should (member "exec" argv))
+    (should (member "--json" argv))
+    (should (member "--sandbox" argv))
+    (should (member cmacs-brigade-codex-sandbox argv))
+    ;; The bare model, never our provider prefix.
+    (should (member "gpt-6-astra" argv))
+    (should-not (member "codex-cli/gpt-6-astra" argv)))
+  ;; A session id resumes rather than starting a new thread.
+  (let ((argv (cmacs-brigade--worker-command
+               'codex '(:model "codex-cli/gpt-6-astra") "/tmp/p" nil "th_42")))
+    (should (member "resume" argv))
+    (should (member "th_42" argv))))
+
+(ert-deftest cmacs-brigade-codex-report-is-jsonl-not-one-object ()
+  "The codex parser takes the last agent message and the thread id.
+
+`codex exec --json' streams an event per line, so the whole-object
+parser reads none of it and would hand the caller the raw stream."
+  (skip-unless (fboundp 'cmacs-brigade--parse-codex-report))
+  (let* ((raw (mapconcat
+               #'identity
+               '("{\"type\":\"thread.started\",\"thread_id\":\"th_7\"}"
+                 "{\"type\":\"turn.started\"}"
+                 "{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\",\"text\":\"thinking\"}}"
+                 "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"first\"}}"
+                 "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"the answer\"}}"
+                 "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":3}}")
+               "\n"))
+         (out (cmacs-brigade--parse-codex-report raw "task-codex-test")))
+    (should (equal out "the answer"))
+    ;; Reasoning is the work, not the reply.
+    (should-not (string-match-p "thinking" out)))
+  ;; Not JSONL at all: hand it back rather than swallowing a crash.
+  (should (equal (cmacs-brigade--parse-codex-report
+                  "codex: command not found" "task-codex-test")
+                 "codex: command not found")))
+
+(ert-deftest cmacs-brigade-codex-overlay-keeps-the-real-home-reachable ()
+  "The CODEX_HOME overlay carries our config.toml and links the rest.
+
+auth.json above all: without it the run is unauthenticated and the
+failure reads as a model error rather than a missing login."
+  (skip-unless (fboundp 'cmacs-brigade--codex-overlay))
+  (let* ((home (make-temp-file "cmacs-codex-home" t))
+         (frag (make-temp-file "cmacs-codex-frag"))
+         (process-environment (cons (format "CODEX_HOME=%s" home)
+                                    process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "auth.json" home) (insert "{}"))
+          (with-temp-file (expand-file-name "config.toml" home)
+            (insert "model = \"gpt-6-astra\"\n"))
+          (with-temp-file frag (insert "\n[mcp_servers.cmacs-brigade]\ncommand = \"x\"\n"))
+          (let ((overlay (cmacs-brigade--codex-overlay frag)))
+            (should overlay)
+            (should (file-directory-p overlay))
+            ;; The user's own settings survive, ours are appended.
+            (let ((cfg (with-temp-buffer
+                         (insert-file-contents
+                          (expand-file-name "config.toml" overlay))
+                         (buffer-string))))
+              (should (string-match-p "gpt-6-astra" cfg))
+              (should (string-match-p "mcp_servers\\.cmacs-brigade" cfg)))
+            ;; Everything else is linked through, config.toml is not.
+            (should (file-exists-p (expand-file-name "auth.json" overlay)))
+            (should (file-symlink-p (expand-file-name "auth.json" overlay)))
+            (should-not (file-symlink-p
+                         (expand-file-name "config.toml" overlay)))
+            (delete-directory overlay t)))
+      (delete-directory home t)
+      (delete-file frag)))
+  ;; Nothing to deliver: no overlay, and the run uses the real home.
+  (should-not (cmacs-brigade--codex-overlay nil)))

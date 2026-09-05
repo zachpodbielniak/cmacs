@@ -71,7 +71,85 @@ locate the binary.
 The @command{agy} CLI.
 @item cursor
 The @command{cursor-agent} CLI.
+@item codex-cli
+OpenAI's @command{codex} CLI, driven as @code{codex exec}.  Reads
+@env{CODEX_PATH} to locate the binary.  @code{codex} is accepted as a
+spelling of it.
+@item openai-compatible
+Any server speaking OpenAI's Chat Completions protocol.  Reads
+@env{OPENAI_COMPATIBLE_BASE_URL} and @env{OPENAI_COMPATIBLE_API_KEY}.
+@code{http} is an alias.
 @end table
+
+@subsection Codex
+
+Run @command{codex login} once; there is no API key to set here.  The
+models are codex's own ids --- @code{gpt-6-astra} (the default),
+@code{gpt-5.6-sol}, @code{gpt-5.6-terra}, @code{gpt-5.6-luna},
+@code{gpt-5.5}, @code{gpt-5.4-mini}, @code{gpt-5.3-codex-spark} --- and
+@code{cmacs-ai-list-models} returns them without a network round trip.
+
+Codex is the one CLI here that enforces a @dfn{sandbox} rather than
+asking for approval: @code{read-only}, @code{workspace-write} or
+@code{danger-full-access}, set through
+@code{cmacs-ai-client-set-cli-option} on the @code{sandbox} property.
+NULL means read-only, so an agent expected to edit its own tree needs
+@code{workspace-write} saying so.  There is no prompt to skip: ai-glib
+always passes @option{--ask-for-approval never}, and skip-permissions
+would only add @option{--dangerously-bypass-approvals-and-sandbox},
+which removes the sandbox outright.
+
+ai-glib's codex client declares no MCP config surface, so a codex chat
+in cmacs has no cmacs tools.  The brigade's own @code{codex} worker does
+deliver them, because it spawns the CLI itself and can hand it a
+@env{CODEX_HOME}.
+
+@subsection Your own OpenAI-compatible servers
+
+@vindex cmacs-ai-openai-compatible-endpoints
+@code{openai-compatible} talks to anything speaking OpenAI's Chat
+Completions protocol: vLLM, llama.cpp's server, LM Studio, a hosted
+gateway.  On its own it reads the environment, which is one server.
+
+A base URL is not a setting you have one of, so name them instead:
+
+@lisp
+(setq cmacs-ai-openai-compatible-endpoints
+      '((vllm     :base-url "http://localhost:8000/v1"
+                  :model "Qwen/Qwen3-32B" :api-key "")
+        (together :base-url "https://api.together.xyz/v1"
+                  :model "deepseek-ai/DeepSeek-V3"
+                  :api-key-env "TOGETHER_API_KEY")))
+@end lisp
+
+Each name is then a provider in every sense:
+@code{cmacs-ai-chat-with-provider} completes on @code{vllm},
+@code{cmacs-ai-prompt-sync} takes it, the harness builds it,
+@code{cmacs-ai-textops-provider} can be set to it, and a brigade agent
+can carry @samp{vllm/Qwen3-32B} as its model.
+
+@table @code
+@item :base-url
+The API root.  An origin gets @code{/v1} appended; a URL with a path
+@emph{is} the root.  Never @code{/chat/completions}.
+@item :model
+Default model id for this server.
+@item :api-key
+The token.  @code{""} means send no @code{Authorization} header, which
+is what a local server wants.
+@item :api-key-env
+Environment variable holding the token, read when @code{:api-key} is
+absent.  Prefer it: a customize file is often in a git repository.
+@item :image-model
+For the image commands.
+@item :embedding-model
+For @code{cmacs-ai-embed}.
+@end table
+
+The properties are set on the client rather than left to ai-glib's
+fallback chain, and that is the point: the environment and
+@code{AiConfig} hold @emph{one} URL between them, so two endpoints
+resolved through them would be the same server twice.
 
 @code{grok} and @code{grok-build} are two different backends, not two
 names for one.  @code{grok} is xAI's HTTP API and takes API model ids;

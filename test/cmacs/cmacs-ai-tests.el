@@ -1893,5 +1893,75 @@ to come back sealed rather than as a hole."
             (should-error (insert "x") :type 'text-read-only)))
       (kill-buffer buf))))
 
+;;; New providers: codex-cli and OpenAI-compatible endpoints
+
+(ert-deftest cmacs-ai-providers-carry-the-new-backends ()
+  "codex-cli and openai-compatible are offered like any other provider."
+  (skip-unless (fboundp 'cmacs-ai-providers))
+  (let ((ps (cmacs-ai-providers)))
+    (should (memq 'codex-cli ps))
+    (should (memq 'openai-compatible ps))))
+
+(ert-deftest cmacs-ai-named-endpoints-are-providers ()
+  "A name in `cmacs-ai-openai-compatible-endpoints' completes as a provider.
+
+That is the whole point of the alist: one AI_PROVIDER_OPENAI_COMPATIBLE
+in ai-glib, but a user has a vLLM box and a gateway and wants to pick
+between them by name."
+  (skip-unless (fboundp 'cmacs-ai-providers))
+  (let ((cmacs-ai-openai-compatible-endpoints
+         '((test-vllm :base-url "http://127.0.0.1:9/v1" :model "m1")
+           (test-gw   :base-url "http://127.0.0.1:19/v1" :model "m2"))))
+    (let ((ps (cmacs-ai-providers)))
+      (should (memq 'test-vllm ps))
+      (should (memq 'test-gw ps))))
+  ;; and they are gone again once the user's config no longer names them
+  (should-not (memq 'test-vllm (cmacs-ai-providers))))
+
+(ert-deftest cmacs-ai-endpoint-client-takes-its-own-settings ()
+  "Two endpoints build two differently-configured clients.
+
+The model is the readable half; the base URL is asserted by
+`cmacs-ai-endpoint-clients-are-independent' in the live-server test
+below, which is the one that actually proves they do not share a
+setting."
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (let ((cmacs-ai-openai-compatible-endpoints
+         '((test-a :base-url "http://127.0.0.1:9/v1"  :model "model-a")
+           (test-b :base-url "http://127.0.0.1:19/v1" :model "model-b"))))
+    (dolist (case '((test-a . "model-a") (test-b . "model-b")))
+      (let ((h (cmacs-ai-client-new (car case))))
+        (unwind-protect
+            (progn
+              (should (equal (cmacs-ai-client-get-model h) (cdr case)))
+              ;; An HTTP client, not a CLI one: the tool loop drives it
+              ;; in process, which is what makes it work under brigade's
+              ;; `inproc' worker.
+              (should-not (cmacs-ai-client-cli-p h)))
+          (cmacs-ai-client-free h))))))
+
+(ert-deftest cmacs-ai-codex-is-a-cli-client ()
+  "codex-cli builds, and is a CLI client.
+
+Which matters beyond tidiness: `cmacs-ai-client-cli-p' is what decides
+whether a chat injects CLAUDE.md into the system prompt and whether the
+harness hands over an MCP config instead of a tools argument."
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (let ((h (cmacs-ai-client-new 'codex-cli)))
+    (unwind-protect
+        (progn
+          (should (cmacs-ai-client-cli-p h))
+          (should (stringp (cmacs-ai-client-get-model h))))
+      (cmacs-ai-client-free h))))
+
+(ert-deftest cmacs-ai-unknown-provider-still-errors ()
+  "An unknown name is an error, not a silent fall back to Claude.
+
+ai-glib's own string parser falls back; cmacs deliberately does not,
+because a typo that bills somewhere else is worse than a failure."
+  (skip-unless (fboundp 'cmacs-ai-client-new))
+  (let ((cmacs-ai-openai-compatible-endpoints nil))
+    (should-error (cmacs-ai-client-new 'no-such-provider-here))))
+
 (provide 'cmacs-ai-tests)
 ;;; cmacs-ai-tests.el ends here

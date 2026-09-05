@@ -24,22 +24,67 @@
 
 ;;;; Defcustoms ------------------------------------------------------
 
+(defcustom cmacs-ai-openai-compatible-endpoints nil
+  "Your own OpenAI-compatible HTTP servers, each a provider in its own right.
+
+ai-glib has one `openai-compatible' provider, but a base URL is not a
+setting you have one of: a vLLM box, a llama.cpp on the laptop and a
+hosted gateway are three servers you want to reach in the same session.
+Each entry here is a provider symbol, so it completes in
+\[cmacs-ai-chat-with-provider], can be a brigade agent's model prefix
+\(`my-vllm/qwen3\='), and can be `cmacs-ai-textops-provider'.
+
+Each entry is (NAME . PLIST):
+
+  :base-url         the API root.  An origin gets `/v1' appended; a URL
+                    with a path IS the root.  Never `/chat/completions'.
+  :model            default model id for this server
+  :api-key          the token.  An empty string means \"send no
+                    Authorization header\", which a local server wants
+  :api-key-env      name of an environment variable holding the token,
+                    read when :api-key is absent -- prefer this, since a
+                    customize file is often in a git repository
+  :image-model      for `cmacs-ai-image-*'
+  :embedding-model  for `cmacs-ai-embed'
+
+  (setq cmacs-ai-openai-compatible-endpoints
+        \='((vllm     :base-url \"http://localhost:8000/v1\"
+                    :model \"Qwen/Qwen3-32B\" :api-key \"\")
+          (together :base-url \"https://api.together.xyz/v1\"
+                    :model \"deepseek-ai/DeepSeek-V3\"
+                    :api-key-env \"TOGETHER_API_KEY\")))
+
+A name here shadows nothing: the plain `openai-compatible' provider is
+still available and takes its URL from ai-glib's own configuration and
+the OPENAI_COMPATIBLE_* environment."
+  :type '(alist :key-type symbol
+                :value-type (plist :key-type symbol :value-type string))
+  :group 'cmacs-ai)
+
 (defcustom cmacs-ai-default-provider 'claude
   "Default provider symbol used by `cmacs-ai-chat'.
-One of: claude openai gemini grok ollama claude-code opencode
-claude-tmux grok-build antigravity cursor.
+One of: claude openai gemini grok ollama openai-compatible claude-code
+opencode claude-tmux grok-build antigravity cursor codex-cli, or any
+name you defined in `cmacs-ai-openai-compatible-endpoints'.
 
 `grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.  They
 take different model ids and are not interchangeable.
 
-`antigravity' wraps Google's `agy' CLI and `cursor' wraps Cursor's
-`cursor-agent' CLI.  Both are agentic CLIs like claude-code, so they
-ignore the tools argument and need an MCP config instead -- see
-`cmacs-ai-client-cli-p'."
+`antigravity' wraps Google's `agy' CLI, `cursor' wraps Cursor's
+`cursor-agent' CLI, and `codex-cli' wraps OpenAI's `codex exec'.  All
+are agentic CLIs like claude-code, so they ignore the tools argument and
+need an MCP config instead -- see `cmacs-ai-client-cli-p'.
+
+`openai-compatible' is any server speaking OpenAI's Chat Completions
+protocol.  Point it somewhere with the OPENAI_COMPATIBLE_BASE_URL
+environment, or name several servers at once in
+`cmacs-ai-openai-compatible-endpoints' and use those names here."
   :type '(choice (const claude) (const openai) (const gemini)
-                 (const grok) (const ollama)
+                 (const grok) (const ollama) (const openai-compatible)
                  (const claude-code) (const opencode) (const claude-tmux)
-                 (const grok-build) (const antigravity) (const cursor))
+                 (const grok-build) (const antigravity) (const cursor)
+                 (const codex-cli)
+                 (symbol :tag "Named endpoint"))
   :group 'cmacs-ai)
 
 (defcustom cmacs-ai-default-model nil
@@ -457,7 +502,10 @@ AiConfig singleton + the `cmacs-ai-default-provider' defcustom)."
                 (claude-code  . ("CLAUDE_CODE_PATH"))
                 (opencode     . ("OPENCODE_PATH"))
                 (claude-tmux  . ("CLAUDE_CODE_PATH"))
-                (grok-build   . ("GROK_PATH")))))
+                (grok-build   . ("GROK_PATH"))
+                (codex-cli    . ("CODEX_PATH"))
+                (openai-compatible . ("OPENAI_COMPATIBLE_BASE_URL"
+                                      "OPENAI_COMPATIBLE_API_KEY")))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)

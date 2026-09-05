@@ -24,6 +24,40 @@
  * re-declare here (gcc -Wredundant-decls). */
 
 /* Client registry (cmacs-ai-client.c). */
+/* ── User-defined OpenAI-compatible endpoints ────────────────────────
+ *
+ * ai-glib has one AI_PROVIDER_OPENAI_COMPATIBLE, but a user has more
+ * than one server to talk to: a vLLM box, a llama.cpp on the laptop, a
+ * hosted gateway.  `cmacs-ai-openai-compatible-endpoints' names each
+ * one, and every provider symbol in that alist behaves like a provider
+ * of its own -- it completes in `cmacs-ai-chat-with-provider', it can
+ * be a brigade agent's model prefix, it can be the textops provider.
+ *
+ * Returns the endpoint's plist for SYM, or Qnil when SYM does not name
+ * one.  Reading the variable is a plain cell read, so this is safe from
+ * anywhere the client factory runs. */
+extern Lisp_Object cmacs_ai_openai_compatible_endpoint (Lisp_Object sym);
+
+/* True when SYM is `openai-compatible' (or its `http' alias). */
+extern bool cmacs_ai_openai_compatible_symbol_p (Lisp_Object sym);
+
+/* Provider symbol -> AiProviderType, strictly: an unknown name is an
+ * error rather than ai_provider_type_from_string's silent fall back to
+ * Claude, which for a typo means billing somewhere nobody asked for.
+ * Endpoint-aware, so a user's own server name resolves too. */
+extern AiProviderType cmacs_ai_provider_type_from_symbol (Lisp_Object sym);
+
+/* When SYM names an entry in `cmacs-ai-openai-compatible-endpoints',
+ * push that entry's base-url / api-key / model onto PROV.  A no-op for
+ * every other symbol, and for a provider object that is not an
+ * OpenAI-compatible client.
+ *
+ * The type alone is not enough to build one of these: two endpoints are
+ * the same AI_PROVIDER_OPENAI_COMPATIBLE and differ only in properties,
+ * so any path that constructs from a type has to call this or it gets
+ * whichever server the environment happens to name. */
+extern void cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov);
+
 extern void   cmacs_ai_client_registry_init  (void);
 extern guint  cmacs_ai_client_register       (gpointer client_gobject);
 extern gpointer cmacs_ai_client_lookup       (guint handle);

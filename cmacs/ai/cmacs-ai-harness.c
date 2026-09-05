@@ -238,28 +238,15 @@ on_activity_notify (GObject *obj, GParamSpec *pspec, gpointer user)
 
 /* Provider symbol -> AiProviderType, strictly.
  *
- * ai_provider_type_from_string() falls back to Claude on anything it
- * does not recognise, which for a typed provider name means a typo runs
- * -- and bills -- somewhere the user did not ask for.  The same table
- * appears in cmacs-ai-stream.c and cmacs-ai-config.c for the same
- * reason; it is short enough that sharing it would cost more in
- * plumbing than it saves. */
+ * The table lives in cmacs-ai-config.c and every path shares it.  It
+ * used to be copied here and in cmacs-ai-stream.c on the grounds that
+ * it was too short to be worth sharing; what that cost was a provider
+ * that worked in a chat buffer and did not exist in the harness, twice
+ * over, as soon as ai-glib grew one. */
 static AiProviderType
 cmacs_ai_harness__provider_type (Lisp_Object sym)
 {
-  if (EQ (sym, intern ("claude")))      return AI_PROVIDER_CLAUDE;
-  if (EQ (sym, intern ("openai")))      return AI_PROVIDER_OPENAI;
-  if (EQ (sym, intern ("gemini")))      return AI_PROVIDER_GEMINI;
-  if (EQ (sym, intern ("grok")))        return AI_PROVIDER_GROK;
-  if (EQ (sym, intern ("ollama")))      return AI_PROVIDER_OLLAMA;
-  if (EQ (sym, intern ("claude-code"))) return AI_PROVIDER_CLAUDE_CODE;
-  if (EQ (sym, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
-  if (EQ (sym, intern ("claude-tmux"))) return AI_PROVIDER_CLAUDE_TMUX;
-  if (EQ (sym, intern ("grok-build")))  return AI_PROVIDER_GROK_BUILD;
-  if (EQ (sym, intern ("antigravity"))) return AI_PROVIDER_ANTIGRAVITY;
-  if (EQ (sym, intern ("cursor")))      return AI_PROVIDER_CURSOR;
-  error ("cmacs-ai-harness: unknown provider %s",
-         SSDATA (SYMBOL_NAME (sym)));
+  return cmacs_ai_provider_type_from_symbol (sym);
 }
 
 static GObject *
@@ -280,6 +267,10 @@ cmacs_ai_harness__make_provider (Lisp_Object provider_sym,
   if (prov == NULL)
     error ("cmacs-ai-harness: %s",
            gerror ? gerror->message : "could not build that provider");
+
+  /* The factory builds from a type; a named endpoint's URL and key
+   * arrive only here. */
+  cmacs_ai_apply_endpoint_settings (provider_sym, prov);
 
   /* Set after construction rather than passed in: the factory takes a
    * config, and the two client hierarchies spell the model setter

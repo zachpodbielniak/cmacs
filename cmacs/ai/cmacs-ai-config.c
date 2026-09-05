@@ -19,8 +19,42 @@
 #include <ai-glib.h>
 #include <glib.h>
 
-static AiProviderType
-cmacs_ai__provider_from_symbol (Lisp_Object sym)
+/* ── User-defined OpenAI-compatible endpoints ──────────────────────── */
+
+bool
+cmacs_ai_openai_compatible_symbol_p (Lisp_Object sym)
+{
+  /* `http' is ai-glib's own alias for the same provider; accepting it
+   * here keeps the two spellings interchangeable in cmacs too. */
+  return EQ (sym, intern ("openai-compatible")) || EQ (sym, intern ("http"));
+}
+
+Lisp_Object
+cmacs_ai_openai_compatible_endpoint (Lisp_Object sym)
+{
+  Lisp_Object alist, tail;
+
+  if (!SYMBOLP (sym) || NILP (sym))
+    return Qnil;
+
+  /* find_symbol_value rather than Fsymbol_value: the variable is
+   * defined in Elisp that may not be loaded yet, and a void variable
+   * must read as "no endpoints", not signal. */
+  alist = find_symbol_value (intern ("cmacs-ai-openai-compatible-endpoints"));
+  if (!CONSP (alist))
+    return Qnil;
+
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      if (CONSP (entry) && EQ (XCAR (entry), sym))
+        return XCDR (entry);
+    }
+  return Qnil;
+}
+
+AiProviderType
+cmacs_ai_provider_type_from_symbol (Lisp_Object sym)
 {
   if (EQ (sym, intern ("claude")))       return AI_PROVIDER_CLAUDE;
   if (EQ (sym, intern ("openai")))       return AI_PROVIDER_OPENAI;
@@ -37,7 +71,22 @@ cmacs_ai__provider_from_symbol (Lisp_Object sym)
   if (EQ (sym, intern ("grok-build")))   return AI_PROVIDER_GROK_BUILD;
   if (EQ (sym, intern ("antigravity")))  return AI_PROVIDER_ANTIGRAVITY;
   if (EQ (sym, intern ("cursor")))       return AI_PROVIDER_CURSOR;
+  if (EQ (sym, intern ("codex-cli"))
+      || EQ (sym, intern ("codex")))     return AI_PROVIDER_CODEX_CLI;
+  if (cmacs_ai_openai_compatible_symbol_p (sym))
+    return AI_PROVIDER_OPENAI_COMPATIBLE;
+  /* A name from `cmacs-ai-openai-compatible-endpoints' is that provider
+   * with its own base URL and key, so it maps to the same type. */
+  if (!NILP (cmacs_ai_openai_compatible_endpoint (sym)))
+    return AI_PROVIDER_OPENAI_COMPATIBLE;
   error ("cmacs-ai: unknown provider %s", SSDATA (SYMBOL_NAME (sym)));
+}
+
+/* Kept as the file-local spelling the DEFUNs below already use. */
+static AiProviderType
+cmacs_ai__provider_from_symbol (Lisp_Object sym)
+{
+  return cmacs_ai_provider_type_from_symbol (sym);
 }
 
 DEFUN ("cmacs-ai-config-set-api-key",

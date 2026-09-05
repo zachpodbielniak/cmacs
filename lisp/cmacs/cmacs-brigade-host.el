@@ -125,10 +125,23 @@ provider appends this to a copy of the user's own config."
                       "\n")
             "")))
 
+(defun cmacs-brigade-host--config-codex (command args env)
+  "A TOML fragment for Codex's config.toml.
+
+Codex declares MCP servers in exactly the shape grok does, so this is
+the grok emitter under another name.  What differs is delivery, not
+dialect: grok takes an overlay GROK_HOME from ai-glib, while codex reads
+CODEX_HOME/config.toml, which `cmacs-brigade--codex-overlay' builds.
+
+The server is named `cmacs-brigade' for the same reason it is there --
+a project's own config must not merge with ours by name."
+  (cmacs-brigade-host--config-grok command args env))
+
 (defconst cmacs-brigade-host-config-formats
   '((claude   . cmacs-brigade-host--config-claude)
     (opencode . cmacs-brigade-host--config-opencode)
-    (grok     . cmacs-brigade-host--config-grok))
+    (grok     . cmacs-brigade-host--config-grok)
+    (codex    . cmacs-brigade-host--config-codex))
   "Dialect emitters, keyed by format symbol.
 
 This table is the registration: teaching the host about another agent's
@@ -141,6 +154,7 @@ here.")
   (pcase (and provider (intern (format "%s" provider)))
     ((or 'opencode 'open-code) 'opencode)
     ((or 'grok-build 'grok_build) 'grok)
+    ((or 'codex-cli 'codex) 'codex)
     (_ 'claude)))
 
 (defun cmacs-brigade-host-endpoint-kind (format)
@@ -148,6 +162,11 @@ here.")
   (pcase format
     ('opencode "mcp-config-opencode")
     ('grok     "mcp-config-grok")
+    ;; ai-glib's codex client declares no MCP endpoint kind, so an
+    ;; in-process codex run gets no tools.  Naming the kind anyway keeps
+    ;; the table honest about the dialect; the brigade's own `codex'
+    ;; worker is what actually delivers it, through CODEX_HOME.
+    ('codex    "mcp-config-codex")
     (_         "mcp-config")))
 
 (cl-defun cmacs-brigade-host-provision (agent-id allowlist &key format)

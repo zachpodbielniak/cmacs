@@ -74,8 +74,10 @@ always freed afterwards.
 
 KEYS is a plist:
   :provider SYMBOL     provider (claude / openai / gemini / grok / ollama
-                       / claude-code / opencode / claude-tmux /
-                       grok-build / antigravity / cursor); nil = the
+                       / openai-compatible / claude-code / opencode /
+                       claude-tmux / grok-build / antigravity / cursor /
+                       codex-cli, or a name from
+                       `cmacs-ai-openai-compatible-endpoints'); nil = the
                        configured default.
   :system STRING       system prompt.
   :model STRING        model name overriding the provider's default.

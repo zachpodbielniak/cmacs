@@ -425,26 +425,14 @@ DEFUN ("cmacs-ai-chat-cancel", Fcmacs_ai_chat_cancel,
   return Qt;
 }
 
-/* Map a provider symbol to an AiProviderType.  Errors on unknown
- * symbols (deliberately stricter than ai_provider_type_from_string,
- * which silently falls back to Claude). */
+/* Map a provider symbol to an AiProviderType.  One table, in
+ * cmacs-ai-config.c: three copies of it is how `codex-cli' worked in a
+ * chat and was an unknown provider in `cmacs-ai-prompt-sync'. */
 static AiProviderType
 cmacs_ai__provider_type (Lisp_Object provider)
 {
   CHECK_SYMBOL (provider);
-  if (EQ (provider, intern ("claude")))      return AI_PROVIDER_CLAUDE;
-  if (EQ (provider, intern ("openai")))      return AI_PROVIDER_OPENAI;
-  if (EQ (provider, intern ("gemini")))      return AI_PROVIDER_GEMINI;
-  if (EQ (provider, intern ("grok")))        return AI_PROVIDER_GROK;
-  if (EQ (provider, intern ("ollama")))      return AI_PROVIDER_OLLAMA;
-  if (EQ (provider, intern ("claude-code"))) return AI_PROVIDER_CLAUDE_CODE;
-  if (EQ (provider, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
-  if (EQ (provider, intern ("claude-tmux"))) return AI_PROVIDER_CLAUDE_TMUX;
-  if (EQ (provider, intern ("grok-build"))) return AI_PROVIDER_GROK_BUILD;
-  if (EQ (provider, intern ("antigravity"))) return AI_PROVIDER_ANTIGRAVITY;
-  if (EQ (provider, intern ("cursor")))      return AI_PROVIDER_CURSOR;
-  error ("cmacs-ai: unknown provider %s",
-         SSDATA (SYMBOL_NAME (provider)));
+  return cmacs_ai_provider_type_from_symbol (provider);
 }
 
 /* Build an AiSimple for optional PROVIDER (symbol or nil) and
@@ -462,8 +450,16 @@ cmacs_ai__simple_for (Lisp_Object provider, Lisp_Object model)
     }
 
   if (!NILP (provider))
-    return ai_simple_new_with_provider (cmacs_ai__provider_type (provider),
-                                        model_str);
+    {
+      AiSimple *ai = ai_simple_new_with_provider (
+        cmacs_ai__provider_type (provider), model_str);
+      /* A named endpoint is the type plus its own URL and key, and the
+       * type is all that reached the factory. */
+      if (ai != NULL)
+        cmacs_ai_apply_endpoint_settings (provider,
+                                          ai_simple_get_provider (ai));
+      return ai;
+    }
   if (model_str != NULL)
     return ai_simple_new_with_provider
       (ai_config_get_default_provider (ai_config_get_default ()),
@@ -619,8 +615,10 @@ DEFUN ("cmacs-ai-list-models", Fcmacs_ai_list_models,
        Scmacs_ai_list_models, 0, 1, 0,
        doc: /* Return the list of model names PROVIDER offers.
 PROVIDER is a symbol (claude / openai / gemini / grok / ollama /
-claude-code / opencode / claude-tmux / grok-build / antigravity /
-cursor), or nil for the configured default.  Queries the provider (network for API providers, static
+openai-compatible / claude-code / opencode / claude-tmux / grok-build /
+antigravity / cursor / codex-cli, or a name from
+`cmacs-ai-openai-compatible-endpoints'), or nil for the configured
+default.  Queries the provider (network for API providers, static
 tables for CLI providers) with a 30 second timeout; signals
 `cmacs-ai-error' on failure.  */)
   (Lisp_Object provider)

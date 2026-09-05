@@ -98,7 +98,14 @@ explicitly pointed `cmacs-libreclaw-config-file' somewhere else."
 
 (defcustom cmacs-libreclaw-default-ai-provider 'claude
   "AI provider baked into the auto-generated default YAML config.
-One of the symbols `claude', `openai', or `both'."
+One of the symbols `claude', `openai', or `both'.
+
+These three are what libreclaw's hatch API emits, not what libreclaw can
+run: its `LcHatchAiKind' enum has exactly these values.  The runtime set
+is wider -- `codex-cli', `opencode', `grok-build', `antigravity' and
+`cursor' are all accepted in the YAML's `provider:' field -- so an agent
+on one of those is one edit to the generated file.  cmacs passes the
+provider string through untouched and validates nothing."
   :type '(choice (const :tag "Claude (Anthropic)"  claude)
                  (const :tag "OpenAI"               openai)
                  (const :tag "Both (smart routing)" both))

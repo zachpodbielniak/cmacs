@@ -148,14 +148,43 @@ A malformed definition is reported and skipped rather than aborting the load, so
 
 * Workers
 
-A worker decides /how/ an agent runs. Four ship, and all four are registered through the public =cmacs-brigade-register-worker=, so one you register yourself is reached by exactly the same path.
+A worker decides /how/ an agent runs. Five ship, and all five are registered through the public =cmacs-brigade-register-worker=, so one you register yourself is reached by exactly the same path.
 
 | Worker | What it does | Continues a conversation? |
 |--------+--------------+---------------------------|
 | =inproc= | runs the tool loop inside cmacs against the provider's HTTP API (the default) | yes, by keeping the session |
 | =claude-code= | drives the =claude= CLI in =--print= mode | yes, via =--resume= |
 | =opencode= | drives the =opencode= CLI | yes, via =--session= |
+| =codex= | drives OpenAI's =codex= CLI as =codex exec --json= | yes, via =codex exec resume= |
 | =shell= | pipes the prompt to bash; mostly for testing | no |
+
+*** Codex
+
+The =codex= worker differs from the other two CLIs in three ways worth
+knowing.
+
+It runs under a real *sandbox* rather than a skipped prompt.
+=cmacs-brigade-codex-sandbox= (default =workspace-write=) is passed as
+=--sandbox=, and codex enforces it: a run that tries to write outside
+the workspace fails rather than asking. claude's
+=--dangerously-skip-permissions= removes a prompt; this is a boundary.
+
+Its tools arrive through a *=CODEX_HOME= overlay*, not a config flag.
+Codex reads MCP servers from =CODEX_HOME/config.toml= and has no
+=--mcp-config=, so the worker builds a directory holding just that file
+— the user's own config first, our =[mcp_servers.cmacs-brigade]= table
+appended — and symlinks every other entry of the real Codex home into
+it, =auth.json= above all. Writing into =~/.codex/config.toml= was not
+an option: it is the user's, agents run concurrently, and a crash would
+leave a server declared there for every later codex run. The overlay
+lives in =cmacs-brigade-runtime-dir=, not the shared temp directory,
+because codex refuses to create its PATH helpers under one.
+
+It reports as *JSONL*, not one object. =codex exec --json= streams an
+event per line, so the worker reads =thread.started= for the session id,
+the last =agent_message= item for the reply and =turn.completed= for
+usage. Codex reports no cost, so the budget sees tokens and zero dollars
+rather than a figure invented from a price list.
 
 The last column is the worker's =:supports-session= flag, and it is what
 =agent_send= checks. Sending to a =shell= task is refused rather than re-running
@@ -163,7 +192,7 @@ bash with the follow-up as though it were a first prompt: that produces a
 process which has never seen the first message, and presenting it as a
 continuation would be a lie the caller cannot detect. See [[file:mailbox.org][Mailboxes]].
 
-*You rarely name a worker.* It is resolved in this order: an explicit =worker:= in the definition, then the worker implied by the model's provider (=claude-code/= and =opencode/= pick their own CLI), then =cmacs-brigade-worker=. Running a CLI provider through the in-process loop would silently drop every tool — the CLI clients ignore the tools argument and take them over MCP — so the provider gets to decide.
+*You rarely name a worker.* It is resolved in this order: an explicit =worker:= in the definition, then the worker implied by the model's provider (=claude-code/=, =opencode/= and =codex-cli/= pick their own CLI), then =cmacs-brigade-worker=. An HTTP provider — including one of your own from =cmacs-ai-openai-compatible-endpoints=, as =my-vllm/qwen3= — implies nothing and stays on =inproc=, which is what gives it the full tool loop. Running a CLI provider through the in-process loop would silently drop every tool — the CLI clients ignore the tools argument and take them over MCP — so the provider gets to decide.
 
 =inproc= is the default because it is the one that honours =:MODEL:= and the tool allowlist directly: the executor is built from the allowlist, so the agent cannot name a tool that was not installed.
 

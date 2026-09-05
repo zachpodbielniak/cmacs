@@ -40,20 +40,39 @@ DEFUN ("cmacs-ai-version", Fcmacs_ai_version,
 
 DEFUN ("cmacs-ai-providers", Fcmacs_ai_providers,
        Scmacs_ai_providers, 0, 0, 0,
-       doc: /* Return list of supported provider symbols.  */)
+       doc: /* Return list of supported provider symbols.
+
+The built-ins, followed by every name in
+`cmacs-ai-openai-compatible-endpoints' -- a user's own OpenAI-compatible
+servers are providers here in every sense, so they complete in
+`cmacs-ai-chat-with-provider', in the brigade's composer, and anywhere
+else this list is offered.  */)
   (void)
 {
-  return list (intern ("claude"),
-               intern ("openai"),
-               intern ("gemini"),
-               intern ("grok"),
-               intern ("ollama"),
-               intern ("claude-code"),
-               intern ("opencode"),
-               intern ("claude-tmux"),
-               intern ("grok-build"),
-               intern ("antigravity"),
-               intern ("cursor"));
+  Lisp_Object builtin = list (intern ("claude"),
+                              intern ("openai"),
+                              intern ("gemini"),
+                              intern ("grok"),
+                              intern ("ollama"),
+                              intern ("openai-compatible"),
+                              intern ("claude-code"),
+                              intern ("opencode"),
+                              intern ("claude-tmux"),
+                              intern ("grok-build"),
+                              intern ("antigravity"),
+                              intern ("cursor"),
+                              intern ("codex-cli"));
+  Lisp_Object extra = Qnil, tail;
+  Lisp_Object alist =
+    find_symbol_value (intern ("cmacs-ai-openai-compatible-endpoints"));
+
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      if (CONSP (entry) && SYMBOLP (XCAR (entry)) && !NILP (XCAR (entry)))
+        extra = Fcons (XCAR (entry), extra);
+    }
+  return CALLN (Fnconc, builtin, Fnreverse (extra));
 }
 
 DEFUN ("cmacs-ai-config-default-provider",
