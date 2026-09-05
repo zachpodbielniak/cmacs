@@ -496,10 +496,10 @@ Returns the number of nodes emitted.  */)
   }
 
   sb_relayout (st, ctx, 0);
-  emitted = cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  emitted = cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                            st->ring_gap, st->band_guides);
   cmacs_secondbrain_scene_set_projection (ctx, st->dims == 2);
-  cmacs_secondbrain_scene_fit (ctx, st->graph);
+  cmacs_secondbrain_scene_fit (ctx, st->graph, st->layout);
   cmacs_libregnum_view_request_redraw (v);
 
   return make_fixnum ((EMACS_INT) emitted);
@@ -1245,9 +1245,9 @@ DEFUN ("cmacs-secondbrain-set-ring-gap", Fcmacs_secondbrain_set_ring_gap,
 
   st->ring_gap = g;
   sb_relayout (st, ctx, 0);
-  cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                  st->ring_gap, st->band_guides);
-  cmacs_secondbrain_scene_fit (ctx, st->graph);
+  cmacs_secondbrain_scene_fit (ctx, st->graph, st->layout);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
 }
@@ -1303,7 +1303,7 @@ Returns t when visibility actually changed.  */)
     }
 
   sb_relayout (st, ctx, f);
-  cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                  st->ring_gap, st->band_guides);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
@@ -1325,9 +1325,9 @@ DEFUN ("cmacs-secondbrain-collapse-all", Fcmacs_secondbrain_collapse_all,
 
   cmacs_graph_collapse_all (st->graph, !NILP (collapsed));
   sb_relayout (st, ctx, f);
-  cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                  st->ring_gap, st->band_guides);
-  cmacs_secondbrain_scene_fit (ctx, st->graph);
+  cmacs_secondbrain_scene_fit (ctx, st->graph, st->layout);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
 }
@@ -1372,9 +1372,9 @@ DEFUN ("cmacs-secondbrain-set-projection", Fcmacs_secondbrain_set_projection,
   st->dims = NILP (flat) ? 3 : 2;
   cmacs_secondbrain_scene_set_projection (ctx, !NILP (flat));
   sb_relayout (st, ctx, 0);
-  cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                  st->ring_gap, st->band_guides);
-  cmacs_secondbrain_scene_fit (ctx, st->graph);
+  cmacs_secondbrain_scene_fit (ctx, st->graph, st->layout);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
 }
@@ -1408,7 +1408,7 @@ they are on by default; hiding them is for a screenshot.  */)
   if (!st || !ctx) return Qnil;
 
   st->band_guides = !NILP (on);
-  cmacs_secondbrain_scene_build (ctx, st->graph, st->dims,
+  cmacs_secondbrain_scene_build (ctx, st->graph, st->layout, st->dims,
                                  st->ring_gap, st->band_guides);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
@@ -1493,6 +1493,39 @@ rebuilding the scene.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-secondbrain-band-radius", Fcmacs_secondbrain_band_radius,
+       Scmacs_secondbrain_band_radius, 2, 2, 0,
+       doc: /* Return the world radius BUFFER's RING band was placed at.
+
+RING is a ring symbol (`skills', `memory', `routines', `applications').
+Returns nil when that band holds nothing, or when the current layout is
+not `rings'.
+
+This is where the band's hubs sit and where its guide circle is drawn,
+and it is NOT a function of the ring's index: a band's radius grows with
+its population so that a department of a thousand notes has the
+circumference to spread over.  Anything that recomputes it from the
+index instead lands somewhere plausible and wrong.  */)
+  (Lisp_Object buffer, Lisp_Object ring)
+{
+  SbState *st;
+  Lisp_Object name;
+  CmacsSbRing rv;
+  double rad;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, NULL, NULL);
+  if (!st || !st->layout) return Qnil;
+
+  name = SYMBOLP (ring) ? SYMBOL_NAME (ring) : ring;
+  CHECK_STRING (name);
+  if (!cmacs_sb_ring_from_name (SSDATA (ENCODE_UTF_8 (name)), &rv))
+    xsignal2 (Qerror, build_string ("Unknown ring"), ring);
+
+  rad = cmacs_graph_layout_band_radius (st->layout, (guint) rv);
+  return (rad > 0.0) ? make_float (rad) : Qnil;
+}
+
 DEFUN ("cmacs-secondbrain-fit", Fcmacs_secondbrain_fit,
        Scmacs_secondbrain_fit, 1, 1, 0,
        doc: /* Frame BUFFER's whole graph.  */)
@@ -1506,7 +1539,7 @@ DEFUN ("cmacs-secondbrain-fit", Fcmacs_secondbrain_fit,
   st = state_for_buffer (buffer, &v, &ctx);
   if (!st || !ctx) return Qnil;
 
-  cmacs_secondbrain_scene_fit (ctx, st->graph);
+  cmacs_secondbrain_scene_fit (ctx, st->graph, st->layout);
   cmacs_libregnum_view_request_redraw (v);
   return Qt;
 }
@@ -1621,6 +1654,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_add_icon);
   defsubr (&Scmacs_secondbrain_clear_icons);
   defsubr (&Scmacs_secondbrain_apply_flags);
+  defsubr (&Scmacs_secondbrain_band_radius);
   defsubr (&Scmacs_secondbrain_fit);
   defsubr (&Scmacs_secondbrain_ring_names);
 }

@@ -145,6 +145,31 @@ extern void   cmacs_graph_layout_set_galaxy_tilt (CmacsGraphLayout *l,
                                                   double radians);
 extern double cmacs_graph_layout_get_galaxy_tilt (CmacsGraphLayout *l);
 
+/* Where the RINGS layout actually put each band, for whoever draws on
+ * top of it.
+ *
+ * These exist because a band's radius is NOT a function of its index: it
+ * grows with the band's population, so that a department of a thousand
+ * notes gets the circumference to spread over instead of piling onto
+ * itself.  Anything that guesses the radius from the index instead --
+ * a ring guide, a legend, a camera framing pass -- draws in the wrong
+ * place, and does it silently, because the guess is a perfectly
+ * plausible number.  (It shipped that way: four band guides at 6, 12,
+ * 18 and 24 while the bands sat at 6, 29, 41 and 45.)
+ *
+ * `band_radius' is where the band's hubs sit; `band_depth' is how far
+ * outward its members fan from there.  Both are 0 for a band that was
+ * not placed -- the layout is not RINGS, or that band is empty.
+ * `warp_height' is the galaxy warp at a point, WITHOUT the per-node
+ * thickness, so a curve drawn through it traces the disc rather than
+ * one node's jitter. */
+extern double cmacs_graph_layout_band_radius (CmacsGraphLayout *l,
+                                              guint band);
+extern double cmacs_graph_layout_band_depth  (CmacsGraphLayout *l,
+                                              guint band);
+extern double cmacs_graph_layout_warp_height (CmacsGraphLayout *l,
+                                              double r, double angle);
+
 extern CmacsGraphLayoutKind cmacs_graph_layout_get_kind (CmacsGraphLayout *l);
 
 /* ---- Tweening -----------------------------------------------------

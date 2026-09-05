@@ -248,7 +248,9 @@ Concentric rings viewed in three dimensions are coplanar, so orbiting them only 
 
 Two terms, and the split is the design:
 
-- The *warp* is a mode-1 bend — the "integral sign" warp real galaxies have. Height grows with radius and varies with the azimuth, so one side of the map lifts and the opposite side drops. Coherent rather than random: neighbours stay neighbours, a department stays a clump, and the eye reads a shape instead of scatter. Growing with radius keeps the middle legible while the rim does the moving.
+- The *warp* is a mode-1 bend — the "integral sign" warp real galaxies have. Height varies with the azimuth so one side of the map lifts and the opposite side drops, and grows with the *square* of the radius so the inner disc stays flat and legible while the rim does the moving. Coherent rather than random: neighbours stay neighbours, a department stays a clump, and the eye reads a shape instead of scatter.
+
+  *The exponent is the whole feature*, and the linear version is a trap that reads correctly in the source and is a rigid rotation in the picture. With height = =r·tan(t)·sin(a)= and the in-plane coordinate =v = r·sin(a)=, the height is exactly =tan(t)·v= — a *plane*. Every node moves, nothing bends, and orbiting reveals precisely the flat disc the warp exists to get rid of. It shipped that way, and the symptom was a user saying the map still did not look three-dimensional.
 - The *thickness* is a per-node offset so one department's members are not perfectly coplanar. Without it the map is a bent sheet; with it the disc has substance. Unlike the warp it does /not/ vary with azimuth — a real disc is thick everywhere, not only where it bends — and it is a fraction of the same =r·tan(tilt)= amplitude the warp uses, so the two stay in proportion at any tilt and any scale.
 
 =cmacs-secondbrain-galaxy-tilt= (32°) is the warp's crest: there a node sits exactly that far above the plane. The thickness rides on top, so an individual node can sit beyond it — but by a stated amount, never past =atan(1.34 · tan TILT)=. The number describes the shape of the disc, not a ceiling on any one node. =T= cycles flat → gentle → default → steep.
@@ -263,7 +265,17 @@ In 3D the rings lie in the world's *ground plane* — X and Z, with the galaxy's
 
 That is not bookkeeping; it is the difference between a map you can turn and one you cannot. The renderer's world is Y-up and so is its orbit camera, whose two drag gestures are azimuth about Y and elevation from the XZ plane. Laid out in XY instead, neither gesture means anything sensible: the elevation drag walks the camera along the disc's *own* plane until it jams against the pole clamp edge-on, so the galaxy presents as a flat streak and the drag appears to stop for no reason the picture explains. In XZ the same two gestures are "spin the galaxy" and "raise your eye above it".
 
-The band guides are turned a quarter turn about X to match. Left alone, raylib draws a 3D circle in XY, which would stand four hoops vertically through the disc.
+*** The guides go where the bands actually are
+
+A ring guide is drawn at the radius the *layout* placed that band at, read back through =cmacs_graph_layout_band_radius=. That radius is *not* a function of the ring's index: it grows with the band's population, so a department of a thousand notes gets the circumference to spread over instead of piling onto itself.
+
+Computing it from the index instead — which is what the guides did at first, and which produces a perfectly plausible number — put them at 6/12/18/24 while the bands sat at 6/29/41/45. Four small hoops adrift in the middle of a map five times their size, which is what "why are the rings off to one side?" looks like. =cmacs-secondbrain-band-radius= exposes the real number, and a test asserts the guide passes through the hubs of the ring it names.
+
+Each guide is a *polyline*, not an =LrgCircle3D=, because the band it names is not flat: it samples the layout's own warp so the two stay in step at any tilt. (A flat circle would also need turning a quarter turn about X, since raylib draws a 3D circle in XY — with the polyline the plane is just where the points are put.)
+
+*** Framing is on the origin, not on the bounding box
+
+A closed-form layout is built around the origin, so that is what the camera aims at. The two are not the same point: a department's members fan outward from wherever its wedge happens to be, and the outermost ring may hold four nodes at four arbitrary angles, so the bounding box is lopsided — and framing it slides the concentric structure the whole map is built around off into a corner of its own cloud. Only the *force* layout, which puts the graph wherever it settles, is framed by its box.
 
 *** The orbit runs all the way round
 

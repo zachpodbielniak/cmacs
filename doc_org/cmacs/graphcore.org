@@ -81,11 +81,19 @@ The obvious choice — keep XY and use Z for height — is wrong, and wrong in a
 
 =place_plane= is the only writer and =plane_uv= the only reader, so a pass that needs a node's in-plane direction (the fan that places children around their parent) cannot silently read the height axis instead.
 
+*** Published band geometry
+
+=cmacs_graph_layout_band_radius= / =_band_depth= report where RINGS actually put each band, and =_warp_height= evaluates the warp surface at a point without any per-node thickness.
+
+They exist because a band's radius is *not* a function of its index — it grows with the band's population — so anything drawing on top of the layout (a ring guide, a legend, a camera framing pass) that recomputes the radius from the index draws in the wrong place, silently, because the guess is a plausible number. It shipped that way: guides at 6/12/18/24 around bands at 6/29/41/45.
+
 *** The galaxy warp (RINGS, 3D only)
 
 =cmacs_graph_layout_set_galaxy_tilt= bends the rings out of their plane. Two terms, sharing one amplitude:
 
-- The *warp* is a mode-1 bend: =r·tan(tilt)·sin(azimuth)=, so height grows with radius and one side of the disc lifts while the opposite side drops.
+- The *warp* is a mode-1 bend, and the exponent in it is the whole point: =ref·tan(tilt)·(r/ref)²·sin(azimuth)=. One side of the disc lifts while the opposite side drops, and because the height grows faster than linearly the inner disc stays flat while the rim turns up — the "integral sign" a real galaxy has.
+
+  Linear is the trap. With =r·tan(t)·sin(a)= and the in-plane coordinate =v = r·sin(a)=, the height is exactly =tan(t)·v= — *a plane*. Every node moves, nothing bends, and orbiting shows the flat disc the warp existed to remove. The reference radius is the disc's own outer edge, so the crest still reaches =tilt= exactly and the shape does not drift with the ring gap or the population.
 - The *thickness* is =r·tan(tilt)·THICKNESS·jitter(id)= — the same amplitude, scaled down, and *azimuth-independent*, because a real disc is thick everywhere and not only where it bends.
 
 Sharing the amplitude is what makes the pair statable: no node can exceed =atan((1 + THICKNESS)·tan(TILT))=, which is a bound the tests assert rather than a margin someone guessed. An absolute scatter would have had neither property — it would drift out of proportion with the ring gap and could only ever be bounded empirically.

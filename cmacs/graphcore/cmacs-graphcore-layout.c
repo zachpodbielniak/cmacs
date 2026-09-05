@@ -85,6 +85,21 @@
    everywhere, not only where it happens to bend.  Big enough to read as
    volume from any angle, small enough that the bands stay bands. */
 #define GRAPHCORE_GALAXY_THICKNESS (0.34)
+/* How sharply the warp turns up toward the rim.
+ *
+ * This exponent is the whole difference between a warp and a tilt, and
+ * the linear case is a trap that looks right in the code and is a
+ * rigid rotation in the picture: with h = r*tan(t)*sin(a) and the
+ * in-plane coordinate v = r*sin(a), the height is just h = tan(t)*v --
+ * a PLANE.  Every node moves, nothing bends, and orbiting reveals
+ * exactly the flat disc the warp existed to get rid of.
+ *
+ * Squaring it gives the "integral sign" a real galaxy has: the inner
+ * disc stays flat and legible while the rim turns up on one side and
+ * down on the other, so the shape survives being looked at from any
+ * angle.  The crest is unchanged -- at the reference radius the
+ * exponent contributes exactly 1 -- so TILT still means what it says. */
+#define GRAPHCORE_GALAXY_WARP_POWER (2.0)
 #define GRAPHCORE_RING_GAP     6.0
 
 /* Centre-to-centre spacing of the hex lattice, in the same world units
@@ -130,6 +145,17 @@ struct CmacsGraphLayout
   double   galaxy_tilt; /* max out-of-plane angle, radians; 0 = flat */
   int      tween_frame; /* frames elapsed in the current tween */
   int      tween_frames;/* 0 = not tweening */
+
+  /* Where RINGS actually put each band, published for whoever has to
+     draw on top of it.  Radius 0 means "this band was not placed" --
+     either the layout is not RINGS, or that band holds nothing.
+     Recomputed by every place_rings, because the radii depend on the
+     population and the population changes on every expand. */
+  double   band_r[GRAPHCORE_MAX_BANDS];
+  guint    band_rows[GRAPHCORE_MAX_BANDS];
+  /* Radius the warp is normalised against: the outer edge of the
+     outermost band, where the crest reaches TILT exactly. */
+  double   warp_ref;
 };
 
 CmacsGraphLayout *
@@ -1213,22 +1239,40 @@ graphcore_id_jitter (const gchar *id)
   return ((double) (h & 0xFFFFu) / 32767.5) - 1.0;
 }
 
+/* The warp alone, without any per-node thickness: the SURFACE the nodes
+   are scattered around.  Exposed so a caller drawing on top of the disc
+   -- a ring guide, a legend arc -- can trace the same shape rather than
+   cutting a flat curve through it. */
+static double
+graphcore_galaxy_warp (CmacsGraphLayout *l, double r, double angle)
+{
+  double ref, t;
+
+  if (l->galaxy_tilt <= 0.0) return 0.0;
+  ref = (l->warp_ref > 1e-6) ? l->warp_ref : MAX (r, 1e-6);
+  t   = r / ref;
+  return ref * tan (l->galaxy_tilt)
+           * pow (t, GRAPHCORE_GALAXY_WARP_POWER) * sin (angle);
+}
+
 static double
 graphcore_galaxy_z (CmacsGraphLayout *l, CmacsGraphNode *nd,
                     double r, double angle)
 {
-  double amp, warp, thick;
+  double warp, thick;
 
   if (l->galaxy_tilt <= 0.0) return 0.0;
 
-  /* One scale for both terms.  The warp is the disc's SHAPE (it varies
-     with azimuth, so one side lifts and the other drops); the thickness
-     is its SUBSTANCE (it does not, so the disc is thick all the way
-     round).  Sharing r*tan(tilt) is what makes the pair bounded by
-     atan((1 + THICKNESS) * tan(TILT)) everywhere. */
-  amp   = r * tan (l->galaxy_tilt);
-  warp  = amp * sin (angle);
-  thick = amp * GRAPHCORE_GALAXY_THICKNESS * graphcore_id_jitter (nd->id);
+  /* Two terms, two jobs.  The warp is the disc's SHAPE -- it varies with
+     azimuth, so one side lifts and the other drops, and it grows faster
+     than linearly with radius so that it BENDS instead of tilting.  The
+     thickness is its SUBSTANCE -- azimuth-independent, because a real
+     disc is thick everywhere and not only where it bends -- and stays
+     linear in r so the inner disc keeps some depth of its own rather
+     than collapsing to a sheet where the warp has yet to take hold. */
+  warp  = graphcore_galaxy_warp (l, r, angle);
+  thick = r * tan (l->galaxy_tilt) * GRAPHCORE_GALAXY_THICKNESS
+            * graphcore_id_jitter (nd->id);
   return warp + thick;
 }
 
@@ -1238,9 +1282,9 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
   guint n = order->len, start = 0;
   GHashTable *root_of;   /* node index -> its top VISIBLE ancestor index */
   GHashTable *weight;    /* root index -> 1 + visible descendants shown */
-  guint  band_n[GRAPHCORE_MAX_BANDS];
-  double band_r[GRAPHCORE_MAX_BANDS];
-  guint  band_rows[GRAPHCORE_MAX_BANDS];
+  guint   band_n[GRAPHCORE_MAX_BANDS];
+  double *band_r    = l->band_r;      /* published; see the struct */
+  guint  *band_rows = l->band_rows;
 
   /* Every node's group root: the outermost visible ancestor, or itself.
      Walking up rather than trusting `parent' directly matters once more
@@ -1326,6 +1370,12 @@ place_rings (CmacsGraphLayout *l, CmacsGraph *g, GArray *order, int dims)
                          prev_outer + l->ring_gap * 0.55);
         prev_outer = band_r[b] + thick;
       }
+
+    /* The warp is normalised against the disc's own outer edge, so the
+       shape is the same whatever the ring gap or the population -- and
+       so TILT keeps meaning "the elevation at the rim" rather than
+       drifting with how many notes happen to exist. */
+    l->warp_ref = prev_outer;
   }
 
   /* `order' is already sorted by ring, so each band is one run. */
@@ -1490,6 +1540,16 @@ cmacs_graph_layout_place (CmacsGraphLayout *l, CmacsGraph *g,
       return;
     }
 
+  /* A published band radius belongs to the layout that produced it.
+     Leaving RINGS' radii up while CIRCLE or HEX is showing would have a
+     ring guide drawn around a hex lattice, at a radius nothing is at. */
+  if (kind != CMACS_GRAPH_LAYOUT_RINGS)
+    {
+      guint b;
+      for (b = 0; b < GRAPHCORE_MAX_BANDS; b++)
+        { l->band_r[b] = 0.0; l->band_rows[b] = 1; }
+    }
+
   order = place_order (g);
   switch (kind)
     {
@@ -1569,6 +1629,30 @@ double
 cmacs_graph_layout_get_galaxy_tilt (CmacsGraphLayout *l)
 {
   return l ? l->galaxy_tilt : 0.0;
+}
+
+double
+cmacs_graph_layout_band_radius (CmacsGraphLayout *l, guint band)
+{
+  if (!l || band >= GRAPHCORE_MAX_BANDS) return 0.0;
+  return l->band_r[band];
+}
+
+double
+cmacs_graph_layout_band_depth (CmacsGraphLayout *l, guint band)
+{
+  if (!l || band >= GRAPHCORE_MAX_BANDS) return 0.0;
+  if (l->band_r[band] <= 0.0) return 0.0;
+  /* What place_rings spends on members: the gap that lifts them clear of
+     the hub, plus one row gap per row. */
+  return GRAPHCORE_ROW_GAP * (0.9 + (double) l->band_rows[band]);
+}
+
+double
+cmacs_graph_layout_warp_height (CmacsGraphLayout *l, double r, double angle)
+{
+  if (!l) return 0.0;
+  return graphcore_galaxy_warp (l, r, angle);
 }
 
 CmacsGraphLayoutKind

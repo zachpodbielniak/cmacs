@@ -225,6 +225,19 @@ reader, so a pass that needs a node's in-plane direction (the fan that
 places children around their parent) cannot silently read the height
 axis instead.
 
+@subsection Published band geometry
+
+@code{cmacs_graph_layout_band_radius} and @code{_band_depth} report
+where RINGS actually put each band, and @code{_warp_height} evaluates
+the warp surface at a point without any per-node thickness.
+
+They exist because a band's radius is @emph{not} a function of its index
+--- it grows with the band's population --- so anything drawing on top
+of the layout (a ring guide, a legend, a camera framing pass) that
+recomputes the radius from the index draws in the wrong place, silently,
+because the guess is a plausible number.  It shipped that way: guides at
+6/12/18/24 around bands at 6/29/41/45.
+
 @subsection The galaxy warp: RINGS out of its plane
 
 @code{cmacs_graph_layout_set_galaxy_tilt} bends the rings out of their
@@ -233,9 +246,19 @@ them only proves they are flat.  Two terms, sharing one amplitude:
 
 @itemize @bullet
 @item
-The @strong{warp} is a mode-1 bend: @code{r*tan(tilt)*sin(azimuth)}, so
-height grows with radius and one side of the disc lifts while the
-opposite side drops --- the ``integral sign'' warp real galaxies have.
+The @strong{warp} is a mode-1 bend, and the exponent in it is the whole
+point: @code{ref*tan(tilt)*(r/ref)^2*sin(azimuth)}.  One side of the
+disc lifts while the opposite side drops, and because the height grows
+faster than linearly the inner disc stays flat while the rim turns up
+--- the ``integral sign'' a real galaxy has.
+
+Linear is the trap.  With @code{r*tan(t)*sin(a)} and the in-plane
+coordinate @code{v = r*sin(a)}, the height is exactly @code{tan(t)*v}
+--- @strong{a plane}.  Every node moves, nothing bends, and orbiting
+shows the flat disc the warp existed to remove.  The reference radius is
+the disc's own outer edge, so the crest still reaches @code{tilt}
+exactly and the shape does not drift with the ring gap or the
+population.
 @item
 The @strong{thickness} is
 @code{r*tan(tilt)*THICKNESS*jitter(id)} --- the same amplitude, scaled

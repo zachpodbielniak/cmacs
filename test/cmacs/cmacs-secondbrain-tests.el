@@ -1468,13 +1468,28 @@ in the frame at all is the shading and nothing else."
     (cmacs-secondbrain-set-graph
      buf (vector (list :id "a" :title "A" :kind 'hub :ring 'memory))
      (vector) 3)
-    (cmacs-secondbrain-fit buf)
-    (let ((before (cmacs-libregnum-mean-color buf)))
-      (cmacs-libregnum-orbit buf 0 160)
-      (let ((after (cmacs-libregnum-mean-color buf)))
-        (should before)
-        (should after)
-        (should-not (equal before after))))))
+    ;; Aim at the node explicitly rather than through `fit', and stand
+    ;; close.  A ring layout is framed on the ORIGIN and this node sits
+    ;; out on its band, so `fit' would leave it a speck: a real shading
+    ;; change would then move the frame mean by less than one level and
+    ;; the test would pass on a renderer that does no lighting at all.
+    (let* ((p (cmacs-secondbrain-node-position buf "a")))
+      (cmacs-libregnum-set-camera
+       buf (list (nth 0 p) (nth 1 p) (+ (nth 2 p) 1.4)) p 45.0)
+      ;; Half a turn in AZIMUTH.  Elevation is the wrong axis for this:
+      ;; the default orbit clamps ten degrees short of the pole, so a
+      ;; vertical drag pins after two steps and stops producing any
+      ;; change to measure.
+      (let ((before (cmacs-libregnum-mean-color buf)))
+        (cmacs-libregnum-orbit buf (* 200 float-pi) 0)
+        (let ((after (cmacs-libregnum-mean-color buf)))
+          (should before)
+          (should after)
+          ;; A real difference, not one level of rounding: a headlight
+          ;; would give exactly zero here.
+          (should (> (apply #'max (cl-mapcar (lambda (a b) (abs (- a b)))
+                                             before after))
+                     8)))))))
 
 (ert-deftest cmacs-secondbrain-test-glow-does-not-accumulate ()
   "Rebuilding with glow on keeps the billboard count flat.
@@ -1967,6 +1982,131 @@ always zero, which is what every caller here is really asserting."
 (defun cmacs-secondbrain-tests--3d-p (buf)
   "Non-nil when BUF\='s layout was placed in three dimensions."
   (not (cmacs-secondbrain-flat-p buf)))
+
+(ert-deftest cmacs-secondbrain-test-band-guide-matches-its-band ()
+  "A ring guide is drawn where that ring actually is.
+
+The band radius is NOT a function of the ring index -- it grows with the
+band\='s population, so a department of a thousand notes gets the
+circumference to spread over.  The guides were computed from the index
+instead, which is a perfectly plausible number and the wrong one: on a
+real map they landed at 6/12/18/24 while the bands sat at 6/29/41/45,
+four small hoops adrift in the middle of a map five times their size.
+
+Asserted against the HUBS, because that is the observable version of the
+claim: the guide passes through the hubs of the ring it names."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-band-radius))
+  (cmacs-secondbrain-tests--with-view buf
+    ;; A lopsided map, which is the case that broke: one ring holding
+    ;; over a thousand nodes next to rings holding a handful.  The
+    ;; population has to be big enough that the band OUTGROWS its index
+    ;; -- under a few hundred the two formulas agree, and the test would
+    ;; pass against the bug.
+    (let ((nodes (vector (list :id "big"  :title "big"  :kind 'hub
+                               :ring 'memory)
+                         (list :id "few"  :title "few"  :kind 'hub
+                               :ring 'applications))))
+      (setq nodes
+            (vconcat nodes
+                     (cl-loop for i below 1200
+                              collect (list :id (format "m%d" i) :title ""
+                                            :kind 'file :parent "big"
+                                            :ring 'memory))
+                     (cl-loop for i below 3
+                              collect (list :id (format "a%d" i) :title ""
+                                            :kind 'file :parent "few"
+                                            :ring 'applications))))
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (cl-labels ((hub-radius (id)
+                    (let ((p (cmacs-secondbrain-node-position buf id)))
+                      (sqrt (+ (* (nth 0 p) (nth 0 p))
+                               (* (nth 2 p) (nth 2 p)))))))
+        (let ((mem (cmacs-secondbrain-band-radius buf 'memory))
+              (app (cmacs-secondbrain-band-radius buf 'applications)))
+          (should mem)
+          (should app)
+          (should (< (abs (- mem (hub-radius "big"))) 0.01))
+          (should (< (abs (- app (hub-radius "few"))) 0.01))
+          ;; And the populous ring really did outgrow its index: were
+          ;; the radius still a function of the index, memory (index 1)
+          ;; would sit at 12 and this would fail, which is what makes the
+          ;; test discriminate rather than merely pass.
+          (should (> mem 14.0))
+          ;; The sparse outer ring is still outside it: growing a band
+          ;; must push everything beyond it out too, not let a populous
+          ;; inner ring swallow its neighbours.
+          (should (> app mem)))))))
+
+(ert-deftest cmacs-secondbrain-test-galaxy-warp-bends-rather-than-tilts ()
+  "The warp BENDS the disc; it is not a rigid tilt of the plane.
+
+This is the trap the first implementation fell into, and it is invisible
+in the code: with height = r*tan(t)*sin(a) and the in-plane coordinate
+v = r*sin(a), the height is exactly tan(t)*v -- a PLANE.  Every node
+moves, nothing bends, and orbiting reveals the flat disc the warp
+existed to get rid of.
+
+The signature of a plane is that the ratio of height to radius is the
+SAME at every radius.  A real warp turns up toward the rim, so the outer
+band must be steeper than the inner one."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-set-galaxy-tilt))
+  (cmacs-secondbrain-tests--with-view buf
+    (let ((nodes (cmacs-secondbrain-tests--ring-nodes 200)))
+      (cmacs-secondbrain-set-graph buf (vconcat nodes) (vector) 3)
+      (cmacs-secondbrain-set-galaxy-tilt buf 32 0)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (cl-labels ((steepness (ring)
+                    ;; max |height| / radius over one ring: tan(t) at
+                    ;; every radius if the disc is a plane.
+                    (let ((best 0.0))
+                      (dolist (n (append nodes nil) best)
+                        (when (eq (plist-get n :ring) ring)
+                          (let* ((p (cmacs-secondbrain-node-position
+                                     buf (plist-get n :id)))
+                                 (r (sqrt (+ (* (nth 0 p) (nth 0 p))
+                                             (* (nth 2 p) (nth 2 p))))))
+                            (when (> r 0.5)
+                              (setq best (max best (/ (abs (nth 1 p)) r))))))))))
+        (let ((inner (steepness 'skills))
+              (outer (steepness 'applications)))
+          (should (> inner 0.0))
+          (should (> outer 0.0))
+          ;; Comfortably more than measurement noise, and impossible for
+          ;; a plane, where the two are equal by construction.
+          (should (> outer (* 1.5 inner))))))))
+
+(ert-deftest cmacs-secondbrain-test-fit-centres-a-ring-layout-on-the-origin ()
+  "Framing a ring layout aims at the origin, not at the bounding box.
+
+They are not the same point.  A department\='s members fan outward from
+wherever its wedge happens to be and the outermost ring may hold four
+nodes at four arbitrary angles, so the box is lopsided -- and framing it
+slides the concentric structure the whole map is built around off into a
+corner of its own cloud."
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-libregnum-camera-state))
+  (cmacs-secondbrain-tests--with-view buf
+    ;; Deliberately lopsided: one heavy department and one stray node far
+    ;; out on the rim.
+    (let ((nodes (vconcat
+                  (vector (list :id "hub" :title "hub" :kind 'hub
+                                :ring 'memory)
+                          (list :id "stray" :title "s" :kind 'app
+                                :ring 'applications))
+                  (cl-loop for i below 300
+                           collect (list :id (format "m%d" i) :title ""
+                                         :kind 'file :parent "hub"
+                                         :ring 'memory)))))
+      (cmacs-secondbrain-set-graph buf nodes (vector) 3)
+      (cmacs-secondbrain-set-layout buf 'rings 0)
+      (cmacs-secondbrain-fit buf)
+      (let ((target (plist-get (cmacs-libregnum-camera-state buf) :target)))
+        (should target)
+        (dotimes (i 3)
+          (should (< (abs (nth i target)) 0.001)))))))
 
 (ert-deftest cmacs-secondbrain-test-3d-layout-is-in-the-ground-plane ()
   "In 3D the disc lies in XZ, with height on Y; in 2D it lies in XY.

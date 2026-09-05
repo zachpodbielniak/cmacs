@@ -57,6 +57,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-set-spin BUFFER RADIANS &optional FRAMES= | |
 | =cmacs-secondbrain-set-ring-gap BUFFER GAP= | |
 | =cmacs-secondbrain-set-galaxy-tilt BUFFER DEGREES &optional FRAMES= | 3D rings warp; rings layout only, inert in 2D |
+| =cmacs-secondbrain-band-radius BUFFER RING= | world radius that band was placed at, or nil; grows with population, so never recompute it from the ring index |
 
 ** Collapse
 | =cmacs-secondbrain-set-collapsed BUFFER ID COLLAPSED &optional FRAMES= | t when visibility changed |

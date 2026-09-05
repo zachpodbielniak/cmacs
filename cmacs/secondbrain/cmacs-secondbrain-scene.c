@@ -346,6 +346,7 @@ kind_of (CmacsGraphNode *nd)
 
 guint
 cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
+                               CmacsGraphLayout *layout,
                                int dims, double ring_gap,
                                gboolean band_guides)
 {
@@ -396,28 +397,56 @@ cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
       int band;
       for (band = 0; band < CMACS_SB_RING_COUNT; band++)
         {
-          double rad = cmacs_sb_ring_radius ((CmacsSbRing) band, ring_gap);
+          /* Where the band ACTUALLY is, not where its index suggests.
+             A band's radius grows with its population -- a department of
+             a thousand notes needs the circumference to spread over --
+             so the fixed per-index formula this used to call was simply
+             a different number: it drew guides at 6/12/18/24 while the
+             bands sat at 6/29/41/45, four small hoops adrift in the
+             middle of a map five times their size.  The formula is kept
+             only for a band the layout never placed, so the ARMS frame
+             still shows all four rings when one is empty. */
+          double rad = cmacs_graph_layout_band_radius (layout, (guint) band);
           guint32 rgba = cmacs_sb_ring_color ((CmacsSbRing) band);
           guint8 cr, cg, cb, ca;
-          LrgCircle3D *ring;
-          g_autoptr (GrlColor) col = NULL;
+          int v;
 
+          if (rad <= 0.0)
+            rad = cmacs_sb_ring_radius ((CmacsSbRing) band, ring_gap);
           unpack_rgba (rgba, &cr, &cg, &cb, &ca);
-          col = grl_color_new (cr, cg, cb, 70);
-          ring = lrg_circle3d_new_full (0.0f, 0.0f, 0.0f, (float) rad,
-                                        SB_BAND_VERTICES, col);
-          /* A guide has to lie in the same plane as the band it names.
-             raylib draws a 3D circle in XY; in 3D the layout is in the
-             world's ground plane (XZ), so the guide is turned a quarter
-             turn about X to match.  Left alone it stands vertically
-             through the disc, which reads as four random hoops. */
-          if (dims != 2)
+
+          /* Drawn as a polyline rather than as an LrgCircle3D, because a
+             circle is flat and the band it names is not: the galaxy warp
+             lifts one side of the disc and drops the other, and a flat
+             ring cuts straight through that instead of following it.
+             Sampling the layout's own warp is also what keeps the two in
+             step when the tilt changes. */
+          for (v = 0; v < SB_BAND_VERTICES; v++)
             {
-              g_autoptr (GrlVector3) axis = grl_vector3_new (1.0f, 0.0f, 0.0f);
-              lrg_circle3d_set_rotation_axis (ring, axis);
-              lrg_circle3d_set_rotation_angle (ring, 90.0f);
+              double a0 = 2.0 * G_PI * (double) v / SB_BAND_VERTICES;
+              double a1 = 2.0 * G_PI * (double) (v + 1) / SB_BAND_VERTICES;
+              double h0 = (dims == 2)
+                            ? 0.0
+                            : cmacs_graph_layout_warp_height (layout, rad, a0);
+              double h1 = (dims == 2)
+                            ? 0.0
+                            : cmacs_graph_layout_warp_height (layout, rad, a1);
+              LrgLine3D *seg;
+              g_autoptr (GrlColor) col = grl_color_new (cr, cg, cb, 70);
+
+              if (dims == 2)
+                seg = lrg_line3d_new_from_to
+                        ((float) (rad * cos (a0)), (float) (rad * sin (a0)), 0.0f,
+                         (float) (rad * cos (a1)), (float) (rad * sin (a1)), 0.0f);
+              else
+                seg = lrg_line3d_new_from_to
+                        ((float) (rad * cos (a0)), (float) h0,
+                         (float) (rad * sin (a0)),
+                         (float) (rad * cos (a1)), (float) h1,
+                         (float) (rad * sin (a1)));
+              lrg_shape_set_color (LRG_SHAPE (seg), col);
+              cmacs_libregnum_render_ctx_add_drawable (r, seg);
             }
-          cmacs_libregnum_render_ctx_add_drawable (r, ring);
         }
     }
 
@@ -1332,11 +1361,14 @@ cmacs_secondbrain_scene_focus_node (CmacsLibregnumRenderCtx *r, guint i)
 }
 
 void
-cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g)
+cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g,
+                             CmacsGraphLayout *layout)
 {
   SceneState *st = scene_state (r, TRUE);
   float lo[3], hi[3];
   double cx, cy, cz, extent, dist;
+  double w, h;
+  gboolean concentric;
 
   if (!r || !g) return;
   if (!cmacs_graph_layout_bounds (g, lo, hi))
@@ -1346,13 +1378,43 @@ cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g)
       return;
     }
 
-  cx = 0.5 * ((double) lo[0] + (double) hi[0]);
-  cy = 0.5 * ((double) lo[1] + (double) hi[1]);
-  cz = 0.5 * ((double) lo[2] + (double) hi[2]);
+  /* A ring layout is centred on the ORIGIN by construction, so that is
+     what the camera aims at -- not the middle of the bounding box.
+     They are not the same point: the rim is lopsided (a department's
+     members fan outward from wherever its wedge happens to be, and the
+     outermost ring may hold four nodes at four arbitrary angles), so
+     framing the box slides the whole ring system off to one side of the
+     picture and makes the concentric structure the map is built around
+     look like it is sitting in a corner of the cloud. */
+  /* Every closed-form layout here is built around the origin -- rings,
+     circles and the hex spiral all start there.  Only the force solver
+     puts the graph wherever it happens to settle, and only it wants the
+     bounding box.  (Asking whether the innermost BAND was placed looks
+     equivalent and is not: a map with an empty Skills ring would fall
+     back to box framing for no reason a reader could see.) */
+  concentric = (layout != NULL
+                && cmacs_graph_layout_get_kind (layout)
+                     != CMACS_GRAPH_LAYOUT_FORCE);
 
-  extent = MAX (MAX ((double) hi[0] - (double) lo[0],
-                     (double) hi[1] - (double) lo[1]),
-                (double) hi[2] - (double) lo[2]);
+  if (concentric)
+    {
+      cx = cy = cz = 0.0;
+      /* Half-extents measured about the origin, so the far side of a
+         lopsided rim still fits. */
+      w = 2.0 * MAX (fabs ((double) lo[0]), fabs ((double) hi[0]));
+      h = 2.0 * MAX (fabs ((double) lo[1]), fabs ((double) hi[1]));
+      extent = MAX (MAX (w, h),
+                    2.0 * MAX (fabs ((double) lo[2]), fabs ((double) hi[2])));
+    }
+  else
+    {
+      cx = 0.5 * ((double) lo[0] + (double) hi[0]);
+      cy = 0.5 * ((double) lo[1] + (double) hi[1]);
+      cz = 0.5 * ((double) lo[2] + (double) hi[2]);
+      w  = (double) hi[0] - (double) lo[0];
+      h  = (double) hi[1] - (double) lo[1];
+      extent = MAX (MAX (w, h), (double) hi[2] - (double) lo[2]);
+    }
   if (extent < 1.0) extent = 1.0;
 
   if (st->flat)
@@ -1362,8 +1424,6 @@ cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r, CmacsGraph *g)
          by the aspect ratio, so a wide ring in a wide window needs the
          larger of the two distances. */
       double half_v = tan (SB_FOV * 0.5 * G_PI / 180.0);
-      double w = (double) hi[0] - (double) lo[0];
-      double h = (double) hi[1] - (double) lo[1];
       double aspect = 1.6;
       int vw = 0, vh = 0;
       double dv, dh;

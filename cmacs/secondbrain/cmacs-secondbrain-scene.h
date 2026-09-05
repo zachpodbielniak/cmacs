@@ -21,6 +21,7 @@
 #include <glib.h>
 #include "cmacs-libregnum-render.h"   /* opaque CmacsLibregnumRenderCtx */
 #include "cmacs-graphcore-graph.h"
+#include "cmacs-graphcore-layout.h"  /* band radii the guides are drawn at */
 
 G_BEGIN_DECLS
 
@@ -43,6 +44,7 @@ G_BEGIN_DECLS
  * Returns the number of nodes emitted. */
 extern guint cmacs_secondbrain_scene_build (CmacsLibregnumRenderCtx *r,
                                             CmacsGraph *g,
+                                            CmacsGraphLayout *layout,
                                             int dims,
                                             double ring_gap,
                                             gboolean band_guides);
@@ -136,9 +138,15 @@ extern void     cmacs_secondbrain_scene_set_projection
                         (CmacsLibregnumRenderCtx *r, gboolean flat);
 extern gboolean cmacs_secondbrain_scene_flat_p (CmacsLibregnumRenderCtx *r);
 
-/* Frame the whole graph, respecting the current projection. */
+/* Frame the whole graph, respecting the current projection.
+ *
+ * LAYOUT may be NULL.  When it describes a concentric layout the camera
+ * aims at the ORIGIN rather than at the middle of the bounding box --
+ * the two differ whenever the rim is lopsided, and framing the box
+ * slides the ring system into a corner of its own cloud. */
 extern void cmacs_secondbrain_scene_fit (CmacsLibregnumRenderCtx *r,
-                                         CmacsGraph *g);
+                                         CmacsGraph *g,
+                                         CmacsGraphLayout *layout);
 
 G_END_DECLS
 
