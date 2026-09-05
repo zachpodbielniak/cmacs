@@ -40,6 +40,9 @@
 (declare-function cmacs-gowl-media-install-keybinds "cmacs-gowl-media" ())
 (declare-function cmacs-notify-daemon-mode-global "cmacs-notify-daemon"
                   (&optional arg))
+;; Autoloaded, but declared so the byte compiler knows the arity of the
+;; command the Super+Escape bind names.
+(declare-function cmacs-gowl-menu "cmacs-gowl-menu" ())
 
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
@@ -214,6 +217,7 @@ standalone gowl ships with (see
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
   Super+/             show the keybind cheatsheet
+  Super+Escape        control surface (power, audio, network, ...)
 
 Every bind is registered with a description, which is what
 `cmacs-gowl-describe-keybinds' renders.
@@ -521,7 +525,9 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
         (bind "Super+slash" 'custom "(cmacs-gowl-describe-keybinds)"
-              "Show this cheatsheet"))
+              "Show this cheatsheet")
+        (bind "Super+Escape" 'custom "(cmacs-gowl-menu)"
+              "Control surface (power, audio, network, ...)"))
       ;; Media, volume and brightness keys.  Bound to Elisp via gowl's
       ;; `custom' action rather than spawned, so each one can show the
       ;; resulting level.  Opt out with `cmacs-gowl-media-keybindings'.

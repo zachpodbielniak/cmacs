@@ -2747,6 +2747,48 @@ indistinguishable from a frozen cursor if you do not know a constraint
 exists.
 
 @noindent
+The control surface:
+
+@table @code
+@item cmacs-gowl-menu
+@vindex cmacs-gowl-menu
+The session's power, audio, network, bluetooth and display control as
+one tree, bound to @kbd{Super+@key{ESC}}.
+@item cmacs-gowl-menu-tree
+@vindex cmacs-gowl-menu-tree
+The tree itself, as a defcustom.
+@end table
+
+Omarchy solves the same problem with a Quickshell panel stack plus a
+JSONC menu tree whose guards are bash.  The tree is the good idea; QML
+is the wrong half to copy here --- a menu is a list of choices, and
+Emacs has had the best list-of-choices widget on the machine for forty
+years.  So this is the same data-driven tree, rendered by
+@code{completing-read}, with its guards evaluated in-process as Elisp
+rather than forked as one bash process per open.  It therefore works
+identically in a GUI frame, in a terminal, over @command{emacsclient
+-nw} from another machine, and under @option{--lrg}.
+
+@code{cmacs-gowl-menu-tree} is a list of @code{(LABEL . PLIST)} where a
+group carries @code{:items} (recursively the same shape) and a leaf
+carries @code{:call}.  @code{:when} is an Elisp form evaluated when the
+menu is built; an entry whose form returns nil is not shown, which is
+how a machine without bluetooth simply has no Bluetooth group rather
+than a group whose every item errors.  A guard that @emph{signals}
+hides its own entry and logs, because the entry most likely to have a
+broken guard is the one whose backend is misbehaving --- exactly when
+the rest of the menu still needs to open.
+
+@vindex cmacs-gowl-menu-confirm-destructive
+Reboot, power off and log out confirm first; suspend does not, because
+a confirmation on every reversible action is what trains people to
+answer yes without reading.
+
+Opening the menu blocks Emacs's main loop while it waits for a choice,
+but not the compositor: under @option{--gowl} the compositor runs on
+its own thread, so the desktop keeps compositing with the menu open.
+
+@noindent
 Notifications:
 
 @table @code

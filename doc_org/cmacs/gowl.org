@@ -520,6 +520,75 @@ lock the cursor deliberately does not move, which is indistinguishable
 from a frozen cursor if you do not know a constraint exists.
 =gowl_compositor_pointer_is_locked()= reports it.
 
+** The control surface
+:PROPERTIES:
+:CUSTOM_ID: control-surface
+:END:
+
+=M-x cmacs-gowl-menu= (=Super+Escape=) is the session's power, audio,
+network, bluetooth and display control, as one tree.
+
+Omarchy solves the same problem with a Quickshell panel stack plus
+=omarchy-menu.jsonc= --- a tree of entries with bash guards, rendered
+by QML.  The tree is the good idea; QML is the wrong half to copy
+here.  A menu is a list of choices, and Emacs has had the best
+list-of-choices widget on the machine for forty years.  So this is the
+same data-driven tree, rendered by =completing-read=, with its guards
+evaluated in-process as Elisp rather than forked as one bash process
+per open.
+
+What that buys beyond parity: the menu works identically in a GUI
+frame, in a terminal, over =emacsclient -nw= from another machine, and
+under =emacs --lrg=; it composes with whatever completion framework is
+already configured; and adding an entry is a line in =init.el=.
+
+*** What is in it
+
+| Group          | Entries                                                     |
+|----------------+-------------------------------------------------------------|
+| Applications   | launcher, run dialog, terminal                              |
+| Audio          | output / input device, volume, mute, mic mute               |
+| Network        | wifi networks, toggle wifi, status, nmtui                   |
+| Bluetooth      | connect, disconnect, toggle radio                           |
+| Display        | brightness, monitor list                                    |
+| Compositor     | keybind cheatsheet, reload config, layouts                  |
+| Power          | lock, suspend, hibernate, log out, reboot, power off        |
+
+Reboot, power off and log out confirm first
+(=cmacs-gowl-menu-confirm-destructive=); suspend does not, because a
+confirmation on every reversible action is what trains people to
+answer yes without reading.
+
+*** Extending it
+
+=cmacs-gowl-menu-tree= is a defcustom: a list of =(LABEL . PLIST)=
+where a group carries =:items= (recursively the same shape) and a leaf
+carries =:call= (a command symbol or a function).
+
+=:when= is an Elisp form evaluated when the menu is built.  An entry
+whose form returns nil is not shown --- which is how a machine without
+bluetooth simply has no Bluetooth group, rather than a group whose
+every item errors.  A guard that *signals* hides its own entry and
+logs, because the entry most likely to have a broken guard is the one
+whose backend is misbehaving, and that is exactly when the rest of the
+menu still needs to open.
+
+#+begin_src emacs-lisp
+(add-to-list 'cmacs-gowl-menu-tree
+             '("VPN"
+               :when (executable-find "tailscale")
+               :items (("Up"   :call (lambda () (start-process "ts" nil "tailscale" "up")))
+                       ("Down" :call (lambda () (start-process "ts" nil "tailscale" "down")))))
+             t)
+#+end_src
+
+*** A note on blocking
+
+Opening the menu blocks Emacs's main loop while it waits for a choice
+--- but not the compositor.  Under =--gowl= the compositor runs on its
+own thread, so the desktop keeps compositing and other clients keep
+animating with the menu open.
+
 ** Notifications
 :PROPERTIES:
 :CUSTOM_ID: notifications
