@@ -506,7 +506,13 @@ typedef enum
   CMACS_LIBREGNUM_NODE_MATCH     = 1u << 0,  /* a search hit */
   CMACS_LIBREGNUM_NODE_DIM       = 1u << 1,  /* de-emphasised */
   CMACS_LIBREGNUM_NODE_PINNED    = 1u << 2,  /* user pinned */
-  CMACS_LIBREGNUM_NODE_NEIGHBOUR = 1u << 3   /* one hop from the selection */
+  CMACS_LIBREGNUM_NODE_NEIGHBOUR = 1u << 3,  /* one hop from the selection */
+  /* Where the KEYBOARD stands, as distinct from what is selected.  A
+     scene that navigates by anchoring one node and walking its links
+     needs both at once: the selection is the anchor (halo, lit links),
+     the cursor is the node the next key acts on.  Drawn as its own ring
+     and always labelled. */
+  CMACS_LIBREGNUM_NODE_CURSOR    = 1u << 4
 } CmacsLibregnumNodeFlags;
 
 extern void  cmacs_libregnum_render_ctx_set_node_flags

@@ -670,6 +670,55 @@ no longer; ids are the only durable key.  */)
   return (emit >= 0) ? make_fixnum (emit) : Qnil;
 }
 
+DEFUN ("cmacs-secondbrain-set-cursor", Fcmacs_secondbrain_set_cursor,
+       Scmacs_secondbrain_set_cursor, 2, 2, 0,
+       doc: /* Put the keyboard cursor on node ID in BUFFER; nil clears it.
+
+The cursor is where the keyboard STANDS, as distinct from what is
+selected.  Navigation anchors one node -- the selection, with its halo
+and lit links -- and walks the cursor over that node's links; the
+cursor is therefore the node the next key acts on, and it needs its own
+mark: a white ring, and a label that is never dropped.
+
+A flag on the emitted node, so it survives everything but a rebuild;
+the Lisp side re-applies it after one.  A hidden node (its department
+collapsed) has no scene entry and gets no ring, which is why the
+navigation layer reveals before it moves.  Repaints immediately.
+Returns ID, or nil when it was cleared or is not on screen.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  SbState *st;
+  CmacsLibregnumView *v = NULL;
+  CmacsLibregnumRenderCtx *ctx = NULL;
+  Lisp_Object result = Qnil;
+
+  CHECK_BUFFER (buffer);
+  st = state_for_buffer (buffer, &v, &ctx);
+  if (!st || !ctx) return Qnil;
+
+  cmacs_libregnum_render_ctx_clear_node_flags (ctx, CMACS_LIBREGNUM_NODE_CURSOR);
+  if (!NILP (id))
+    {
+      gint idx, emit;
+
+      CHECK_STRING (id);
+      idx = cmacs_graph_index_of (st->graph, SSDATA (ENCODE_UTF_8 (id)));
+      emit = (idx >= 0) ? cmacs_secondbrain_scene_emit_index (ctx, (guint) idx)
+                        : -1;
+      if (emit >= 0)
+        {
+          cmacs_libregnum_render_ctx_set_node_flags
+            (ctx, emit,
+             cmacs_libregnum_render_ctx_get_node_flags (ctx, emit)
+             | CMACS_LIBREGNUM_NODE_CURSOR);
+          result = id;
+        }
+    }
+  cmacs_secondbrain_scene_apply_flags (ctx, st->graph);
+  if (v) cmacs_libregnum_view_request_redraw (v);
+  return result;
+}
+
 DEFUN ("cmacs-secondbrain-node-id-at", Fcmacs_secondbrain_node_id_at,
        Scmacs_secondbrain_node_id_at, 2, 2, 0,
        doc: /* Return the id string of the node at scene INDEX in BUFFER.
@@ -1757,6 +1806,7 @@ syms_of_cmacs_secondbrain_defuns (void)
   defsubr (&Scmacs_secondbrain_focus);
   defsubr (&Scmacs_secondbrain_select);
   defsubr (&Scmacs_secondbrain_scene_index);
+  defsubr (&Scmacs_secondbrain_set_cursor);
   defsubr (&Scmacs_secondbrain_node_id_at);
   defsubr (&Scmacs_secondbrain_set_match_set);
   defsubr (&Scmacs_secondbrain_set_shading);

@@ -56,10 +56,14 @@ Press =?= in the map for all of this as a menu that also shows each toggle's cur
 
 *** Moving around
 
+Two positions. The *cursor* — a white ring, always labelled — is what the keys move. The *anchor* — the selection, with its halo and lit links — is what they orbit. Unanchored, =h= =j= =k= =l= roam to the nearest node in that direction; with a node anchored (=SPC=, or a click) the same four keys walk only *that node's links*, still by screen direction, so "right" means "the connection that way". =<escape>= drops the anchor and leaves the cursor where it is, so you can walk out along a node's links, let go, and carry on roaming from there; =SPC= anchors again on whatever the cursor is standing on. =RET= opens the cursor's node.
+
 | Key | Does |
 |-----+------|
-| =h= =j= =k= =l= | the nearest node left / down / up / right |
+| =h= =j= =k= =l= | move the cursor: the nearest node, or the anchor's nearest link, that way |
 | arrows | the same |
+| =SPC= | anchor on the cursor's node — the keys now walk its links |
+| =<escape>= | drop the anchor; the keys roam again from here |
 | =]= | follow a link out of the selection |
 | =[= | go back the way you came |
 | =>= =<= (=M-n= =M-p=) | next / previous node in this department |
@@ -121,7 +125,7 @@ One prefix rather than a capital letter each. There were twelve of these scatter
 | =f= | fly to the selection, and pivot the camera around it |
 | =+= =-= (=+= also on ~=~) | zoom in / out, toward the camera's target |
 | =0= | frame the whole graph |
-| =RET= / =O= | open the node's file, here or in another window |
+| =RET= / =O= | open the cursor's node, here or in another window |
 | =y= | copy the node's path |
 | =i= / =p= / =W= | inspector / preview / close the panes |
 | =?= | the *menu*: every key, with each toggle's current state |

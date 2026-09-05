@@ -1295,7 +1295,8 @@ cmacs_libregnum_render_ctx_label_visible_p (CmacsLibregnumRenderCtx *r,
      able to read its name without hunting for it. */
   if (n->flags & (CMACS_LIBREGNUM_NODE_MATCH
                   | CMACS_LIBREGNUM_NODE_PINNED
-                  | CMACS_LIBREGNUM_NODE_NEIGHBOUR))
+                  | CMACS_LIBREGNUM_NODE_NEIGHBOUR
+                  | CMACS_LIBREGNUM_NODE_CURSOR))
     return TRUE;
 
   switch (n->label_mode)
@@ -4033,6 +4034,10 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
          cannot read, exactly what highlighting was for. */
       cand[ncand].priority =
         (r->selected == (gint) i) ? 1e9f
+        /* The cursor outranks everything but the selection: it is the
+           node the next key acts on, so its name must never be the one
+           the label budget drops. */
+        : (n->flags & CMACS_LIBREGNUM_NODE_CURSOR) ? 9e8f
         : (r->hovered == (gint) i) ? 5e8f
         : (n->flags & CMACS_LIBREGNUM_NODE_MATCH) ? 4e8f
         : (n->flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR) ? 3e8f
@@ -4057,9 +4062,11 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
         gboolean sel = (r->selected == (gint) c->id);
         gboolean hov = (r->hovered == (gint) c->id);
         guint flags = g_array_index (r->nodes, CmacsNode, c->id).flags;
+        gboolean cur = (flags & CMACS_LIBREGNUM_NODE_CURSOR) != 0;
         float rr;
 
-        if (!sel && !hov && !(flags & CMACS_LIBREGNUM_NODE_MATCH)) continue;
+        if (!sel && !hov && !cur && !(flags & CMACS_LIBREGNUM_NODE_MATCH))
+          continue;
 
         rr = MAX (c->rpx, 3.0f);
         {
@@ -4072,6 +4079,18 @@ ctx_draw_node_labels (CmacsLibregnumRenderCtx *r)
               g_autoptr (GrlColor) edge = grl_color_new (255, 235, 120, 235);
               grl_draw_ring (at, rr + 3.0f, rr + 11.0f, 0.0f, 360.0f, 40, glow);
               grl_draw_ring (at, rr + 3.0f, rr + 5.0f, 0.0f, 360.0f, 40, edge);
+            }
+          else if (cur)
+            {
+              /* The cursor: a crisp white ring with a thin outer halo,
+                 inside where the selection's rings would sit, so the
+                 two are legible together when the cursor is standing on
+                 the anchor.  White, because every other colour in the
+                 scene means something. */
+              g_autoptr (GrlColor) halo = grl_color_new (255, 255, 255, 50);
+              g_autoptr (GrlColor) edge = grl_color_new (245, 250, 255, 240);
+              grl_draw_ring (at, rr + 1.0f, rr + 7.0f, 0.0f, 360.0f, 40, halo);
+              grl_draw_ring (at, rr + 1.5f, rr + 3.5f, 0.0f, 360.0f, 40, edge);
             }
           else if (hov)
             {

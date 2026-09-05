@@ -15,6 +15,12 @@
 ;;
 ;;   h j k l   SPATIAL -- the nearest node in that screen direction.
 ;;             What you reach for when you can see where you want to be.
+;;             With a node ANCHORED (SPC, or a click) the same four keys
+;;             walk only that node's links, still by screen direction;
+;;             <escape> drops the anchor and they roam again.  Two
+;;             positions therefore: the CURSOR the keys move (a white
+;;             ring, always labelled) and the SELECTION they orbit (the
+;;             halo and the lit links).  RET opens the cursor's node.
 ;;
 ;;   [ ] < >   TOPOLOGICAL -- walk links, and walk the department you
 ;;             are standing in.  What you reach for when you cannot.
@@ -118,6 +124,25 @@ be overshot."
   "Breadcrumb stack of ids for `]' / `['.")
 (defvar-local cmacs-secondbrain--spatial-trail nil
   "Stack of (DIRECTION . FROM-ID) making spatial moves exactly reversible.")
+(defvar-local cmacs-secondbrain--cursor nil
+  "Id of the node the keyboard stands on, or nil.
+
+Distinct from `cmacs-secondbrain--selected\=', which is the ANCHOR: the
+node whose links the cursor walks while one is set.  Moving never
+changes the anchor; only SPC, a click, or <escape> do.")
+
+(defcustom cmacs-secondbrain-link-cone-degrees 80
+  "Half-angle of the screen-space cone used when walking an anchor\='s links.
+
+Wider than the roaming cone because the candidates are few and spread
+around the anchor: with a dozen links there is usually exactly one to
+the right, and it may be forty degrees off the axis."
+  :type 'integer
+  :group 'cmacs-secondbrain)
+
+(defun cmacs-secondbrain--nav-here ()
+  "The node the keyboard is standing on: the cursor, else the selection."
+  (or cmacs-secondbrain--cursor cmacs-secondbrain--selected))
 
 ;;;; Graph access -----------------------------------------------------
 
@@ -217,16 +242,72 @@ editor -- and expands each ancestor."
             (current-buffer) idx cmacs-secondbrain-edge-margin)))))
 
 (defun cmacs-secondbrain--nav-goto (id &optional fly)
-  "Reveal, select and report ID.  With FLY, bring the camera to it.
+  "Reveal ID, stand the cursor on it and report it.  FLY brings the camera.
 
 The single choke point for every keyboard move, so revealing can never
-be forgotten by one of them."
+be forgotten by one of them.  Moves the CURSOR, never the selection:
+the selection is the anchor, and a walk that re-anchored on every step
+could never walk an anchor\='s links -- the second step would already be
+somebody else\='s."
   (when id
     (cmacs-secondbrain--nav-reveal id)
-    (cmacs-secondbrain--select id)
+    (cmacs-secondbrain--set-cursor id)
     (when (and fly (fboundp 'cmacs-secondbrain-focus))
       (ignore-errors (cmacs-secondbrain-focus (current-buffer) id)))
+    (let ((node (cmacs-secondbrain--nav-node id)))
+      (message "%s%s%s"
+               (or (plist-get node :title) id)
+               (let ((d (plist-get node :department)))
+                 (if d (format "  [%s]" d) ""))
+               (if (and cmacs-secondbrain--selected
+                        (not (equal cmacs-secondbrain--selected id)))
+                   (format "  ·  linked to %s"
+                           (cmacs-secondbrain--nav-title
+                            cmacs-secondbrain--selected))
+                 "")))
     id))
+
+(defun cmacs-secondbrain--set-cursor (id)
+  "Stand the cursor on ID (nil clears) and mark it in the scene."
+  (setq cmacs-secondbrain--cursor id)
+  (when (fboundp 'cmacs-secondbrain-set-cursor)
+    (ignore-errors (cmacs-secondbrain-set-cursor (current-buffer) id))))
+
+;;;; Anchoring ------------------------------------------------------
+
+(defun cmacs-secondbrain-anchor ()
+  "Anchor on the node under the cursor: h j k l then walk its links.
+
+Anchoring IS selecting -- the halo, the lit links, the inspector all
+follow -- so what the four keys walk is exactly what the map is
+showing you.  With no cursor yet, anchors the busiest node."
+  (interactive)
+  (let ((id (or (cmacs-secondbrain--nav-here)
+                (cmacs-secondbrain--nav-goto (cmacs-secondbrain--nav-busiest) t))))
+    (when id
+      (cmacs-secondbrain--select id)
+      (cmacs-secondbrain--set-cursor id)
+      (setq cmacs-secondbrain--spatial-trail nil)
+      (message "%s  —  h j k l walk its %d links, <escape> to roam"
+               (cmacs-secondbrain--nav-title id)
+               (length (cmacs-secondbrain--nav-links id))))))
+
+(defun cmacs-secondbrain-unanchor ()
+  "Drop the anchor; h j k l roam the nearest nodes again.
+
+The cursor stays where it is, so nothing is lost: SPC re-anchors right
+there.  With nothing anchored this falls through to what <escape> did
+before -- under Evil, back to normal state."
+  (interactive)
+  (cond
+   (cmacs-secondbrain--selected
+    (let ((here (cmacs-secondbrain--nav-here)))
+      (cmacs-secondbrain--select nil)
+      (cmacs-secondbrain--set-cursor here)
+      (setq cmacs-secondbrain--spatial-trail nil)
+      (message "Roaming  —  h j k l move to the nearest node, SPC to anchor")))
+   ((fboundp 'cmacs-libregnum-evil-normal-state)
+    (cmacs-libregnum-evil-normal-state))))
 
 ;;;; Spatial tier -----------------------------------------------------
 
@@ -262,59 +343,118 @@ be forgotten by one of them."
   (and index (fboundp 'cmacs-secondbrain-node-id-at)
        (ignore-errors (cmacs-secondbrain-node-id-at (current-buffer) index))))
 
+(defun cmacs-secondbrain--nav-viewport-size ()
+  "The viewport\='s size in pixels, as (W . H).
+
+The window body, because the framebuffer tracks it exactly; a buffer
+with no window gets a square, which only has to be self-consistent."
+  (let ((w (get-buffer-window (current-buffer) t)))
+    (if w
+        (cons (max 1 (window-body-width w t)) (max 1 (window-body-height w t)))
+      (cons 1000 1000))))
+
+(defun cmacs-secondbrain--nav-screen-pos (id)
+  "ID\='s position in view pixels, or nil when hidden or behind the camera."
+  (let* ((pos (ignore-errors (cmacs-secondbrain-node-position (current-buffer) id)))
+         (size (cmacs-secondbrain--nav-viewport-size)))
+    (and pos (cmacs-secondbrain--nav-scene-index id)
+         (fboundp 'cmacs-libregnum-project)
+         (ignore-errors
+           (cmacs-libregnum-project (current-buffer)
+                                    (nth 0 pos) (nth 1 pos) (nth 2 pos)
+                                    (car size) (cdr size))))))
+
+(defun cmacs-secondbrain--pick-linked (dir)
+  "Among the anchor\='s links, the id nearest in screen direction DIR.
+
+Candidates are the anchor\='s links plus the anchor itself, minus where
+the cursor already stands, and only those on screen: a link into a
+collapsed department has nowhere to be walked to.  Scored by angle
+first (inside `cmacs-secondbrain-link-cone-degrees\=' of DIR) and then
+by distance, so the key means \"that way\" rather than \"nearest\"."
+  (let* ((anchor cmacs-secondbrain--selected)
+         (here (cmacs-secondbrain--nav-here))
+         (from (and here (cmacs-secondbrain--nav-screen-pos here)))
+         (v (cdr (assq dir cmacs-secondbrain--nav-directions)))
+         (cos-min (cos (degrees-to-radians cmacs-secondbrain-link-cone-degrees)))
+         (best nil) (best-d most-positive-fixnum))
+    (when (and anchor from)
+      (dolist (cand (cons anchor (cmacs-secondbrain--nav-links anchor)))
+        (unless (equal cand here)
+          (let ((to (cmacs-secondbrain--nav-screen-pos cand)))
+            (when to
+              (let* ((dx (- (nth 0 to) (nth 0 from)))
+                     (dy (- (nth 1 to) (nth 1 from)))
+                     (d (sqrt (+ (* dx dx) (* dy dy)))))
+                (when (and (> d 0.5)
+                           (>= (/ (+ (* dx (car v)) (* dy (cdr v))) d) cos-min)
+                           (< d best-d))
+                  (setq best cand best-d d))))))))
+    best))
+
 (defun cmacs-secondbrain--move-spatial (dir)
-  "Select the nearest node in screen direction DIR from the selection."
-  (let ((buf (current-buffer)))
-    (if (not cmacs-secondbrain--selected)
-        ;; Nothing selected: drop onto the busiest node rather than
+  "Move the cursor in screen direction DIR.
+
+Two modes, chosen by whether a node is anchored.  Anchored: the cursor
+walks the anchor\='s LINKS, nearest in that direction from where it
+stands.  Roaming: the nearest node of any kind, in a cone.  Both are
+exactly reversible through a trail, because a cone metric is not
+self-inverse -- `l\=' then `h\=' would otherwise land somewhere new."
+  (let ((buf (current-buffer))
+        (here (cmacs-secondbrain--nav-here)))
+    (if (not here)
+        ;; Nothing to stand on: drop onto the busiest node rather than
         ;; refusing.  The first press of an arrow key should do
         ;; something, or the map reads as keyboard-dead.
         (cmacs-secondbrain--nav-goto (cmacs-secondbrain--nav-busiest) t)
-      ;; Exact reversal.  A cone metric is not self-inverse, so going
-      ;; back the way you came is replayed from a trail rather than
-      ;; recomputed -- otherwise `l' then `h' lands somewhere new.
       (let ((top (car cmacs-secondbrain--spatial-trail)))
         (if (and top (eq dir (cmacs-secondbrain--nav-opposite (car top))))
             (progn (pop cmacs-secondbrain--spatial-trail)
                    (cmacs-secondbrain--nav-goto (cdr top)))
-          (let* ((from (cmacs-secondbrain--nav-scene-index
-                        cmacs-secondbrain--selected))
-                 (v (cdr (assq dir cmacs-secondbrain--nav-directions)))
-                 (hit (and from (fboundp 'cmacs-libregnum-nearest-in-direction)
-                           (cmacs-libregnum-nearest-in-direction
-                            buf from (car v) (cdr v)
-                            cmacs-secondbrain-cone-degrees))))
-            (if (not hit)
-                (message "No node %s of here" dir)
-              (let ((id (cmacs-secondbrain--nav-id-at hit)))
-                (if (not id)
-                    (message "No node %s of here" dir)
-                  (push (cons dir cmacs-secondbrain--selected)
-                        cmacs-secondbrain--spatial-trail)
-                  ;; Do not fly by default: the step normally lands on
-                  ;; something already visible, and moving the camera
-                  ;; every time makes the map swim under you.  But a few
-                  ;; steps in one direction walk off the edge of a ring
-                  ;; layout far larger than the viewport, and navigating
-                  ;; something you cannot see is useless -- so follow
-                  ;; exactly when the new selection is not on screen.
-                  (cmacs-secondbrain--nav-goto id)
-                  (when (and cmacs-secondbrain-keep-selection-visible
-                             (not (cmacs-secondbrain--nav-onscreen-p id)))
-                    (ignore-errors
-                      (cmacs-secondbrain-focus (current-buffer) id))))))))))))
+          (let ((id
+                 (if cmacs-secondbrain--selected
+                     (cmacs-secondbrain--pick-linked dir)
+                   (let* ((from (cmacs-secondbrain--nav-scene-index here))
+                          (v (cdr (assq dir cmacs-secondbrain--nav-directions)))
+                          (hit (and from
+                                    (fboundp 'cmacs-libregnum-nearest-in-direction)
+                                    (cmacs-libregnum-nearest-in-direction
+                                     buf from (car v) (cdr v)
+                                     cmacs-secondbrain-cone-degrees))))
+                     (cmacs-secondbrain--nav-id-at hit)))))
+            (if (not id)
+                (message (if cmacs-secondbrain--selected
+                             "No link of %s %s of here  (<escape> to roam)"
+                           "No node %s%s of here")
+                         (if cmacs-secondbrain--selected
+                             (cmacs-secondbrain--nav-title cmacs-secondbrain--selected)
+                           dir)
+                         (if cmacs-secondbrain--selected dir ""))
+              (push (cons dir here) cmacs-secondbrain--spatial-trail)
+              ;; Do not fly by default: the step normally lands on
+              ;; something already visible, and moving the camera every
+              ;; time makes the map swim under you.  But a few steps in
+              ;; one direction walk off the edge of a ring layout far
+              ;; larger than the viewport, and navigating something you
+              ;; cannot see is useless -- so follow exactly when the new
+              ;; cursor is not on screen.
+              (cmacs-secondbrain--nav-goto id)
+              (when (and cmacs-secondbrain-keep-selection-visible
+                         (not (cmacs-secondbrain--nav-onscreen-p id)))
+                (ignore-errors
+                  (cmacs-secondbrain-focus (current-buffer) id))))))))))
 
 (defun cmacs-secondbrain-move-left ()
-  "Select the nearest node to the left."
+  "Move the cursor left: to the nearest node, or the anchor\='s nearest link."
   (interactive) (cmacs-secondbrain--move-spatial 'left))
 (defun cmacs-secondbrain-move-right ()
-  "Select the nearest node to the right."
+  "Move the cursor right: to the nearest node, or the anchor\='s nearest link."
   (interactive) (cmacs-secondbrain--move-spatial 'right))
 (defun cmacs-secondbrain-move-up ()
-  "Select the nearest node above."
+  "Move the cursor up: to the nearest node, or the anchor\='s nearest link."
   (interactive) (cmacs-secondbrain--move-spatial 'up))
 (defun cmacs-secondbrain-move-down ()
-  "Select the nearest node below."
+  "Move the cursor down: to the nearest node, or the anchor\='s nearest link."
   (interactive) (cmacs-secondbrain--move-spatial 'down))
 
 ;;;; Topological tier -------------------------------------------------
@@ -322,7 +462,7 @@ be forgotten by one of them."
 (defun cmacs-secondbrain-follow-link ()
   "Follow a link out of the selection, remembering where you came from."
   (interactive)
-  (let* ((id cmacs-secondbrain--selected)
+  (let* ((id (cmacs-secondbrain--nav-here))
          (links (and id (cmacs-secondbrain--nav-links id)))
          ;; Do not immediately walk back the way we arrived: that turns
          ;; `]' `]' into a two-node oscillation on any pair.
@@ -330,7 +470,7 @@ be forgotten by one of them."
                                :test #'equal)
                     links)))
     (cond
-     ((null id) (message "Nothing selected"))
+     ((null id) (message "Nothing to stand on -- press a movement key first"))
      ((null links) (message "%s has no links"
                             (cmacs-secondbrain--nav-title id)))
      (t
@@ -344,21 +484,21 @@ be forgotten by one of them."
 (defun cmacs-secondbrain-back ()
   "Go back the way you came, or to a link if there is no trail."
   (interactive)
-  (let ((id cmacs-secondbrain--selected))
+  (let ((id (cmacs-secondbrain--nav-here)))
     (cond
      (cmacs-secondbrain--trail
       (cmacs-secondbrain--nav-goto (pop cmacs-secondbrain--trail) t))
-     ((null id) (message "Nothing selected"))
+     ((null id) (message "Nothing to stand on -- press a movement key first"))
      ((cmacs-secondbrain--nav-links id)
       (cmacs-secondbrain--nav-goto (car (cmacs-secondbrain--nav-links id)) t))
      (t (message "Nowhere to go back to")))))
 
 (defun cmacs-secondbrain--cycle-sibling (delta)
   "Move DELTA places through the selection's sibling set, wrapping."
-  (let* ((id cmacs-secondbrain--selected)
+  (let* ((id (cmacs-secondbrain--nav-here))
          (peers (and id (cmacs-secondbrain--nav-siblings id))))
     (cond
-     ((null id) (message "Nothing selected"))
+     ((null id) (message "Nothing to stand on -- press a movement key first"))
      ((or (null peers) (< (length peers) 2))
       (message "%s has no siblings" (cmacs-secondbrain--nav-title id)))
      (t
@@ -384,7 +524,7 @@ be forgotten by one of them."
   "Jump to one of the selection's links, chosen by name.
 The answer for a hub with forty links, where cycling is hopeless."
   (interactive)
-  (let* ((id cmacs-secondbrain--selected)
+  (let* ((id (cmacs-secondbrain--nav-here))
          (_ (unless id (user-error "Nothing selected")))
          (links (cmacs-secondbrain--nav-links id))
          (table (make-hash-table :test #'equal))
@@ -405,10 +545,10 @@ The answer for a hub with forty links, where cycling is hopeless."
 (defun cmacs-secondbrain-up ()
   "Select the department this node belongs to, then its ring."
   (interactive)
-  (let* ((id cmacs-secondbrain--selected)
+  (let* ((id (cmacs-secondbrain--nav-here))
          (parent (and id (cmacs-secondbrain--nav-parent id))))
     (cond
-     ((null id) (message "Nothing selected"))
+     ((null id) (message "Nothing to stand on -- press a movement key first"))
      (parent (cmacs-secondbrain--nav-goto parent t))
      (t (message "%s is already a top-level node"
                  (cmacs-secondbrain--nav-title id))))))
@@ -416,10 +556,10 @@ The answer for a hub with forty links, where cycling is hopeless."
 (defun cmacs-secondbrain-down ()
   "Select the first member of the selected department, expanding it."
   (interactive)
-  (let* ((id cmacs-secondbrain--selected)
+  (let* ((id (cmacs-secondbrain--nav-here))
          (kids (and id (cmacs-secondbrain--nav-children id))))
     (cond
-     ((null id) (message "Nothing selected"))
+     ((null id) (message "Nothing to stand on -- press a movement key first"))
      ((null kids) (message "%s holds nothing"
                            (cmacs-secondbrain--nav-title id)))
      (t
@@ -669,7 +809,7 @@ end up believing a department is empty."
 ;;;; Camera -----------------------------------------------------------
 
 (defun cmacs-secondbrain-recenter ()
-  "Bring the camera to the selection and pivot around it.
+  "Bring the camera to the cursor (else the selection) and pivot around it.
 
 The companion to the spatial keys, which deliberately leave the camera
 alone: this is how you say \"take me to what I have selected\".  It also
@@ -677,13 +817,14 @@ re-aims the camera TARGET at the node, so orbiting and zooming from
 here revolve around it rather than around wherever the view was last
 centred."
   (interactive)
-  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
-  (cmacs-secondbrain--nav-reveal cmacs-secondbrain--selected)
-  (unless (ignore-errors
-            (cmacs-secondbrain-focus (current-buffer)
-                                     cmacs-secondbrain--selected))
-    (user-error "%s is not on screen to fly to"
-                (cmacs-secondbrain--nav-title cmacs-secondbrain--selected))))
+  ;; The cursor when the keyboard is standing somewhere, else the anchor:
+  ;; `f' takes you to what you walked to.
+  (let ((id (cmacs-secondbrain--nav-here)))
+    (unless id (user-error "Nothing selected"))
+    (cmacs-secondbrain--nav-reveal id)
+    (unless (ignore-errors (cmacs-secondbrain-focus (current-buffer) id))
+      (user-error "%s is not on screen to fly to"
+                  (cmacs-secondbrain--nav-title id)))))
 
 (define-obsolete-function-alias 'cmacs-secondbrain-fly-to-selected
   'cmacs-secondbrain-recenter "cmacs 32"
@@ -790,7 +931,9 @@ version with the legend."
     ("^" "up to the department" cmacs-secondbrain-up)
     ("m" "down into it" cmacs-secondbrain-down)
     ("o" "a link, by name…" cmacs-secondbrain-goto-link)
-    ("J" "any node, by name…" cmacs-secondbrain-jump)]
+    ("J" "any node, by name…" cmacs-secondbrain-jump)
+    ("SPC" "anchor: h j k l walk its links" cmacs-secondbrain-anchor)
+    ("<escape>" "drop the anchor, roam" cmacs-secondbrain-unanchor)]
    ["Find & filter"
     ("/" "search…" cmacs-secondbrain-find)
     ("n" "next match" cmacs-secondbrain-search-next)
@@ -917,7 +1060,13 @@ version with the legend."
                      (if cmacs-secondbrain-age-fade ", age fade" "")))
 
       (princ "Moving around\n-------------\n")
-      (princ "  h j k l    nearest node left / down / up / right\n")
+      (princ "  Two positions: the CURSOR (white ring) the keys move, and\n")
+      (princ "  the ANCHOR (halo, lit links) they orbit.  Unanchored, h j k l\n")
+      (princ "  roam to the nearest node; anchored, they walk the anchor's\n")
+      (princ "  links, still by direction.\n\n")
+      (princ "  SPC        anchor on the node under the cursor\n")
+      (princ "  <escape>   drop the anchor and roam from here\n")
+      (princ "  h j k l    move the cursor: nearest node, or the anchor's link, that way\n")
       (princ "  arrows     the same\n")
       (princ "  ]          follow a link out of the selection\n")
       (princ "  [          go back the way you came\n")

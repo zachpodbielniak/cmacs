@@ -1826,9 +1826,11 @@ error -- indistinguishable from the key doing nothing."
       (cmacs-secondbrain-set-collapsed buf "hub" t 0)
       (should-not (cmacs-secondbrain-scene-index buf "kid"))
       (cmacs-secondbrain--nav-goto "kid")
-      ;; Revealed, and really selected in the scene.
+      ;; Revealed, and the CURSOR stands on it -- not the selection,
+      ;; which is the anchor and only SPC or a click may move.
       (should (cmacs-secondbrain-scene-index buf "kid"))
-      (should (equal "kid" cmacs-secondbrain--selected)))))
+      (should (equal "kid" cmacs-secondbrain--cursor))
+      (should-not cmacs-secondbrain--selected))))
 
 (ert-deftest cmacs-secondbrain-test-nav-siblings-and-links ()
   "Sibling and link walks are ordered, deduplicated and undirected."
@@ -2042,7 +2044,8 @@ still frame and behave wrongly the moment you orbit."
   (cmacs-secondbrain-tests--skip)
   (skip-unless (fboundp 'cmacs-secondbrain-recenter))
   (cmacs-secondbrain-tests--with-live-graph buf
-    (setq cmacs-secondbrain--selected nil)
+    (setq cmacs-secondbrain--selected nil
+          cmacs-secondbrain--cursor nil)
     (should-error (cmacs-secondbrain-recenter) :type 'user-error)))
 
 (ert-deftest cmacs-secondbrain-test-spatial-move-follows-offscreen ()
@@ -2062,16 +2065,16 @@ see, and every further step is blind."
             ;; Close in hard so the rest of the map leaves the viewport.
             (dotimes (_ 12) (cmacs-secondbrain-zoom-in))
             (cmacs-secondbrain-move-right)
-            ;; The step either found nothing (selection unchanged) or it
+            ;; The step either found nothing (cursor unchanged) or it
             ;; moved -- and then the camera must end up showing it.
-            (unless (equal "a" cmacs-secondbrain--selected)
+            (unless (equal "a" cmacs-secondbrain--cursor)
               ;; A fly is a GOAL that the render pass eases toward, so it
               ;; needs frames.  Asserting the camera moved the instant
               ;; the command returned would fail on working code -- which
               ;; is exactly how this test was first written.
               (dotimes (_ 60) (cmacs-libregnum-snapshot buf shot))
               (should (cmacs-secondbrain--nav-onscreen-p
-                       cmacs-secondbrain--selected))))
+                       cmacs-secondbrain--cursor))))
         (ignore-errors (delete-file shot))))))
 
 (defun cmacs-secondbrain-tests--ring-nodes (n)
@@ -2943,6 +2946,143 @@ is a filter that keeps nothing, distinct from nil which lifts it."
       ;; nil lifts it.
       (should-not (cmacs-secondbrain-set-keep-set buf nil))
       (should (equal lit (cmacs-libregnum-mean-color buf))))))
+
+;;;; Cursor and anchor --------------------------------------------------
+
+(defmacro cmacs-secondbrain-tests--with-linked-graph (buf &rest body)
+  "Attach BUF with a hub, four leaves and links, laid out and framed.
+
+\"a\" links to \"b\" and \"c\"; \"d\" is a member of the same department
+but unlinked -- the node an anchored walk must never reach."
+  (declare (indent 1) (debug t))
+  `(cmacs-secondbrain-tests--with-view ,buf
+     (with-current-buffer ,buf
+       (cmacs-secondbrain-mode)
+       (let ((g (list :nodes (list (list :id "hub" :title "Hub" :kind 'hub
+                                         :ring 'memory)
+                                   (list :id "a" :title "A" :kind 'file
+                                         :ring 'memory :parent "hub")
+                                   (list :id "b" :title "B" :kind 'file
+                                         :ring 'memory :parent "hub")
+                                   (list :id "c" :title "C" :kind 'file
+                                         :ring 'memory :parent "hub")
+                                   (list :id "d" :title "D" :kind 'file
+                                         :ring 'memory :parent "hub"))
+                      :edges (list (list :from "a" :to "b")
+                                   (list :from "c" :to "a")))))
+         (setq cmacs-secondbrain--graph g)
+         (cmacs-secondbrain-set-graph ,buf (vconcat (plist-get g :nodes))
+                                      (vconcat (plist-get g :edges)) 2)
+         (cmacs-secondbrain--build-groups (plist-get g :nodes)
+                                          (plist-get g :edges)))
+       (cmacs-secondbrain-set-layout ,buf 'rings 0)
+       (cmacs-secondbrain-fit ,buf)
+       ,@body)))
+
+(ert-deftest cmacs-secondbrain-test-anchor-walks-only-the-links ()
+  "Anchored on \"a\", every spatial key lands on a node LINKED to \"a\".
+
+The unlinked sibling \"d\" sits in the same wedge, often nearer than a
+link, and must never be reached: that is the whole difference between
+walking a node\='s connections and roaming the map.  Both ways round
+the ring, so a layout that puts the links on one side cannot pass by
+accident."
+  (require 'cmacs-secondbrain-nav)
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-anchor))
+  (cmacs-secondbrain-tests--with-linked-graph buf
+    (cmacs-secondbrain--nav-goto "a")
+    (cmacs-secondbrain-anchor)
+    (should (equal "a" cmacs-secondbrain--selected))
+    (should (equal "a" cmacs-secondbrain--cursor))
+    (let ((seen nil))
+      (dolist (fn (list #'cmacs-secondbrain-move-left #'cmacs-secondbrain-move-right
+                        #'cmacs-secondbrain-move-up #'cmacs-secondbrain-move-down
+                        #'cmacs-secondbrain-move-left #'cmacs-secondbrain-move-right))
+        (funcall fn)
+        (push cmacs-secondbrain--cursor seen)
+        ;; Wherever the cursor went, the anchor did not move...
+        (should (equal "a" cmacs-secondbrain--selected))
+        ;; ...and it is standing on the anchor or one of its links.
+        (should (member cmacs-secondbrain--cursor '("a" "b" "c"))))
+      ;; And it actually went somewhere.
+      (should (cl-some (lambda (id) (not (equal id "a"))) seen)))))
+
+(ert-deftest cmacs-secondbrain-test-escape-roams-from-where-the-cursor-is ()
+  "<escape> drops the anchor, keeps the cursor, and the keys roam again.
+
+Roaming from the cursor rather than snapping back to the anchor is what
+makes the two modes compose: walk out along the links, let go, and
+carry on from there."
+  (require 'cmacs-secondbrain-nav)
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (fboundp 'cmacs-secondbrain-unanchor))
+  (cmacs-secondbrain-tests--with-linked-graph buf
+    (cmacs-secondbrain--nav-goto "a")
+    (cmacs-secondbrain-anchor)
+    ;; Walk to a link, whichever direction finds one.
+    (cl-loop for fn in (list #'cmacs-secondbrain-move-left #'cmacs-secondbrain-move-right
+                             #'cmacs-secondbrain-move-up #'cmacs-secondbrain-move-down)
+             until (not (equal "a" cmacs-secondbrain--cursor))
+             do (funcall fn))
+    (let ((there cmacs-secondbrain--cursor))
+      (should (member there '("b" "c")))
+      (cmacs-secondbrain-unanchor)
+      (should-not cmacs-secondbrain--selected)
+      (should (equal there cmacs-secondbrain--cursor))
+      ;; Roaming now: some direction reaches the unlinked "d" or the hub,
+      ;; which an anchored walk could never have.
+      (let ((reached nil))
+        (dotimes (_ 6)
+          (dolist (fn (list #'cmacs-secondbrain-move-left #'cmacs-secondbrain-move-right
+                            #'cmacs-secondbrain-move-up #'cmacs-secondbrain-move-down))
+            (funcall fn)
+            (push cmacs-secondbrain--cursor reached)))
+        (should (cl-some (lambda (id) (member id '("d" "hub"))) reached)))
+      ;; SPC re-anchors where the cursor stands.
+      (cmacs-secondbrain-anchor)
+      (should (equal cmacs-secondbrain--cursor cmacs-secondbrain--selected)))))
+
+(ert-deftest cmacs-secondbrain-test-cursor-is-marked-in-the-scene ()
+  "The cursor carries the CURSOR flag on exactly one emitted node,
+and it survives a rebuild through refresh's re-application."
+  (require 'cmacs-secondbrain-nav)
+  (cmacs-secondbrain-tests--skip)
+  (skip-unless (and (fboundp 'cmacs-secondbrain-set-cursor)
+                    (fboundp 'cmacs-libregnum-get-node-flags)))
+  (cmacs-secondbrain-tests--with-linked-graph buf
+    (should (equal "b" (cmacs-secondbrain-set-cursor buf "b")))
+    (let ((flagged nil))
+      (dolist (id '("hub" "a" "b" "c" "d"))
+        (let ((idx (cmacs-secondbrain-scene-index buf id)))
+          (when (and idx (/= 0 (logand 16 (cmacs-libregnum-get-node-flags buf idx))))
+            (push id flagged))))
+      (should (equal '("b") flagged)))
+    ;; Moving it clears the old one.
+    (cmacs-secondbrain-set-cursor buf "c")
+    (should (= 0 (logand 16 (cmacs-libregnum-get-node-flags
+                             buf (cmacs-secondbrain-scene-index buf "b")))))
+    ;; nil clears it everywhere; a hidden node gets nothing and says so.
+    (should-not (cmacs-secondbrain-set-cursor buf nil))
+    (cmacs-secondbrain-set-collapsed buf "hub" t 0)
+    (should-not (cmacs-secondbrain-set-cursor buf "c"))))
+
+(ert-deftest cmacs-secondbrain-test-enter-opens-the-cursor-not-the-anchor ()
+  "RET opens the node the cursor stands on, even while another is anchored."
+  (skip-unless (fboundp 'cmacs-secondbrain-visit))
+  (with-temp-buffer
+    (let ((opened nil))
+      (cl-letf (((symbol-function 'cmacs-secondbrain-node-at)
+                 (lambda (_buf id) (list :id id :file (concat "/tmp/" id ".org"))))
+                ((symbol-function 'find-file) (lambda (f) (setq opened f))))
+        (setq-local cmacs-secondbrain--selected "anchor")
+        (setq-local cmacs-secondbrain--cursor "walked")
+        (cmacs-secondbrain-visit)
+        (should (equal "/tmp/walked.org" opened))
+        ;; No cursor: the anchor is what there is.
+        (setq-local cmacs-secondbrain--cursor nil)
+        (cmacs-secondbrain-visit)
+        (should (equal "/tmp/anchor.org" opened))))))
 
 (provide 'cmacs-secondbrain-tests)
 

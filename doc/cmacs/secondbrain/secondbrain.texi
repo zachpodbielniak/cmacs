@@ -104,10 +104,21 @@ Press @kbd{?} in the map for all of this as a menu that also shows each
 toggle's current state; @kbd{M-?} is the plain-text version with the
 legend.
 
+Two positions.  The @emph{cursor}---a white ring, always labelled---is
+what the keys move.  The @emph{anchor}---the selection, with its halo
+and lit links---is what they orbit.  Unanchored, @kbd{h} @kbd{j} @kbd{k}
+@kbd{l} roam to the nearest node in that direction; with a node anchored
+(@key{SPC}, or a click) the same four keys walk only @emph{that node's
+links}, still by screen direction.  @key{ESC} drops the anchor and
+leaves the cursor where it is; @key{SPC} anchors again on whatever the
+cursor is standing on.  @key{RET} opens the cursor's node.
+
 @multitable @columnfractions .22 .78
 @headitem Key @tab Moving around
-@item @kbd{h} @kbd{j} @kbd{k} @kbd{l} @tab nearest node left / down / up / right
+@item @kbd{h} @kbd{j} @kbd{k} @kbd{l} @tab move the cursor: the nearest node, or the anchor's nearest link, that way
 @item arrows @tab the same
+@item @key{SPC} @tab anchor on the cursor's node; the keys now walk its links
+@item @key{ESC} @tab drop the anchor; the keys roam again from here
 @item @kbd{]} @tab follow a link out of the selection
 @item @kbd{[} @tab go back the way you came
 @item @kbd{>} @kbd{<} @tab next / previous node in this department
@@ -164,7 +175,7 @@ legend.
 @item @kbd{f} @tab fly to the selection, and pivot the camera around it
 @item @kbd{+} @kbd{=} @kbd{-} @tab zoom in / in / out, toward the camera's target
 @item @kbd{0} @tab frame the whole graph
-@item @key{RET} / @kbd{O} @tab open the node's file, here or in another window
+@item @key{RET} / @kbd{O} @tab open the cursor's node, here or in another window
 @item @kbd{y} @tab copy the node's path
 @item @kbd{i} / @kbd{p} / @kbd{W} @tab inspector / preview / close the panes
 @item @kbd{?} @tab the menu: every key, with each toggle's current state

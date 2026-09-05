@@ -1127,7 +1127,8 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
           else if (dimmed)
             { tr = (guint8) (cr / 3); tg = (guint8) (cg / 3);
               tb = (guint8) (cb / 3); ta = 90; }
-          else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
+          else if (flags & (CMACS_LIBREGNUM_NODE_NEIGHBOUR
+                            | CMACS_LIBREGNUM_NODE_CURSOR))
             { tr = bump (cr); tg = bump (cg); tb = bump (cb); ta = 255; }
 
           cmacs_libregnum_render_ctx_set_orb_color
@@ -1158,7 +1159,8 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
               double pulse = 0.5 + 0.5 * sin (st->link_phase * 2.0);
               galpha = (guint8) (70.0 + 60.0 * pulse);
             }
-          else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
+          else if (flags & (CMACS_LIBREGNUM_NODE_NEIGHBOUR
+                            | CMACS_LIBREGNUM_NODE_CURSOR))
             galpha = 84;
 
           cmacs_libregnum_render_ctx_set_billboard_color
@@ -1181,7 +1183,8 @@ cmacs_secondbrain_scene_apply_flags (CmacsLibregnumRenderCtx *r,
                            (guint8) (cb / 3), 90);
           lrg_shape_set_color (LRG_SHAPE (shape), col);
         }
-      else if (flags & CMACS_LIBREGNUM_NODE_NEIGHBOUR)
+      else if (flags & (CMACS_LIBREGNUM_NODE_NEIGHBOUR
+                            | CMACS_LIBREGNUM_NODE_CURSOR))
         {
           /* Brightened rather than recoloured, so it still reads as
              its own ring. */

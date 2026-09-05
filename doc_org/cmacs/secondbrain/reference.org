@@ -78,6 +78,7 @@ An unrecognised =:ring= falls back to =memory= rather than signalling — a sour
 | =cmacs-secondbrain-set-dressing BUFFER ON= | band lanes + galactic core; read at build time |
 | =cmacs-secondbrain-set-match-set BUFFER IDS &optional DIM-REST= | ids, not scene indices; a hit in a collapsed department flags the department. Returns nodes flagged |
 | =cmacs-secondbrain-scene-index BUFFER ID= | emission index, or nil when not on screen. Never store it |
+| =cmacs-secondbrain-set-cursor BUFFER ID= | stand the keyboard cursor on ID (white ring, always labelled); nil clears; returns nil for a hidden node |
 | =cmacs-secondbrain-node-id-at BUFFER INDEX= | the inverse |
 | =cmacs-secondbrain-set-isolate BUFFER ON= | dim outside the selection's neighbourhood |
 | =cmacs-secondbrain-set-ring-filter BUFFER RING= | keep one ring; =nil= keeps all |
@@ -164,7 +165,9 @@ In =cmacs-secondbrain-nav.el=, loaded by the mode body.  All of them route throu
 
 | Command | Key | Does |
 |---------+-----+------|
-| =cmacs-secondbrain-move-left/right/up/down= | =h= =l= =k= =j= | nearest node in a screen-space cone |
+| =cmacs-secondbrain-move-left/right/up/down= | =h= =l= =k= =j= | move the CURSOR: nearest node in a cone, or -- anchored -- the anchor's nearest link that way |
+| =cmacs-secondbrain-anchor= | =SPC= | anchor (select) the cursor's node; the keys then walk its links |
+| =cmacs-secondbrain-unanchor= | =<escape>= | drop the anchor, keep the cursor; roam again |
 | =cmacs-secondbrain-follow-link= | =]= | walk a link, pushing a breadcrumb |
 | =cmacs-secondbrain-back= | =[= | pop the breadcrumb |
 | =cmacs-secondbrain-next-sibling= / =-prev-sibling= | =>= =<= | walk the department |

@@ -66,6 +66,10 @@
 (declare-function cmacs-libregnum-set-camera "cmacs-libregnum-defuns")
 (declare-function cmacs-secondbrain-set-dressing "cmacs-secondbrain-defuns")
 (declare-function cmacs-secondbrain-menu "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-anchor "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain-unanchor "cmacs-secondbrain-nav")
+(declare-function cmacs-secondbrain--set-cursor "cmacs-secondbrain-nav")
+(defvar cmacs-secondbrain--cursor)
 (declare-function cmacs-secondbrain-tags "cmacs-secondbrain-filter")
 (declare-function cmacs-secondbrain-filter-pick "cmacs-secondbrain-filter")
 (declare-function cmacs-secondbrain-filter-toggle-mode "cmacs-secondbrain-filter")
@@ -940,6 +944,11 @@ itself -- and drops the libregnum animation clock with it."
       (cmacs-secondbrain-set-layout buf cmacs-secondbrain-default-layout 0)
       (cmacs-secondbrain-fit buf)
       (cmacs-secondbrain--build-groups nodes edges)
+      ;; The cursor is a flag on an emitted node and the rebuild dropped
+      ;; every one of them; put it back or the ring vanishes on refresh.
+      (when (and (boundp 'cmacs-secondbrain--cursor) cmacs-secondbrain--cursor
+                 (fboundp 'cmacs-secondbrain-set-cursor))
+        (ignore-errors (cmacs-secondbrain-set-cursor buf cmacs-secondbrain--cursor)))
       (when (fboundp 'cmacs-secondbrain-filter-build-index)
         (cmacs-secondbrain-filter-build-index nodes)
         ;; A rebuild replaces the scene, and the keep set with it.
@@ -1005,8 +1014,15 @@ itself -- and drops the libregnum animation clock with it."
 ;;;; Selection and collapse -------------------------------------------
 
 (defun cmacs-secondbrain--select (id)
-  "Select node ID, report it, and refresh any open pane."
+  "Select node ID -- anchor on it -- report it, and refresh any open pane.
+
+Anchoring stands the keyboard cursor on the same node, so the next
+h/j/k/l walks this node\='s links from here.  Clearing the selection
+(ID nil) leaves the cursor where it is: that is how <escape> lets you
+roam on from the spot you were at."
   (setq cmacs-secondbrain--selected id)
+  (when (and id (fboundp 'cmacs-secondbrain--set-cursor))
+    (cmacs-secondbrain--set-cursor id))
   ;; Tell the SCENE too.  A click sets its selection in C; selecting from
   ;; Lisp -- keyboard navigation, search, the inspector -- has to say so
   ;; as well, or the halo and the lit links only ever follow the mouse.
@@ -1390,9 +1406,12 @@ department is not emitted at all."
 (defun cmacs-secondbrain-visit (&optional other-window)
   "Open the selected node's file.  With OTHER-WINDOW, in another window."
   (interactive "P")
-  (unless cmacs-secondbrain--selected (user-error "Nothing selected"))
-  (let* ((node (cmacs-secondbrain-node-at (current-buffer)
-                                          cmacs-secondbrain--selected))
+  ;; The CURSOR's node, when the keyboard is standing somewhere: RET
+  ;; opens what you walked to, not what you anchored on.
+  (let* ((id (or (and (boundp 'cmacs-secondbrain--cursor) cmacs-secondbrain--cursor)
+                 cmacs-secondbrain--selected))
+         (_ (unless id (user-error "Nothing selected")))
+         (node (cmacs-secondbrain-node-at (current-buffer) id))
          (file (plist-get node :file)))
     (unless file (user-error "%s has no file" (or (plist-get node :title) "Node")))
     (if other-window (find-file-other-window file) (find-file file))))
@@ -1540,6 +1559,10 @@ opens a menu of all of it, with each toggle's current state."
   "2" #'cmacs-secondbrain-layout-circle
   "3" #'cmacs-secondbrain-layout-hex
   "4" #'cmacs-secondbrain-layout-rings
+  ;; Anchoring: SPC pins the cursor's node as the selection, and from
+  ;; then on h j k l walk ITS links; <escape> lets them roam again.
+  "SPC" #'cmacs-secondbrain-anchor
+  "<escape>" #'cmacs-secondbrain-unanchor
   ;; Finding.
   "/" #'cmacs-secondbrain-find
   "J" #'cmacs-secondbrain-jump
@@ -1660,7 +1683,8 @@ teardown, the Evil `C-w' handoff and `<escape>'.
               '(" second brain  "
                 (:eval (if cmacs-secondbrain--3d "3D" "2D"))
                 (:eval (cmacs-secondbrain--ml-counts))
-                "  [?]keys [hjkl]move [f]center [+-]zoom [/]find [TAB]expand [RET]open"))
+                (:eval (if cmacs-secondbrain--selected "  anchored" ""))
+                "  [?]keys [hjkl]move [SPC]anchor [ESC]roam [f]center [/]find [RET]open"))
   (add-hook 'window-configuration-change-hook
             #'cmacs-secondbrain--maybe-resume-animation nil t)
   (add-hook 'kill-buffer-hook #'cmacs-secondbrain--on-kill nil t)

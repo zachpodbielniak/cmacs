@@ -765,6 +765,23 @@ neighbour of the selection.  */)
   return flags;
 }
 
+DEFUN ("cmacs-libregnum-get-node-flags", Fcmacs_libregnum_get_node_flags,
+       Scmacs_libregnum_get_node_flags, 2, 2, 0,
+       doc: /* Return node ID's flag bitmask in BUFFER.
+Bit 0 is a search match, bit 1 de-emphasised, bit 2 pinned, bit 3 a
+neighbour of the selection, bit 4 the keyboard cursor.  The read half of
+`cmacs-libregnum-set-node-flags', mostly for tests: a flag that only
+ever goes in is a flag whose absence nothing can prove.  */)
+  (Lisp_Object buffer, Lisp_Object id)
+{
+  CHECK_BUFFER (buffer);
+  CHECK_FIXNAT (id);
+  CmacsLibregnumRenderCtx *ctx = cmacs_libregnum_image_ctx (buffer);
+  if (!ctx) return Qnil;
+  return make_fixnum ((EMACS_INT) cmacs_libregnum_render_ctx_get_node_flags
+                      (ctx, (gint) XFIXNAT (id)));
+}
+
 DEFUN ("cmacs-libregnum-clear-node-flags", Fcmacs_libregnum_clear_node_flags,
        Scmacs_libregnum_clear_node_flags, 2, 2, 0,
        doc: /* Clear the bits in MASK on every node of BUFFER.  */)
@@ -3279,6 +3296,7 @@ syms_of_cmacs_libregnum_defuns (void)
   defsubr (&Scmacs_libregnum_node_onscreen_p);
   defsubr (&Scmacs_libregnum_set_match_set);
   defsubr (&Scmacs_libregnum_set_node_flags);
+  defsubr (&Scmacs_libregnum_get_node_flags);
   defsubr (&Scmacs_libregnum_clear_node_flags);
   defsubr (&Scmacs_libregnum_node_flags);
   defsubr (&Scmacs_libregnum_build_tree);
