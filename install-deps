@@ -685,12 +685,18 @@ install_system_deps () {
 # DEPS_REQUIRED / PKG_DEPS lines in deps/*/config.mk.
 
 # Modules whose absence fails the default (`just bootstrap') flag set.
+#
+# jansson is deliberately NOT here even though the package lists above
+# still install it: Emacs 30 replaced it with a built-in JSON parser,
+# and nothing in configure.ac, src/, or any dep references it any more.
+# Listing it made --check report a missing *required* dependency, and
+# exit 1, on a tree that builds perfectly well.
 CHECK_REQUIRED=(
 	glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
 	gobject-introspection-1.0
 	json-glib-1.0 yaml-0.1 readline libsoup-3.0 libdex-1 libcmark
 	sqlite3 libetpan libpq libssh2 libxml-2.0 libpng libzip gudev-1.0
-	gnutls harfbuzz freetype2 fontconfig jansson tree-sitter
+	gnutls harfbuzz freetype2 fontconfig tree-sitter
 	gtk+-3.0 webkit2gtk-4.1 javascriptcoregtk-4.1
 	wayland-server wayland-client wayland-protocols xkbcommon libinput
 	cairo pango pixman-1 egl gl
