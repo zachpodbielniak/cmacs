@@ -44,6 +44,8 @@
 ;; command the Super+Escape bind names.
 (declare-function cmacs-gowl-menu "cmacs-gowl-menu" ())
 (declare-function cmacs-tray-mode-global "cmacs-tray" (&optional arg))
+(declare-function cmacs-gowl-palette-follow-theme-mode
+                  "cmacs-gowl-palette" (&optional arg))
 
 (defgroup cmacs-gowl nil
   "Gowl Wayland compositor integration."
@@ -257,6 +259,18 @@ D-Bus, not a compositor feature, and nothing owns the name by default.
 
 Claimed only when free; a desktop that already has a tray host keeps
 it.  See `cmacs-tray-mode-global'."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-palette t
+  "When non-nil, keep gowl's colours in step with the Emacs theme.
+
+gowl resolves its borders, bar and lock screen against one palette.
+Left to itself that palette is a set of colours in a YAML file that
+nothing ever updates; with this on, it is whatever theme is loaded in
+the editor, which is the palette actually being curated.
+
+See `cmacs-gowl-palette-follow-theme-mode'."
   :type 'boolean
   :group 'cmacs-gowl)
 
@@ -665,6 +679,11 @@ thread is running and applies configuration."
   (when cmacs-gowl-tray
     (require 'cmacs-tray)
     (ignore-errors (cmacs-tray-mode-global 1)))
+  ;; Follow the editor's theme.  Enabled last of the appearance hooks
+  ;; because it repaints what the others just drew.
+  (when cmacs-gowl-palette
+    (require 'cmacs-gowl-palette)
+    (ignore-errors (cmacs-gowl-palette-follow-theme-mode 1)))
   ;; Enable the in-process status bar with its dwm-style tag
   ;; indicator.  Opt-out via `cmacs-gowl-bar-show-tags'.
   (when (and cmacs-gowl-bar-show-tags

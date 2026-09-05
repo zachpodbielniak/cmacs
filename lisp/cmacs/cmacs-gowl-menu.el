@@ -364,6 +364,10 @@ are handed to nmtui, which knows how to ask."
              ("Layout"             :call cmacs-gowl-menu-layout)
              ("System tray"        :call cmacs-tray
               :when (fboundp 'cmacs-tray))
+             ("Palette"            :call cmacs-gowl-set-palette
+              :when (fboundp 'cmacs-gowl-set-palette))
+             ("Palette from theme" :call cmacs-gowl-palette-apply
+              :when (fboundp 'cmacs-gowl-palette-apply))
              ("Next layout"        :call (lambda () (gowl-cycle-layout)))))
     ("Power"
      :items (("Lock"      :call cmacs-gowl-menu-lock)

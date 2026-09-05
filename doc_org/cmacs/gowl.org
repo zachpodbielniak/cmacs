@@ -570,6 +570,163 @@ animating size as well would make every intermediate size a configure
 round-trip per window.  An interactive drag is exempt entirely, so
 dragging still tracks the pointer exactly.
 
+** One palette for editor and compositor
+:PROPERTIES:
+:CUSTOM_ID: palette
+:END:
+
+A gowl session used to carry five independent sets of colours: three
+border colours, gowlbar's twelve-key block, the lock screen's four, the
+terminal's, and the editor's.  Changing "the" colour of the desktop
+meant editing all of them, so nobody did --- and they had already
+drifted far enough that the shipped config's borders were dwm's
+=#005577= while its bar three hundred lines below was Catppuccin.
+
+gowl now has a palette: one flat name-to-colour map that every colour
+setting resolves against.
+
+#+begin_src yaml
+palette:
+  name: latte
+  accent: "#d20f39"
+
+border-color-focus: accent
+border-color-unfocus: surface
+border-color-urgent: red
+#+end_src
+
+Any colour setting --- in this file or in any module --- may be a
+literal =#rrggbb=, a palette entry name, or =name/aa= for the same
+colour at a different opacity, which is how the bar gets a translucent
+version of the background the borders use.  Five flavours ship: the
+four Catppuccin ones, and =dwm= for exactly what gowl looked like
+before palettes existed.
+
+*** The editor drives it
+
+The interesting direction is Emacs to gowl.  The theme in the editor is
+the palette actually being curated; the borders are the thing that
+never got updated to match it.  So =cmacs-gowl-mode= turns on
+=cmacs-gowl-palette-follow-theme-mode=, and enabling a theme repaints
+the borders, the bar and the lock screen with it.
+
+| Command | Does |
+|---------+------|
+| =cmacs-gowl-palette-apply= | Push the editor's colours now |
+| =cmacs-gowl-set-palette= | Switch to a built-in flavour |
+| =cmacs-gowl-palette-show= | Show the current palette, with swatches |
+
+What gets derived is deliberately small.  A theme has hundreds of faces
+and gowl needs fifteen colours; guessing which face means "surface"
+across every theme is not solvable.  =cmacs-gowl-palette-face-map=
+names one face attribute per entry, and an entry it cannot read is
+simply not sent --- gowl keeps that one from the flavour underneath, so
+a sparse theme gives a partial retint rather than a black desktop.
+
+=accent= reads the =link= face rather than the mode line, which decides
+the colour of every focused border.  The mode line is the more obvious
+choice and the wrong one: in modus-vivendi and many dark themes its
+background is a neutral grey, so every border came out grey.
+
+*** Two things that would otherwise fail silently
+
+Both were found by running it rather than by reading it.
+
+*A literal border follows nothing.*  gowl resolves =#005577= to itself,
+so pushing a palette at a config written before this existed --- every
+config --- changed the palette and left the borders exactly as they
+were.  No error, and a desktop that looks like the theme did not apply.
+So the first push retargets literal border colours at =accent=,
+=surface= and =red=.  A border already naming an entry is left alone:
+someone who wrote =border-color-focus: mauve= meant it.  Opt out with
+=cmacs-gowl-palette-adopt-borders=.
+
+*A reload puts the file's specs back.*  Palette overrides survive a
+reload; the border specs pointing at them do not, because the file owns
+what the file declares.  With the mode on, =gowl-reload-config= is
+followed by a re-push.  With it off, the config file wins --- which is
+right for anyone who did not ask for this.
+
+** One palette
+:PROPERTIES:
+:CUSTOM_ID: palette
+:END:
+
+A gowl session used to carry five independent sets of colours: three
+border colours, gowlbar's twelve-key block, the lock screen's four,
+the terminal's, and the editor's.  Changing "the" colour of the
+desktop meant editing all of them, so nobody did --- and they had
+already drifted far enough that the shipped config's borders were
+dwm's =#005577= while its bar three hundred lines below was
+Catppuccin.
+
+gowl now has a palette: a flat set of named colours that every colour
+setting resolves against.
+
+#+begin_src yaml
+palette:
+  name: latte
+  accent: "#d20f39"
+
+border-color-focus: accent
+border-color-unfocus: surface
+border-color-urgent: red
+#+end_src
+
+Any colour setting --- in the main config or in any module --- may be
+a literal (=#rrggbb= or =#rrggbbaa=), a palette entry name, or
+=name/aa= for that entry at a different opacity.  Five flavours ship:
+the four Catppuccin ones, plus =dwm= for exactly what gowl looked like
+before palettes existed.
+
+*** The editor drives it
+
+The palette a user actually curates is the one in their editor.  So
+=cmacs-gowl-mode= turns on =cmacs-gowl-palette-follow-theme-mode=, and
+from then on enabling a theme repaints the compositor:
+=M-x load-theme= and the borders, the bar and the lock screen change
+with it.
+
+| Command | Does |
+|---------+------|
+| =cmacs-gowl-palette-apply= | Push the editor's colours now |
+| =cmacs-gowl-set-palette=   | Switch gowl to a built-in flavour |
+| =cmacs-gowl-palette-show=  | The current palette, with swatches |
+
+Fifteen colours are derived from named faces via
+=cmacs-gowl-palette-face-map=.  Deriving more would mean guessing
+which of a theme's hundreds of faces means "surface", which is not
+solvable in general; an entry whose face gives nothing is simply not
+sent, and gowl keeps that entry from the flavour underneath.  A sparse
+theme costs you a partial retint, not a black desktop.
+
+=accent= reads the =link= face rather than the mode line.  The mode
+line is the more obvious choice and the wrong one: in modus-vivendi
+and many other dark themes its background is a neutral grey, so every
+focused border came out grey.  A theme's link colour is the one it
+actually chose to mean "accent".
+
+*** Two things that would otherwise be silent
+
+Both were found by running it rather than reading it, and neither
+raises an error at either end.
+
+*A literal border follows nothing.* gowl resolves =#005577= to itself,
+so a config written before palettes existed --- every config --- takes
+a palette push and changes nothing at all.  So the first push
+retargets the three border colours at =accent=, =surface= and =red=.
+It leaves alone any border that already names an entry: someone who
+wrote =border-color-focus: mauve= meant it.  Opt out with
+=cmacs-gowl-palette-adopt-borders=.
+
+*A reload puts the literals back.* The config file owns the border
+specs, so =gowl-reload-config= restores them and the borders stop
+following the theme --- while the palette overrides themselves
+survive, which makes it look like the push half-worked.  With the mode
+on, a reload re-asserts the editor's colours afterwards.  With it off,
+the config file wins, as it should for anyone who did not ask for
+this.
+
 ** The system tray
 :PROPERTIES:
 :CUSTOM_ID: tray

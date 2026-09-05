@@ -2824,6 +2824,97 @@ but not the compositor: under @option{--gowl} the compositor runs on
 its own thread, so the desktop keeps compositing with the menu open.
 
 @noindent
+The colour palette:
+
+@table @code
+@item cmacs-gowl-palette-follow-theme-mode
+@vindex cmacs-gowl-palette-follow-theme-mode
+Keep gowl's colours in step with the Emacs theme.  Enabled by
+@code{cmacs-gowl-mode} unless @code{cmacs-gowl-palette} is nil.
+@item cmacs-gowl-palette-apply
+Push the editor's colours to the compositor now.
+@item cmacs-gowl-set-palette
+Switch the compositor to a built-in flavour: @code{mocha},
+@code{macchiato}, @code{frappe}, @code{latte}, or @code{dwm} for the
+colours gowl used before palettes existed.
+@item cmacs-gowl-palette-show
+Show the compositor's palette with colour swatches.
+@item gowl-get-palette
+@itemx gowl-set-palette
+@itemx gowl-list-palettes
+@itemx gowl-set-border-colors
+@itemx gowl-get-border-color-specs
+The primitives underneath.
+@end table
+
+A gowl session used to carry five independent sets of colours: three
+border colours, gowlbar's twelve-key block, the lock screen's four, the
+terminal's and the editor's.  gowl now has one palette that every
+colour setting resolves against --- a setting may be a literal
+@code{#rrggbb}, a palette entry name, or @code{name/aa} for the same
+colour at a different opacity.
+
+The useful direction is Emacs to gowl: the editor's theme is the
+palette actually being curated, so enabling a theme repaints the
+borders, the bar and the lock screen.  @code{cmacs-gowl-palette-face-map}
+decides what is read from where; an entry that cannot be read is not
+sent, so a sparse theme gives a partial retint rather than a black
+desktop.
+
+Two behaviours are worth knowing because they would otherwise fail
+silently.  A border colour written as a literal resolves to itself and
+follows no palette, so the first push retargets literal borders at
+@code{accent}, @code{surface} and @code{red} (a border already naming
+an entry is left alone; opt out with
+@code{cmacs-gowl-palette-adopt-borders}).  And a config reload restores
+the file's border specs, so with the mode on a reload is followed by a
+re-push --- with it off, the config file wins.
+
+@noindent
+One palette for editor and compositor:
+
+@table @code
+@item cmacs-gowl-palette-follow-theme-mode
+@vindex cmacs-gowl-palette-follow-theme-mode
+Repaint gowl whenever an Emacs theme is enabled or disabled.  Turned on
+by @code{cmacs-gowl-mode} unless @code{cmacs-gowl-palette} is nil.
+@item cmacs-gowl-palette-apply
+Push the editor's colours to the compositor now.
+@item cmacs-gowl-set-palette
+Switch gowl to a built-in flavour: @code{mocha}, @code{macchiato},
+@code{frappe}, @code{latte}, or @code{dwm} for the colours gowl used
+before palettes existed.
+@item cmacs-gowl-palette-show
+Show the compositor's current palette, with swatches.
+@end table
+
+A gowl session used to carry five independent sets of colours --- three
+border colours, gowlbar's twelve-key block, the lock screen's four, the
+terminal's and the editor's --- which had drifted far enough that the
+shipped config's borders were dwm blue while its bar was Catppuccin.
+gowl now resolves every colour setting, in the main config and in any
+module, against one named palette; a setting may be a literal, an entry
+name, or @code{name/aa} for that entry at a different opacity.
+
+The palette a user actually curates is the editor's, so by default the
+compositor follows it: @code{M-x load-theme} repaints the borders, the
+bar and the lock screen.  Fifteen entries are derived from named faces
+through @code{cmacs-gowl-palette-face-map}; an entry whose face gives
+no colour is not sent, and gowl keeps that entry from the flavour
+underneath, so a sparse theme costs a partial retint rather than a
+black desktop.
+
+Two behaviours are worth knowing, because neither raises an error.  A
+border colour written as a literal resolves to itself and follows no
+palette --- which is every config written before palettes existed --- so
+the first push retargets the three borders at @code{accent},
+@code{surface} and @code{red}, leaving alone any that already names an
+entry (@code{cmacs-gowl-palette-adopt-borders} opts out).  And a
+@code{gowl-reload-config} restores the file's literal specs even though
+the palette overrides survive; with the mode on, the editor's colours
+are re-asserted afterwards, and with it off the config file wins.
+
+@noindent
 The system tray:
 
 @table @code

@@ -5691,6 +5691,241 @@ Re-arranges all monitors immediately. */)
   return Qt;
 }
 
+/*
+ * The palette --- one colour source for the compositor and the editor.
+ *
+ * The interesting direction is Emacs to gowl.  The theme in the editor
+ * is the palette the user actually curates; the compositor's borders
+ * and bar are the things that never got updated to match it.  So these
+ * are written to be driven from `enable-theme', with the compositor
+ * following the editor rather than the other way round.
+ */
+
+DEFUN ("gowl-get-palette", Fgowl_get_palette, Sgowl_get_palette, 0, 0, 0,
+       doc: /* Return the compositor's colour palette as an alist.
+Each element is (NAME . HEX), where NAME is a string such as "accent"
+and HEX is "#rrggbb" or "#rrggbbaa".  The list is sorted by name.  */)
+  (void)
+{
+  GowlConfig *config;
+  GowlPalette *palette;
+  g_auto (GStrv) names = NULL;
+  Lisp_Object out = Qnil;
+  gsize i, n;
+
+  GOWL_CHECK_RUNNING ();
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  palette = config != NULL ? gowl_config_get_palette (config) : NULL;
+  if (palette != NULL)
+    names = gowl_palette_names (palette);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (names == NULL)
+    return Qnil;
+
+  /* Built backwards so the result comes out in the sorted order the
+     names already have. */
+  for (n = 0; names[n] != NULL; n++)
+    ;
+  for (i = n; i > 0; i--)
+    {
+      const gchar *hex;
+
+      pthread_mutex_lock (&cmacs_gowl_mutex);
+      hex = gowl_palette_lookup (palette, names[i - 1]);
+      out = Fcons (Fcons (build_string (names[i - 1]),
+			  hex != NULL ? build_string (hex) : Qnil),
+		   out);
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+    }
+
+  return out;
+}
+
+DEFUN ("gowl-set-palette", Fgowl_set_palette, Sgowl_set_palette, 1, 2, 0,
+       doc: /* Set the compositor's colour palette and repaint.
+
+PALETTE is either a string naming a built-in flavour --- "mocha",
+"macchiato", "frappe", "latte", or "dwm" for the colours gowl used
+before palettes existed --- or an alist of (NAME . HEX) entries to
+override individually.  With a flavour name, optional ENTRIES is an
+alist applied on top of it.
+
+Entries set this way sit above the config file, so a later
+`gowl-reload-config' does not undo them.  That is what makes following
+an editor theme work: push the colours once and they stay.
+
+Every colour the compositor draws --- borders, the bar, the lock
+screen --- is redrawn.  */)
+  (Lisp_Object palette, Lisp_Object entries)
+{
+  GowlConfig *config;
+  Lisp_Object tail;
+  GList *monitors, *l;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (!STRINGP (palette) && !CONSP (palette) && !NILP (palette))
+    xsignal1 (Qgowl_error,
+	      build_string ("PALETTE must be a flavour name or an alist"));
+
+  /* A string in the first argument is a flavour and the alist comes
+     second; an alist in the first argument is the whole request. */
+  if (CONSP (palette))
+    {
+      entries = palette;
+      palette = Qnil;
+    }
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      error ("No gowl config");
+    }
+
+  if (STRINGP (palette))
+    gowl_config_set_palette_name (config, SSDATA (palette));
+
+  for (tail = entries; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      Lisp_Object name, hex;
+
+      if (!CONSP (entry))
+	continue;
+
+      name = XCAR (entry);
+      hex = XCDR (entry);
+      /* Accept both (NAME . HEX) and (NAME HEX): a list read out of a
+	 config file is as likely a shape as a cons. */
+      if (CONSP (hex))
+	hex = XCAR (hex);
+
+      if (SYMBOLP (name))
+	name = SYMBOL_NAME (name);
+      if (!STRINGP (name))
+	continue;
+
+      gowl_config_set_palette_color (config, SSDATA (name),
+				     STRINGP (hex) ? SSDATA (hex) : NULL);
+    }
+
+  /* Borders are painted during arrange, so nothing changes on screen
+     until every monitor is re-arranged. */
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Qt;
+}
+
+DEFUN ("gowl-set-border-colors", Fgowl_set_border_colors,
+       Sgowl_set_border_colors, 1, 3, 0,
+       doc: /* Set the window border colours and repaint.
+
+FOCUS, UNFOCUS and URGENT are colour specs: a literal "#rrggbb" or
+"#rrggbbaa", the name of a palette entry such as "accent", or
+"name/aa" for a palette entry at a different opacity.  A nil argument
+leaves that border alone.
+
+Naming a palette entry is the useful form: the border then follows
+every later palette change, which is what makes a border track the
+editor's theme.  A literal is frozen until it is set again.  */)
+  (Lisp_Object focus, Lisp_Object unfocus, Lisp_Object urgent)
+{
+  GowlConfig *config;
+  GList *monitors, *l;
+
+  GOWL_CHECK_RUNNING ();
+
+  if (!NILP (focus))
+    CHECK_STRING (focus);
+  if (!NILP (unfocus))
+    CHECK_STRING (unfocus);
+  if (!NILP (urgent))
+    CHECK_STRING (urgent);
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      error ("No gowl config");
+    }
+
+  if (!NILP (focus))
+    g_object_set (config, "border-color-focus", SSDATA (focus), NULL);
+  if (!NILP (unfocus))
+    g_object_set (config, "border-color-unfocus", SSDATA (unfocus), NULL);
+  if (!NILP (urgent))
+    g_object_set (config, "border-color-urgent", SSDATA (urgent), NULL);
+
+  monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+  for (l = monitors; l != NULL; l = l->next)
+    gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return Qt;
+}
+
+DEFUN ("gowl-get-border-color-specs", Fgowl_get_border_color_specs,
+       Sgowl_get_border_color_specs, 0, 0, 0,
+       doc: /* Return the border colour specs, unresolved.
+
+A list (FOCUS UNFOCUS URGENT) of the strings as configured --- palette
+entry names stay names.  `gowl-config-get' returns the same three
+resolved to literals, which is what gets painted; this is what decides
+whether they follow a palette change at all.  */)
+  (void)
+{
+  GowlConfig *config;
+  g_autofree gchar *focus = NULL;
+  g_autofree gchar *unfocus = NULL;
+  g_autofree gchar *urgent = NULL;
+
+  GOWL_CHECK_RUNNING ();
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config != NULL)
+    g_object_get (config,
+		  "border-color-focus", &focus,
+		  "border-color-unfocus", &unfocus,
+		  "border-color-urgent", &urgent,
+		  NULL);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  return list3 (focus != NULL ? build_string (focus) : Qnil,
+		unfocus != NULL ? build_string (unfocus) : Qnil,
+		urgent != NULL ? build_string (urgent) : Qnil);
+}
+
+DEFUN ("gowl-list-palettes", Fgowl_list_palettes, Sgowl_list_palettes,
+       0, 0, 0,
+       doc: /* Return the names of the built-in palette flavours.  */)
+  (void)
+{
+  const gchar * const *names;
+  Lisp_Object out = Qnil;
+  gsize i, n;
+
+  names = gowl_palette_builtin_names ();
+  if (names == NULL)
+    return Qnil;
+
+  for (n = 0; names[n] != NULL; n++)
+    ;
+  for (i = n; i > 0; i--)
+    out = Fcons (build_string (names[i - 1]), out);
+
+  return out;
+}
+
 DEFUN ("gowl-gaps-info", Fgowl_gaps_info, Sgowl_gaps_info, 0, 0, 0,
        doc: /* Return the current gap configuration as an alist.
 Returns ((inner-h . N) (inner-v . N) (outer-h . N) (outer-v . N))
@@ -7732,6 +7967,11 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_unlock);
   defsubr (&Sgowl_locked_p);
   defsubr (&Sgowl_reload_config);
+  defsubr (&Sgowl_get_palette);
+  defsubr (&Sgowl_set_palette);
+  defsubr (&Sgowl_list_palettes);
+  defsubr (&Sgowl_set_border_colors);
+  defsubr (&Sgowl_get_border_color_specs);
   defsubr (&Sgowl_start_recording);
   defsubr (&Sgowl_drain_recording);
   defsubr (&Sgowl_stop_recording);
