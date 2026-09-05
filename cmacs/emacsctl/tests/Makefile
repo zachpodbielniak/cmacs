@@ -9,19 +9,11 @@ PKGS     := glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 \
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
 
-# Statically vendored yaml-glib, mirroring ../Makefile.
+# Statically vendored yaml-glib, mirroring ../Makefile --- wildcarded
+# there and here so a submodule bump that adds a source file cannot go
+# stale into an undefined-reference link failure.
 YAMLGLIB_DIR ?= ../../../deps/bacon/deps/yaml-glib
-YAMLGLIB_SRCS := \
-        $(YAMLGLIB_DIR)/src/yaml-builder.c \
-        $(YAMLGLIB_DIR)/src/yaml-document.c \
-        $(YAMLGLIB_DIR)/src/yaml-generator.c \
-        $(YAMLGLIB_DIR)/src/yaml-gobject.c \
-        $(YAMLGLIB_DIR)/src/yaml-mapping.c \
-        $(YAMLGLIB_DIR)/src/yaml-node.c \
-        $(YAMLGLIB_DIR)/src/yaml-parser.c \
-        $(YAMLGLIB_DIR)/src/yaml-schema.c \
-        $(YAMLGLIB_DIR)/src/yaml-sequence.c \
-        $(YAMLGLIB_DIR)/src/yaml-serializable.c
+YAMLGLIB_SRCS := $(sort $(wildcard $(YAMLGLIB_DIR)/src/*.c))
 
 HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)
 ifeq ($(HAVE_READLINE),yes)
@@ -48,7 +40,7 @@ CFLAGS += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
 check: test-ctl
 	./test-ctl
 
-test-ctl: test-ctl.c $(UNITS)
+test-ctl: test-ctl.c $(UNITS) $(YAMLGLIB_SRCS)
 	$(CC) $(CFLAGS) -o $@ test-ctl.c $(UNITS) $(YAMLGLIB_SRCS) $(PKG_LIBS)
 
 clean:

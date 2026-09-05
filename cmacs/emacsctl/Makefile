@@ -37,16 +37,21 @@ PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
 # copy links into this binary, so the static-library dedup concern
 # from src/Makefile.in does not apply here.
 YAMLGLIB_DIR ?= ../../deps/bacon/deps/yaml-glib
+
+# Wildcarded rather than hand-listed, for the same reason bacon's own
+# Makefile wildcards it: the explicit list went stale every time the
+# submodule was bumped, and a new upstream file surfaced only as an
+# undefined-reference link failure at the very end of a full build
+# (yaml-writer.c / yaml-comments.c did exactly that).  Everything under
+# yaml-glib's src/ is library code, so there is nothing to filter out.
 #
-# Globbed, not listed.  A hand-maintained list of a submodule's sources
-# goes stale the first time that submodule grows a file, and says so by
-# failing to link with undefined references to the new symbols --- which
-# names the function, not the missing source.  That is what happened
-# when yaml-glib added yaml-comments.c and yaml-writer.c: emacsctl
-# stopped building and nothing else noticed, because src/emacs links
-# the archive rather than these sources.
+# Sorted so the link line is the same on every filesystem; $(wildcard)
+# returns directory order, which is not.
 YAMLGLIB_SRCS := $(sort $(wildcard $(YAMLGLIB_DIR)/src/*.c))
 
+# An uninitialised submodule makes the wildcard empty, and the link
+# then fails on every yaml_* symbol at once -- which names the symbols
+# and not the reason.  Say the reason.
 ifeq ($(YAMLGLIB_SRCS),)
 $(error No yaml-glib sources under $(YAMLGLIB_DIR)/src -- \
 	run `git submodule update --init --recursive')
@@ -70,7 +75,7 @@ OUTDIR   ?= .
 
 all: $(OUTDIR)/emacsctl $(OUTDIR)/cmacsctl
 
-$(OUTDIR)/emacsctl: $(SRCS) $(HDRS)
+$(OUTDIR)/emacsctl: $(SRCS) $(HDRS) $(YAMLGLIB_SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(YAMLGLIB_SRCS) $(LDFLAGS)
 
 # cmacsctl is the same binary by another name (argv[0]-insensitive).
