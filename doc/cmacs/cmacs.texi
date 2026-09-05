@@ -2735,6 +2735,18 @@ Remove every keybind from the config.
 @end table
 
 @noindent
+Pointer lock:
+
+The compositor implements @code{pointer-constraints-v1} and
+@code{relative-pointer-v1}, so a client can hide the cursor and read raw
+motion deltas instead of absolute position --- what an FPS, a VM console
+and an RDP or VNC client need.  Nothing is configured for this: a client
+asks and the compositor answers.  It is worth knowing only because while
+a client holds the lock the cursor deliberately does not move, which is
+indistinguishable from a frozen cursor if you do not know a constraint
+exists.
+
+@noindent
 Notifications:
 
 @table @code

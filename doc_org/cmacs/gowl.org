@@ -503,6 +503,23 @@ anything from a YAML config, or a module's own binds --- falls back to
 its action and argument (=spawn: wofi --show drun=), which is still
 more use than a bare action nick.
 
+** Pointer lock (games, VMs, remote desktops)
+:PROPERTIES:
+:CUSTOM_ID: pointer-lock
+:END:
+
+The compositor implements =pointer-constraints-v1= and
+=relative-pointer-v1=, so a client can hide the cursor and read raw
+motion deltas instead of absolute position.  That is what an FPS, a VM
+console and an RDP or VNC client need; without it the pointer walks
+out of the window and the view stops turning.
+
+Nothing is configured for this --- a client asks and the compositor
+answers.  Worth knowing only for one reason: while a client holds the
+lock the cursor deliberately does not move, which is indistinguishable
+from a frozen cursor if you do not know a constraint exists.
+=gowl_compositor_pointer_is_locked()= reports it.
+
 ** Notifications
 :PROPERTIES:
 :CUSTOM_ID: notifications
