@@ -164,8 +164,23 @@ else
 SELECTOR_ACTUAL=$(SELECTOR_EXPENSIVE)
 endif
 
+## CMACS: the byte compiler is a prerequisite too.
+##
+## Upstream lists only the source, so a .elc stays "up to date" forever
+## once written -- including across a rebuild of the Emacs that produced
+## it.  In this tree that is a rebuild every few minutes, and with
+## TEST_LOAD_EL unset the runner loads the .elc in preference to the .el,
+## so the suite happily reports failures from code that no longer exists.
+## Seen 2026-09-04: 33 "failures" across 8 unrelated suites, all of them
+## stale objects; `rm -f test/cmacs/*.elc' made them vanish.
+##
+## Guarded through $(wildcard ...) so an EMACS= override naming something
+## on PATH (rather than a path in the tree) adds no prerequisite and
+## keeps upstream's behaviour, instead of failing with no rule to make it.
+cmacs_byte_compiler := $(wildcard $(EMACS))
+
 ## Byte-compile all test files to test for errors.
-%.elc: %.el
+%.elc: %.el $(cmacs_byte_compiler)
 	$(AM_V_ELC)$(emacs) --batch -f batch-byte-compile $<
 
 ifdef EMACS_HYDRA_CI

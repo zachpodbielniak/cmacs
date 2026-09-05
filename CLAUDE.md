@@ -346,6 +346,16 @@ Maintained in two formats that must stay in sync — **update both**:
 
 `make -C test check-cmacs` — ERT tests, one file per subsystem in `test/cmacs/`.
 
+**Test `.elc` files go stale across a rebuild, and lie about it.** The runner
+loads `test/cmacs/*.elc` in preference to the `.el` unless `TEST_LOAD_EL=yes`, and
+upstream's `%.elc: %.el` rule names only the source — so an object written by an
+earlier `src/emacs` stays "up to date" forever. In this tree that is a rebuild
+every few minutes. Symptom: a pile of failures in suites you never touched, with
+conditions like `void-variable <a macro-defined test symbol>`. `test/Makefile.in`
+now lists the byte compiler as a prerequisite (marked `## CMACS:`), so a rebuilt
+Emacs recompiles them; **re-run `./config.status test/Makefile` after a merge
+drops that hunk**. The manual escape hatch is still `rm -f test/cmacs/*.elc`.
+
 **Known-failing upstream test.** `emacs-tests/seccomp/allows-stdout` dies `SIGSYS`
 (exit 159) and is *expected to*: `lib-src/seccomp-filter.bpf` whitelists the
 syscalls an upstream-shaped Emacs makes at startup, and cmacs links GLib/wlroots,
