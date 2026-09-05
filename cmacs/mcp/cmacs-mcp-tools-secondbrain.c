@@ -425,6 +425,30 @@ handle_doctor (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
      " (cmacs-secondbrain-ingest-doctor)))))"));
 }
 
+static McpToolResult *
+handle_migrate (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  const gchar *dir = sb_str_member (a, "dir");
+  gboolean apply = a && json_object_has_member (a, "apply")
+    && json_object_get_boolean_member_with_default (a, "apply", FALSE);
+  gboolean archives = a && json_object_has_member (a, "include_archives")
+    && json_object_get_boolean_member_with_default (a, "include_archives", FALSE);
+  gboolean ai = a && json_object_has_member (a, "ai")
+    && json_object_get_boolean_member_with_default (a, "ai", FALSE);
+  const gchar *remove = sb_str_member (a, "remove");
+  g_autofree gchar *qd = dir ? sb_lisp_str (dir) : g_strdup ("nil");
+  g_autofree gchar *options = g_strdup_printf
+    ("{\"apply\":%s,\"include_archives\":%s,\"ai\":%s,\"remove\":\"%s\"}",
+     apply ? "true" : "false", archives ? "true" : "false", ai ? "true" : "false",
+     (remove && g_strcmp0 (remove, "trash") == 0) ? "trash" : "");
+  g_autofree gchar *qo = sb_lisp_str (options);
+  (void) s; (void) n; (void) u;
+
+  return sb_eval_result (g_strdup_printf
+    ("(progn (require 'cmacs-secondbrain-ingest-migrate)"
+     " (cmacs-secondbrain-ingest-migrate-from-json %s %s))", qd, qo));
+}
+
 static void
 sb_add (McpServer *server, const gchar *name, const gchar *desc,
         const gchar *schema_json, gboolean read_only,
@@ -567,6 +591,21 @@ cmacs_mcp_tools_secondbrain_register (McpServer *server)
     "\"query\":{\"type\":\"string\"},"
     "\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}",
     TRUE, handle_find);
+
+  sb_add (server, "secondbrain_migrate",
+    "Plan -- or with 'apply', perform -- the bulk migration of the Markdown "
+    "notes under 'dir' (default: the whole tree) into Org nodes in place: "
+    "same directory, same base name, front matter mapped onto the header, "
+    "links rewritten to ids.  Without 'apply' nothing is written and the "
+    "plan lists every file and every link that would not resolve.  "
+    "'remove' = 'trash' moves the originals to the trash afterwards.",
+    "{\"type\":\"object\",\"properties\":{"
+    "\"dir\":{\"type\":\"string\"},"
+    "\"apply\":{\"type\":\"boolean\"},"
+    "\"include_archives\":{\"type\":\"boolean\"},"
+    "\"ai\":{\"type\":\"boolean\",\"description\":\"Summarise and tag with the model\"},"
+    "\"remove\":{\"type\":\"string\",\"enum\":[\"trash\"]}}}",
+    FALSE, handle_migrate);
 
   sb_add (server, "secondbrain_doctor",
     "Which external programs (pandoc, pdftotext, yt-dlp, ffmpeg, ...) and "

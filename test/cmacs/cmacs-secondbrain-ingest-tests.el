@@ -798,5 +798,296 @@ interface -- and a test must never drive that session anyway."
         (should (= 0 (car jobs)))
         (should (string-match-p "sbi-" (cdr jobs)))))))
 
+;;;; The drop folder -------------------------------------------------------------------
+
+(ert-deftest cmacs-secondbrain-ingest-test-drop-ignores-junk ()
+  (cmacs-secondbrain-ingest-tests--with-root root
+    (let ((cmacs-secondbrain-ingest-drop-directory (expand-file-name "drop" root)))
+      (make-directory (cmacs-secondbrain-ingest--drop-dir) t)
+      (dolist (n '(".hidden.md" "x.md~" "dl.pdf.part" "dl.crdownload"))
+        (with-temp-file (expand-file-name n (cmacs-secondbrain-ingest--drop-dir)) (insert "x"))
+        (should-not (cmacs-secondbrain-ingest-drop (expand-file-name n (cmacs-secondbrain-ingest--drop-dir)))))
+      (should-not (cmacs-secondbrain-ingest-drop (expand-file-name "missing.md" (cmacs-secondbrain-ingest--drop-dir)))))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-drop-settles-then-ingests-and-moves ()
+  "A dropped file is ingested once its size holds, then moved to .ingested/."
+  (cmacs-secondbrain-ingest-tests--with-root root
+    (let* ((cmacs-secondbrain-ingest-drop-directory (expand-file-name "drop" root))
+           (cmacs-secondbrain-ingest-drop-settle 0.2)
+           (cmacs-secondbrain-ingest-drop-options '(:para inbox :no-ai t))
+           (cmacs-secondbrain-ingest-drop-after 'move)
+           (dir (cmacs-secondbrain-ingest--drop-dir))
+           (file (expand-file-name "note.md" dir)))
+      (make-directory dir t)
+      (copy-file (cmacs-secondbrain-ingest-tests--fixture "sample.md") file)
+      (should (cmacs-secondbrain-ingest-drop file))
+      ;; A second event for the same file is a no-op while it is pending.
+      (should (cmacs-secondbrain-ingest-drop file))
+      (let ((deadline (time-add (current-time) 20)))
+        (while (and (time-less-p (current-time) deadline)
+                    (or (gethash file cmacs-secondbrain-ingest--drop-pending)
+                        (null cmacs-secondbrain-ingest--jobs)
+                        (not (cmacs-secondbrain-ingest--finished-p (car cmacs-secondbrain-ingest--jobs)))))
+          (accept-process-output nil 0.1) (sit-for 0.05)))
+      (let ((job (car cmacs-secondbrain-ingest--jobs)))
+        (should job)
+        (should (eq 'done (cmacs-secondbrain-ingest-job-stage job)))
+        (should (file-exists-p (expand-file-name "00_inbox/systemd_timers.org" root))))
+      (should-not (file-exists-p file))
+      (should (file-exists-p (expand-file-name ".ingested/note.md" dir))))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-drop-url-file ()
+  (let ((f (make-temp-file "sbi-url-" nil ".url")))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "[InternetShortcut]\nURL=https://example.com/a\n"))
+          (should (equal "https://example.com/a" (cmacs-secondbrain-ingest--drop-url-file f)))
+          (with-temp-file f (insert "  https://example.com/b \n"))
+          (should (equal "https://example.com/b" (cmacs-secondbrain-ingest--drop-url-file f)))
+          (with-temp-file f (insert "not a url\nmore\n"))
+          (should-not (cmacs-secondbrain-ingest--drop-url-file f)))
+      (delete-file f))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-podomation-rule ()
+  (let ((dsl (cmacs-secondbrain-ingest-podomation-rule "/tmp/drop\"quoted" "org.cmacs.Editor")))
+    (should (string-match-p "inotify_event->new(\"/tmp/drop\\\\\"quoted\")" dsl))
+    (should (string-match-p "cmacs->new(\"org.cmacs.Editor\")" dsl))
+    (should (string-match-p "on_create => sb_editor->eval(\"(cmacs-secondbrain-ingest-drop" dsl))
+    (should (string-match-p "{event->path}" dsl))
+    (should (string-match-p "on_move.*{event->other_path}" dsl)))
+  (let ((cmacs-secondbrain-ingest-podomation-instance nil))
+    (should (string-match-p (format "Pid%d" (emacs-pid))
+                            (cmacs-secondbrain-ingest-podomation-rule "/tmp/x")))))
+
+;;;; Migration -------------------------------------------------------------------------
+
+(require 'cmacs-secondbrain-ingest-migrate)
+
+(ert-deftest cmacs-secondbrain-ingest-test-migrate-front-matter ()
+  (let ((r (cmacs-secondbrain-ingest-migrate-split-front-matter
+            "---\ntitle: A Title\ntags:\n- one\n- two\nstatus: done\nrelates_to: []\ncreated: '2026-02-18T21:13:49'\n---\n\n# A Title\n\nbody\n")))
+    (should (equal "A Title" (cdr (assoc "title" (car r)))))
+    (should (equal '("one" "two") (cdr (assoc "tags" (car r)))))
+    (should (equal "done" (cdr (assoc "status" (car r)))))
+    (should (null (cdr (assoc "relates_to" (car r)))))
+    (should (equal "2026-02-18T21:13:49" (cdr (assoc "created" (car r)))))
+    (should (string-prefix-p "\n# A Title" (cdr r))))
+  (should (null (car (cmacs-secondbrain-ingest-migrate-split-front-matter "# no front matter\n"))))
+  (should (string-match-p "\\`2026-02-18T21:13:49[-+][0-9]\\{4\\}\\'"
+                          (cmacs-secondbrain-ingest-migrate--iso "2026-02-18T21:13:49"))))
+
+(defun cmacs-secondbrain-ingest-tests--md-tree (root)
+  "Populate ROOT with a small Markdown tree; return the people dir."
+  (let ((people (expand-file-name "02_areas/work/people/" root)))
+    (make-directory people t)
+    (with-temp-file (expand-file-name "alice.md" people)
+      (insert "---\ntitle: Alice Example\ntags: [people, work]\nmanager: '![[02_areas/work/people/bob.md]]'\ncreated: '2025-12-22T21:23:43'\n---\n\n# Alice Example\n\nReports to [[02_areas/work/people/bob.md]]. See [notes](../../../01_projects/work/plan.md) and [[nowhere.md]].\n"))
+    (with-temp-file (expand-file-name "bob.md" people)
+      (insert "# Bob\n\nManages [[02_areas/work/people/alice.md|Alice]].\n"))
+    ;; An org note that already exists, with an id, to link to.
+    (make-directory (expand-file-name "01_projects/work" root) t)
+    (with-temp-file (expand-file-name "01_projects/work/plan.org" root)
+      (insert ":PROPERTIES:\n:ID:       plan-id\n:END:\n#+title: The Plan\n"))
+    ;; Things that must be left alone.
+    (make-directory (expand-file-name ".claude/commands" root) t)
+    (with-temp-file (expand-file-name ".claude/commands/x.md" root) (insert "# x"))
+    (make-directory (expand-file-name "04_archives/01_projects/personal/done" root) t)
+    (with-temp-file (expand-file-name "04_archives/01_projects/personal/done/old.md" root) (insert "# old"))
+    people))
+
+(ert-deftest cmacs-secondbrain-ingest-test-migrate-plan ()
+  (cmacs-secondbrain-ingest-tests--with-root root
+    (cmacs-secondbrain-ingest-tests--md-tree root)
+    (let* ((plan (cmacs-secondbrain-ingest-migrate-plan nil root))
+           (entries (plist-get plan :entries))
+           (alice (cl-find-if (lambda (e) (string-suffix-p "alice.md" (plist-get e :source))) entries))
+           (bob (cl-find-if (lambda (e) (string-suffix-p "bob.md" (plist-get e :source))) entries)))
+      (should (= 2 (plist-get plan :count)))
+      (should alice) (should bob)
+      (should (equal "Alice Example" (plist-get alice :title)))
+      (should (equal '("people" "work") (plist-get alice :tags)))
+      (should (string-prefix-p "2025-12-22T21:23:43" (plist-get alice :created)))
+      (should (equal (expand-file-name "02_areas/work/people/alice.org" root) (plist-get alice :target)))
+      ;; Cross-links inside the batch resolve to the pre-minted ids...
+      (should (string-match-p (format "\\[\\[id:%s\\]\\[Bob\\]\\]" (plist-get bob :id)) (plist-get alice :body)))
+      (should (string-match-p (format "\\[\\[id:%s\\]\\[Alice\\]\\]" (plist-get alice :id)) (plist-get bob :body)))
+      ;; ...the transclusion (in the front matter, kept as a section)
+      ;; keeps its form with .org...
+      (should (string-match-p "!\\[\\[02_areas/work/people/bob.org\\]\\]" (plist-get alice :body)))
+      (should (string-match-p "^## Front matter" (plist-get alice :body)))
+      ;; ...an existing org note resolves through its :ID:...
+      (should (string-match-p "\\[\\[id:plan-id\\]\\[notes\\]\\]" (plist-get alice :body)))
+      ;; ...and a dangling link is left alone and reported.
+      (should (string-match-p "\\[\\[nowhere.md\\]\\]" (plist-get alice :body)))
+      (should (member "nowhere.md" (plist-get plan :unresolved)))
+      (should-not (cl-some (lambda (e) (string-match-p "\\.claude\\|04_archives" (plist-get e :source))) entries))
+      ;; Nothing was written.
+      (should-not (file-exists-p (plist-get alice :target))))
+    (should (= 3 (plist-get (cmacs-secondbrain-ingest-migrate-plan nil root t) :count)))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-migrate-apply ()
+  (cmacs-secondbrain-ingest-tests--with-root root
+    (cmacs-secondbrain-ingest-tests--md-tree root)
+    (let* ((done nil)
+           (plan (cmacs-secondbrain-ingest-migrate nil :apply t :root root
+                                                   :callback (lambda (_jobs) (setq done t))))
+           (jobs (plist-get plan :jobs)))
+      (should (= 2 (length jobs)))
+      (cmacs-secondbrain-ingest-wait jobs 30)
+      (let ((deadline (time-add (current-time) 5)))
+        (while (and (not done) (time-less-p (current-time) deadline))
+          (accept-process-output nil 0.1) (sit-for 0.05)))
+      (should done)
+      (let* ((alice (cl-find-if (lambda (e) (string-suffix-p "alice.md" (plist-get e :source))) (plist-get plan :entries)))
+             (target (plist-get alice :target))
+             (text (cmacs-secondbrain-ingest-tests--read target)))
+        (should (file-exists-p target))
+        (should (string-match-p (format "\\`:PROPERTIES:\n:ID:       %s\n" (plist-get alice :id)) text))
+        (should (string-match-p "^#\\+title: Alice Example$" text))
+        (should (string-match-p "^#\\+filetags: :people:work:migrated:$" text))
+        (should (string-match-p "^#\\+created: 2025-12-22T21:23:43" text))
+        (should (string-match-p "\\*+ Front matter\n+- manager: !\\[\\[02_areas/work/people/bob.org\\]\\]" text))
+        (should-not (string-match-p "^#\\+description: #" text))
+        (should (string-match-p "id:plan-id" text))
+        ;; The original is kept without :remove, and the index knows the note.
+        (should (file-exists-p (plist-get alice :source)))
+        (should (string-match-p (plist-get alice :id)
+                                (cmacs-secondbrain-ingest-tests--read
+                                 (expand-file-name "02_areas/work/people/00_index.org" root)))))
+      ;; Running the plan again skips what now exists.
+      (should (cl-every (lambda (e) (plist-get e :exists))
+                        (plist-get (cmacs-secondbrain-ingest-migrate-plan nil root) :entries))))))
+
+;;;; cmacs-ai: /ingest ---------------------------------------------------------------------
+
+(require 'cmacs-ai-ingest nil t)
+
+(ert-deftest cmacs-secondbrain-ingest-test-ai-slash-parse ()
+  (skip-unless (featurep 'cmacs-ai-ingest))
+  (should-not (cmacs-ai-ingest-parse-command "hello /ingest"))
+  (pcase-let ((`(,input ,text . ,opts) (cmacs-ai-ingest-parse-command "/ingest -p resources -c technical/linux -t a,b https://x.y/z")))
+    (should (equal "https://x.y/z" input))
+    (should (null text))
+    (should (equal "resources" (plist-get opts :para)))
+    (should (equal "technical/linux" (plist-get opts :category)))
+    (should (equal "a,b" (plist-get opts :tags))))
+  (pcase-let ((`(,input ,text . ,opts) (cmacs-ai-ingest-parse-command "/ingest -n --title \"My Note\" -- some free text here")))
+    (should (null input))
+    (should (equal "some free text here" text))
+    (should (eq t (plist-get opts :no-summary)))
+    (should (equal "My Note" (plist-get opts :title))))
+  (pcase-let ((`(,input ,text . ,opts) (cmacs-ai-ingest-parse-command "/ingest-chat")))
+    (should (null input)) (should (null text)) (should (plist-get opts :chat)))
+  (pcase-let ((`(,input ,_text . ,_opts) (cmacs-ai-ingest-parse-command "/ingest ~/x.pdf")))
+    (should (equal "~/x.pdf" input))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-ai-chat-title ()
+  (skip-unless (featurep 'cmacs-ai-ingest))
+  (should (equal "T" (cmacs-ai-ingest--chat-title "#+title: T\n** zach\nhello")))
+  (should (equal "how do I rsync a directory" (cmacs-ai-ingest--chat-title "** zach\n\nhow do I rsync a directory\n** claude\nlike so")))
+  (should (string-prefix-p "Chat " (cmacs-ai-ingest--chat-title ""))))
+
+;;;; Incremental memory update ---------------------------------------------------------
+
+(require 'cmacs-brigade-memory nil t)
+
+(ert-deftest cmacs-secondbrain-ingest-test-memory-update-files ()
+  "Changing one file replaces its rows and appends the new ones; nothing else moves."
+  (skip-unless (and (featurep 'cmacs-brigade-memory) (fboundp 'cmacs-brigade-index-writer-copy)))
+  (let* ((root (file-name-as-directory (make-temp-file "sbi-mem-root-" t)))
+         (idx (file-name-as-directory (make-temp-file "sbi-mem-idx-" t)))
+         (a (expand-file-name "a.org" root))
+         (b (expand-file-name "b.org" root))
+         (cmacs-brigade-memory-index-dir idx)
+         (cmacs-brigade-memory-roots (list (list :path root :kind 'org)))
+         (cmacs-brigade-embed-dim 4)
+         (cmacs-brigade-embed-batch 8)
+         (cmacs-brigade-memory--handle nil)
+         (cmacs-brigade-memory--meta nil)
+         (cmacs-brigade-memory--update nil)
+         (cmacs-brigade-memory--update-queue nil)
+         (cmacs-brigade-memory--build nil))
+    (unwind-protect
+        (progn
+          (with-temp-file a (insert "#+title: A\n* One\nalpha text\n"))
+          (with-temp-file b (insert "#+title: B\n* Two\nbeta text\n"))
+          ;; A three-row index: two rows for a, one for b.
+          (let ((w (cmacs-brigade-index-writer-new idx 4)))
+            (cmacs-brigade-index-writer-add w [1 0 0 0])
+            (cmacs-brigade-index-writer-add w [0 1 0 0])
+            (cmacs-brigade-index-writer-add w [0 0 1 0])
+            (cmacs-brigade-index-writer-commit w))
+          (cmacs-brigade-memory--write-meta
+           (list (list :path a :display "a.org" :heading "a1" :text "old a1")
+                 (list :path a :display "a.org" :heading "a2" :text "old a2")
+                 (list :path b :display "b.org" :heading "b" :text "old b")))
+          (cmacs-brigade-memory--write-manifest
+           (list :version 1 :model cmacs-brigade-embed-model :dim 4
+                 :chunk-target cmacs-brigade-chunk-target-bytes :count 3 :files 2))
+          (should (cmacs-brigade-memory-index-exists-p))
+          ;; Stub the embedder: every chunk becomes the same unit vector.
+          (let ((result nil) (calls 0))
+            (cl-letf (((symbol-function 'cmacs-brigade-memory--embed-async)
+                       (lambda (texts on-ok _on-error)
+                         (cl-incf calls)
+                         (run-at-time 0 nil on-ok (mapcar (lambda (_) [0 0 0 1]) texts))
+                         nil)))
+              (should (cmacs-brigade-memory-update-files a (lambda (n) (setq result n))))
+              (let ((deadline (time-add (current-time) 10)))
+                (while (and (null result) (time-less-p (current-time) deadline))
+                  (accept-process-output nil 0.1) (sit-for 0.05))))
+            (should (numberp result))
+            (should (>= result 1))
+            (should (>= calls 1))
+            ;; b's row survived in place; a's old rows are gone; a's new rows follow.
+            (let* ((h (cmacs-brigade-index-open idx))
+                   (info (cmacs-brigade-index-info h))
+                   (meta (progn (setq cmacs-brigade-memory--meta nil) (cmacs-brigade-memory--load-meta))))
+              (should (= (plist-get info :count) (length meta)))
+              (should (= (plist-get info :count) (+ 1 result)))
+              (should (equal b (plist-get (aref meta 0) :path)))
+              (should (equal a (plist-get (aref meta 1) :path)))
+              (should-not (equal "old a1" (plist-get (aref meta 1) :text)))
+              ;; Row 0 is still b's [0 0 1 0].
+              (should (equal 0 (car (car (cmacs-brigade-index-search h [0 0 1 0] 1)))))
+              (cmacs-brigade-index-close h))
+            (should (= (+ 1 result) (plist-get (cmacs-brigade-memory-manifest) :count)))
+            ;; A deleted file just loses its rows.
+            (delete-file b)
+            (setq result nil)
+            (cl-letf (((symbol-function 'cmacs-brigade-memory--embed-async)
+                       (lambda (texts on-ok _on-error)
+                         (run-at-time 0 nil on-ok (mapcar (lambda (_) [0 0 0 1]) texts)) nil)))
+              (cmacs-brigade-memory-update-files b (lambda (n) (setq result n)))
+              (let ((deadline (time-add (current-time) 10)))
+                (while (and (null result) (time-less-p (current-time) deadline))
+                  (accept-process-output nil 0.1) (sit-for 0.05))))
+            (should (= 0 result))
+            (should (cl-every (lambda (m) (equal a (plist-get m :path)))
+                              (progn (setq cmacs-brigade-memory--meta nil)
+                                     (cmacs-brigade-memory--load-meta))))))
+      (ignore-errors (cmacs-brigade-memory-close))
+      (ignore-errors (delete-directory root t))
+      (ignore-errors (delete-directory idx t)))))
+
+(ert-deftest cmacs-secondbrain-ingest-test-memory-update-refuses-without-index ()
+  (skip-unless (and (featurep 'cmacs-brigade-memory) (fboundp 'cmacs-brigade-index-writer-copy)))
+  (let* ((root (file-name-as-directory (make-temp-file "sbi-mem-root-" t)))
+         (idx (make-temp-file "sbi-mem-idx-" t))
+         (cmacs-brigade-memory-index-dir idx)
+         (cmacs-brigade-memory-roots (list (list :path root :kind 'org)))
+         (f (expand-file-name "a.org" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "x"))
+          (should-not (cmacs-brigade-memory-index-exists-p))
+          (should-not (cmacs-brigade-memory-update-files f))
+          ;; Outside every root: nothing to do, callback still told.
+          (let ((n 'unset))
+            (should-not (cmacs-brigade-memory-update-files "/no/such/root/x.org" (lambda (k) (setq n k))))
+            (should (eql 0 n))))
+      (ignore-errors (delete-directory root t))
+      (ignore-errors (delete-directory idx t)))))
+
 (provide 'cmacs-secondbrain-ingest-tests)
 ;;; cmacs-secondbrain-ingest-tests.el ends here

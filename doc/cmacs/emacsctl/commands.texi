@@ -104,7 +104,7 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{list}, @code{describe}), @code{compositor} and @code{monitor}
 (gowl), and @code{sb} (the second brain: @code{ingest}, @code{jobs},
 @code{status}, @code{cancel}, @code{tree}, @code{find}, @code{doctor},
-@code{open}, @code{layout}, @code{search}, @code{expand}, @code{node},
+@code{migrate}, @code{watch}, @code{open}, @code{layout}, @code{search}, @code{expand}, @code{node},
 @code{stats}, @code{sources}, @code{refresh}; aliases
 @code{second-brain} and @code{secondbrain}).
 
@@ -255,10 +255,26 @@ Other flags: @option{-t/--tags}, @option{--title}, @option{--name},
 @option{-a/--append}, @option{-r/--recursive}, @option{--no-link},
 @option{--keep-source}, @option{--root DIR}, @option{-b/--branch NAME}.
 
+Migration and the drop folder:
+
+@example
+emacsctl sb migrate                        # the plan: every .md, its target, unresolved links
+emacsctl sb migrate 02_areas/work/people   # one directory
+emacsctl sb migrate --apply --remove trash # do it; originals to the trash
+emacsctl sb watch true                     # ingest whatever lands in ~/Documents/inbox
+@end example
+
+@code{sb migrate} plans by default and writes nothing; @option{--apply}
+converts each Markdown note into an Org node in place
+(@option{--include-archives}, @option{--ai}, @option{--remove trash}).
+@code{sb watch} toggles the editor's @code{file-notify} watcher on the
+drop folder.
+
 The underlying typed methods are @code{Editor1.SecondBrain}
 @code{Ingest} / @code{IngestStatus} / @code{IngestList} /
-@code{IngestCancel} / @code{Tree} / @code{Find} / @code{Doctor}, with MCP
-parity via @code{secondbrain_ingest} and friends.
+@code{IngestCancel} / @code{Tree} / @code{Find} / @code{Doctor} /
+@code{Migrate} / @code{Watch}, with MCP parity via
+@code{secondbrain_ingest} and friends.
 
 @subsection Org buffers: text insert-org
 

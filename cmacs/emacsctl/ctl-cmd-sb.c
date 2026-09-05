@@ -61,6 +61,8 @@ static const CtlMethodSpec sb_specs[] = {
     CTL_IFACE_SECONDBRAIN, "IngestCancel", "s:id", CTL_REPLY_JSON },
   { "sb doctor", "Which programs and features the ingester can use here",
     CTL_IFACE_SECONDBRAIN, "Doctor", NULL, CTL_REPLY_JSON },
+  { "sb watch", "Watch the drop folder in the editor (true) or stop (false)",
+    CTL_IFACE_SECONDBRAIN, "Watch", "b:enable", CTL_REPLY_STRING },
   { NULL, NULL, NULL, NULL, NULL, 0 }
 };
 
@@ -669,6 +671,63 @@ cmd_sb_find (CtlCommand *self, CtlInvocation *inv, GError **error)
   return code;
 }
 
+/* -- sb migrate --------------------------------------------------- */
+
+static gboolean sb_mig_apply = FALSE;
+static gboolean sb_mig_archives = FALSE;
+static gboolean sb_mig_ai = FALSE;
+static gchar *sb_mig_remove = NULL;
+
+static const GOptionEntry sb_migrate_entries[] = {
+  { "apply", 0, 0, G_OPTION_ARG_NONE, &sb_mig_apply,
+    "Perform the migration (default: only print the plan)", NULL },
+  { "include-archives", 0, 0, G_OPTION_ARG_NONE, &sb_mig_archives,
+    "Also migrate 04_archives", NULL },
+  { "ai", 0, 0, G_OPTION_ARG_NONE, &sb_mig_ai,
+    "Let the model summarise and tag each migrated note", NULL },
+  { "remove", 0, 0, G_OPTION_ARG_STRING, &sb_mig_remove,
+    "What to do with the originals after a successful migration: trash",
+    "MODE" },
+  { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
+static gint
+cmd_sb_migrate (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  gint argc = 0;
+  gchar **argv = ctl_invocation_get_args (inv, &argc);
+  gchar *dir;
+  gchar *options;
+  gchar *reply;
+  gint code;
+
+  (void) self;
+
+  if (argc > 0 && !g_path_is_absolute (argv[0]))
+    {
+      gchar *cwd = g_get_current_dir ();
+      dir = g_build_filename (cwd, argv[0], NULL);
+      g_free (cwd);
+    }
+  else
+    dir = g_strdup (argc > 0 ? argv[0] : "");
+
+  options = g_strdup_printf
+    ("{\"apply\":%s,\"include_archives\":%s,\"ai\":%s,\"remove\":\"%s\"}",
+     sb_mig_apply ? "true" : "false", sb_mig_archives ? "true" : "false",
+     sb_mig_ai ? "true" : "false",
+     (sb_mig_remove != NULL && g_strcmp0 (sb_mig_remove, "trash") == 0)
+       ? "trash" : "");
+  reply = sb_call (inv, "Migrate", g_variant_new ("(ss)", dir, options), error);
+  g_free (dir);
+  g_free (options);
+  if (reply == NULL)
+    return ctl_exit_code_for_error (error != NULL ? *error : NULL);
+  code = sb_emit_json (inv, reply, error);
+  g_free (reply);
+  return code;
+}
+
 /* ── Registration ────────────────────────────────────────────────── */
 
 void
@@ -693,6 +752,10 @@ ctl_cmd_sb_register (CtlCommandRegistry *registry)
     ctl_simple_command_new_with_options (
       "sb find", "Search the notes (semantic when the memory index exists)",
       "QUERY...", sb_find_entries, cmd_sb_find));
+  ctl_command_registry_add (registry,
+    ctl_simple_command_new_with_options (
+      "sb migrate", "Plan (or --apply) the Markdown-to-Org migration",
+      "[DIR]", sb_migrate_entries, cmd_sb_migrate));
 
   ctl_command_registry_add_alias (registry, "second-brain", "sb");
   ctl_command_registry_add_alias (registry, "secondbrain", "sb");

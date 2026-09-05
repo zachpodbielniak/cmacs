@@ -608,6 +608,33 @@ File names are the title's slug (=cmacs-secondbrain-ingest-filename-style= adds 
 
 Every stage that takes time is asynchronous — a subprocess with a sentinel, a fetch callback, a whisper callback, a model stream — because the same code runs when a D-Bus call arrives on the main thread of a cmacs that may be someone's Wayland compositor. The queue is global, not buffer-local, because jobs are addressed by id from outside Emacs.
 
+** The drop folder
+
+=cmacs-secondbrain-ingest-drop-directory= (default =~/Documents/inbox=) is a folder you save things into and forget about. Two watchers feed it, and either or both may be on:
+
+- =M-x cmacs-secondbrain-ingest-watch-mode= — Emacs's own =file-notify=. Turning it on also sweeps what is already there. =emacsctl sb watch true= does the same from a shell.
+- =M-x cmacs-secondbrain-ingest-podomation-install= — loads a podomation rule into the running engine: an =inotify_event= pod on the folder whose =on_create=, =on_move= and =on_modify= call =cmacs-secondbrain-ingest-drop= in this instance over D-Bus. With a prefix argument it only shows the rule; =cmacs-secondbrain-ingest-podomation-rule= returns the DSL for your own pod files, and =cmacs-secondbrain-ingest-podomation-instance= chooses which cmacs it drives.
+
+Both end in one function, =cmacs-secondbrain-ingest-drop=, which is the only place that decides what a dropped file means: hidden, backup and partial-download names are ignored; a file that has just appeared waits until its size stops changing (=cmacs-secondbrain-ingest-drop-settle=) because a browser download or a scanner is usually still writing it; a file already picked up is not picked up twice when a second event fires. A small text file holding one URL ingests the URL. Every dropped file is ingested with =cmacs-secondbrain-ingest-drop-options= (default: let the model place it), and afterwards =cmacs-secondbrain-ingest-drop-after= moves it into =.ingested/= so the folder stays a queue.
+
+** From a chat
+
+=cmacs-ai-ingest.el= puts the ingester inside cmacs-ai:
+
+- =/ingest URL= or =/ingest PATH= in a chat's compose region files that thing; =/ingest -p resources -c technical/linux URL= places it; =/ingest -- some text= files the text; =/ingest= alone (or =/ingest-chat=, or =C-c C-b=) files the conversation you are having into =cmacs-ai-ingest-chat-directory= (=02_areas/cmacs_ai_chats=, the directory the placement model is told to stay out of). The compose text is a command to us, not something sent to the model; any subsystem can add such a command to =cmacs-ai-chat-slash-command-functions=.
+- *Ingest into the second brain* in the universal AI right-click menu, for a file, a directory, marked files, a URL or page, a region, an org subtree, a mail, the clipboard, or a chat.
+- A =secondbrain_ingest= tool on the chat's executor, so an HTTP-provider model can be told "file this" and do it; CLI providers reach the brigade tool of the same name over their MCP config.
+
+** Migrating the old Markdown
+
+=M-x cmacs-secondbrain-ingest-migrate= (or =emacsctl sb migrate [DIR]=, or the =secondbrain_migrate= tool) converts the =.md= files still in the tree into Org nodes *in place*: same directory, same base name, YAML front matter mapped onto the header (=title=, =tags=, =created=; the rest kept in a =Front matter= section so a ticket loses nothing), and links rewritten. Every note in the batch has its id minted up front, so =[[people/bob.md]]= becomes =[[id:…][Bob]]= before =bob.org= exists; a link to an org note that is already there resolves through its =:ID:=; =![[path.md]]= transclusions keep their form with the path re-pointed to =.org=; a link to nothing is left alone and reported.
+
+It *plans by default*. The plan lists every file, its target, and every link target that would not resolve; nothing is written until =:apply t= (=--apply=). The archive is skipped unless asked (=:include-archives=), the model is not used unless asked (=:ai=), and the originals are kept unless =:remove 'trash= (=--remove trash=), which moves them to the system trash. A note whose =.org= twin already exists is skipped.
+
+** The memory index keeps up
+
+After each note is written, =cmacs-brigade-memory-update-files= re-indexes just that note (and the index it was added to) in the brigade memory: its old rows are dropped, the new chunks embedded and appended, and every other row of the index copied verbatim by =cmacs-brigade-index-writer-copy= — seconds, against the hours of a rebuild. So =sb find= and the related-notes step of the *next* ingest already know about this one. =cmacs-secondbrain-ingest-reindex-memory= turns it off; it is skipped anyway until a first =cmacs-brigade-memory-build= exists. The same routine serves a deleted file, which simply loses its rows.
+
 Two hooks: =cmacs-secondbrain-ingest-after-note-functions= receives an INFO plist (=:file :id :title :kind :source :dir :tags :summary :related=) after every note, and =cmacs-secondbrain-ingest-after-job-functions= receives the job at done, failed or cancelled.
 
 * Configuration
@@ -718,7 +745,7 @@ Colours are per ring, fixed rather than hashed, so a colour means the same thing
 
 * MCP
 
-Fourteen tools, when built with =--with-cmacs-mcp=:
+Fifteen tools, when built with =--with-cmacs-mcp=:
 
 | Tool | Does |
 |------+------|
@@ -736,6 +763,7 @@ Fourteen tools, when built with =--with-cmacs-mcp=:
 | =secondbrain_tree= | the PARA tree, for choosing a place |
 | =secondbrain_find= | search the notes |
 | =secondbrain_doctor= | what this host can read |
+| =secondbrain_migrate= | plan, or apply, the Markdown-to-Org migration |
 
 * Architecture
 
@@ -764,7 +792,6 @@ Honest list:
 - *No OCR.* A scanned PDF ingests as a note that says it has no text layer; run =ocrmypdf= first.
 - *Outlook =.msg= needs =msgconvert=.* Without it the job fails with that message.
 - *The crawler is a fetcher, not a browser.* Pages that render only in JavaScript need =--web gsurf=, and the crawl itself always uses url.el.
-- *The memory index is not updated incrementally.* A new note becomes findable by =sb find= after the next =cmacs-brigade-memory-build=.
 
 * Tests
 

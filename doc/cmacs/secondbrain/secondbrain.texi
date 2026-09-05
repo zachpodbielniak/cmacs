@@ -1157,6 +1157,67 @@ when a D-Bus call arrives on the main thread of a cmacs that may be a
 Wayland compositor.  Hooks: @code{cmacs-secondbrain-ingest-after-note-functions}
 (an INFO plist per note) and @code{cmacs-secondbrain-ingest-after-job-functions}.
 
+@subsection The drop folder
+
+@code{cmacs-secondbrain-ingest-drop-directory} (default
+@file{~/Documents/inbox}) is a folder you save things into and forget
+about.  Two watchers feed it: @kbd{M-x cmacs-secondbrain-ingest-watch-mode}
+(Emacs's own @code{file-notify}; @command{emacsctl sb watch true} from a
+shell) and @kbd{M-x cmacs-secondbrain-ingest-podomation-install}, which
+loads an @code{inotify_event} rule into the running podomation engine
+whose events call @code{cmacs-secondbrain-ingest-drop} in this instance
+over D-Bus.  @code{cmacs-secondbrain-ingest-podomation-rule} returns the
+DSL for your own pod files.
+
+Both end in @code{cmacs-secondbrain-ingest-drop}, the only place that
+decides what a dropped file means: hidden, backup and partial-download
+names are ignored; a file that has just appeared waits until its size
+stops changing; a file already picked up is not picked up twice; a small
+text file holding one URL ingests the URL.  Afterwards
+@code{cmacs-secondbrain-ingest-drop-after} moves the original into
+@file{.ingested/} so the folder stays a queue.
+
+@subsection From a chat
+
+@file{cmacs-ai-ingest.el} puts the ingester inside cmacs-ai.
+@code{/ingest URL} or @code{/ingest PATH} in a chat's compose region
+files that thing (@code{-p}, @code{-c}, @code{-t}, @code{-T} place and
+tag it; @code{--} introduces free text); @code{/ingest} alone,
+@code{/ingest-chat} or @kbd{C-c C-b} files the conversation into
+@code{cmacs-ai-ingest-chat-directory}.  Any subsystem can add such a
+command to @code{cmacs-ai-chat-slash-command-functions}.  The universal
+AI menu gains @emph{Ingest into the second brain} for files, URLs,
+regions, org subtrees, mail, the clipboard and chats, and the chat's tool
+executor gains a @code{secondbrain_ingest} tool the model can call.
+
+@subsection Migrating the old Markdown
+
+@kbd{M-x cmacs-secondbrain-ingest-migrate} (or @command{emacsctl sb
+migrate}, or the @code{secondbrain_migrate} tool) converts the
+@file{.md} files still in the tree into Org nodes in place: same
+directory, same base name, YAML front matter mapped onto the header,
+links rewritten.  Every note in the batch has its id minted up front, so
+a link to a sibling resolves before the sibling exists; a link to an
+existing org note resolves through its @code{:ID:}; @code{![[path.md]]}
+transclusions keep their form re-pointed to @file{.org}; a link to
+nothing is left alone and reported.
+
+It plans by default and writes nothing until @code{:apply t}
+(@option{--apply}).  The archive is skipped unless asked, the model is
+not used unless asked, and the originals are kept unless @code{:remove
+'trash}.
+
+@subsection The memory index keeps up
+
+After each note, @code{cmacs-brigade-memory-update-files} re-indexes just
+that note in the brigade memory: its old rows are dropped, the new
+chunks embedded and appended, and every other row copied verbatim by
+the @code{cmacs-brigade-index-writer-copy} primitive --- seconds against
+the hours of a rebuild --- so @command{sb find} and the next ingest's
+related-notes step already know about it.
+@code{cmacs-secondbrain-ingest-reindex-memory} turns it off; it is
+skipped until a first @code{cmacs-brigade-memory-build} exists.
+
 Every knob is a @code{defcustom} in the @code{cmacs-secondbrain-ingest}
 group; the reference table is in @file{doc_org/cmacs/secondbrain/reference.org}.
 
@@ -1280,9 +1341,10 @@ With @option{--with-cmacs-mcp}: @code{secondbrain_open},
 @code{secondbrain_refresh}, and for the ingester
 @code{secondbrain_ingest}, @code{secondbrain_ingest_status},
 @code{secondbrain_ingest_cancel}, @code{secondbrain_tree},
-@code{secondbrain_find} and @code{secondbrain_doctor}.  Every tool has a
-method on @code{org.cmacs.Editor1.SecondBrain} with the same Elisp
-body, which is what @command{emacsctl sb} calls.
+@code{secondbrain_find}, @code{secondbrain_doctor} and
+@code{secondbrain_migrate}.  Every tool has a method on
+@code{org.cmacs.Editor1.SecondBrain} with the same Elisp body, which is
+what @command{emacsctl sb} calls.
 
 Every interpolated argument goes through the Elisp string escaper: these
 are attacker-controlled tool arguments being spliced into a form that is

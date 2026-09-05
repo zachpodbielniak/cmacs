@@ -110,7 +110,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
-| =sb=        | =ingest=, =jobs=, =status=, =cancel=, =tree=, =find=, =doctor=, =open=, =layout=, =search=, =expand=, =node=, =stats=, =sources=, =refresh= (aliases =second-brain=, =secondbrain=) |
+| =sb=        | =ingest=, =jobs=, =status=, =cancel=, =tree=, =find=, =doctor=, =migrate=, =watch=, =open=, =layout=, =search=, =expand=, =node=, =stats=, =sources=, =refresh= (aliases =second-brain=, =secondbrain=) |
 
 * Agents: =brigade spawn= / =brigade send= / =brigade log=
 
@@ -252,7 +252,18 @@ Sites: =--crawl= turns a URL into a site directory with a =00_index.org= and one
 
 Other flags: =-t/--tags=, =--title=, =--name= (file-name seed), =-a/--append= (add to an existing note instead of uniquifying), =-r/--recursive= (descend into directories), =--no-link=, =--keep-source= (copy the original into =.attachments/=), =--root DIR=, =-b/--branch NAME= (=ROOT/trees/NAME=, for a notes worktree).
 
-The underlying typed methods are =Editor1.SecondBrain= =Ingest= / =IngestStatus= / =IngestList= / =IngestCancel= / =Tree= / =Find= / =Doctor=, with MCP parity via =secondbrain_ingest= / =secondbrain_ingest_status= / =secondbrain_ingest_cancel= / =secondbrain_tree= / =secondbrain_find= / =secondbrain_doctor=.
+Migration and the drop folder:
+
+#+begin_src sh
+  emacsctl sb migrate                        # the plan: every .md, its target, unresolved links
+  emacsctl sb migrate 02_areas/work/people   # one directory
+  emacsctl sb migrate --apply --remove trash # do it; originals to the trash
+  emacsctl sb watch true                     # ingest whatever lands in ~/Documents/inbox
+#+end_src
+
+=sb migrate= plans by default and writes nothing; =--apply= converts each Markdown note into an Org node in place (=--include-archives=, =--ai=, =--remove trash=). =sb watch= toggles the editor's =file-notify= watcher on the drop folder; the podomation rule (=cmacs-secondbrain-ingest-podomation-install=) is the other way to feed it.
+
+The underlying typed methods are =Editor1.SecondBrain= =Ingest= / =IngestStatus= / =IngestList= / =IngestCancel= / =Tree= / =Find= / =Doctor= / =Migrate= / =Watch=, with MCP parity via =secondbrain_ingest= / =secondbrain_ingest_status= / =secondbrain_ingest_cancel= / =secondbrain_tree= / =secondbrain_find= / =secondbrain_doctor= / =secondbrain_migrate=.
 
 * Org buffers: =text insert-org=
 

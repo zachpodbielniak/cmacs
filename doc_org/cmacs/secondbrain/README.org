@@ -57,4 +57,3 @@ raylib's =Color= is a struct and pgtk's is a =void*=; they cannot coexist in one
 - No folders view; departments group by PARA bucket or by source, not by the literal directory tree.
 - Similarity edges are computed on demand, not maintained as the notes change.
 - No OCR for scanned PDFs; no =.msg= without =msgconvert=; the crawler does not run JavaScript (=--web gsurf= does, one page at a time).
-- The memory index is not updated incrementally after an ingest.

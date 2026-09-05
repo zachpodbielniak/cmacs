@@ -61,6 +61,7 @@
 (require 'json)
 (require 'org)
 (require 'org-id)
+(require 'filenotify)
 (require 'cmacs-para)
 (require 'cmacs-secondbrain-ingest-extract)
 (require 'cmacs-secondbrain-ingest-ai)
@@ -362,6 +363,7 @@ A function may edit the job's `analysis', `summary' or `tags' slots.")
   appended
   pages         ; for crawls and site exports: list of docs
   crawl         ; crawler state plist
+  written       ; every file this job created or changed (notes, indices)
   callbacks)    ; functions of (JOB) called at the end
 
 (defvar cmacs-secondbrain-ingest--jobs nil
@@ -511,7 +513,7 @@ keywords with underscores for hyphens; unknown keys are ignored."
                                    :provider :model :name :title :description :format :text
                                    :crawl :depth :max-pages :include :exclude :wait
                                    :recursive :append :dry-run :keep-source :link
-                                   :web-backend :whisper-model :language))
+                                   :web-backend :whisper-model :language :id :created))
                    (setq out (plist-put out key v)))))
              obj)
     (cmacs-secondbrain-ingest-normalize-options out)))
@@ -851,8 +853,10 @@ Signals when an explicit option names somewhere unacceptable."
             parts))
     (and parts (string-join (nreverse parts) "\n\n"))))
 
-(defun cmacs-secondbrain-ingest--header (id title description categories tags)
-  "Return the file header: property drawer and the standard keywords."
+(defun cmacs-secondbrain-ingest--header (id title description categories tags &optional created)
+  "Return the file header: property drawer and the standard keywords.
+CREATED, when given, is the ISO 8601 timestamp for `#+created:' -- a
+migrated note keeps the date it was really written."
   (let ((now (cmacs-secondbrain-ingest--timestamp)))
     (concat
      ":PROPERTIES:\n:ID:       " id "\n:END:\n"
@@ -861,7 +865,7 @@ Signals when an explicit option names somewhere unacceptable."
      "#+authors: " cmacs-secondbrain-ingest-author "\n"
      "#+categories: " (or categories "") "\n"
      (if tags (concat "#+filetags: :" (string-join tags ":") ":\n") "")
-     "#+created: " now "\n"
+     "#+created: " (or created now) "\n"
      "#+updated: " now "\n"
      "#+version: 1.0.0\n")))
 
@@ -894,7 +898,8 @@ Signals when an explicit option names somewhere unacceptable."
              (cmacs-secondbrain-ingest-job-note-id job) title
              (cmacs-secondbrain-ingest-job-description job)
              (cmacs-secondbrain-ingest--categories job dir)
-             (cmacs-secondbrain-ingest-job-tags job))
+             (cmacs-secondbrain-ingest-job-tags job)
+             (cmacs-secondbrain-ingest--opt job :created))
             "\n"
             (string-join sections "\n\n")
             "\n")))
@@ -1751,7 +1756,8 @@ Strips stray fences and makes every heading level two or deeper."
             (cmacs-secondbrain-ingest--fallback-description job))
         (cmacs-secondbrain-ingest-job-target-dir job) (cmacs-secondbrain-ingest--resolve-target-dir job)
         (cmacs-secondbrain-ingest-job-note-id job)
-        (or (and (plist-get (cmacs-secondbrain-ingest-job-doc job) :id)
+        (or (cmacs-secondbrain-ingest--opt job :id)
+            (and (plist-get (cmacs-secondbrain-ingest-job-doc job) :id)
                  (cmacs-secondbrain-ingest--opt job :preserve-id t)
                  (plist-get (cmacs-secondbrain-ingest-job-doc job) :id))
             (org-id-new)))
@@ -1759,7 +1765,8 @@ Strips stray fences and makes every heading level two or deeper."
 
 (defun cmacs-secondbrain-ingest--one-line (text &optional max)
   "Collapse TEXT to one plain line of at most MAX (default 160) characters."
-  (let* ((s (replace-regexp-in-string "[ \t\n]+" " " (or text "")))
+  (let* ((s (replace-regexp-in-string "^#\\{1,6\\} \\|^\\*+ " "" (or text "")))
+         (s (replace-regexp-in-string "[ \t\n]+" " " s))
          (s (replace-regexp-in-string "\\[\\[[^]]*\\]\\[\\([^]]*\\)\\]\\]" "\\1" s))
          (s (replace-regexp-in-string "\\(?:\\`\\| \\)[*/=~_+]\\([^*/=~_+]+\\)[*/=~_+]\\(?:\\'\\|[ .,;:!?]\\)"
                                       (lambda (m) (replace-regexp-in-string "[*/=~_+]" "" m)) s))
@@ -1907,6 +1914,7 @@ Returns the copy's path, or nil when nothing was copied."
                (not (cmacs-secondbrain-ingest-job-appended job)))
       (cmacs-secondbrain-ingest-register-in-index
        dir (cmacs-secondbrain-ingest-job-note-id job) title root)
+      (cmacs-secondbrain-ingest--note-written job (expand-file-name "00_index.org" dir))
       (cmacs-secondbrain-ingest--roam-update (expand-file-name "00_index.org" dir)))
     (cmacs-secondbrain-ingest--roam-update file)
     (cmacs-secondbrain-ingest--after-note job file)))
@@ -1945,6 +1953,7 @@ Returns the copy's path, or nil when nothing was copied."
                   (cmacs-secondbrain-ingest-demote (or (plist-get p :body) "") 1)
                   "\n"))
         (push (cons pid ptitle) page-links)
+        (cmacs-secondbrain-ingest--note-written job pfile)
         (cmacs-secondbrain-ingest--roam-update pfile)))
     ;; The site index carries the summary and lists the pages.
     (setf (cmacs-secondbrain-ingest-job-target-file job) index)
@@ -1968,12 +1977,58 @@ Returns the copy's path, or nil when nothing was copied."
                   "")))
     (setf (cmacs-secondbrain-ingest-job-note-file job) index)
     (when cmacs-secondbrain-ingest-register-index
-      (cmacs-secondbrain-ingest-register-in-index dir (cmacs-secondbrain-ingest-job-note-id job) title root))
+      (cmacs-secondbrain-ingest-register-in-index dir (cmacs-secondbrain-ingest-job-note-id job) title root)
+      (cmacs-secondbrain-ingest--note-written job (expand-file-name "00_index.org" dir)))
     (cmacs-secondbrain-ingest--roam-update index)
     (cmacs-secondbrain-ingest--after-note job index)))
 
+(defcustom cmacs-secondbrain-ingest-reindex-memory t
+  "Re-index each written note in the brigade memory index, incrementally.
+
+Uses `cmacs-brigade-memory-update-files', which re-embeds only the new
+note (and the index it was added to) and copies every other row of the
+index verbatim -- seconds, against the hours of a rebuild.  Skipped when
+there is no committed index yet; build one first with
+`cmacs-brigade-memory-build'.  The effect is that `sb find' and the
+related-notes step of the NEXT ingest already know about this one."
+  :type 'boolean
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-reindex-delay 2
+  "Seconds of idle time before the incremental re-index starts.
+Lets the note be written and the job reported before the embedder is
+asked for anything."
+  :type 'number
+  :group 'cmacs-secondbrain-ingest)
+
+(declare-function cmacs-brigade-memory-update-files "cmacs-brigade-memory" (files &optional callback))
+(declare-function cmacs-brigade-memory-index-exists-p "cmacs-brigade-memory" ())
+
+(defun cmacs-secondbrain-ingest--note-written (job file)
+  "Record FILE as written by JOB."
+  (cl-pushnew (expand-file-name file) (cmacs-secondbrain-ingest-job-written job)
+              :test #'equal))
+
+(defun cmacs-secondbrain-ingest--reindex (job)
+  "Queue an incremental memory re-index of what JOB wrote."
+  (when (and cmacs-secondbrain-ingest-reindex-memory
+             (cmacs-secondbrain-ingest-job-written job)
+             (or (featurep 'cmacs-brigade-memory) (require 'cmacs-brigade-memory nil t))
+             (fboundp 'cmacs-brigade-memory-update-files)
+             (fboundp 'cmacs-brigade-memory-index-exists-p)
+             (ignore-errors (cmacs-brigade-memory-index-exists-p)))
+    (let ((files (cmacs-secondbrain-ingest-job-written job)))
+      (run-with-idle-timer
+       cmacs-secondbrain-ingest-reindex-delay nil
+       (lambda ()
+         (condition-case err
+             (cmacs-brigade-memory-update-files files)
+           (error (cmacs-secondbrain-ingest--log job "reindex failed: %s"
+                                                 (error-message-string err)))))))))
+
 (defun cmacs-secondbrain-ingest--after-note (job file)
   "Run the after-note hook and refresh the visualiser."
+  (cmacs-secondbrain-ingest--note-written job file)
   (ignore-errors
     (run-hook-with-args
      'cmacs-secondbrain-ingest-after-note-functions
@@ -1996,7 +2051,8 @@ Returns the copy's path, or nil when nothing was copied."
              (fboundp 'cmacs-secondbrain-refresh))
     (ignore-errors
       (with-current-buffer cmacs-secondbrain-buffer-name
-        (cmacs-secondbrain-refresh)))))
+        (cmacs-secondbrain-refresh))))
+  (cmacs-secondbrain-ingest--reindex job))
 
 ;;;; The pool -------------------------------------------------------------
 
@@ -2359,6 +2415,257 @@ of `record_audio_and_ingest'."
     (cmacs-audio-finish-recording)
     (cmacs-secondbrain-ingest-run path :para para :type 'meeting)))
 
+;;;; The drop folder -----------------------------------------------------------
+;;
+;; A directory you save things into and forget about.  Two watchers feed
+;; it: a podomation rule (inotify -> the editor over D-Bus, so it works
+;; for a headless cmacs and survives the visualiser never being opened)
+;; and Emacs's own `file-notify' for the case where podomation is not
+;; running.  Both end up in `cmacs-secondbrain-ingest-drop', which is the
+;; only place that decides what a dropped file means.
+;;
+;; A file that has just appeared is often still being written -- a
+;; browser download, a scanner, `cp' of something large -- so the drop
+;; handler waits until its size stops changing before it ingests.  Hidden
+;; and partial names are ignored, and a file that has already been picked
+;; up is not picked up twice when a second event fires for it.
+
+(defcustom cmacs-secondbrain-ingest-drop-directory "~/Documents/inbox"
+  "The drop folder: anything saved here is ingested.
+Created on demand by `cmacs-secondbrain-ingest-watch-mode' and by the
+podomation rule installer."
+  :type 'directory
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-drop-options '(:para detect)
+  "Options for every file the drop folder ingests, as a plist.
+The keys of `cmacs-secondbrain-ingest-normalize-options'.  The default
+lets the model place each note; `(:para inbox)' would only collect."
+  :type 'sexp
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-drop-after 'move
+  "What happens to a dropped file once its note is written.
+
+`move' puts it in a `.ingested/' subdirectory of the drop folder, so the
+folder stays a queue and nothing is lost; `trash' uses the system trash;
+`keep' leaves it where it is (and it will not be ingested again until it
+changes)."
+  :type '(choice (const move) (const trash) (const keep))
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-drop-settle 2.0
+  "Seconds a dropped file's size must hold still before it is read."
+  :type 'number
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-drop-max-wait 300
+  "Give up waiting for a dropped file to finish writing after this long."
+  :type 'integer
+  :group 'cmacs-secondbrain-ingest)
+
+(defcustom cmacs-secondbrain-ingest-drop-ignore-regexp
+  "\\`\\.\\|~\\'\\|\\.\\(?:part\\|crdownload\\|tmp\\|swp\\|download\\)\\'\\|\\`00_index\\.org\\'"
+  "File names (not paths) matching this are never ingested from the drop folder.
+Hidden files, editor backups and the partial-download names browsers use."
+  :type 'regexp
+  :group 'cmacs-secondbrain-ingest)
+
+(defvar cmacs-secondbrain-ingest--drop-pending (make-hash-table :test 'equal)
+  "PATH -> plist (:size :since :started) for files waiting to settle.")
+
+(defun cmacs-secondbrain-ingest--drop-dir ()
+  (file-name-as-directory (expand-file-name cmacs-secondbrain-ingest-drop-directory)))
+
+(defun cmacs-secondbrain-ingest--drop-ignored-p (path)
+  (or (string-match-p cmacs-secondbrain-ingest-drop-ignore-regexp (file-name-nondirectory path))
+      (string-match-p "/\\.ingested/" path)))
+
+(defun cmacs-secondbrain-ingest-drop (path)
+  "Ingest PATH, which just appeared in a drop folder, once it stops changing.
+Safe to call more than once for the same PATH.  Returns non-nil when the
+file was accepted for ingestion."
+  (let ((path (expand-file-name path)))
+    (cond
+     ((cmacs-secondbrain-ingest--drop-ignored-p path) nil)
+     ((not (file-regular-p path)) nil)
+     ((gethash path cmacs-secondbrain-ingest--drop-pending) t)
+     (t
+      (puthash path (list :size -1 :since (float-time) :started (float-time))
+               cmacs-secondbrain-ingest--drop-pending)
+      (cmacs-secondbrain-ingest--log nil "drop: %s appeared" (abbreviate-file-name path))
+      (cmacs-secondbrain-ingest--drop-poll path)
+      t))))
+
+(defun cmacs-secondbrain-ingest--drop-poll (path)
+  "Check whether PATH has stopped growing; ingest it when it has."
+  (let ((st (gethash path cmacs-secondbrain-ingest--drop-pending)))
+    (when st
+      (let* ((attrs (file-attributes path))
+             (size (and attrs (file-attribute-size attrs)))
+             (now (float-time)))
+        (cond
+         ((null attrs)
+          ;; Gone before it settled -- renamed away or deleted.
+          (remhash path cmacs-secondbrain-ingest--drop-pending))
+         ((/= size (plist-get st :size))
+          (plist-put st :size size)
+          (plist-put st :since now)
+          (run-at-time cmacs-secondbrain-ingest-drop-settle nil
+                       #'cmacs-secondbrain-ingest--drop-poll path))
+         ((and (>= (- now (plist-get st :since)) cmacs-secondbrain-ingest-drop-settle)
+               (> size 0))
+          (remhash path cmacs-secondbrain-ingest--drop-pending)
+          (cmacs-secondbrain-ingest--drop-ingest path))
+         ((> (- now (plist-get st :started)) cmacs-secondbrain-ingest-drop-max-wait)
+          (remhash path cmacs-secondbrain-ingest--drop-pending)
+          (cmacs-secondbrain-ingest--log nil "drop: gave up waiting for %s" path))
+         (t (run-at-time cmacs-secondbrain-ingest-drop-settle nil
+                         #'cmacs-secondbrain-ingest--drop-poll path)))))))
+
+(defun cmacs-secondbrain-ingest--drop-url-file (path)
+  "If PATH is a small text file holding one URL, return the URL."
+  (when (and (member (downcase (or (file-name-extension path) "")) '("url" "txt" "webloc" ""))
+             (< (file-attribute-size (file-attributes path)) 4096))
+    (let ((text (string-trim (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+      (cond ((cmacs-secondbrain-ingest-url-p text) text)
+            ;; A Windows/GNOME .url file: URL=... on one of its lines.
+            ((string-match "^URL=\\(https?://[^\n]+\\)" text) (match-string 1 text))))))
+
+(defun cmacs-secondbrain-ingest--drop-ingest (path)
+  "Queue PATH (or the URL it names) with the drop options; tidy it afterwards."
+  (let* ((url (ignore-errors (cmacs-secondbrain-ingest--drop-url-file path)))
+         (opts (append cmacs-secondbrain-ingest-drop-options
+                       (list :callback (lambda (job) (cmacs-secondbrain-ingest--drop-finished job path))))))
+    (condition-case err
+        (progn
+          (cmacs-secondbrain-ingest--log nil "drop: ingesting %s%s" (abbreviate-file-name path)
+                                         (if url (format " (URL %s)" url) ""))
+          (apply #'cmacs-secondbrain-ingest-run (or url path) opts))
+      (error (cmacs-secondbrain-ingest--log nil "drop: %s: %s" path (error-message-string err))))))
+
+(defun cmacs-secondbrain-ingest--drop-finished (job path)
+  "After JOB for dropped PATH ends, move, trash or keep the original."
+  (when (and (eq (cmacs-secondbrain-ingest-job-stage job) 'done)
+             (file-exists-p path))
+    (pcase cmacs-secondbrain-ingest-drop-after
+      ('move
+       (let ((dest (expand-file-name (file-name-nondirectory path)
+                                     (expand-file-name ".ingested" (file-name-directory path)))))
+         (make-directory (file-name-directory dest) t)
+         (when (file-exists-p dest)
+           (setq dest (concat dest "." (format-time-string "%Y%m%d%H%M%S"))))
+         (ignore-errors (rename-file path dest))))
+      ('trash (ignore-errors (move-file-to-trash path)))
+      (_ nil))))
+
+;;;;; Emacs's own watcher
+
+(defvar cmacs-secondbrain-ingest--watch-descriptor nil)
+
+(defun cmacs-secondbrain-ingest--watch-event (event)
+  "Handle a `file-notify' EVENT on the drop folder."
+  (pcase-let ((`(,_desc ,action ,file . ,rest) event))
+    (pcase action
+      ((or 'created 'changed)
+       (cmacs-secondbrain-ingest-drop file))
+      ('renamed
+       ;; A move INTO the folder arrives as a rename whose new name is
+       ;; inside it; the first arg is the old name.
+       (let ((new (car rest)))
+         (when (and new (string-prefix-p (cmacs-secondbrain-ingest--drop-dir) (expand-file-name new)))
+           (cmacs-secondbrain-ingest-drop new))))
+      (_ nil))))
+
+(defun cmacs-secondbrain-ingest-drop-sweep ()
+  "Ingest whatever is already sitting in the drop folder."
+  (interactive)
+  (let ((dir (cmacs-secondbrain-ingest--drop-dir)) (n 0))
+    (when (file-directory-p dir)
+      (dolist (f (directory-files dir t "\\`[^.]" t))
+        (when (and (file-regular-p f) (cmacs-secondbrain-ingest-drop f))
+          (cl-incf n))))
+    (message "sb ingest: %d file%s picked up from %s" n (if (= n 1) "" "s")
+             (abbreviate-file-name dir))
+    n))
+
+;;;###autoload
+(define-minor-mode cmacs-secondbrain-ingest-watch-mode
+  "Watch `cmacs-secondbrain-ingest-drop-directory' and ingest whatever lands in it.
+
+Uses Emacs's `file-notify'.  This is the watcher for a session without
+podomation; with podomation running, install the rule from
+`cmacs-secondbrain-ingest-podomation-rule' instead (or as well -- the
+drop handler ignores a file it has already picked up).  Turning the mode
+on also sweeps what is already in the folder."
+  :global t
+  :group 'cmacs-secondbrain-ingest
+  (when cmacs-secondbrain-ingest--watch-descriptor
+    (ignore-errors (file-notify-rm-watch cmacs-secondbrain-ingest--watch-descriptor))
+    (setq cmacs-secondbrain-ingest--watch-descriptor nil))
+  (when cmacs-secondbrain-ingest-watch-mode
+    (let ((dir (cmacs-secondbrain-ingest--drop-dir)))
+      (make-directory dir t)
+      (setq cmacs-secondbrain-ingest--watch-descriptor
+            (file-notify-add-watch dir '(change) #'cmacs-secondbrain-ingest--watch-event))
+      (cmacs-secondbrain-ingest-drop-sweep))))
+
+;;;;; The podomation rule
+
+(defcustom cmacs-secondbrain-ingest-podomation-instance nil
+  "D-Bus name of the cmacs the podomation rule should drive.
+nil targets THIS instance by its per-PID name, which is right for an
+in-process engine; \"org.cmacs.Editor\" targets whichever instance owns
+the well-known name, which is right for a standalone podomation daemon."
+  :type '(choice (const :tag "This instance" nil) string)
+  :group 'cmacs-secondbrain-ingest)
+
+(defun cmacs-secondbrain-ingest-podomation-rule (&optional dir instance)
+  "Return the podomation DSL for a drop-folder rule watching DIR.
+
+The rule fires `cmacs-secondbrain-ingest-drop' in INSTANCE (a D-Bus
+name; default per `cmacs-secondbrain-ingest-podomation-instance') for
+every file created in or moved into DIR.  The Elisp side does the
+filtering and the settle wait, so the rule itself stays one line per
+event and needs no DSL string matching."
+  (let* ((dir (directory-file-name (expand-file-name (or dir cmacs-secondbrain-ingest-drop-directory))))
+         (instance (or instance cmacs-secondbrain-ingest-podomation-instance
+                       (format "org.cmacs.Editor.Pid%d" (emacs-pid))))
+         (q (lambda (s) (replace-regexp-in-string "\"" "\\\\\"" s))))
+    (concat
+     "# Second-brain drop folder: anything saved here becomes an Org note.\n"
+     "# Generated by cmacs-secondbrain-ingest-podomation-rule; the filtering,\n"
+     "# settle wait and tidy-up live in Elisp (cmacs-secondbrain-ingest-drop).\n"
+     (format "pod sb_drop = inotify_event->new(\"%s\");\n" (funcall q dir))
+     (format "pod sb_editor = cmacs->new(\"%s\");\n" (funcall q instance))
+     "sb_drop->on_create => sb_editor->eval(\"(cmacs-secondbrain-ingest-drop \\\"{event->path}\\\")\");\n"
+     "sb_drop->on_move   => sb_editor->eval(\"(cmacs-secondbrain-ingest-drop \\\"{event->other_path}\\\")\");\n"
+     "sb_drop->on_modify => sb_editor->eval(\"(cmacs-secondbrain-ingest-drop \\\"{event->path}\\\")\");\n")))
+
+(declare-function cmacs-podomation-running-p "cmacs-podomation.c" ())
+(declare-function cmacs-podomation-start "cmacs-podomation.c" ())
+(declare-function cmacs-podomation-eval-dsl "cmacs-podomation.c" (dsl))
+
+;;;###autoload
+(defun cmacs-secondbrain-ingest-podomation-install (&optional dir)
+  "Install the drop-folder rule into the running podomation engine.
+Starts the engine if it is not running and creates DIR (default
+`cmacs-secondbrain-ingest-drop-directory').  Returns the DSL loaded.
+Interactively, with a prefix argument, only shows the rule."
+  (interactive (list nil))
+  (let ((dsl (cmacs-secondbrain-ingest-podomation-rule dir)))
+    (if current-prefix-arg
+        (with-current-buffer (get-buffer-create "*second brain: podomation rule*")
+          (erase-buffer) (insert dsl) (pop-to-buffer (current-buffer)))
+      (unless (fboundp 'cmacs-podomation-eval-dsl)
+        (user-error "cmacs was built without --with-cmacs-podomation"))
+      (make-directory (cmacs-secondbrain-ingest--drop-dir) t)
+      (unless (cmacs-podomation-running-p) (cmacs-podomation-start))
+      (cmacs-podomation-eval-dsl dsl)
+      (message "sb ingest: podomation is watching %s"
+               (abbreviate-file-name (cmacs-secondbrain-ingest--drop-dir))))
+    dsl))
+
 ;;;; The queue buffer -------------------------------------------------------
 
 (defun cmacs-secondbrain-ingest--stage-icon (stage)
@@ -2498,7 +2805,7 @@ of `record_audio_and_ingest'."
 (defun cmacs-secondbrain-ingest-queue-help ()
   "Describe the queue keys."
   (interactive)
-  (message "a add file  u add URL  p clipboard  RET visit  o visit other  l log  k cancel  r retry  d remove  D clear  s summaries  P placement  ! doctor  g refresh  q quit"))
+  (message "a add file  u add URL  p clipboard  RET visit  o visit other  l log  k cancel  r retry  d remove  D clear  s summaries  P placement  w watch drop folder  ! doctor  g refresh  q quit"))
 
 (defvar cmacs-secondbrain-ingest-mode-map
   (let ((m (make-sparse-keymap)))
@@ -2515,6 +2822,7 @@ of `record_audio_and_ingest'."
     (define-key m "s" #'cmacs-secondbrain-ingest-queue-toggle-summaries)
     (define-key m "P" #'cmacs-secondbrain-ingest-queue-toggle-placement)
     (define-key m "!" #'cmacs-secondbrain-ingest-queue-doctor)
+    (define-key m "w" #'cmacs-secondbrain-ingest-watch-mode)
     (define-key m "g" (lambda () (interactive) (cmacs-secondbrain-ingest--render)))
     (define-key m "?" #'cmacs-secondbrain-ingest-queue-help)
     m)

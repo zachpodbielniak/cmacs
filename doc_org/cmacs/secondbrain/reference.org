@@ -269,6 +269,8 @@ At =/org/cmacs/Editor=. Every method returns one string.
 | =Tree= | =s para, s category, b files= | JSON array of paths |
 | =Find= | =s query, i limit= | JSON array of hits |
 | =Doctor= | | JSON array of =(name available detail)= |
+| =Migrate= | =s dir, s options_json= | the plan as JSON; with ="apply": true= the job ids too |
+| =Watch= | =b enable= | drop-folder watch on or off |
 
 =Ingest= returns when the jobs are *queued*; the work runs on the editor's main loop and a caller polls =IngestStatus= until =done= is true. Option keys are the snake_case names of the plist keys below.
 
@@ -283,13 +285,15 @@ Aliases =second-brain=, =secondbrain=, =second_brain=.
 | =sb tree [-p PARA] [-c PATH] [-f]= | the PARA tree |
 | =sb find [-k N] QUERY…= | search the notes |
 | =sb doctor= | what this host can read |
+| =sb migrate [DIR] [--apply] [--include-archives] [--ai] [--remove trash]= | plan (default) or apply the Markdown migration |
+| =sb watch trueert{}false= | watch the drop folder in the editor |
 | =sb open [true]= / =sb layout KIND= / =sb search Q [true]= / =sb expand [ID] [true]= / =sb node ID= / =sb stats= / =sb sources= / =sb refresh= | the visualiser |
 
 =sb ingest= flags: =-p/--para=, =-c/--category=, =-d/--directory=, =-t/--tags=, =-T/--type=, =--prompt=, =--principle=, =-n/--no-summary=, =-N/--no-ai=, =-s/--sanitize=, =--sanitize-rules RULES=, =-P/--provider=, =-m/--model=, =--name=, =--title=, =-f/--format=, =-i/--stdin=, =--crawl=, =--depth=, =--max-pages=, =--include=, =--exclude=, =-r/--recursive=, =-a/--append=, =--dry-run=, =--no-link=, =--keep-source=, =--root=, =-b/--branch=, =--web=, =-w/--wait=, =--wait-timeout=.
 
 * Ingest: Elisp
 
-Entry points: =cmacs-secondbrain-ingest=, =-ingest-file=, =-ingest-url=, =-ingest-region=, =-ingest-buffer=, =-ingest-clipboard=, =-ingest-dired=, =-ingest-record= / =-record-stop=, =-ingest-queue=.
+Entry points: =cmacs-secondbrain-ingest=, =-ingest-file=, =-ingest-url=, =-ingest-region=, =-ingest-buffer=, =-ingest-clipboard=, =-ingest-dired=, =-ingest-record= / =-record-stop=, =-ingest-queue=, =-ingest-watch-mode=, =-ingest-drop-sweep=, =-ingest-podomation-install= / =-podomation-rule=, =-ingest-migrate= (=-migrate-plan=, =-migrate-plan-json=, =-migrate-from-json=). In cmacs-ai: =cmacs-ai-ingest-chat= (=C-c C-b=), the =/ingest= compose command, and =cmacs-ai-ingest-parse-command=. In brigade memory: =cmacs-brigade-memory-update-files FILES &optional CALLBACK= and =cmacs-brigade-memory-index-exists-p=; the DEFUN =cmacs-brigade-index-writer-copy WRITER INDEX &optional SKIP=.
 
 Programmatic: =(cmacs-secondbrain-ingest-run INPUTS &rest OPTS)= → jobs; =-enqueue=, =-start=, =-cancel=, =-wait=, =-job=, =-jobs=, =-status-json=, =-list-json=, =-from-json=, =-plan=, =-tree=, =-find=, =-find-json=, =-doctor=, =-related-notes=, =-register-in-index=, =-ensure-index=, =-render-note=.
 
@@ -365,5 +369,20 @@ Extending: =cmacs-secondbrain-ingest-register-strategy NAME :needs PROGRAMS-or-P
 | =cmacs-secondbrain-ingest-extension-kinds= | | extension → kind |
 | =cmacs-secondbrain-ingest-strategies= | | kind → strategies |
 | =cmacs-secondbrain-ingest-parallel-jobs= | 2 | |
+| =cmacs-secondbrain-ingest-reindex-memory= | =t= | incremental brigade re-index after each note |
+| =cmacs-secondbrain-ingest-reindex-delay= | 2 | idle seconds before it starts |
+| =cmacs-secondbrain-ingest-drop-directory= | =~/Documents/inbox= | the drop folder |
+| =cmacs-secondbrain-ingest-drop-options= | =(:para detect)= | options for every dropped file |
+| =cmacs-secondbrain-ingest-drop-after= | =move= | =move= to =.ingested/=, =trash=, or =keep= |
+| =cmacs-secondbrain-ingest-drop-settle= | 2.0 | seconds the size must hold still |
+| =cmacs-secondbrain-ingest-drop-max-wait= | 300 | give up waiting for a growing file |
+| =cmacs-secondbrain-ingest-drop-ignore-regexp= | hidden, =~=, =.part=, ... | names never ingested |
+| =cmacs-secondbrain-ingest-podomation-instance= | =nil= | D-Bus name the rule drives; nil = this instance |
+| =cmacs-secondbrain-ingest-migrate-exclude= | =.git .claude .vimban trees= ... | Markdown left alone |
+| =cmacs-secondbrain-ingest-migrate-include-archives= | =nil= | |
+| =cmacs-secondbrain-ingest-migrate-front-matter-keys= | title, tags, created, ... | front matter → header |
+| =cmacs-ai-ingest-chat-directory= | =02_areas/cmacs_ai_chats= | where a filed chat goes |
+| =cmacs-ai-ingest-chat-summarize= | =nil= | |
+| =cmacs-ai-ingest-chat-tags= | =("ai-chat")= | plus the provider |
 | =cmacs-secondbrain-ingest-verbose= | =nil= | |
 | =cmacs-secondbrain-ingest-log-file= | =nil= | |

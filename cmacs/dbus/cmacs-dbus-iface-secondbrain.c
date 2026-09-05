@@ -102,6 +102,15 @@ static const gchar *iface_xml =
   "    <method name='Doctor'>"
   "      <arg type='s' name='report_json' direction='out'/>"
   "    </method>"
+  "    <method name='Migrate'>"
+  "      <arg type='s' name='dir' direction='in'/>"
+  "      <arg type='s' name='options_json' direction='in'/>"
+  "      <arg type='s' name='plan_json' direction='out'/>"
+  "    </method>"
+  "    <method name='Watch'>"
+  "      <arg type='b' name='enable' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -362,6 +371,34 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
        "  (list :name (symbol-name (nth 0 e)) :available (and (nth 1 e) t)"
        "        :detail (nth 2 e)))"
        " (cmacs-secondbrain-ingest-doctor)))))"));
+  else if (g_strcmp0 (m, "Migrate") == 0)
+    {
+      /* Plans by default; only an options object saying "apply": true
+       * writes anything.  The plan is the deliverable people want to
+       * read before they let a bulk conversion loose on their notes. */
+      const gchar *dir, *options;
+      gchar *qd, *qo;
+
+      g_variant_get (p, "(&s&s)", &dir, &options);
+      qd = sb_lisp_str_or_nil (dir);
+      qo = sb_lisp_str ((options != NULL && *options != '\0') ? options : "{}");
+      sb_reply (iv, g_strdup_printf
+        ("(progn (require 'cmacs-secondbrain-ingest-migrate)"
+         " (cmacs-secondbrain-ingest-migrate-from-json %s %s))", qd, qo));
+      g_free (qd);
+      g_free (qo);
+    }
+  else if (g_strcmp0 (m, "Watch") == 0)
+    {
+      gboolean enable;
+
+      g_variant_get (p, "(b)", &enable);
+      sb_reply (iv, g_strdup_printf
+        (SB_INGEST "(cmacs-secondbrain-ingest-watch-mode %s)"
+         " (format \"watch %%s: %%s\" (if cmacs-secondbrain-ingest-watch-mode \"on\" \"off\")"
+         "  (abbreviate-file-name (expand-file-name cmacs-secondbrain-ingest-drop-directory))))",
+         enable ? "1" : "-1"));
+    }
 }
 
 static const GDBusInterfaceVTable vtable = {
