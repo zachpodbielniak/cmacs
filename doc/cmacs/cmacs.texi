@@ -2775,11 +2775,30 @@ rather than windows being squeezed to fit.  @kbd{Super+s} selects it,
 @code{scroll-column-width}, named after Hyprland's
 @code{scrolling.column_width} so a config translates.
 
-Windows slide to new positions rather than snapping.  Only position is
-animated --- a window is configured to its final size immediately and
-its node slides to meet it, because animating size would make every
-intermediate size a configure round-trip.  An interactive drag is
-exempt, so dragging still tracks the pointer exactly.
+Windows open with a centered pop from 84% size and two diminishing
+squash/stretch bounces, and close with a quick squeeze and shrink. Opacity reaches the
+configured client alpha before the entrance finishes. Position, size
+and borders animate together during layout changes. Repeating a layout
+destination retains the animation clock rather than delaying its finish.
+
+The defaults in @file{~/.config/gowl/config.yaml} are
+@code{animation-duration: 260}, @code{animation-duration-open: 360},
+@code{animation-duration-close: 180}, @code{animation-popin-scale: 0.84},
+@code{animation-curve-open: ease-out-back}, and
+@code{animation-curve: ease-out-expo}. Durations are milliseconds.
+Set @code{animations: false} or @code{animation-duration: 0} to disable
+all animation; an open or close duration of 0 disables that effect alone.
+@code{animation-jiggle-strength} defaults to 1; use 0 to remove jiggle,
+0.5 for a softer effect, or 2 for double intensity.
+For an entrance closer to Omarchy, use scale 0.87 and
+@code{ease-out-quint} as the entrance curve, with jiggle strength 0.
+
+The compositor scales a snapshot of the surface tree, preserving
+subsurfaces and buffer crops. Clients receive only the final size, and
+live content returns when the transition ends. The embedded editor is
+exempt from snapshot resizing; interactive drags track the pointer and
+add a brief jiggle when you release a moved or resized window. The final
+placement does not change. Fullscreen and embedded clients do not jiggle.
 
 @noindent
 The control surface:

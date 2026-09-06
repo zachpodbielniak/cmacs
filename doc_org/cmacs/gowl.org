@@ -558,17 +558,34 @@ focus change would move the world.
 
 *** Motion
 
-Windows slide to new positions rather than snapping, along a
-configurable easing curve.  gowl's =animations=,
-=animation-duration= (180 ms) and =animation-curve= control it; the
-curves are the ones Omarchy configures Hyprland with, by the same names
-in kebab-case.
+Windows open with a centered pop from 84% size and two diminishing
+squash/stretch bounces, and close with a quick squeeze and shrink. The fade completes
+before the entrance finishes, making the motion clearly visible.
+Position and size animate together on layout changes, with borders
+following the same rectangle. Repeated layout updates retain the
+animation clock instead of making the window trail behind.
 
-Only *position* is animated.  A window is configured to its final size
-the moment the layout decides it, and its node slides to meet it ---
-animating size as well would make every intermediate size a configure
-round-trip per window.  An interactive drag is exempt entirely, so
-dragging still tracks the pointer exactly.
+gowl's =animations= switch controls the effects. Defaults are
+=animation-duration= (260 ms for layout changes and release jiggles),
+=animation-duration-open= (360 ms), =animation-duration-close= (180 ms),
+=animation-popin-scale= (0.84), =animation-curve-open= (=ease-out-back=),
+and =animation-curve= (=ease-out-expo=). Set =animation-duration= to 0 to
+disable all animation; set an open or close duration to 0 to disable
+that effect alone. =animation-jiggle-strength= defaults to 1; use 0 to
+remove the jiggle, 0.5 for a softer effect, or 2 for double intensity.
+These settings live in =~/.config/gowl/config.yaml=.
+
+For an entrance closer to Omarchy's Hyprland defaults, use scale 0.87
+and the =ease-out-quint= entrance curve, with jiggle strength 0. The
+CMacs default adds a larger pop and squash/stretch for emphasis.
+
+The compositor scales a snapshot of the surface tree, including
+subsurfaces and cropped client decorations. Clients receive only the
+final size, and live content returns when the transition ends. The
+embedded editor frame is exempt from snapshot resizing. Interactive
+drags track the pointer directly, with a brief jiggle when you release a
+moved or resized window. The jiggle never changes the final placement.
+Fullscreen and embedded clients do not jiggle.
 
 ** One palette for editor and compositor
 :PROPERTIES:
