@@ -429,7 +429,7 @@ tag 1, the second views tag 2, and so on, up to nine monitors.  Re-run
 
 The tag-action keybinds act on the *focused* monitor: focus a monitor
 with =Super+,= / =Super+.=, then =Super+N= switches that monitor's
-tags, =Super+Shift+,= / =.= moves the focused client to the previous /
+tags, =Super+Ctrl+Shift+,= / =.= moves the focused client to the previous /
 next monitor.  Each monitor's bar shows its own tag state.
 
 Launching into a tag follows the tag to its monitor:
@@ -454,6 +454,7 @@ holds focus.
 | =Super+Shift+p=         | Run dialog (=cmacs-gowl-run-command=, wofi)  |
 | =Super+Shift+c=         | Kill focused client                     |
 | =Super+j= / =Super+k=   | Focus next / previous in stack          |
+| =Super+Shift+j= / =k=   | Swap with next / previous tiled window  |
 | =Super+h= / =Super+l=   | Shrink / grow the master area           |
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
@@ -472,10 +473,14 @@ holds focus.
 | =Super+0=               | View all tags                           |
 | =Super+Shift+0=         | Tag focused client to all tags          |
 | =Super+,= / =Super+.=   | Focus previous / next monitor           |
-| =Super+Shift+,= / =.=   | Move client to previous / next monitor  |
+| =Super+Ctrl+Shift+,= / =.= | Move client to previous / next monitor  |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
 | =Super+/=               | Show the keybind cheatsheet             |
+
+Super+Shift+j/k swap the focused window with the next/previous tiled
+window, wrapping at the ends. Focus stays on the moved window; floating
+windows and the dropdown are excluded. Super+j/k continue to change focus.
 
 Every one of these is registered with a *description*.  That is the
 fourth argument to =gowl-add-keybind=, it never affects dispatch, and
@@ -528,18 +533,26 @@ from a frozen cursor if you do not know a constraint exists.
 :CUSTOM_ID: layouts
 :END:
 
-Four layouts ship --- =tile=, =monocle=, =float= and =scrolling= ---
-plus whatever a loaded module registers.  =gowl-list-layouts= returns
-the live set, =gowl-set-layout= selects by name, =gowl-cycle-layout=
-walks them, and the control surface's =Compositor > Layout= entry is
-built from the same list rather than a hardcoded three.
+Tile, monocle, float and scrolling are separate Gowl plugins. CMacs
+loads all four before windows map; standalone Gowl enables layouts in
+its =modules= config. Additional layout plugins join the same list.
 
-That last point is not cosmetic.  Until recently the compositor had
-exactly two layouts reachable: =set_layout= mapped every argument that
-was not ="monocle"= onto tile, so a =Float layout= menu entry silently
-did tile, and =gowl-set-layout= reported success either way.  A picker
-built from =gowl-list-layouts= cannot drift from what the compositor
-will accept.
+=Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
+forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
+aliases. =Super+t= selects tile, =Super+s= scrolling, =Super+m= monocle,
+and =Super+f= float. Layout selection and scroll offset belong to the
+current tag view on the current monitor; changing one does not change
+another tag. A combined tag view keeps its own selection.
+
+=gowl-list-layouts= returns active layouts; =gowl-set-layout= selects a
+name and =gowl-cycle-layout= cycles the same list. Monitor-move shortcuts
+are now =Super+Ctrl+Shift+comma/period=; Super+comma/period still focus
+another monitor.
+
+CMacs shows a brief layout toast at the top of the active monitor when
+its layout changes. Rapid switches replace the toast; it disappears after
+1.2 seconds and never takes focus or intercepts clicks. Disable the
+layout-indicator module to hide these notices.
 
 *** The scrolling layout
 
@@ -557,6 +570,15 @@ it, and does nothing when it is already visible --- otherwise every
 focus change would move the world.
 
 *** Motion
+
+CMacs bundles and loads Gowl's =animation.so= module before windows map,
+including the early =--gowl= startup path. The module owns the motion
+engine; standalone Gowl leaves it unloaded until the user sets
+=modules.animation.enabled: true= in its configuration. Existing CMacs
+animation settings and defaults are unchanged. Disabling the module
+with =(gowl-disable-module "animation")= restores live windows and full
+effect opacity immediately; =(gowl-enable-module "animation")= enables it
+again. The =animations= setting remains a separate effects switch.
 
 Windows open with a centered pop from 84% size and two diminishing
 squash/stretch bounces, and close with a quick squeeze and shrink. The fade completes
@@ -586,6 +608,12 @@ embedded editor frame is exempt from snapshot resizing. Interactive
 drags track the pointer directly, with a brief jiggle when you release a
 moved or resized window. The jiggle never changes the final placement.
 Fullscreen and embedded clients do not jiggle.
+
+Keyboard focus cycling with Super+j/k gives the newly active window a
+small 220 ms wiggle while retaining the focus border color. It does not
+change window placement or interrupt an entrance or layout transition.
+It follows =animation-jiggle-strength= (0 disables it), and skips
+fullscreen and embedded windows.
 
 ** One palette for editor and compositor
 :PROPERTIES:
@@ -1980,6 +2008,14 @@ modal/popup windows out of the tiled layout:
   subsequent presses the window is hidden/shown without being
   destroyed, and re-positioned on the currently focused output.
 
+The default terminal spans the output width and two-thirds of its usable
+height. It is a fixed floating overlay: opening it never rearranges tiles,
+and move, resize, centering, and fullscreen shortcuts cannot displace it.
+Super+grave (also Super+Shift+grave / tilde) toggles it; focusing another
+app dismisses it while preserving the shell session. With the animation
+module enabled, it slides from its anchor edge and reverses smoothly when
+toggled mid-transition. Without animation, visibility changes immediately.
+
 ** YAML config
 
 #+begin_example
@@ -2007,7 +2043,7 @@ dropdowns:
     spawn-cmd: "foot"
     keybind: "Super+grave"
     width-pct: 1.0
-    height-pct: 0.4
+    height-pct: 0.666667
     anchor: top
 
   - name: btop
@@ -2063,7 +2099,7 @@ gowl config at mode-enable time.
          :spawn-cmd "foot"
          :keybind "Super+grave"
          :width-pct 1.0
-         :height-pct 0.4
+         :height-pct 0.666667
          :anchor top)
         (:name "btop"
          :spawn-cmd "foot -e btop"

@@ -365,7 +365,7 @@ CMACS_BACON_CFLAGS = @CMACS_BACON_CFLAGS@
 CMACS_BACON_LIBS = @CMACS_BACON_LIBS@
 CMACS_BACON_BUNDLED = @CMACS_BACON_BUNDLED@
 CMACS_GOWL_OBJ = @CMACS_GOWL_OBJ@
-CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@
+CMACS_GOWL_CFLAGS = @CMACS_GOWL_CFLAGS@ -DCMACS_GOWL_BUILDTYPE=\"$(CMACS_DEP_BUILDTYPE)\"
 CMACS_GOWL_LIBS = @CMACS_GOWL_LIBS@
 CMACS_GOWL_BUNDLED = @CMACS_GOWL_BUNDLED@
 CMACS_PODOMATION_OBJ = @CMACS_PODOMATION_OBJ@
@@ -723,7 +723,7 @@ ifeq ($(HAVE_NATIVE_COMP):$(NATIVE_DISABLED),yes:)
 all: ../native-lisp
 endif
 ifeq ($(CMACS_GOWL_BUNDLED),yes)
-all: $(GOWL_WALLPAPER_SO)
+all: cmacs-gowl-dep-modules
 endif
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 all: cmacs-bacon-dep-modules
@@ -994,11 +994,14 @@ $(CMACS_GOWL_STATIC_LIB): FORCE
 ## need gowl-version.h, which is generated during the gowl lib build.
 $(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
 
-## Build gowl wallpaper module .so (loaded at runtime, not linked into temacs).
-## gowl's own `make` builds this as part of its modules target.
-GOWL_WALLPAPER_SO = $(srcdir)/../deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules/wallpaper.so
-$(GOWL_WALLPAPER_SO): $(CMACS_GOWL_STATIC_LIB)
+## Build runtime modules, including the default animation engine. Always
+## delegate so module source/header changes and missing .so files are handled.
+.PHONY: cmacs-gowl-dep-modules
+cmacs-gowl-dep-modules: $(CMACS_GOWL_STATIC_LIB)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl modules
+## --gowl must have its required module even when building just src/emacs.
+emacs$(EXEEXT) temacs$(EXEEXT): | cmacs-gowl-dep-modules
+
 endif
 
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)

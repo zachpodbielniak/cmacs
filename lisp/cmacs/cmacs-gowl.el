@@ -203,11 +203,13 @@ standalone gowl ships with (see
   Super+Shift+p       run dialog (`cmacs-gowl-run-command')
   Super+Shift+c       kill focused client
   Super+j / Super+k   focus next / previous in stack
+  Super+Shift+j / k   move window next / previous in tiling stack
   Super+h / Super+l   shrink / grow master area
   Super+i / Super+d   increment / decrement master count
   Super+Shift+Return  zoom (promote to master)
   Super+t / f / m     tile / float / monocle layout
   Super+s             scrolling layout (niri-style columns)
+  Super+< / Super+>   previous / next layout on this tag
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
   Super+space         toggle floating
@@ -219,7 +221,7 @@ standalone gowl ships with (see
   Super+Ctrl+1..9     toggle visibility of tag N
   Super+Shift+Ctrl+N  toggle tag N on focused client
   Super+, / Super+.   focus previous / next monitor
-  Super+Shift+, / .   move focused client to previous / next monitor
+  Super+Ctrl+Shift+, / . move focused client to previous / next monitor
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
   Super+/             show the keybind cheatsheet
@@ -321,7 +323,7 @@ lands on the monitor whose workspace is tag 2."
      :spawn-cmd nil
      :keybind "Super+grave"
      :width-pct 1.0
-     :height-pct 0.4
+     :height-pct 0.666667
      :anchor top))
   "Guake-style dropdown entries managed by `cmacs-gowl-mode'.
 Each element is a plist:
@@ -451,7 +453,7 @@ terminal choice with a single setting."
                              cmacs-gowl-default-dropdown-terminal))
             (keybind     (plist-get dd :keybind))
             (width-pct   (or (plist-get dd :width-pct) 1.0))
-            (height-pct  (or (plist-get dd :height-pct) 0.4))
+            (height-pct  (or (plist-get dd :height-pct) 0.666667))
             (width       (or (plist-get dd :width) 0))
             (height      (or (plist-get dd :height) 0))
             (anchor      (or (plist-get dd :anchor) 'top)))
@@ -510,6 +512,8 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+c" 'kill-client nil "Close window")
         (bind "Super+j" 'focus-stack "+1" "Focus next window")
         (bind "Super+k" 'focus-stack "-1" "Focus previous window")
+        (bind "Super+Shift+j" 'move-stack "+1" "Move window next in stack")
+        (bind "Super+Shift+k" 'move-stack "-1" "Move window previous in stack")
         (bind "Super+h" 'set-mfact "-0.05" "Shrink master area")
         (bind "Super+l" 'set-mfact "+0.05" "Grow master area")
         (bind "Super+i" 'inc-nmaster "+1" "More master windows")
@@ -520,6 +524,8 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+f" 'set-layout "float" "Float layout")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
         (bind "Super+s" 'set-layout "scrolling" "Scrolling layout")
+        (bind "Super+Shift+comma" 'cycle-layout "-1" "Previous layout on this tag")
+        (bind "Super+Shift+period" 'cycle-layout "+1" "Next layout on this tag")
         (bind "Super+Tab" 'cycle-layout nil "Next layout")
         (bind "Super+Shift+Tab" 'cycle-layout "-1" "Previous layout")
         ;; Scroll the column strip.  Only meaningful in the scrolling
@@ -557,9 +563,9 @@ authoritative and keeps re-runs idempotent."
         ;; Multi-monitor.
         (bind "Super+comma" 'focus-monitor "-1" "Focus previous monitor")
         (bind "Super+period" 'focus-monitor "+1" "Focus next monitor")
-        (bind "Super+Shift+comma" 'move-to-monitor "-1"
+        (bind "Super+Ctrl+Shift+comma" 'move-to-monitor "-1"
               "Move window to previous monitor")
-        (bind "Super+Shift+period" 'move-to-monitor "+1"
+        (bind "Super+Ctrl+Shift+period" 'move-to-monitor "+1"
               "Move window to next monitor")
         ;; Session.
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")

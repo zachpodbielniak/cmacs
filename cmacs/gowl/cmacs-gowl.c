@@ -1452,10 +1452,10 @@ cmacs_gowl_key_intercept (GowlCompositor *comp,
      0. $CMACS_GOWL_MODULE_DIR/<name>.so  (explicit override, e.g. set
         by `just run`/`just gowl` so local testing always uses the
         freshly-built modules instead of any system-installed copy);
-     1. the in-tree dev build (<exe-dir>/../deps/gowl/build/release/...);
-     2. the system install dir GOWL_MODULEDIR (where gowl's own
-        `make install' lands modules, e.g. /usr/lib64/gowl/modules);
-     3. the installed libexec location (PATH_EXEC from epaths.h).
+     1. the in-tree dev build (<exe-dir>/../deps/gowl/build/<build-type>/...);
+     2. the bundled libexec location (PATH_EXEC from epaths.h);
+     3. the system install dir GOWL_MODULEDIR (where gowl's own
+        `make install' lands modules, e.g. /usr/lib64/gowl/modules).
    Returns a newly allocated path or NULL if not found. */
 static gchar *
 cmacs_gowl_find_module (const gchar *name)
@@ -1477,19 +1477,28 @@ cmacs_gowl_find_module (const gchar *name)
         return g_steal_pointer (&env_path);
     }
 
-  /* 1. In-tree: <exe-dir>/../deps/gowl/build/release/modules/<name>.so */
+  /* 1. In-tree, matching the dependency build linked into this executable. */
   exe_path = g_file_read_link ("/proc/self/exe", NULL);
   if (exe_path != NULL)
     {
       g_autofree gchar *bin_dir = g_path_get_dirname (exe_path);
       dev_path = g_build_filename (bin_dir, "..", "deps", "gowl",
-                                   "build", "release", "modules",
+                                   "build", CMACS_GOWL_BUILDTYPE, "modules",
                                    so_name, NULL);
       if (g_file_test (dev_path, G_FILE_TEST_EXISTS))
         return g_steal_pointer (&dev_path);
     }
 
-  /* 2. System install dir: the compile-time GOWL_MODULEDIR, which is
+  /* 2. Bundled install: PATH_EXEC/gowl-modules/<name>.so
+     PATH_EXEC is archlibdir (e.g. /usr/libexec/emacs/31.0.50/x86_64-...) */
+  {
+    g_autofree gchar *inst_path =
+      g_build_filename (PATH_EXEC, "gowl-modules", so_name, NULL);
+    if (g_file_test (inst_path, G_FILE_TEST_EXISTS))
+      return g_steal_pointer (&inst_path);
+  }
+
+  /* 3. System install dir: the compile-time GOWL_MODULEDIR, which is
      where gowl's own `make install' lands modules (MODULEDIR =
      LIBDIR/gowl/modules, e.g. /usr/lib64/gowl/modules).  This is what
      makes an installed cmacs find its modules without the env
@@ -1505,17 +1514,42 @@ cmacs_gowl_find_module (const gchar *name)
   }
 #endif
 
-  /* 3. Installed: PATH_EXEC/gowl-modules/<name>.so
-     PATH_EXEC is archlibdir (e.g. /usr/libexec/emacs/31.0.50/x86_64-...) */
-  {
-    g_autofree gchar *inst_path =
-      g_build_filename (PATH_EXEC, "gowl-modules", so_name, NULL);
-    if (g_file_test (inst_path, G_FILE_TEST_EXISTS))
-      return g_steal_pointer (&inst_path);
-  }
-
   g_debug ("gowl: module '%s' not found", name);
   return NULL;
+}
+
+/* Load required plugins before clients map, including pre-Lisp startup. */
+gboolean
+cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
+{
+  const gchar *names[] = { "tile", "monocle", "float", "scrolling", "animation", "layout-indicator" };
+  GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
+  guint i;
+  for (i = 0; i < G_N_ELEMENTS (names); i++)
+    {
+      GowlModule *mod = gowl_module_manager_find_module (mgr, names[i]);
+      g_autofree gchar *path = NULL;
+      if (mod == NULL)
+        {
+          path = cmacs_gowl_find_module (names[i]);
+          if (path == NULL)
+            {
+              g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_NOENT,
+                           "Required Gowl module %s not found; rebuild bundled modules", names[i]);
+              return FALSE;
+            }
+          if (!gowl_module_manager_load_module (mgr, path, error)) return FALSE;
+          mod = gowl_module_manager_find_module (mgr, names[i]);
+          if (mod == NULL || !gowl_module_activate (mod))
+            {
+              g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+                           "Failed to activate Gowl module %s", names[i]);
+              return FALSE;
+            }
+        }
+    }
+  gowl_layout_adopt_providers (comp);
+  return TRUE;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1531,13 +1565,22 @@ the event loop source and returns. */)
 {
   GError *err = NULL;
 
-  /* If already started (e.g. via --gowl early init), load modules
-     (the early path creates an empty module manager), set up the
+  /* If already started (e.g. via --gowl early init), load remaining
+     default modules, set up the
      intercept/timer, and ensure the dispatch thread is running. */
   if (cmacs_gowl_compositor != NULL)
     {
-      /* Load bundled modules if the manager is still empty
-         (--gowl early path doesn't load any). */
+      cmacs_gowl_lock ();
+      if (!cmacs_gowl_load_default_modules (cmacs_gowl_compositor, &err))
+        {
+          cmacs_gowl_unlock ();
+          Lisp_Object msg = build_string (err->message);
+          g_error_free (err);
+          xsignal1 (Qgowl_error, msg);
+        }
+
+      /* The early path already loaded animation; attach the other
+         bundled defaults before dispatching startup hooks. */
       {
         GowlModuleManager *mgr =
           gowl_compositor_get_module_manager (cmacs_gowl_compositor);
@@ -1558,6 +1601,8 @@ the event loop source and returns. */)
                                                   cmacs_gowl_compositor);
           }
       }
+
+      cmacs_gowl_unlock ();
 
       gowl_compositor_set_key_intercept (cmacs_gowl_compositor,
                                          cmacs_gowl_key_intercept,
@@ -1636,6 +1681,13 @@ the event loop source and returns. */)
     gowl_module_manager_activate_all (mgr);
     gowl_compositor_set_module_manager (cmacs_gowl_compositor, mgr);
   }
+
+  if (!cmacs_gowl_load_default_modules (cmacs_gowl_compositor, &err))
+    {
+      Lisp_Object msg = build_string (err->message);
+      g_error_free (err);
+      xsignal1 (Qgowl_error, msg);
+    }
 
   if (!gowl_compositor_start (cmacs_gowl_compositor, &err))
     {
@@ -4008,8 +4060,8 @@ DEFUN ("gowl-set-layout", Fgowl_set_layout, Sgowl_set_layout, 1, 2, 0,
        doc: /* Set LAYOUT on MONITOR.
 LAYOUT is a layout name: \"tile\", \"monocle\", \"float\",
 \"scrolling\", or any layout a loaded module registered.  See
-`gowl-list-layouts'.  MONITOR is currently ignored; the layout applies
-to the focused monitor.
+`gowl-list-layouts'.  Selection applies only to MONITOR's current tag
+view; nil means the focused monitor.
 
 Returns t when LAYOUT named a registered layout, nil otherwise.
 
@@ -4023,17 +4075,19 @@ So it worked only by accident, and reported success either way. */)
   CHECK_STRING (layout);
   GOWL_CHECK_RUNNING ();
 
-  (void) monitor;  /* the layout applies to the focused monitor */
-
-  return gowl_layout_set (cmacs_gowl_compositor, NULL, SSDATA (layout))
-         ? Qt : Qnil;
+  {
+    gboolean changed;
+    cmacs_gowl_lock ();
+    changed = gowl_layout_set (cmacs_gowl_compositor, gowl_resolve_monitor (monitor), SSDATA (layout));
+    cmacs_gowl_unlock ();
+    return changed ? Qt : Qnil;
+  }
 }
 
 DEFUN ("gowl-list-layouts", Fgowl_list_layouts, Sgowl_list_layouts,
        0, 0, 0,
        doc: /* Return the registered layout names, as a list of strings.
-Includes the built-ins and any layout a loaded module registered --- a
-module layout is selectable by name exactly like a built-in. */)
+All layouts are provided by active plugins. */)
   (void)
 {
   GList *names, *l;
@@ -4063,8 +4117,14 @@ With STEP negative, move backwards.  Wraps at both ends. */)
   if (FIXNUMP (step))
     n = (gint) XFIXNUM (step);
 
-  name = gowl_layout_cycle (cmacs_gowl_compositor, NULL, n);
-  return name ? build_string (name) : Qnil;
+  {
+    g_autofree gchar *copy = NULL;
+    cmacs_gowl_lock ();
+    name = gowl_layout_cycle (cmacs_gowl_compositor, NULL, n);
+    copy = g_strdup (name);
+    cmacs_gowl_unlock ();
+    return copy ? build_string (copy) : Qnil;
+  }
 }
 
 DEFUN ("gowl-scroll-by", Fgowl_scroll_by, Sgowl_scroll_by, 1, 1, 0,
@@ -4076,8 +4136,10 @@ layout, so pushing past either end is harmless. */)
   CHECK_FIXNUM (dx);
   GOWL_CHECK_RUNNING ();
 
+  cmacs_gowl_lock ();
   gowl_compositor_scroll_by (cmacs_gowl_compositor, NULL,
                              (gint) XFIXNUM (dx));
+  cmacs_gowl_unlock ();
   return Qt;
 }
 
@@ -4086,7 +4148,8 @@ DEFUN ("gowl-add-keybind", Fgowl_add_keybind, Sgowl_add_keybind,
        doc: /* Add a keybind.  KEY is a string like \"Super+Return\".
 ACTION is a symbol naming a gowl action, or its integer value.  The
 symbol names are gowl's own action nicks -- `spawn', `kill-client',
-`toggle-float', `toggle-fullscreen', `focus-stack', `focus-monitor',
+`toggle-float', `toggle-fullscreen', `focus-stack', `move-stack',
+`focus-monitor',
 `tag-view', `tag-set', `tag-toggle-view', `tag-toggle',
 `move-to-monitor', `set-mfact', `inc-nmaster', `set-layout',
 `cycle-layout', `set-split', `zoom', `quit', `reload-config',
@@ -4486,8 +4549,13 @@ Example — toggle the first dropdown bound to Super+grave (keysym
     return Qnil;
   mods = (guint)XFIXNAT (modifiers);
   sym  = (guint)XFIXNAT (keysym);
-  return gowl_module_manager_dispatch_key (mgr, mods, sym, TRUE)
-           ? Qt : Qnil;
+  {
+    gboolean handled;
+    cmacs_gowl_lock ();
+    handled = gowl_module_manager_dispatch_key (mgr, mods, sym, TRUE);
+    cmacs_gowl_unlock ();
+    return handled ? Qt : Qnil;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -4511,7 +4579,7 @@ precedence when non-zero.  ANCHOR is a symbol: `top', `bottom',
   GowlConfig *config;
   const gchar *keybind_str = NULL;
   gdouble wp = 1.0;
-  gdouble hp = 0.4;
+  gdouble hp = 2.0 / 3.0;
   gint    wa = 0;
   gint    ha = 0;
   gint    anc = 0;
@@ -4595,7 +4663,9 @@ module is loaded. */)
   prov = cmacs_gowl_find_dropdown_provider ();
   if (prov == NULL)
     return Qnil;
+  cmacs_gowl_lock ();
   adopted = gowl_dropdown_provider_refresh (prov);
+  cmacs_gowl_unlock ();
   return make_fixnum ((EMACS_INT)adopted);
 }
 
@@ -4651,7 +4721,10 @@ lets callers type `(gowl-dropdown-toggle)' for the common case. */)
       }
     }
   {
-    gboolean toggled = gowl_dropdown_provider_toggle_by_name (prov, target);
+    gboolean toggled;
+    cmacs_gowl_lock ();
+    toggled = gowl_dropdown_provider_toggle_by_name (prov, target);
+    cmacs_gowl_unlock ();
     g_free (first_name);
     return toggled ? Qt : Qnil;
   }
@@ -5285,38 +5358,44 @@ found or fails to load. */)
   if (mgr == NULL)
     error ("No module manager");
 
-  /* Already loaded? */
-  mod = cmacs_gowl_find_loaded_module (SSDATA (name));
-  if (mod != NULL)
-    {
-      if (!gowl_module_get_is_active (mod))
-        gowl_module_activate (mod);
-      return Qt;
-    }
-
-  /* Find the .so */
-  so_path = cmacs_gowl_find_module (SSDATA (name));
-  if (so_path == NULL)
-    xsignal1 (Qgowl_error,
-              concat3 (build_string ("Module not found: "),
-                       name, empty_unibyte_string));
-
-  if (!gowl_module_manager_load_module (mgr, so_path, &err))
-    xsignal1 (Qgowl_error, build_string (err->message));
-
-  /* Look up the module by name — safer than assuming list position. */
+  /* Scene-effect activation and startup mutate the scene. Serialize
+     them with the compositor frame loop, including reactivation. */
+  cmacs_gowl_lock ();
   mod = cmacs_gowl_find_loaded_module (SSDATA (name));
   if (mod == NULL)
-    xsignal1 (Qgowl_error,
-              concat3 (build_string ("Module loaded but not found: "),
-                       name, empty_unibyte_string));
-
-  gowl_module_activate (mod);
-
-  /* Dispatch startup if the module implements the interface. */
-  if (GOWL_IS_STARTUP_HANDLER (mod))
-    gowl_startup_handler_on_startup (GOWL_STARTUP_HANDLER (mod),
-                                     cmacs_gowl_compositor);
+    {
+      so_path = cmacs_gowl_find_module (SSDATA (name));
+      if (so_path == NULL)
+        g_set_error (&err, G_FILE_ERROR, G_FILE_ERROR_NOENT,
+                     "Module not found: %s", SSDATA (name));
+      else if (gowl_module_manager_load_module (mgr, so_path, &err))
+        {
+          mod = cmacs_gowl_find_loaded_module (SSDATA (name));
+          if (mod == NULL)
+            g_set_error (&err, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+                         "Module loaded but not found: %s", SSDATA (name));
+        }
+    }
+  if (mod != NULL && !gowl_module_get_is_active (mod))
+    {
+      if (!gowl_module_activate (mod))
+        g_set_error (&err, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+                     "Module activation failed: %s", SSDATA (name));
+      else if (GOWL_IS_STARTUP_HANDLER (mod))
+        gowl_startup_handler_on_startup (GOWL_STARTUP_HANDLER (mod),
+                                         cmacs_gowl_compositor);
+    }
+  gowl_layout_adopt_providers (cmacs_gowl_compositor);
+  if (mod != NULL && GOWL_IS_LAYOUT_PROVIDER (mod))
+    {
+      GList *monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+      GList *item;
+      for (item = monitors; item != NULL; item = item->next)
+        gowl_compositor_arrange (cmacs_gowl_compositor, item->data);
+    }
+  cmacs_gowl_unlock ();
+  if (err != NULL)
+    xsignal1 (Qgowl_error, build_string (err->message));
 
   return Qt;
 }
@@ -5332,13 +5411,19 @@ Deactivates the module.  Returns t if found, nil otherwise. */)
   CHECK_STRING (name);
   GOWL_CHECK_RUNNING ();
 
+  cmacs_gowl_lock ();
   mod = cmacs_gowl_find_loaded_module (SSDATA (name));
-  if (mod == NULL)
-    return Qnil;
-
-  if (gowl_module_get_is_active (mod))
+  if (mod != NULL && gowl_module_get_is_active (mod))
     gowl_module_deactivate (mod);
-  return Qt;
+  if (mod != NULL && GOWL_IS_LAYOUT_PROVIDER (mod))
+    {
+      GList *monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+      GList *item;
+      for (item = monitors; item != NULL; item = item->next)
+        gowl_compositor_arrange (cmacs_gowl_compositor, item->data);
+    }
+  cmacs_gowl_unlock ();
+  return mod != NULL ? Qt : Qnil;
 }
 
 DEFUN ("gowl-configure-module", Fgowl_configure_module,

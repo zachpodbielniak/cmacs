@@ -2168,7 +2168,10 @@ to toggle its visibility, @kbd{Shift+Ctrl} to toggle it on the client.
 @item Super+0
 View all tags; @kbd{Super+Shift+0} tags the client to all.
 @item Super+, / Super+.
-Focus previous / next monitor (@kbd{Shift} moves the client).
+Focus previous / next monitor (@kbd{Ctrl+Shift} moves the client).
+@item Super+Shift+j / Super+Shift+k
+Swap with the next / previous tiled window, wrapping at the ends.
+Focus stays on the moved window; floating windows and dropdowns stay put.
 @item Super+Shift+q
 Quit the compositor.  @strong{Under @option{--gowl} this quits Emacs.}
 @item Super+Shift+r
@@ -2752,7 +2755,7 @@ Layouts:
 @table @code
 @item gowl-list-layouts
 @vindex gowl-list-layouts
-The registered layout names --- the four built-ins (@code{tile},
+The registered layout names --- the four default plugins (@code{tile},
 @code{monocle}, @code{float}, @code{scrolling}) plus any a loaded
 module registered.
 @item gowl-set-layout NAME &optional MONITOR
@@ -2768,12 +2771,39 @@ The current layout's symbol.
 Scroll the scrolling layout's column strip by DX pixels.
 @end table
 
+All layouts are plugins. CMacs loads @file{tile.so}, @file{monocle.so},
+@file{float.so}, and @file{scrolling.so} before windows map. Standalone
+Gowl selects enabled layout modules in its configuration.
+
+@kbd{Super+<} and @kbd{Super+>} cycle layouts on the current tag view
+only; @kbd{Super+Tab} and @kbd{Super+Shift+Tab} remain aliases. Each tag
+view remembers its layout and scroll offset independently. Combined tag
+views have their own selection. Moving a window between monitors now
+uses @kbd{Super+Ctrl+Shift+comma/period}.
+
+CMacs shows a brief layout toast at the top of the active monitor when
+its layout changes. Rapid switches replace the toast; it disappears after
+1.2 seconds and never takes focus or intercepts clicks. Disable the
+layout-indicator module to hide these notices.
+
 The scrolling layout is a niri-style horizontal strip: full-height
 columns laid left to right, with the viewport scrolling along them
 rather than windows being squeezed to fit.  @kbd{Super+s} selects it,
 @kbd{Super+[} and @kbd{Super+]} scroll.  Its column width is gowl's
 @code{scroll-column-width}, named after Hyprland's
 @code{scrolling.column_width} so a config translates.
+
+CMacs bundles and loads Gowl's @file{animation.so} module before windows
+map, including early @code{--gowl} startup. Standalone Gowl requires
+@code{modules.animation.enabled: true} to load it. Existing animation
+settings and defaults are preserved. @code{(gowl-disable-module "animation")}
+restores live windows immediately; @code{(gowl-enable-module "animation")}
+enables the module again.
+
+Super+j/k focus cycling adds a small 220 ms wiggle to the newly active
+window, retaining its focus border color and placement. It follows
+@code{animation-jiggle-strength}, skips fullscreen and embedded windows,
+and leaves ongoing entrance and layout transitions alone.
 
 Windows open with a centered pop from 84% size and two diminishing
 squash/stretch bounces, and close with a quick squeeze and shrink. Opacity reaches the
@@ -4007,6 +4037,14 @@ window, and re-compute the target geometry for the currently
 focused output so the dropdown follows the user's focus across
 monitors.
 
+The default terminal spans the output width and two-thirds of its usable
+height. It is a fixed floating overlay: opening it never rearranges tiles,
+and move, resize, centering, and fullscreen shortcuts cannot displace it.
+Super+grave (also Super+Shift+grave / tilde) toggles it; focusing another
+app dismisses it while preserving the shell session. With the animation
+module enabled, it slides from its anchor edge and reverses smoothly when
+toggled mid-transition. Without animation, visibility changes immediately.
+
 YAML schema:
 
 @example
@@ -4015,7 +4053,7 @@ dropdowns:
     spawn-cmd: "foot"
     keybind: "Super+grave"
     width-pct: 1.0
-    height-pct: 0.4
+    height-pct: 0.666667
     anchor: top
   - name: btop
     spawn-cmd: "foot -e btop"

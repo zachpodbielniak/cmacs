@@ -191,6 +191,7 @@ extern GowlCompositor *cmacs_gowl_compositor;
 extern GowlCompositor *gowl_compositor;
 extern GowlConfig     *gowl_config;
 extern void cmacs_gowl_start_thread (void);
+extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 #endif
 
@@ -1700,6 +1701,13 @@ android_emacs_init (int argc, char **argv, char *dump_file)
 
             mgr = gowl_module_manager_new ();
             gowl_compositor_set_module_manager (comp, mgr);
+
+            if (!cmacs_gowl_load_default_modules (comp, &err))
+              {
+                fprintf (stderr, "cmacs: %s\n", err->message);
+                g_error_free (err);
+                exit (1);
+              }
 
             if (!gowl_compositor_start (comp, &err))
               {
