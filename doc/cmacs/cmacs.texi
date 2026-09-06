@@ -2781,17 +2781,38 @@ view remembers its layout and scroll offset independently. Combined tag
 views have their own selection. Moving a window between monitors now
 uses @kbd{Super+Ctrl+Shift+comma/period}.
 
+@kbd{Super+Shift+c} closes ordinary windows, but cannot close a window
+owned by the main CMacs process. An attempted close shows ``Can't close
+CMacs: it owns this session'' for 1.2 seconds. Repeated presses refresh
+the notice and remain blocked. Separate Emacs processes are still
+closable. Use the normal Emacs quit command (or @kbd{Super+Shift+q}) to
+end the session deliberately.
+
 CMacs shows a brief layout toast at the top of the active monitor when
 its layout changes. Rapid switches replace the toast; it disappears after
 1.2 seconds and never takes focus or intercepts clicks. Disable the
 layout-indicator module to hide these notices.
 
-The scrolling layout is a niri-style horizontal strip: full-height
-columns laid left to right, with the viewport scrolling along them
-rather than windows being squeezed to fit.  @kbd{Super+s} selects it,
+Layouts adapt to each monitor's current logical dimensions on every
+arrangement, including live mode and rotation changes. When height is
+greater than width, tile puts the master above the stack (a horizontal
+split), scrolling runs top to bottom, centered-master uses a central
+horizontal band, and Fibonacci starts with a horizontal split. Square
+and landscape monitors keep the normal orientation. Bars and gaps do
+not affect this decision, and monitors choose independently. Monocle
+still fills the usable area; floating windows retain their positions.
+An explicitly enabled @code{vsplit} continues to select top/bottom tiling
+on landscape and square monitors too.
+
+The scrolling layout is a niri-style strip: full-height columns laid left
+to right on landscape and square monitors, or full-width rows running top
+to bottom on portrait monitors. The viewport scrolls along them instead
+of squeezing windows to fit.  @kbd{Super+s} selects it,
 @kbd{Super+[} and @kbd{Super+]} scroll.  Its column width is gowl's
 @code{scroll-column-width}, named after Hyprland's
-@code{scrolling.column_width} so a config translates.
+@code{scrolling.column_width} so a config translates. This setting is a
+fraction of usable width on landscape and square monitors, or usable
+height on portrait monitors (default 0.5; 1.0 shows one window).
 
 CMacs bundles and loads Gowl's @file{animation.so} module before windows
 map, including early @code{--gowl} startup. Standalone Gowl requires

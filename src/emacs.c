@@ -191,6 +191,7 @@ extern GowlCompositor *cmacs_gowl_compositor;
 extern GowlCompositor *gowl_compositor;
 extern GowlConfig     *gowl_config;
 extern void cmacs_gowl_start_thread (void);
+extern void cmacs_gowl_install_close_protection (GowlCompositor *);
 extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 #endif
@@ -1617,6 +1618,8 @@ android_emacs_init (int argc, char **argv, char *dump_file)
                 exit (1);
               }
 
+            cmacs_gowl_install_close_protection (comp);
+
             config = gowl_config_new ();
 
             /* Load user YAML config from the search path.  The two
@@ -1716,6 +1719,10 @@ android_emacs_init (int argc, char **argv, char *dump_file)
                 g_error_free (err);
                 exit (1);
               }
+
+            /* Default module startup hooks must be ready before the first
+               window maps, including session-protection toasts under -Q. */
+            gowl_module_manager_dispatch_startup (mgr, comp);
 
             socket = gowl_compositor_get_socket_name (comp);
             if (socket != NULL)

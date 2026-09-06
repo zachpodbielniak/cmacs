@@ -1556,6 +1556,30 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
  * COMPOSITOR LIFECYCLE
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* Keep the hosting Emacs process alive when users close a run of windows.
+   Compare peer credentials, not app-id/title: unrelated Emacs processes
+   remain ordinary closable clients. This callback runs under the Gowl lock. */
+static gboolean
+cmacs_gowl_protect_session_close (GowlCompositor *compositor,
+                                  GowlClient *client, gpointer data)
+{
+  if (gowl_client_get_pid (client) != getpid ())
+    return FALSE;
+
+  GowlMonitor *monitor = gowl_client_get_monitor (client);
+  if (monitor != NULL)
+    g_signal_emit_by_name (compositor, "toast-requested", monitor,
+                          "Can't close CMacs: it owns this session");
+  return TRUE;
+}
+
+void
+cmacs_gowl_install_close_protection (GowlCompositor *compositor)
+{
+  g_signal_connect (compositor, "client-close-request",
+                    G_CALLBACK (cmacs_gowl_protect_session_close), NULL);
+}
+
 DEFUN ("gowl-start", Fgowl_start, Sgowl_start, 0, 0, 0,
        doc: /* Create and start the gowl Wayland compositor.
 Returns non-nil on success.  Signals an error if already running.
@@ -1648,6 +1672,8 @@ the event loop source and returns. */)
   if (cmacs_gowl_compositor == NULL)
     xsignal1 (Qgowl_error,
               build_string ("Failed to create GowlCompositor"));
+
+  cmacs_gowl_install_close_protection (cmacs_gowl_compositor);
 
   /* Create a default config.  Do NOT load ~/.config/gowl/config.yaml
      or any search-path config — when embedded, the application (cmacs)
@@ -2397,7 +2423,10 @@ DEFUN ("gowl-close-client", Fgowl_close_client, Sgowl_close_client,
        doc: /* Close CLIENT window. */)
   (Lisp_Object client)
 {
-  gowl_client_close (gowl_resolve_client (client));
+  GowlClient *resolved = gowl_resolve_client (client);
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  gowl_client_close (resolved);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
   return Qnil;
 }
 

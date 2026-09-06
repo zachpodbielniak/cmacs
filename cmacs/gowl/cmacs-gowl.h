@@ -18,6 +18,8 @@
 
 /* Start the compositor dispatch thread. */
 extern void cmacs_gowl_start_thread (void);
+/* Install before mapping host windows, including early --gowl startup. */
+extern void cmacs_gowl_install_close_protection (GowlCompositor *);
 extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
 
 /* Launch COMMAND (a shell-style command line, parsed with
