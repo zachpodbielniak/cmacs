@@ -10822,6 +10822,26 @@ That checks the pkg-config modules and tools the build actually uses
 the ones that fail the build from the ones that merely narrow a
 feature.
 
+To get the package @emph{names} rather than have them installed ---
+to paste into a Containerfile, an image build, a ticket, or another
+machine --- @command{make deps-list} prints one ready-to-run install
+command and nothing else on stdout:
+
+@example
+make deps-list            # this machine's distro
+make deps-list-fedora     # sudo dnf install -y ...
+make deps-list-ubuntu     # sudo apt-get install -y ...
+make deps-list-arch       # sudo pacman -S --needed --noconfirm ...
+make deps-list-macos      # brew install ...
+make deps-list-freebsd    # sudo pkg install -y ...
+@end example
+
+Everything explanatory goes to stderr, so
+@code{make deps-list-arch 2>/dev/null} is a clean one-liner and
+@code{make deps-list | bash} works.  These targets run in an
+@emph{unconfigured} tree --- that is the point of them, since the
+machine that needs the list is the one that cannot configure yet.
+
 @subsection Distro Detection
 
 @file{install-deps} picks its package list from @file{/etc/os-release}:
@@ -11197,6 +11217,246 @@ Markdown conversion or extra build dependency is needed.
 The script is a clean no-op on a tree without @file{deps/}, so an
 upstream-style build is unaffected.
 @end itemize
+
+@section Container Images
+
+Building cmacs from source on a small machine is genuinely slow --- on
+a two- or four-core box it runs for hours.  The container images exist
+so that machine never has to: cmacs is built once, centrally, and the
+result is unpacked onto the host.
+
+The image is a @code{FROM scratch} stage holding only @file{/usr} and
+@file{/etc}, so ``installing'' it is a copy.  That is also how
+immutablue consumes it.
+
+@subsection Building
+
+@example
+./build-container                 # Fedora 44, the default
+./build-container 44 --push       # Fedora 44    -> quay.io/.../cmacs:44
+./build-container 24.04 --push    # Ubuntu 24.04 -> :24.04
+./build-container 26.04 --push    # Ubuntu 26.04 -> :26.04
+./build-container arch --push     # Arch Linux   -> :arch
+@end example
+
+There is one positional argument and no @code{--distro} flag to
+forget: the target is inferred from its @emph{shape}.
+
+@multitable @columnfractions .25 .50 .15
+@headitem Argument @tab Base image @tab Family
+@item @code{arch}, @code{archlinux}
+@tab @code{docker.io/library/archlinux:latest} @tab arch
+@item @code{NN.NN} (@code{24.04})
+@tab @code{docker.io/library/ubuntu:24.04} @tab ubuntu
+@item @code{NN} (@code{44})
+@tab @code{registry.fedoraproject.org/fedora:44} @tab fedora
+@end multitable
+
+The tag is always
+@code{quay.io/zachpodbielniak/cmacs:<what you typed>}.  Override the
+registry with @env{REGISTRY=}.  Anything after @code{--} is passed
+straight through to buildah.
+
+The Containerfile takes three arguments from the script ---
+@code{BASE_IMAGE}, @code{CMACS_DISTRO}, @code{CMACS_RELEASE} --- and
+@code{CMACS_DISTRO} selects the package manager.  Everything after the
+package install is identical across distros, because it is all
+@command{make}.
+
+The per-distro package lists live in the Containerfile rather than
+calling @file{./install-deps}, deliberately: a container needs things
+a developer's machine already has (@command{curl}, @command{git},
+@code{ca-certificates}) and does not want things a developer does.
+@file{install-deps} remains the source of truth for the @emph{host}
+install question, which is what @command{make deps-list} answers.
+
+@subsection Ubuntu 24.04 and the Bundled Wayland Stack
+
+Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22 and pixman 0.42;
+gowl needs wlroots >= 0.19, which in turn needs wayland >= 1.23.1 and
+pixman >= 0.43.  The builder therefore compiles wayland,
+wayland-protocols, pixman and wlroots from source for that target ---
+and @emph{only} for that target.  The probe is on @command{pkg-config},
+not on the distro version, so a release that starts shipping a new
+enough wlroots stops building one without anyone editing the file.
+Fedora 44, Arch and Ubuntu 26.04 all take the fast path today.
+
+Two things about this are easy to get wrong, and both fail
+@emph{silently}:
+
+@itemize @bullet
+@item
+@strong{libdir.}  Installing to @file{/usr/lib} on Debian/Ubuntu does
+not shadow the distro's libraries --- @file{/usr/lib/<triplet>/pkgconfig}
+is searched first, so meson cheerfully reports ``found 1.22.0 but need
+>=1.23.1'' with a freshly built 1.23.1 sitting in @file{/usr/lib}.  The
+libdir is taken from @code{dpkg-architecture -qDEB_HOST_MULTIARCH}.
+@item
+@strong{Staging.}  The final image is only @file{/build/stage}, so a
+library built here and installed into the builder's @file{/usr} is not
+in the image.  The result would link against wayland 1.23 symbols and
+land on a host that has 1.22.  Each component is installed twice: once
+into the builder so cmacs can build against it, and once into a
+scratch @env{DESTDIR} whose @emph{libdir alone} is copied into the
+stage.  Headers are deliberately left behind --- the image must not
+shadow the distro's wayland headers for anything else the user
+compiles.
+@end itemize
+
+libwayland and pixman have only ever added to their ABI, so the newer
+copies satisfy every existing consumer, and wlroots 0.19 carries its
+version in its soname and coexists with the distro's 0.17.  The one
+standing caveat is that a later @command{apt upgrade} of
+@code{libwayland-server0} repoints the soname symlink back at the
+distro's build; re-running @file{install-from-container} puts it right, and
+the script says so when the image it installed was a bundled-Wayland
+one.
+
+@subsection Older Distros Diverge Invisibly
+
+Two build failures showed up only on Fedora 43, and both were invisible
+on the machine where the code was written.  They are worth reading
+together, because the shape is the same and it will happen again.
+
+wlroots @strong{0.19} pulls generated protocol headers in by bare name
+--- @code{wlr_pointer_constraints_v1.h} does
+@code{#include "pointer-constraints-unstable-v1-protocol.h"} --- so
+every consumer has to run @command{wayland-scanner} over the XML
+itself.  @strong{0.20} replaced those with
+@code{#include <wayland-protocols/...-enum.h>}, which wayland-protocols
+now installs, so nothing needs generating.  gowl's @code{PROTO_HDRS}
+covered three of those headers but not pointer-constraints, tablet-v2
+or ext-image-copy-capture, and Fedora 43 could not build gowl at all.
+
+The reason nobody saw it: gowl builds against the @emph{newest} wlroots
+present, so a machine carrying both versions always compiles the 0.20
+path.  It could only fail on a 0.19-only distro, which Fedora 43 is and
+which Immutablue still ships.
+@file{deps/gowl/tests/test-protocol-headers.sh} now walks @emph{every
+installed} wlroots version rather than the selected one; checking only
+the selected version would reproduce the original blind spot exactly.
+
+Separately, @code{EIS_EVENT_SEAT_DEVICE_REQUESTED} arrived in libeis
+1.6 and Fedora 43 ships 1.5, where naming it is a compile error.  The
+portal's Makefile probes with
+@code{pkg-config --atleast-version=1.6 libeis-1.0} and guards the case
+label.  Dropping it on 1.5 is behaviour-neutral --- the enumerator does
+not exist because the protocol version that emits it does not either,
+so a libei 1.6 client negotiating with a 1.5 server falls back to
+@code{EIS_EVENT_SEAT_BIND}, the label immediately above it, taking the
+same branch.
+
+The general rule: a dependency that ships two coexisting versions
+resolves to the newer one on any machine that has both, and the older
+path gets no coverage until it reaches a distro that has only the older
+one --- typically inside a container build, the slowest place to find
+out.  Prefer a check that inspects every version installed over one
+that inspects the version that would be chosen.  @code{make
+WLROOTS=0.19} builds gowl against the older wlroots explicitly, which
+is far cheaper than a container round trip.
+
+@subsection Installing Onto a Host
+
+@example
+sudo ./install-from-container             # detect this distro, pull, install
+sudo ./install-from-container             # ...and again, to update
+./install-from-container --check          # is an update available?
+./install-from-container --dry-run        # show what would change
+sudo ./install-from-container arch        # force a target
+./install-from-container --prefix /tmp/x  # unpack elsewhere, no root
+sudo ./install-from-container --local     # use an already-pulled image
+@end example
+
+Or through @command{just}: @code{just install-from-container},
+@code{just container-check}.
+
+The target is detected from @file{/etc/os-release} with the same
+@code{ID} then @code{ID_LIKE} fall-through @file{install-deps} uses, so
+derivatives resolve to their base.
+
+@subsubsection Updating Is the Same Command
+
+There is no separate update path.  A second run copies the new image
+over the top and then @emph{removes the files the previous image had
+and this one does not}.
+
+That prune step is why the install keeps a manifest at
+@file{/usr/share/cmacs/container-manifest} --- every path it wrote, one
+per line.  Without it a renamed library or a dropped module lingers
+forever and @command{ld.so} keeps loading it, which is worse than a
+missing file: everything appears to work until it doesn't.
+@code{--no-prune} opts out.
+
+The order is deliberate: @strong{copy first, prune second}.  A crash
+between the two leaves a machine with both versions' files, which still
+runs; the other order leaves it with neither.  The manifest is written
+last, so an interrupted install leaves the previous manifest in place
+and the next run re-prunes from a state we know we wrote.
+
+Only paths from our own manifest are ever considered for deletion, and
+only regular files and symlinks --- never directories, and never
+recursively.  An empty directory left behind is harmless; an installer
+that removes directories recursively eventually removes something it
+does not own.
+
+@code{--check} answers ``is there anything new?'' and touches nothing,
+exiting 0 when up to date and 1 when an update is available, so it
+composes:
+
+@example
+./install-from-container --check || sudo ./install-from-container
+@end example
+
+It compares the @code{built} timestamp rather than @code{version},
+because cmacs's version string moves rarely --- two images a week apart
+are both @code{32.0.50}.
+
+@subsubsection What It Refuses, and Why
+
+Every image records what it was built from at
+@file{/usr/share/cmacs/container-release}:
+
+@example
+distro=ubuntu
+release=24.04
+libdir=/usr/lib/x86_64-linux-gnu/cmacs
+arch=x86_64
+built=2026-09-07T18:04:11Z
+version=32.0.50
+bundled_wayland=yes
+@end example
+
+The installer compares that against @emph{this machine} --- the family
+from @file{/etc/os-release}, @command{uname -m}, and @code{VERSION_ID}
+--- and refuses on a mismatch.  Comparing it against the image's own
+tag instead would be circular: the tag and the image always agree, so
+such a check can never catch the mistake that actually matters, which
+is unpacking an Arch image onto a Fedora box.  Those binaries are
+linked against that distro's libraries and the failure would otherwise
+surface much later as an unresolved symbol, long after the command
+reported success.
+
+@code{--force} overrides.  @code{--prefix DIR} skips the check
+entirely, because unpacking into a directory is staging or inspection,
+not installing onto this system.
+
+@subsubsection Rootless and the Libdir
+
+@code{--prefix} is meant to work without root, but @command{podman
+mount} needs a user namespace when podman is rootless.  The script
+re-executes itself once under @command{podman unshare} (guarded by an
+environment variable so the second pass does not), and root skips that
+path.  @code{--local} also passes @code{--pull=never} to @command{podman
+create}, which otherwise reaches for a registry on its own when a name
+is missing locally --- so a typo'd tag under @code{--local} would
+quietly pull instead of failing.
+
+The @code{libdir} is read off the staged tree at build time rather than
+hardcoded, and is what @file{/etc/ld.so.conf.d/cmacs.conf} points at so
+bacon modules can find @file{libcmacs-api.so}.  Fedora and Arch use
+@file{/usr/lib64/cmacs} or @file{/usr/lib/cmacs}, Debian and Ubuntu
+@file{/usr/lib/<triplet>/cmacs}; a wrong path here is silent, since
+@command{ldconfig} will happily cache a directory that does not exist.
 
 @section Testing
 

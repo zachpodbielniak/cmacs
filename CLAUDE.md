@@ -394,6 +394,71 @@ backtraces → static-lib duplicate symbols; GC crash → unprotected Lisp_Objec
 call per message so an exit-1 can't nuke sibling calls. Process-killing steps also need
 `dangerouslyDisableSandbox: true`.
 
+## Container images (build once, install anywhere)
+
+`./build-container [TARGET]` builds a distro image; `./install-from-container` unpacks one
+onto a host **and is also the update command**. The point is machines that cannot afford
+to build: a 2- or 4-core box takes *hours* from source and about a minute to unpack. The
+image is `FROM scratch` holding only `/usr` + `/etc`, which is also how immutablue
+consumes it.
+
+- **Updating prunes, and that is the whole reason for the manifest.** The install records
+  every path it wrote to `/usr/share/cmacs/container-manifest`; a later run copies the new
+  image over the top, then deletes what the previous image had and this one does not.
+  Without it a renamed `.so` lingers and `ld.so` keeps loading it — worse than a missing
+  file, because everything works until it doesn't. **Copy first, prune second**: a crash
+  between them leaves both versions' files (still runs) rather than neither. Only paths
+  from our own manifest are deletable, files and symlinks only, never directories.
+- **Compatibility is checked against the machine, not the tag.** Comparing the image's
+  `distro`/`arch` against its own tag is circular — they always agree — so it can never
+  catch an Arch image being unpacked on Fedora. It reads `/etc/os-release`, `uname -m`
+  and `VERSION_ID`. `--prefix` skips the check (staging is not installing).
+- **Rootless needs `podman unshare`.** `podman mount` fails rootless, which is exactly the
+  `--prefix` case; the script re-execs itself once under `podman unshare`. `--local` also
+  passes `--pull=never`, since `podman create` otherwise pulls on a missing name.
+
+The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubuntu),
+`NN` (Fedora, the default: 44). The Containerfile takes `BASE_IMAGE`, `CMACS_DISTRO`,
+`CMACS_RELEASE`; `CMACS_DISTRO` selects the package manager and everything after the
+package install is identical, because it is all `make`.
+
+- **Per-distro package lists live in the Containerfile**, deliberately — a container
+  needs `curl`/`git`/`ca-certificates` a dev box already has, and not the dev extras.
+  `install-deps` stays the source of truth for the *host* question, which is what
+  **`make deps-list[-fedora|-ubuntu|-arch|-macos|-freebsd]`** answers: one paste-ready
+  install command on stdout, all commentary on stderr, and it runs in an **unconfigured
+  tree** (the machine that needs the list is the one that cannot configure yet).
+- **Ubuntu 24.04 builds wayland/wayland-protocols/pixman/wlroots from source** (noble has
+  wlroots 0.17 / wayland 1.22 / pixman 0.42). The probe is on `pkg-config`, not the distro
+  version, so a release that catches up takes the fast path with no edit. Two silent traps
+  guarded there: (a) `--libdir` must be the **multiarch triplet** — installing to
+  `/usr/lib` does not shadow the distro's, `/usr/lib/<triplet>/pkgconfig` is searched
+  first and meson reports "found 1.22.0" with 1.23.1 sitting right there; (b) each
+  component installs **twice**, once into the builder and once into a scratch `DESTDIR`
+  whose *libdir alone* is staged — a library only in the builder is not in the image, and
+  the result links 1.23 symbols and lands on a 1.22 host. Headers are deliberately not
+  staged.
+- **`/usr/share/cmacs/container-release`** records distro/release/libdir/arch/version/
+  `bundled_wayland`. `install-from-container` refuses a mismatched distro or arch (`--force`
+  overrides), because those binaries are linked against that distro's libraries and the
+  failure otherwise surfaces much later as an unresolved symbol.
+- **The libdir in `/etc/ld.so.conf.d/cmacs.conf` is read off the staged tree**, never
+  hardcoded — Fedora/Arch `/usr/lib64/cmacs`, Debian/Ubuntu `/usr/lib/<triplet>/cmacs`. A
+  wrong path is silent: `ldconfig` happily caches a directory that does not exist.
+- **A `for dep in ...` loop takes the exit status of its LAST iteration.** A dep whose
+  `make install` failed mid-loop left the build green for a long time (that is how gowl's
+  broken `install-headers` went unnoticed). Every step in that loop now `|| exit 1`s.
+- **A dependency with two coexisting versions only ever exercises the newer one here.**
+  gowl picks the newest wlroots present, so a box with 0.19 *and* 0.20 never compiles the
+  0.19 path — and 0.19 differs: its `wlr/` headers `#include "<proto>-protocol.h"` by bare
+  name (the consumer must run wayland-scanner), while 0.20 uses a shipped
+  `<wayland-protocols/…-enum.h>`. Fedora 43 is 0.19-only and could not build gowl at all.
+  Same shape with libeis: `EIS_EVENT_SEAT_DEVICE_REQUESTED` is 1.6-only, F43 has 1.5.
+  Both are now pkg-config-probed, and `deps/gowl/tests/test-protocol-headers.sh` checks
+  **every installed** wlroots version rather than the selected one — checking the selected
+  one would reproduce the blind spot. `make WLROOTS=0.19` in `deps/gowl` builds the older
+  path locally, which is vastly cheaper than finding out inside a container.
+
 ## Android APK build
 
 Containerized (`podman`/`docker`), two paths:

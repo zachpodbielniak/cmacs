@@ -40,6 +40,25 @@ That checks the *pkg-config modules and tools the build actually uses*
 (not package names, which drift between releases), and separates the
 ones that fail the build from the ones that merely narrow a feature.
 
+To get the package *names* rather than have them installed --- to paste
+into a Containerfile, an image build, a ticket, or another machine ---
+=make deps-list= prints one ready-to-run install command and nothing
+else on stdout:
+
+#+begin_example
+make deps-list            # this machine's distro
+make deps-list-fedora     # sudo dnf install -y ...
+make deps-list-ubuntu     # sudo apt-get install -y ...
+make deps-list-arch       # sudo pacman -S --needed --noconfirm ...
+make deps-list-macos      # brew install ...
+make deps-list-freebsd    # sudo pkg install -y ...
+#+end_example
+
+Everything explanatory goes to stderr, so =make deps-list-arch 2>/dev/null=
+is a clean one-liner and =make deps-list | bash= works.  These targets
+run in an *unconfigured* tree --- that is the point of them, since the
+machine that needs the list is the one that cannot configure yet.
+
 =just run= is preferred over =src/emacs= directly: it exports
 =CMACS_MODULE_DIR= so the =cmacsgi= bacon builtin loads when you do
 =M-x bacon=.  Bare =src/emacs= still works for plain editing; it
@@ -364,6 +383,11 @@ non-deterministic crashes.
 
 * Building on Ubuntu 24.04 / older hosts
 
+If you only want cmacs *running* on such a host and do not need to
+build it there, skip this section: =./install-from-container 24.04= unpacks
+a prebuilt image, Wayland stack and all, in about a minute.  See
+*Container images* below.  What follows is the from-source recipe.
+
 gowl builds against wlroots *0.19 or 0.20* (newest present wins; pin with
 =make WLROOTS=0.19=).  wlroots 0.20 is recommended --- it unlocks
 per-window screencast capture (the "share a specific window" option);
@@ -499,6 +523,270 @@ compile unit fails with a missing =glib.h=.  If you see that error,
 run =pkg-config --print-errors --exists= on the full
 =DEPS_REQUIRED= list to identify the missing module --- do not try
 to patch the include paths directly.
+
+* Container images
+
+Building cmacs from source on a small machine is genuinely slow --- on
+a two- or four-core box it runs for hours.  The container images exist
+so that machine never has to: cmacs is built once, centrally, and the
+result is unpacked onto the host.
+
+The image is a =FROM scratch= stage holding only =/usr= and =/etc=, so
+"installing" it is a copy.  That is also how immutablue consumes it
+(=cp -a /mnt-cmacs/usr/. /usr/= in its own image build).
+
+** Building
+
+#+begin_example
+./build-container                 # Fedora 44, the default
+./build-container 44 --push       # Fedora 44   -> quay.io/.../cmacs:44
+./build-container 24.04 --push    # Ubuntu 24.04 -> :24.04
+./build-container 26.04 --push    # Ubuntu 26.04 -> :26.04
+./build-container arch --push     # Arch Linux   -> :arch
+#+end_example
+
+There is one positional argument and no =--distro= flag to forget: the
+target is inferred from its *shape*.
+
+| Argument   | Base image                                  | Family |
+|------------+---------------------------------------------+--------|
+| =arch=, =archlinux= | =docker.io/library/archlinux:latest= | arch   |
+| =NN.NN= (=24.04=)   | =docker.io/library/ubuntu:24.04=     | ubuntu |
+| =NN= (=44=)         | =registry.fedoraproject.org/fedora:44= | fedora |
+
+The tag is always =quay.io/zachpodbielniak/cmacs:<what you typed>=.
+Override the registry with =REGISTRY==.  Anything after =--= is passed
+straight through to buildah:
+
+#+begin_example
+./build-container arch -- --build-arg WLROOTS_VERSION=0.20
+#+end_example
+
+The Containerfile takes three arguments from the script ---
+=BASE_IMAGE=, =CMACS_DISTRO=, =CMACS_RELEASE= --- and =CMACS_DISTRO=
+selects the package manager.  Everything after the package install is
+identical across distros, because it is all =make=.
+
+** Why the package lists are in the Containerfile
+
+The per-distro package lists live in the Containerfile rather than
+calling =./install-deps=, deliberately.  A container needs things a
+developer's machine already has (=curl=, =git=, =ca-certificates=) and
+does not want things a developer does.  =install-deps= remains the
+source of truth for the *host* install question, which is what
+=make deps-list= answers.
+
+** Ubuntu 24.04 and the bundled Wayland stack
+
+Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22 and pixman 0.42;
+gowl needs wlroots >= 0.19, which in turn needs wayland >= 1.23.1 and
+pixman >= 0.43.  The builder therefore compiles wayland,
+wayland-protocols, pixman and wlroots from source for that target ---
+and *only* for that target.
+
+The probe is on =pkg-config=, not on the distro version:
+
+#+begin_example
+if pkg-config --exists wlroots-0.20 || pkg-config --exists wlroots-0.19; then
+        exit 0    # nothing to build
+fi
+#+end_example
+
+so a release that starts shipping a new enough wlroots stops building
+one without anyone editing the file.  Fedora 44, Arch and Ubuntu 26.04
+all take the fast path today.
+
+Two things about this are easy to get wrong, and both fail *silently*:
+
+- *libdir.*  Installing to =/usr/lib= on Debian/Ubuntu does not shadow
+  the distro's libraries --- =/usr/lib/<triplet>/pkgconfig= is searched
+  first, so meson cheerfully reports "found 1.22.0 but need >=1.23.1"
+  with a freshly built 1.23.1 sitting in =/usr/lib=.  The libdir is
+  taken from =dpkg-architecture -qDEB_HOST_MULTIARCH=.
+- *Staging.*  The final image is only =/build/stage=, so a library
+  built here and installed into the builder's =/usr= is not in the
+  image.  The result would link against wayland 1.23 symbols and land
+  on a host that has 1.22.  Each component is installed twice: once
+  into the builder so cmacs can build against it, and once into a
+  scratch =DESTDIR= whose *libdir alone* is copied into the stage.
+  Headers are deliberately left behind --- the image must not shadow
+  the distro's wayland headers for anything else the user compiles.
+
+libwayland and pixman have only ever added to their ABI, so the newer
+copies satisfy every existing consumer, and wlroots 0.19 carries its
+version in its soname and coexists with the distro's 0.17.  The one
+standing caveat is that a later =apt upgrade= of =libwayland-server0=
+repoints the soname symlink back at the distro's build; re-running
+=install-from-container= puts it right, and the script says so when the
+image it installed was one of the bundled-Wayland ones.
+
+** Older distros diverge in ways a newer one cannot show you
+
+Two build failures showed up only on Fedora 43, and both were invisible
+on the machine where the code was written.  They are worth reading
+together, because the shape is the same and it will happen again.
+
+*** wlroots 0.19 wants protocol headers generated; 0.20 does not
+
+wlroots *0.19* pulls generated protocol headers in by bare name:
+
+#+begin_example
+/* wlr/types/wlr_pointer_constraints_v1.h, wlroots 0.19 */
+#include "pointer-constraints-unstable-v1-protocol.h"
+#+end_example
+
+so every consumer has to run =wayland-scanner= over the XML itself.
+*0.20* replaced those with =#include <wayland-protocols/...-enum.h>=, a
+header wayland-protocols now installs, so nothing needs generating.
+
+gowl's =PROTO_HDRS= covered xdg-shell, wlr-layer-shell and cursor-shape
+but not the three that came with pointer constraints, tablet v2 and
+image-copy-capture.  On Fedora 43:
+
+#+begin_example
+wlr_pointer_constraints_v1.h:17:10: fatal error:
+    pointer-constraints-unstable-v1-protocol.h: No such file
+#+end_example
+
+The reason nobody saw it: *gowl builds against the newest wlroots
+present*, so a developer machine carrying both 0.19 and 0.20 always
+compiles the 0.20 path.  It could only fail on a 0.19-only distro ---
+which Fedora 43 is, and which Immutablue still ships.
+
+=deps/gowl/tests/test-protocol-headers.sh= now walks *every installed*
+wlroots version rather than the selected one, and asserts that each
+protocol header a used =wlr/= header includes is in =PROTO_HDRS=.
+Checking only the selected version would reproduce the original blind
+spot exactly.
+
+*** libeis 1.6 added an enumerator that 1.5 cannot be told about
+
+=EIS_EVENT_SEAT_DEVICE_REQUESTED= arrived in libeis 1.6.  Fedora 43
+ships 1.5, where naming it is a compile error.  The portal's Makefile
+probes with =pkg-config --atleast-version=1.6 libeis-1.0= and the case
+label is guarded to match.
+
+Dropping the label on 1.5 is behaviour-neutral, which is why this is a
+guard and not a version requirement: the enumerator does not exist
+because the protocol version that emits it does not either, so a libei
+1.6 client negotiating with a 1.5 server falls back to
+=EIS_EVENT_SEAT_BIND= --- the label immediately above it, taking the
+same branch.  KVM client mode keeps working on both.
+
+*** The general rule
+
+A build dependency that ships two coexisting versions will be resolved
+to the newer one on any machine that has both, and the older path then
+gets no coverage at all until it reaches a distro that has only the
+older one --- typically inside a container build, which is the slowest
+and least informative place to find out.
+
+When a dependency spans versions, prefer a check that inspects *every
+version installed* over one that inspects the one that would be chosen.
+=make deps-list= and =just check-deps= report what is present;
+=make WLROOTS=0.19= builds gowl against the older one explicitly, which
+is far cheaper than a container round trip.
+
+** Installing onto a host
+
+#+begin_example
+sudo ./install-from-container             # detect this distro, pull, install
+sudo ./install-from-container             # ...and again, to update
+./install-from-container --check          # is an update available?
+./install-from-container --dry-run        # show what would change
+sudo ./install-from-container arch        # force a target
+./install-from-container --prefix /tmp/x  # unpack elsewhere, no root
+sudo ./install-from-container --local     # use an already-pulled image
+#+end_example
+
+Or through =just=: =just install-from-container=, =just container-check=.
+
+The target is detected from =/etc/os-release= with the same =ID= then
+=ID_LIKE= fall-through =install-deps= uses, so derivatives resolve to
+their base.
+
+*** Updating is the same command
+
+There is no separate update path.  A second run copies the new image
+over the top and then *removes the files the previous image had and
+this one does not*.
+
+That prune step is the reason the install keeps a manifest at
+=/usr/share/cmacs/container-manifest= --- every path it wrote, one per
+line.  Without it a renamed library or a dropped module lingers
+forever, and =ld.so= happily keeps loading it, which is a good deal
+worse than a missing file: everything appears to work until it
+doesn't.  =--no-prune= opts out.
+
+The order matters and is deliberate: *copy first, prune second*.  A
+crash between the two leaves a machine with both versions' files, which
+still runs.  The other order leaves it with neither.  The manifest is
+written last, so an interrupted install leaves the previous manifest in
+place and the next run re-prunes from a state we know we wrote.
+
+Only paths from our own manifest are ever considered for deletion, and
+only regular files and symlinks --- never directories, and never
+recursively.  An empty directory left behind is harmless; an installer
+that removes directories recursively is one that eventually removes
+something it does not own.
+
+=--check= answers "is there anything new?" and touches nothing, exiting
+0 when up to date and 1 when an update is available, so it composes:
+
+#+begin_example
+./install-from-container --check || sudo ./install-from-container
+#+end_example
+
+It compares the =built= timestamp rather than =version=, because
+cmacs's version string moves rarely --- two images a week apart are
+both =32.0.50=.
+
+*** What it refuses, and why
+
+Every image records what it was built from at
+=/usr/share/cmacs/container-release=:
+
+#+begin_example
+distro=ubuntu
+release=24.04
+libdir=/usr/lib/x86_64-linux-gnu/cmacs
+arch=x86_64
+built=2026-09-07T18:04:11Z
+version=32.0.50
+bundled_wayland=yes
+#+end_example
+
+The installer compares that against *this machine* --- the family from
+=/etc/os-release=, =uname -m=, and =VERSION_ID= --- and refuses on a
+mismatch.  Comparing it against the image's own tag instead would be
+circular: the tag and the image always agree, so such a check can never
+catch the mistake that actually matters, which is unpacking an Arch
+image onto a Fedora box.  Those binaries are linked against that
+distro's libraries and the failure would otherwise surface much later
+as an unresolved symbol, long after the command reported success.
+
+=--force= overrides.  =--prefix DIR= skips the check entirely, because
+unpacking into a directory is staging or inspection, not installing
+onto this system.
+
+*** Rootless
+
+=--prefix= is meant to work without root, but =podman mount= needs a
+user namespace when podman is rootless.  The script re-executes itself
+once under =podman unshare= (guarded by an environment variable so the
+second pass does not), and root skips that path.  =--local= also passes
+=--pull=never= to =podman create=, which otherwise reaches for a
+registry on its own when a name is missing locally --- so a typo'd tag
+under =--local= would quietly pull instead of failing.
+
+*** The libdir
+
+The =libdir= is read off the staged tree at build time rather than
+hardcoded, and is what =/etc/ld.so.conf.d/cmacs.conf= points at so
+bacon modules can find =libcmacs-api.so=.  Fedora and Arch use
+=/usr/lib64/cmacs= or =/usr/lib/cmacs=, Debian and Ubuntu
+=/usr/lib/<triplet>/cmacs=; a wrong path here is silent, since
+=ldconfig= will happily cache a directory that does not exist.
 
 * Known Issues
 

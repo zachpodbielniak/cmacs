@@ -2,11 +2,31 @@
 # Build the cmacs container image locally.
 #
 # Usage:
-#   ./build-container                # build only
+#   ./build-container                # Fedora 44 (the default), build only
 #   ./build-container --push         # build then push
 #   ./build-container --only-push    # push without building
-#   ./build-container 44             # use Fedora 44
-#   ./build-container 44 --push      # build Fedora 44 and push
+#   ./build-container 44             # Fedora 44
+#   ./build-container 24.04 --push   # Ubuntu 24.04, build and push
+#   ./build-container 26.04 --push   # Ubuntu 26.04
+#   ./build-container arch --push    # Arch Linux
+#
+# The target is inferred from its shape, so there is one positional
+# argument and no --distro flag to forget:
+#
+#   arch, archlinux   ->  docker.io/library/archlinux:latest
+#   NN.NN  (24.04)    ->  docker.io/library/ubuntu:24.04
+#   NN     (44)       ->  registry.fedoraproject.org/fedora:44
+#
+# The tag is always quay.io/zachpodbielniak/cmacs:<what you typed>, so
+# `./build-container 24.04 --push' lands at :24.04 and
+# `./build-container arch --push' at :arch.
+#
+# Why several distros: the image is a scratch stage holding only /usr
+# and /etc, so a machine installs cmacs by unpacking it (see
+# ./install-container) instead of building it.  On a two- or four-core
+# box that is the difference between two hours and two minutes -- but
+# only if the binaries were linked against that machine's libraries,
+# hence one image per distro.
 #
 # Override the bundled whisper STT model + piper TTS voice:
 #   WHISPER_MODEL_NAME=ggml-small.en.bin \
@@ -28,6 +48,7 @@ set -euo pipefail
 DO_BUILD=1
 DO_PUSH=0
 VERSION="44"
+EXTRA_ARGS=()
 
 # Bundled-model defaults (overridable via env or --build-arg).
 : "${WHISPER_MODEL_NAME:=ggml-base.en.bin}"
@@ -36,59 +57,129 @@ VERSION="44"
 : "${PIPER_VOICE_DIR:=en/en_US/amy/low}"
 : "${PIPER_VOICE_BASE_URL:=https://huggingface.co/rhasspy/piper-voices/resolve/main}"
 
-usage() {
-    echo "Usage: ./build-container [VERSION] [--push] [--only-push]"
-    echo
-    echo "  VERSION      Fedora version (default: 44)"
-    echo "  --push       Build then push to quay.io"
-    echo "  --only-push  Push without building"
-    echo "  -h, --help   Show this help"
-    echo
-    echo "Override bundled models via env vars:"
-    echo "  WHISPER_MODEL_NAME, WHISPER_MODEL_URL,"
-    echo "  PIPER_VOICE_NAME, PIPER_VOICE_DIR, PIPER_VOICE_BASE_URL"
+: "${REGISTRY:=quay.io/zachpodbielniak/cmacs}"
+
+usage () {
+	cat <<'EOF'
+Usage: ./build-container [TARGET] [--push] [--only-push] [-- BUILDAH ARGS]
+
+  TARGET       fedora version (44), ubuntu version (24.04, 26.04),
+               or `arch'.  Default: 44
+  --push       Build then push to the registry
+  --only-push  Push without building
+  -h, --help   Show this help
+
+Examples:
+  ./build-container                 # Fedora 44
+  ./build-container 44 --push       # Fedora 44   -> :44
+  ./build-container 24.04 --push    # Ubuntu 24.04 -> :24.04
+  ./build-container 26.04 --push    # Ubuntu 26.04 -> :26.04
+  ./build-container arch --push     # Arch Linux   -> :arch
+
+Anything after `--' is passed straight to buildah, e.g.
+  ./build-container arch -- --build-arg WLROOTS_VERSION=0.20
+
+Override bundled models via env vars:
+  WHISPER_MODEL_NAME, WHISPER_MODEL_URL,
+  PIPER_VOICE_NAME, PIPER_VOICE_DIR, PIPER_VOICE_BASE_URL
+
+Override the registry with REGISTRY= (default quay.io/zachpodbielniak/cmacs).
+EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
-        -h|--help)   usage; exit 0 ;;
-        --push)      DO_PUSH=1 ;;
-        --only-push) DO_PUSH=1; DO_BUILD=0 ;;
-        *)           VERSION="$arg" ;;
-    esac
+# resolve_target <target>
+#
+# Maps the single positional argument onto a base image and a distro
+# family, writing BASE_IMAGE / DISTRO / RELEASE.  The shape of the
+# argument is the discriminator: a word for Arch, MAJOR.MINOR for
+# Ubuntu, a bare integer for Fedora.
+resolve_target () {
+	if [[ $# -ne 1 ]]
+	then
+		echo 'resolve_target() requires 1 positional argument' >&2
+		echo 'resolve_target <target>' >&2
+		exit 1
+	fi
+
+	local target="${1}"
+
+	if [[ "${target}" == "arch" || "${target}" == "archlinux" ]]
+	then
+		BASE_IMAGE="docker.io/library/archlinux:latest"
+		DISTRO="arch"
+		RELEASE="rolling"
+	elif [[ "${target}" =~ ^[0-9]+\.[0-9]+$ ]]
+	then
+		BASE_IMAGE="docker.io/library/ubuntu:${target}"
+		DISTRO="ubuntu"
+		RELEASE="${target}"
+	elif [[ "${target}" =~ ^[0-9]+$ ]]
+	then
+		BASE_IMAGE="registry.fedoraproject.org/fedora:${target}"
+		DISTRO="fedora"
+		RELEASE="${target}"
+	else
+		echo "Unrecognised target: ${target}" >&2
+		echo "Expected a Fedora version (44), an Ubuntu version" \
+		     "(24.04), or 'arch'." >&2
+		exit 1
+	fi
+}
+
+while [[ $# -gt 0 ]]
+do
+	case "${1}" in
+		-h|--help)   usage; exit 0 ;;
+		--push)      DO_PUSH=1 ;;
+		--only-push) DO_PUSH=1; DO_BUILD=0 ;;
+		--)          shift; EXTRA_ARGS+=("$@"); break ;;
+		--*)         EXTRA_ARGS+=("${1}") ;;
+		*)           VERSION="${1}" ;;
+	esac
+	shift
 done
 
-IMAGE="quay.io/zachpodbielniak/cmacs:${VERSION}"
+resolve_target "${VERSION}"
 
-if [[ "$DO_BUILD" -eq 1 ]]; then
-    echo "==> Building ${IMAGE}"
-    echo "    Whisper model: ${WHISPER_MODEL_NAME}"
-    echo "    Piper voice:   ${PIPER_VOICE_NAME}"
-    # .containerignore strips .git, so buildah copies only the
-    # working trees of submodules into the image -- if any nested
-    # submodule isn't checked out on the host (e.g. fresh clone
-    # without recursive init), the container build will fail with
-    # "no source files" errors deep in deps/libregnum's raylib build.
-    # Init recursively here so the buildah COPY always sees full trees.
-    if [[ -d .git ]] || [[ -f .git ]]; then
-        echo "==> Ensuring submodules are initialised (recursive)"
-        git submodule update --init --recursive
-    fi
-    buildah build \
-        --no-cache \
-        --ignorefile .containerignore \
-        --build-arg=FEDORA_VERSION="${VERSION}" \
-        --build-arg=WHISPER_MODEL_NAME="${WHISPER_MODEL_NAME}" \
-        --build-arg=WHISPER_MODEL_URL="${WHISPER_MODEL_URL}" \
-        --build-arg=PIPER_VOICE_NAME="${PIPER_VOICE_NAME}" \
-        --build-arg=PIPER_VOICE_DIR="${PIPER_VOICE_DIR}" \
-        --build-arg=PIPER_VOICE_BASE_URL="${PIPER_VOICE_BASE_URL}" \
-        -t "${IMAGE}" \
-        -f ./Containerfile .
-    echo "Built ${IMAGE}"
+IMAGE="${REGISTRY}:${VERSION}"
+
+if [[ "${DO_BUILD}" -eq 1 ]]
+then
+	echo "==> Building ${IMAGE}"
+	echo "    Base image:    ${BASE_IMAGE}"
+	echo "    Distro:        ${DISTRO} ${RELEASE}"
+	echo "    Whisper model: ${WHISPER_MODEL_NAME}"
+	echo "    Piper voice:   ${PIPER_VOICE_NAME}"
+	# .containerignore strips .git, so buildah copies only the
+	# working trees of submodules into the image -- if any nested
+	# submodule isn't checked out on the host (e.g. fresh clone
+	# without recursive init), the container build will fail with
+	# "no source files" errors deep in deps/libregnum's raylib build.
+	# Init recursively here so the buildah COPY always sees full trees.
+	if [[ -d .git ]] || [[ -f .git ]]
+	then
+		echo "==> Ensuring submodules are initialised (recursive)"
+		git submodule update --init --recursive
+	fi
+	buildah build \
+		--no-cache \
+		--ignorefile .containerignore \
+		--build-arg=BASE_IMAGE="${BASE_IMAGE}" \
+		--build-arg=CMACS_DISTRO="${DISTRO}" \
+		--build-arg=CMACS_RELEASE="${RELEASE}" \
+		--build-arg=WHISPER_MODEL_NAME="${WHISPER_MODEL_NAME}" \
+		--build-arg=WHISPER_MODEL_URL="${WHISPER_MODEL_URL}" \
+		--build-arg=PIPER_VOICE_NAME="${PIPER_VOICE_NAME}" \
+		--build-arg=PIPER_VOICE_DIR="${PIPER_VOICE_DIR}" \
+		--build-arg=PIPER_VOICE_BASE_URL="${PIPER_VOICE_BASE_URL}" \
+		${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
+		-t "${IMAGE}" \
+		-f ./Containerfile .
+	echo "Built ${IMAGE}"
 fi
 
-if [[ "$DO_PUSH" -eq 1 ]]; then
-    buildah push "${IMAGE}"
-    echo "Pushed ${IMAGE}"
+if [[ "${DO_PUSH}" -eq 1 ]]
+then
+	buildah push "${IMAGE}"
+	echo "Pushed ${IMAGE}"
 fi

@@ -1,0 +1,479 @@
+#!/bin/bash
+# Install or update cmacs on this machine from a prebuilt container image.
+#
+# The cmacs container is a scratch image holding nothing but /usr and
+# /etc, so "installing" it is a copy.  That is the whole point of
+# building one image per distro: a two- or four-core machine takes
+# hours to build cmacs from source and about a minute to unpack it.
+#
+# Usage:
+#   sudo ./install-from-container            # detect distro, pull, install
+#   sudo ./install-from-container            # ...and again, to update
+#   ./install-from-container --check         # is an update available?
+#   ./install-from-container --dry-run       # show what would change
+#   sudo ./install-from-container arch       # force a target
+#   ./install-from-container --prefix DIR    # unpack elsewhere, no root
+#
+# UPDATING is the same command.  The install records every path it
+# wrote to /usr/share/cmacs/container-manifest; a later run copies the
+# new image over the top and then deletes the files the previous image
+# had but this one does not.  Without that step a renamed library or a
+# dropped module lingers forever, and ld.so happily keeps loading it --
+# which is worse than a missing file, because everything appears to
+# work until it doesn't.  --no-prune opts out.
+#
+# The image records what it was built from in
+# /usr/share/cmacs/container-release.  This refuses to install one
+# built for a different distro or architecture, because the binaries
+# are linked against that distro's libraries and the failure would
+# otherwise surface much later as an unresolved symbol.  --force
+# overrides.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+set -euo pipefail
+
+: "${REGISTRY:=quay.io/zachpodbielniak/cmacs}"
+
+DRY_RUN=0
+USE_LOCAL=0
+FORCE=0
+CHECK_ONLY=0
+NO_PRUNE=0
+TAG=""
+TARGET=""
+PREFIX=""
+
+MANIFEST_REL="usr/share/cmacs/container-manifest"
+RELEASE_REL="usr/share/cmacs/container-release"
+
+# Kept because the rootless path below re-executes this script, and by
+# then the argument parser has consumed "$@".
+ORIG_ARGV=("$@")
+
+usage () {
+	cat <<'EOF'
+Usage: ./install-from-container [TARGET] [OPTIONS]
+
+  TARGET          fedora version (44), ubuntu version (24.04), or `arch'.
+                  Detected from /etc/os-release when omitted.
+
+  --check         Report installed vs available version; change nothing.
+                  Exit 0 if up to date, 1 if an update is available.
+  --dry-run       Show what would be added, changed and removed; stop.
+  --tag TAG       Use this image tag instead of the detected one
+  --local         Do not pull; use the image already in local storage
+  --prefix DIR    Unpack under DIR instead of / (needs no root)
+  --no-prune      Keep files the previous image had and this one does not
+  --force         Install even on a distro/arch mismatch
+  -h, --help      Show this help
+
+Installing and updating are the same command:
+
+  sudo ./install-from-container          # first time
+  sudo ./install-from-container          # later, to update
+
+Examples:
+  ./install-from-container --check                 # anything new?
+  sudo ./install-from-container arch               # force the arch image
+  ./install-from-container --prefix /tmp/x --dry-run
+
+Override the registry with REGISTRY= (default quay.io/zachpodbielniak/cmacs).
+EOF
+}
+
+# detect_target
+#
+# Reads /etc/os-release and echoes the image tag this machine wants.
+# ID is checked before ID_LIKE so a derivative (Omarchy, CachyOS,
+# Pop!_OS, Bazzite) resolves to its base rather than failing -- the
+# same fall-through install-deps uses.
+detect_target () {
+	local id=""
+	local id_like=""
+	local version_id=""
+
+	if [[ -r /etc/os-release ]]
+	then
+		# shellcheck disable=SC1091
+		. /etc/os-release
+		id="${ID:-}"
+		id_like="${ID_LIKE:-}"
+		version_id="${VERSION_ID:-}"
+	fi
+
+	case "${id}" in
+		arch|archarm|endeavouros|cachyos|manjaro|omarchy|garuda)
+			echo "arch"; return 0 ;;
+		ubuntu|pop|linuxmint|elementary|zorin)
+			echo "${version_id}"; return 0 ;;
+		fedora|silverblue|immutablue|nobara|bazzite)
+			echo "${version_id}"; return 0 ;;
+	esac
+
+	case " ${id_like} " in
+		*" arch "*)    echo "arch";          return 0 ;;
+		*" ubuntu "*)  echo "${version_id}"; return 0 ;;
+		*" debian "*)  echo "${version_id}"; return 0 ;;
+		*" fedora "*)  echo "${version_id}"; return 0 ;;
+	esac
+
+	echo "Cannot tell what distro this is; pass a target explicitly." >&2
+	echo "  ./install-from-container arch | 24.04 | 44" >&2
+	return 1
+}
+
+# host_family
+#
+# The distro family THIS MACHINE belongs to: arch, ubuntu or fedora.
+#
+# Deliberately derived from /etc/os-release and not from the image tag.
+# Comparing the image against its own tag is circular -- the two always
+# agree -- so it could never catch the mistake that actually matters,
+# which is unpacking an Arch image onto a Fedora box.
+host_family () {
+	local id=""
+	local id_like=""
+
+	if [[ -r /etc/os-release ]]
+	then
+		# shellcheck disable=SC1091
+		. /etc/os-release
+		id="${ID:-}"
+		id_like="${ID_LIKE:-}"
+	fi
+
+	case "${id}" in
+		arch|archarm|endeavouros|cachyos|manjaro|omarchy|garuda)
+			echo "arch"; return 0 ;;
+		ubuntu|pop|linuxmint|elementary|zorin|debian)
+			echo "ubuntu"; return 0 ;;
+		fedora|silverblue|immutablue|nobara|bazzite)
+			echo "fedora"; return 0 ;;
+	esac
+
+	case " ${id_like} " in
+		*" arch "*)   echo "arch";   return 0 ;;
+		*" ubuntu "*) echo "ubuntu"; return 0 ;;
+		*" debian "*) echo "ubuntu"; return 0 ;;
+		*" fedora "*) echo "fedora"; return 0 ;;
+	esac
+
+	echo ""
+}
+
+# host_release
+#
+# VERSION_ID from /etc/os-release, or the empty string on a rolling
+# release that does not carry one.
+host_release () {
+	if [[ -r /etc/os-release ]]
+	then
+		# shellcheck disable=SC1091
+		. /etc/os-release
+		echo "${VERSION_ID:-}"
+	fi
+}
+
+# release_field <file> <key>
+#
+# One value out of a container-release marker, or the empty string.
+release_field () {
+	if [[ $# -ne 2 ]]
+	then
+		echo 'release_field() requires 2 positional arguments' >&2
+		exit 1
+	fi
+
+	local file="${1}"
+	local key="${2}"
+
+	[[ -r "${file}" ]] || return 0
+	sed -n "s/^${key}=//p" "${file}" | head -1
+}
+
+while [[ $# -gt 0 ]]
+do
+	case "${1}" in
+		-h|--help)  usage; exit 0 ;;
+		--check)    CHECK_ONLY=1 ;;
+		--dry-run)  DRY_RUN=1 ;;
+		--local)    USE_LOCAL=1 ;;
+		--force)    FORCE=1 ;;
+		--no-prune) NO_PRUNE=1 ;;
+		--tag)      TAG="${2:-}"; shift ;;
+		--prefix)   PREFIX="${2:-}"; shift ;;
+		-*)         echo "Unknown option: ${1}" >&2; usage >&2; exit 1 ;;
+		*)          TARGET="${1}" ;;
+	esac
+	shift
+done
+
+if [[ -z "${TARGET}" ]]
+then
+	TARGET="$(detect_target)"
+fi
+if [[ -z "${TAG}" ]]
+then
+	TAG="${TARGET}"
+fi
+
+IMAGE="${REGISTRY}:${TAG}"
+DEST="${PREFIX:-/}"
+DEST="${DEST%/}"
+
+if ! command -v podman >/dev/null 2>&1
+then
+	echo "podman is required." >&2
+	exit 1
+fi
+
+echo "==> Image:  ${IMAGE}"
+echo "==> Target: ${DEST}/"
+
+# What is installed right now, if anything.
+INSTALLED_RELEASE="${DEST}/${RELEASE_REL}"
+INSTALLED_MANIFEST="${DEST}/${MANIFEST_REL}"
+have_version="$(release_field "${INSTALLED_RELEASE}" version)"
+have_built="$(release_field "${INSTALLED_RELEASE}" built)"
+
+if [[ -n "${have_version}" ]]
+then
+	echo "==> Installed: ${have_version} (built ${have_built:-unknown})"
+else
+	echo "==> Installed: nothing found; this will be a first install"
+fi
+
+if [[ "${USE_LOCAL}" -eq 0 ]]
+then
+	echo "==> Pulling"
+	podman pull "${IMAGE}"
+fi
+
+# Mount the image read-only rather than running it: the image is FROM
+# scratch and has no shell to run anything with.
+#
+# --pull=never under --local, because `podman create' will reach for a
+# registry on its own when the name is not in local storage -- so a
+# typo'd tag under --local would quietly pull instead of failing, which
+# is exactly what --local is asking not to happen.
+#
+# `podman mount' needs a user namespace when podman is rootless, which
+# is precisely the --prefix case that is supposed to work without root.
+# Re-execute under `podman unshare' once, guarded by an env var so the
+# second pass does not do it again.  Root needs none of this.
+if [[ "${EUID:-$(id -u)}" -ne 0 && -z "${CMACS_INSTALL_IN_USERNS:-}" ]]
+then
+	echo "==> Rootless podman; re-executing under \`podman unshare'"
+	exec podman unshare env CMACS_INSTALL_IN_USERNS=1 \
+		"$(readlink -f "$0")" ${ORIG_ARGV[@]+"${ORIG_ARGV[@]}"}
+fi
+
+CREATE_ARGS=()
+if [[ "${USE_LOCAL}" -eq 1 ]]
+then
+	CREATE_ARGS+=(--pull=never)
+fi
+CID="$(podman create "${CREATE_ARGS[@]+"${CREATE_ARGS[@]}"}" "${IMAGE}" /nonexistent)"
+cleanup () {
+	podman umount "${CID}" >/dev/null 2>&1 || true
+	podman rm -f "${CID}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+MNT="$(podman mount "${CID}")"
+
+if [[ ! -d "${MNT}/usr" ]]
+then
+	echo "Image has no /usr; this is not a cmacs image." >&2
+	exit 1
+fi
+
+IMAGE_RELEASE="${MNT}/${RELEASE_REL}"
+want_version="$(release_field "${IMAGE_RELEASE}" version)"
+want_built="$(release_field "${IMAGE_RELEASE}" built)"
+img_distro="$(release_field "${IMAGE_RELEASE}" distro)"
+img_arch="$(release_field "${IMAGE_RELEASE}" arch)"
+img_release="$(release_field "${IMAGE_RELEASE}" release)"
+bundled_wayland="$(release_field "${IMAGE_RELEASE}" bundled_wayland)"
+
+if [[ -r "${IMAGE_RELEASE}" ]]
+then
+	echo "==> Image was built from:"
+	sed 's/^/    /' "${IMAGE_RELEASE}"
+else
+	echo "==> No container-release marker (an older image); skipping checks"
+fi
+
+# --check answers "is there anything new?" and touches nothing.  The
+# build timestamp is the discriminator, not the version: cmacs's
+# version string moves rarely, and two images a week apart are both
+# 32.0.50.
+if [[ "${CHECK_ONLY}" -eq 1 ]]
+then
+	if [[ -z "${have_version}" ]]
+	then
+		echo "==> Not installed; ${want_version:-unknown} is available."
+		exit 1
+	fi
+	if [[ "${have_built}" == "${want_built}" && -n "${have_built}" ]]
+	then
+		echo "==> Up to date."
+		exit 0
+	fi
+	echo "==> Update available:"
+	echo "        installed ${have_version} (${have_built:-unknown})"
+	echo "        available ${want_version} (${want_built:-unknown})"
+	exit 1
+fi
+
+# Compatibility.  Skipped entirely under --prefix: unpacking into a
+# directory is staging or inspection, not installing onto this system,
+# and refusing there would just be in the way.
+if [[ -r "${IMAGE_RELEASE}" && -z "${PREFIX}" ]]
+then
+	this_family="$(host_family)"
+	this_release="$(host_release)"
+	host_arch="$(uname -m)"
+	bad=""
+
+	if [[ "${img_arch}" != "${host_arch}" ]]
+	then
+		bad="architecture: image is ${img_arch}, this machine is ${host_arch}"
+	elif [[ -n "${this_family}" && "${img_distro}" != "${this_family}" ]]
+	then
+		bad="distro: image is ${img_distro}, this machine is ${this_family}"
+	elif [[ "${img_distro}" != "arch" && -n "${this_release}" \
+	        && -n "${img_release}" && "${img_release}" != "${this_release}" ]]
+	then
+		bad="release: image is ${img_distro} ${img_release}, this machine is ${this_release}"
+	fi
+
+	if [[ -n "${bad}" ]]
+	then
+		echo >&2
+		echo "REFUSING: ${bad}." >&2
+		echo "These binaries are linked against that distro's" >&2
+		echo "libraries; installing anyway gives unresolved symbols at" >&2
+		echo "runtime, long after this command succeeded." >&2
+		echo "Pass --force if you really mean it, or --prefix DIR to" >&2
+		echo "unpack without installing." >&2
+		if [[ "${FORCE}" -eq 0 ]]
+		then
+			exit 1
+		fi
+		echo "==> --force given; continuing anyway" >&2
+	fi
+fi
+
+# The file set this image will install, as paths relative to the root.
+# Symlinks count: the image is full of libfoo.so -> libfoo.so.1.2.3.
+NEW_LIST="$(mktemp)"
+STALE_LIST="$(mktemp)"
+trap 'cleanup; rm -f "${NEW_LIST}" "${STALE_LIST}"' EXIT
+
+( cd "${MNT}" && find usr etc \( -type f -o -type l \) -print 2>/dev/null ) \
+	| LC_ALL=C sort > "${NEW_LIST}"
+
+new_count="$(wc -l < "${NEW_LIST}")"
+echo "==> Image contains ${new_count} files ($(du -sh "${MNT}/usr" 2>/dev/null | cut -f1))"
+
+# Files the previous install wrote that this image does not have.  Only
+# ever paths from OUR manifest, so nothing outside what we installed can
+# be considered for deletion.
+: > "${STALE_LIST}"
+if [[ -r "${INSTALLED_MANIFEST}" && "${NO_PRUNE}" -eq 0 ]]
+then
+	LC_ALL=C sort "${INSTALLED_MANIFEST}" \
+		| LC_ALL=C comm -23 - "${NEW_LIST}" > "${STALE_LIST}"
+fi
+stale_count="$(wc -l < "${STALE_LIST}")"
+
+if [[ "${stale_count}" -gt 0 ]]
+then
+	echo "==> ${stale_count} file(s) from the previous install are gone in this one:"
+	head -10 "${STALE_LIST}" | sed 's|^|    - /|'
+	if [[ "${stale_count}" -gt 10 ]]
+	then
+		echo "    ... and $((stale_count - 10)) more"
+	fi
+fi
+
+if [[ "${DRY_RUN}" -eq 1 ]]
+then
+	echo
+	echo "==> Dry run; nothing written."
+	exit 0
+fi
+
+if [[ "${DEST}" == "" && "${EUID:-$(id -u)}" -ne 0 ]]
+then
+	echo "Installing to / needs root.  Re-run with sudo," \
+	     "or use --prefix DIR." >&2
+	exit 1
+fi
+
+echo "==> Installing"
+mkdir -p "${DEST}/usr"
+cp -a "${MNT}/usr/." "${DEST}/usr/"
+if [[ -d "${MNT}/etc" ]]
+then
+	mkdir -p "${DEST}/etc"
+	cp -a "${MNT}/etc/." "${DEST}/etc/"
+fi
+
+# Prune after copying, never before: a crash between the two would
+# otherwise leave the machine with neither the old cmacs nor the new
+# one.  Directories are left alone; an empty one is harmless, and
+# removing them recursively is how an installer eats something it does
+# not own.
+if [[ "${stale_count}" -gt 0 ]]
+then
+	echo "==> Removing ${stale_count} stale file(s)"
+	while IFS= read -r rel
+	do
+		[[ -n "${rel}" ]] || continue
+		if [[ -f "${DEST}/${rel}" || -L "${DEST}/${rel}" ]]
+		then
+			rm -f "${DEST}/${rel}"
+		fi
+	done < "${STALE_LIST}"
+fi
+
+# The manifest is what makes the NEXT update able to prune.  Written
+# last, so an interrupted install leaves the older manifest in place
+# and the next run re-prunes from a state we know we wrote.
+install -d -m 0755 "${DEST}/$(dirname "${MANIFEST_REL}")"
+cp "${NEW_LIST}" "${DEST}/${MANIFEST_REL}"
+chmod 0644 "${DEST}/${MANIFEST_REL}"
+
+if [[ "${DEST}" == "" ]]
+then
+	echo "==> ldconfig"
+	ldconfig
+fi
+
+echo
+if [[ -n "${have_version}" ]]
+then
+	echo "Updated ${have_version} -> ${want_version:-unknown}."
+else
+	echo "Installed ${want_version:-cmacs}."
+fi
+echo "Try:"
+echo "    emacs --version"
+echo "    emacs --gowl        # the compositor session"
+echo "    cmacsctl instances  # talk to a running one"
+
+if [[ "${bundled_wayland}" == "yes" ]]
+then
+	cat <<'EOF'
+
+NOTE: this image bundles a newer wayland/pixman than your distro
+      packages, because its wlroots needs them.  They install
+      alongside the distro's and satisfy every existing consumer,
+      but a later upgrade of libwayland-server0 repoints the soname
+      symlink back at the distro build.  Re-run this script if cmacs
+      stops starting after a system upgrade.
+EOF
+fi

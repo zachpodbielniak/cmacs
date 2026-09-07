@@ -181,6 +181,43 @@ install-deps:
 check-deps:
     ./install-deps --check
 
+# The names, not the installation.  Everything explanatory goes to stderr
+# and exactly one install command to stdout, so this pipes and pastes:
+# `just deps-list arch 2>/dev/null', `just deps-list | bash'.  PLATFORM
+# defaults to this machine's distro.
+
+# Print a paste-ready package install command (fedora|debian|arch|macos|freebsd).
+[group('build')]
+deps-list PLATFORM='':
+    ./install-deps --packages {{ PLATFORM }}
+
+# Build the cmacs container image.  TARGET is a fedora version (44), an
+# ubuntu version (24.04, 26.04) or `arch'; the base image is inferred from
+# its shape.  Pass --push to publish.
+
+# Build a distro container image (default: Fedora 44).
+[group('build')]
+container TARGET='44' *EXTRA:
+    ./build-container {{ TARGET }} {{ EXTRA }}
+
+# Unpack a prebuilt image onto this machine instead of building for hours.
+# The same command updates an existing install: it prunes files the previous
+# image had and this one does not, so a renamed library cannot linger.  Needs
+# root for the default / prefix; --check, --dry-run and --prefix DIR do not.
+
+# Install or update cmacs from a prebuilt container image.
+[group('build')]
+install-from-container *ARGS:
+    ./install-from-container {{ ARGS }}
+
+# Is a newer image published than the one installed?  Exits non-zero if so,
+# so it composes: `just container-update-available && sudo just install-from-container'.
+
+# Check whether a container update is available (no changes made).
+[group('build')]
+container-check:
+    ./install-from-container --check
+
 # The top-level `make' builds deps/ in-tree, so a fresh clone cannot build
 # without them.  Idempotent: a no-op once they are at the right commit.
 

@@ -427,6 +427,24 @@ It reports the pkg-config modules and tools the build actually uses —
 not package names, which drift between releases — and separates the
 ones that fail the build from the ones that merely narrow a feature.
 
+To get the package *names* rather than have them installed — to paste
+into an image build, a ticket, or another machine — =just deps-list=
+prints one ready-to-run install command and nothing else on stdout:
+
+#+begin_src bash
+just deps-list                    # this machine's distro
+just deps-list arch               # sudo pacman -S --needed --noconfirm ...
+just deps-list debian             # sudo apt-get install -y ...
+just deps-list fedora             # sudo dnf install -y ...
+make deps-list-arch               # same thing, without just
+#+end_src
+
+Everything explanatory goes to stderr, so =just deps-list arch 2>/dev/null=
+is a clean one-liner and =make deps-list | bash= works.  The =make=
+targets run in an *unconfigured* tree — that is the point of them,
+since the machine that needs the list is the one that cannot configure
+yet.
+
 ** Quick Start (explicit steps)
 
 #+begin_src bash
@@ -787,6 +805,88 @@ sudo ldconfig   # refresh linker cache
 #+end_src
 
 Then configure with =--with-cmacs-crispy=system= etc.
+
+** Container images (build once, install anywhere)
+
+Building cmacs from source on a small machine is genuinely slow — on a
+two- or four-core box it runs for hours.  The container images exist so
+that machine never has to: cmacs is built once, centrally, and the
+result is unpacked onto the host.
+
+The image is a =FROM scratch= stage holding only =/usr= and =/etc=, so
+"installing" it is a copy.  That is also how [[https://gitlab.com/immutablue/immutablue][immutablue]] consumes it.
+
+*** Building
+
+#+begin_src bash
+./build-container                 # Fedora 44, the default
+./build-container 44 --push       # Fedora 44    -> quay.io/.../cmacs:44
+./build-container 24.04 --push    # Ubuntu 24.04 -> :24.04
+./build-container 26.04 --push    # Ubuntu 26.04 -> :26.04
+./build-container arch --push     # Arch Linux   -> :arch
+
+just container arch --push        # the same, via just
+#+end_src
+
+There is one positional argument and no =--distro= flag to forget — the
+target is inferred from its *shape*: a word for Arch, =MAJOR.MINOR= for
+Ubuntu, a bare integer for Fedora.  The tag is always
+=quay.io/zachpodbielniak/cmacs:<what you typed>=; override the registry
+with =REGISTRY==.  Anything after =--= goes straight to buildah.
+
+*** Installing and updating
+
+#+begin_src bash
+sudo ./install-from-container             # detect this distro, pull, install
+sudo ./install-from-container             # ...and again, to update
+./install-from-container --check          # is an update available?
+./install-from-container --dry-run        # show what would change
+sudo ./install-from-container arch        # force a target
+./install-from-container --prefix /tmp/x  # unpack elsewhere, no root
+
+just install-from-container               # the same, via just
+just container-check
+#+end_src
+
+Installing and updating are the same command.  A second run copies the
+new image over the top and then *removes the files the previous image
+had and this one does not* — the install records every path it wrote to
+=/usr/share/cmacs/container-manifest=.  Without that step a renamed
+library or a dropped module lingers forever and =ld.so= keeps loading
+it, which is worse than a missing file: everything appears to work
+until it doesn't.  =--no-prune= opts out.  Copy happens before prune,
+so an interrupted update leaves a machine with both versions' files
+rather than neither.
+
+=--check= touches nothing and exits non-zero when an update is
+available, so it composes:
+
+#+begin_src bash
+./install-from-container --check || sudo ./install-from-container
+#+end_src
+
+The target is detected from =/etc/os-release= with the same =ID= then
+=ID_LIKE= fall-through =install-deps= uses, so derivatives resolve to
+their base.  Every image records what it was built from at
+=/usr/share/cmacs/container-release= (distro, release, libdir, arch,
+build time, version), and the installer compares that against *this
+machine* — not against the image's own tag, which would be circular —
+refusing on a distro, release or architecture mismatch.  Those binaries
+are linked against that distro's libraries, and the failure would
+otherwise surface much later as an unresolved symbol.  =--force=
+overrides; =--prefix DIR= skips the check, since unpacking into a
+directory is staging, not installing.
+
+*** Ubuntu 24.04
+
+Noble ships wlroots 0.17, wayland 1.22 and pixman 0.42; gowl needs
+wlroots ≥ 0.19, which needs wayland ≥ 1.23.1 and pixman ≥ 0.43.  The
+builder compiles that stack from source for the 24.04 target only, and
+stages the resulting libraries into the image so it actually runs on a
+noble host.  The probe is on =pkg-config=, not on the distro version,
+so a release that starts shipping a new enough wlroots takes the fast
+path automatically.  See =doc_org/cmacs/build.org= → *Container images*
+for the two ways this fails silently if you change it.
 
 ** Android APK (containerized, Doom Emacs embedded)
 

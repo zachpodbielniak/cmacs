@@ -1,10 +1,37 @@
-# FEDORA_VERSION controls which wlroots gowl builds against: Fedora 44+
-# ships wlroots 0.20 (per-window screencast capture), 42/43 ship 0.19
-# (monitor-only).  Bump to 44+ (`--build-arg FEDORA_VERSION=44`) for an
-# image whose gowl can window-capture.
-ARG FEDORA_VERSION=43
-FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS builder
-ARG FEDORA_VERSION
+# cmacs container image.
+#
+# One recipe, three distro families.  build-container picks the base
+# image and passes CMACS_DISTRO; everything after the package install
+# is identical, because it is all `make'.
+#
+#   ./build-container 44        Fedora 44   (the default)
+#   ./build-container 24.04     Ubuntu 24.04
+#   ./build-container 26.04     Ubuntu 26.04
+#   ./build-container arch      Arch Linux
+#
+# The image is a scratch stage holding only /usr and /etc, so a
+# consumer installs it by copying:
+#
+#   cp -a /mnt-cmacs/usr/. /usr/   (immutablue does exactly this)
+#   ./install-container            (does it for a running system)
+#
+# Which is the point of building for several distros centrally: a
+# two-core Arch box takes hours to build cmacs and seconds to unpack
+# it.
+#
+# CMACS_DISTRO selects the package manager and the wlroots strategy.
+# CMACS_RELEASE is the distro version, used only for the image's
+# release marker.
+#
+# gowl builds against wlroots 0.19 or 0.20 (newest present wins; 0.20
+# adds per-window screencast capture).  Fedora 44+, Arch and Ubuntu
+# 26.04 all carry one of those.  Ubuntu 24.04 ships 0.17, so the
+# builder compiles the Wayland stack from source -- see the
+# wlroots-from-source stage below.
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora:44
+FROM ${BASE_IMAGE} AS builder
+ARG CMACS_DISTRO=fedora
+ARG CMACS_RELEASE=44
 
 # ---------------------------------------------------------------------
 # Default voice + STT model bundled into the image.  Override at build
@@ -26,49 +53,164 @@ ARG PIPER_VOICE_NAME=en_US-amy-low.onnx
 ARG PIPER_VOICE_DIR=en/en_US/amy/low
 ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main
 
-# System build dependencies
-# wlroots: gowl builds against 0.19 or 0.20 (newest present wins; 0.20
-# adds per-window screencast capture).  wlroots-devel is the right
-# package on every Fedora release -- it is 0.20 on 44+ and 0.19 on
-# 42/43 -- so no version branch is needed.
-RUN dnf install -y \
-        autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
-        which git \
-        gnutls-devel ncurses-devel zlib-devel \
-        gtk3-devel \
-        webkit2gtk4.1-devel \
-        libgccjit-devel \
-        libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel \
-        librsvg2-devel libwebp-devel \
-        libotf-devel m17n-lib-devel \
-        jansson-devel \
-        libtree-sitter-devel \
-        glib2-devel gobject-introspection-devel \
-        wlroots-devel wayland-devel wayland-protocols-devel \
-        libinput-devel libxkbcommon-devel pango-devel cairo-devel \
-        libdecor-devel libdrm-devel pixman-devel \
-        libeis-devel \
-        libxcb-devel xcb-util-wm-devel \
-        libyaml-devel json-glib-devel libdex-devel \
-        libzip-devel libxml2-devel \
-        gdk-pixbuf2-devel \
-        libsoup3-devel readline-devel \
-        libetpan-devel sqlite-devel libpq-devel \
-        cmark-devel \
-        opencascade-devel \
-        libssh2-devel libvirt-devel pam-devel \
-        elfutils-devel elfutils-debuginfod-client-devel binutils-devel \
-        gstreamer1-devel gstreamer1-plugins-base-devel \
-        gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
-        gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free \
-        gstreamer1-libav \
-        pipewire-devel pipewire-libs pulseaudio-libs-devel \
-        cmake espeak-ng python3-pip \
-        mesa-libGL-devel libX11-devel libXrandr-devel libXcursor-devel \
-        libXinerama-devel libXi-devel \
-        ffmpeg-free wl-clipboard \
-        curl \
-    && dnf clean all
+# ---------------------------------------------------------------------
+# System build dependencies.
+#
+# Spelled out per distro rather than deferred to ./install-deps: a
+# container needs things a developer's machine already has (curl, git,
+# ca-certificates) and does not want things a developer does (the
+# ImageMagick/GJS/LuaJIT extras).  install-deps stays the source of
+# truth for a *host* install -- `make deps-list' prints exactly what it
+# would put there.
+#
+# wlroots: gowl builds against 0.19 or 0.20, newest present wins.
+# Fedora's wlroots-devel is the right name on every release (0.20 on
+# 44+, 0.19 on 42/43).  Arch versions the package (wlroots0.20).
+# Ubuntu versions it too (libwlroots-0.19-dev on 26.04) but 24.04 has
+# only 0.17, handled further down.
+# ---------------------------------------------------------------------
+RUN set -eux; \
+    case "${CMACS_DISTRO}" in \
+    fedora) \
+        dnf install -y \
+            autoconf automake gcc gcc-c++ make pkgconf-pkg-config texinfo \
+            which git \
+            gnutls-devel ncurses-devel zlib-devel \
+            gtk3-devel \
+            webkit2gtk4.1-devel \
+            libgccjit-devel \
+            libXpm-devel libjpeg-turbo-devel giflib-devel libtiff-devel \
+            librsvg2-devel libwebp-devel \
+            libotf-devel m17n-lib-devel \
+            jansson-devel \
+            libtree-sitter-devel \
+            glib2-devel gobject-introspection-devel \
+            wlroots-devel wayland-devel wayland-protocols-devel \
+            libinput-devel libxkbcommon-devel pango-devel cairo-devel \
+            libdecor-devel libdrm-devel pixman-devel \
+            libeis-devel \
+            libxcb-devel xcb-util-wm-devel \
+            libyaml-devel json-glib-devel libdex-devel \
+            libzip-devel libxml2-devel \
+            gdk-pixbuf2-devel \
+            libsoup3-devel readline-devel \
+            libetpan-devel sqlite-devel libpq-devel \
+            cmark-devel \
+            opencascade-devel \
+            libssh2-devel libvirt-devel pam-devel \
+            elfutils-devel elfutils-debuginfod-client-devel binutils-devel \
+            gstreamer1-devel gstreamer1-plugins-base-devel \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
+            gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free \
+            gstreamer1-libav \
+            pipewire-devel pipewire-libs pulseaudio-libs-devel \
+            cmake espeak-ng python3-pip \
+            mesa-libGL-devel libX11-devel libXrandr-devel libXcursor-devel \
+            libXinerama-devel libXi-devel \
+            ffmpeg-free wl-clipboard \
+            curl \
+        ; \
+        dnf clean all; \
+        ;; \
+    ubuntu|debian) \
+        export DEBIAN_FRONTEND=noninteractive; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            autoconf automake gcc g++ make pkg-config texinfo \
+            ca-certificates curl git \
+            libgnutls28-dev libncurses-dev zlib1g-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libxpm-dev libjpeg-dev libgif-dev libtiff-dev \
+            librsvg2-dev libwebp-dev \
+            libotf-dev libm17n-dev \
+            libjansson-dev \
+            libtree-sitter-dev \
+            libglib2.0-dev libgirepository1.0-dev \
+            libwayland-dev libwayland-bin wayland-protocols \
+            libinput-dev libxkbcommon-dev libpango1.0-dev libcairo2-dev \
+            libdecor-0-dev libdrm-dev libpixman-1-dev \
+            libei-dev \
+            libxcb1-dev libxcb-icccm4-dev \
+            libyaml-dev libjson-glib-dev \
+            libzip-dev libxml2-dev \
+            libgdk-pixbuf-2.0-dev \
+            libsoup-3.0-dev libreadline-dev \
+            libetpan-dev libsqlite3-dev libpq-dev \
+            libcmark-dev \
+            libocct-foundation-dev libocct-modeling-data-dev \
+            libocct-modeling-algorithms-dev libocct-data-exchange-dev \
+            libeigen3-dev \
+            libssh2-1-dev libvirt-dev libpam0g-dev \
+            libdw-dev libelf-dev libdebuginfod-dev binutils-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            libpipewire-0.3-dev libpulse-dev \
+            cmake espeak-ng python3-pip python3-venv \
+            libgl1-mesa-dev libegl1-mesa-dev libpng-dev \
+            libx11-dev libxrandr-dev libxcursor-dev \
+            libxinerama-dev libxi-dev \
+            ffmpeg wl-clipboard \
+            meson ninja-build \
+        ; \
+        gcc_major="$(gcc -dumpversion | cut -d. -f1)"; \
+        apt-get install -y --no-install-recommends \
+            "libgccjit-${gcc_major}-dev" || \
+            apt-get install -y --no-install-recommends libgccjit-dev; \
+        apt-get install -y --no-install-recommends libgirepository-2.0-dev \
+            || echo "NOTE: no libgirepository-2.0-dev on this release"; \
+        apt-get install -y --no-install-recommends libdex-dev \
+            || echo "NOTE: no libdex-dev on this release"; \
+        apt-get install -y --no-install-recommends libmariadb-dev \
+            || echo "NOTE: no libmariadb-dev on this release"; \
+        for v in 0.20 0.19; do \
+            apt-get install -y --no-install-recommends \
+                "libwlroots-${v}-dev" && break; \
+        done \
+            || echo "NOTE: no wlroots >= 0.19 packaged; building from source"; \
+        ;; \
+    arch) \
+        pacman -Syu --noconfirm --needed \
+            autoconf automake gcc make pkgconf texinfo \
+            which git curl \
+            gnutls ncurses zlib \
+            gtk3 webkit2gtk-4.1 \
+            libgccjit \
+            libxpm libjpeg-turbo giflib libtiff librsvg libwebp \
+            libotf m17n-lib \
+            jansson \
+            tree-sitter \
+            glib2 gobject-introspection libgirepository \
+            wayland wayland-protocols \
+            libinput libxkbcommon pango cairo \
+            libdecor pixman libei \
+            libxcb xcb-util-wm \
+            libyaml json-glib libdex \
+            libzip libxml2 \
+            gdk-pixbuf2 \
+            libsoup3 readline \
+            libetpan sqlite postgresql-libs \
+            cmark \
+            opencascade eigen \
+            libssh2 libvirt pam \
+            elfutils debuginfod binutils \
+            gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
+            gst-plugins-ugly gst-libav \
+            pipewire libpulse \
+            cmake espeak-ng python-pip \
+            mesa libglvnd libpng \
+            libx11 libxrandr libxcursor libxinerama libxi \
+            ffmpeg wl-clipboard \
+            mariadb-libs \
+        ; \
+        pacman -S --noconfirm --needed wlroots0.20 \
+            || pacman -S --noconfirm --needed wlroots0.19; \
+        pacman -Scc --noconfirm; \
+        ;; \
+    *) \
+        echo "Unsupported CMACS_DISTRO: ${CMACS_DISTRO}" >&2; exit 1; \
+        ;; \
+    esac
 # pipewire-devel + pulseaudio-libs-devel: cmacs-audio capture source
 # (pipewiresrc preferred, pulsesrc fallback).  cmake: bundled
 # whisper.cpp build.  git: cad-glib's Manifold kernel CMake clones its
@@ -76,7 +218,7 @@ RUN dnf install -y \
 # dies with "could not find git for clone of clipper2-populate".
 # espeak-ng: phonemiser used by piper-tts.
 # python3-pip: installs the piper-tts CLI in the later RUN step.
-# opencascade-devel: the OpenCASCADE B-rep kernel for --with-cmacs-cad.
+# opencascade: the OpenCASCADE B-rep kernel for --with-cmacs-cad.
 # Fedora ships no opencascade.pc, so cad-glib probes it by header+library
 # (deps/cad-glib/config.mk); without this package the image builds CAD
 # mesh-only (Manifold CSG, no B-rep) and a stale host .pc leaking -lTKernel
@@ -85,15 +227,121 @@ RUN dnf install -y \
 # binutils-devel: provides dis-asm.h / libopcodes for cpatch's
 # (currently optional) prologue probe.  cmacs builds without it via
 # a built-in fallback.
-# ffmpeg-free: the ffmpeg/ffprobe binaries the vidstudio Reel video
-# source/exporter shell out to (video clips + mp4/gif export); the free
-# build decodes/encodes the open codecs, swap in RPM Fusion ffmpeg for
-# H.264 Main/High.  wl-clipboard: imgedit's clipboard fallback for
+# ffmpeg: the ffmpeg/ffprobe binaries the vidstudio Reel video
+# source/exporter shell out to (video clips + mp4/gif export); Fedora's
+# free build decodes/encodes the open codecs, swap in RPM Fusion ffmpeg
+# for H.264 Main/High.  wl-clipboard: imgedit's clipboard fallback for
 # GTK-less sessions (emacs --lrg / tty).
-# mesa-libGL-devel + libX11-devel + the four X11 input libs:
+# mesa GL + the X11 input libs:
 # raylib (via deps/libregnum/deps/graylib) needs these even when we
 # run with FLAG_WINDOW_HIDDEN because raylib's InitWindow still
 # initialises X11 to construct the offscreen GL context.
+#
+# Ubuntu's apt lines end in `|| echo NOTE' for the handful of packages
+# that exist on some releases and not others (libdex-dev arrived in
+# 24.10, libgirepository-2.0-dev later still).  A hard failure there
+# would make the whole image unbuildable on the older LTS for want of
+# an optional subsystem.
+
+# ---------------------------------------------------------------------
+# The Wayland stack, from source, when the distro's is too old.
+#
+# gowl needs wlroots >= 0.19; Ubuntu 24.04 (noble) ships 0.17, along
+# with wayland 1.22 (wlroots wants >= 1.23.1) and pixman 0.42 (wants
+# >= 0.43).  Everything else -- Fedora 44, Arch, Ubuntu 26.04 -- has a
+# usable wlroots in its repositories and skips this entirely.
+#
+# The probe is on pkg-config rather than on the distro version, so a
+# release that starts shipping a new enough wlroots stops building it
+# from source without anyone editing this file.
+#
+# Two details that are easy to get wrong, both silent:
+#
+#   * libdir.  Installing to /usr/lib on Debian/Ubuntu does NOT shadow
+#     the distro's libraries: /usr/lib/<triplet>/pkgconfig is searched
+#     first, so meson happily reports "found 1.22.0 but need >=1.23.1"
+#     with a freshly built 1.23.1 sitting in /usr/lib.  The libdir is
+#     therefore taken from the multiarch triplet.
+#
+#   * staging.  The final image is only /build/stage, so a library
+#     built here and installed to the builder's /usr is NOT in the
+#     image -- the result links against wayland 1.23 symbols and lands
+#     on a host that has 1.22.  The install is done twice: once into
+#     the builder so cmacs can build, and once into a scratch DESTDIR
+#     whose libdir alone is copied into the stage.  Headers are
+#     deliberately left behind; the image must not shadow the distro's
+#     wayland headers for anything else the user compiles.
+#
+# libwayland and pixman have only ever added to their ABI, so the newer
+# copies satisfy every existing consumer.  wlroots 0.19 carries its
+# version in its soname and coexists with the distro's 0.17.  The one
+# standing caveat is that a later `apt upgrade' of libwayland-server0
+# repoints the soname symlink back at the distro's build; re-running
+# install-container puts it right.  install-container says so.
+# ---------------------------------------------------------------------
+ARG WAYLAND_VERSION=1.23.1
+ARG WAYLAND_PROTOCOLS_VERSION=1.41
+ARG PIXMAN_VERSION=pixman-0.44.2
+ARG WLROOTS_VERSION=0.19
+
+RUN set -eux; \
+    if pkg-config --exists wlroots-0.20 || pkg-config --exists wlroots-0.19; then \
+        echo "==> Distro wlroots is usable:"; \
+        pkg-config --modversion wlroots-0.20 2>/dev/null \
+            || pkg-config --modversion wlroots-0.19; \
+        exit 0; \
+    fi; \
+    echo "==> No usable wlroots; building the Wayland stack from source"; \
+    libdir="lib64"; \
+    case "${CMACS_DISTRO}" in \
+    ubuntu|debian) \
+        export DEBIAN_FRONTEND=noninteractive; \
+        apt-get install -y --no-install-recommends \
+            meson ninja-build git ca-certificates \
+            libffi-dev libexpat1-dev libxml2-dev docbook-xsl xsltproc \
+            libudev-dev libseat-dev libdisplay-info-dev libliftoff-dev \
+            hwdata libgbm-dev libvulkan-dev glslang-tools \
+            libxcb-composite0-dev libxcb-ewmh-dev \
+            libxcb-render-util0-dev libxcb-res0-dev libxcb-xinput-dev \
+            libxcb-dri3-dev libxcb-present-dev libxcb-shm0-dev \
+            libxcb-xfixes0-dev libxcb-randr0-dev \
+            python3-setuptools \
+        ; \
+        apt-get install -y --no-install-recommends libxcb-errors-dev \
+            || echo "NOTE: no libxcb-errors-dev; X11 errors print as codes"; \
+        libdir="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
+        ;; \
+    esac; \
+    echo "==> Wayland stack libdir: /usr/${libdir}"; \
+    stage="/build/wayland-stage"; \
+    mkdir -p "${stage}" /build/wayland-src; \
+    cd /build/wayland-src; \
+    \
+    for spec in \
+        "wayland|https://gitlab.freedesktop.org/wayland/wayland.git|${WAYLAND_VERSION}|-Ddocumentation=false -Dtests=false" \
+        "wayland-protocols|https://gitlab.freedesktop.org/wayland/wayland-protocols.git|${WAYLAND_PROTOCOLS_VERSION}|-Dtests=false" \
+        "pixman|https://gitlab.freedesktop.org/pixman/pixman.git|${PIXMAN_VERSION}|-Dtests=disabled -Ddemos=disabled" \
+        "wlroots|https://gitlab.freedesktop.org/wlroots/wlroots.git|${WLROOTS_VERSION}|-Dexamples=false -Dbackends=drm,libinput,x11 -Drenderers=gles2,vulkan" \
+    ; do \
+        name="${spec%%|*}"; rest="${spec#*|}"; \
+        url="${rest%%|*}"; rest="${rest#*|}"; \
+        ref="${rest%%|*}"; opts="${rest#*|}"; \
+        echo "==> ${name} ${ref}"; \
+        git clone --depth 1 -b "${ref}" "${url}" "${name}"; \
+        meson setup "${name}/build" "${name}" \
+            --prefix=/usr --libdir="${libdir}" ${opts}; \
+        ninja -C "${name}/build"; \
+        ninja -C "${name}/build" install; \
+        DESTDIR="${stage}" ninja -C "${name}/build" install; \
+        ldconfig; \
+    done; \
+    \
+    mkdir -p "/build/stage/usr/${libdir}"; \
+    cp -a "${stage}/usr/${libdir}/." "/build/stage/usr/${libdir}/"; \
+    rm -rf "/build/stage/usr/${libdir}/pkgconfig"; \
+    rm -rf /build/wayland-src "${stage}"; \
+    touch /build/stage/.bundled-wayland; \
+    pkg-config --modversion wlroots-0.19
 
 COPY . /build/cmacs
 WORKDIR /build/cmacs
@@ -118,19 +366,18 @@ RUN rm -f .git \
     && rm -rf native-lisp src/*.pdmp deps/whisper.cpp/build \
     && for dep in mcp-glib crispy bacon gowl podomation ai-glib libreclaw; do \
            if [ -d "deps/${dep}" ]; then \
-               case "${dep}" in \
-                   ai-glib) make -C "deps/${dep}" clean all PREFIX=/usr GIR=1;; \
-                   *)       make -C "deps/${dep}" clean all PREFIX=/usr;; \
-               esac; \
-               case "${dep}" in \
-                   ai-glib) make -C "deps/${dep}" install PREFIX=/usr GIR=1;; \
-                   *)       make -C "deps/${dep}" install PREFIX=/usr;; \
-               esac; \
+               gir=""; \
+               if [ "${dep}" = "ai-glib" ]; then gir="GIR=1"; fi; \
+               make -C "deps/${dep}" clean all PREFIX=/usr ${gir} \
+                   || { echo "FAILED: build ${dep}" >&2; exit 1; }; \
+               make -C "deps/${dep}" install PREFIX=/usr ${gir} \
+                   || { echo "FAILED: install ${dep}" >&2; exit 1; }; \
            fi; \
        done \
     && if ! command -v piper >/dev/null 2>&1; then \
-           dnf install -y python3-pip espeak-ng \
-              && pip install --no-cache-dir piper-tts; \
+           pip3 install --no-cache-dir piper-tts \
+             || pip3 install --no-cache-dir --break-system-packages piper-tts \
+             || echo "NOTE: piper-tts not installed; cmacs-piper needs it at runtime"; \
        fi \
     && ldconfig
 # Piper (OHF-Voice piper1-GPL fork) ships as a Python package; the
@@ -219,16 +466,60 @@ RUN ./autogen.sh \
         --with-cmacs-transcribe \
         --with-cmacs-calculator \
         --with-cmacs-lsp \
-
         --with-cmacs-dbexplorer \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"$(nproc)" \
     && make install DESTDIR=/build/stage
 
-# Register cmacs API library path so bacon modules can find libcmacs-api.so
-RUN mkdir -p /build/stage/etc/ld.so.conf.d \
-    && echo "/usr/lib64/cmacs" > /build/stage/etc/ld.so.conf.d/cmacs.conf
+# ---------------------------------------------------------------------
+# Register the cmacs API library path so bacon modules can find
+# libcmacs-api.so, and stamp the image with what it was built from.
+#
+# The libdir is READ OFF the staged tree rather than hardcoded: Fedora
+# and Arch install to /usr/lib64, Debian/Ubuntu to
+# /usr/lib/x86_64-linux-gnu.  A wrong path here is silent -- ldconfig
+# is happy to cache a directory that does not exist, and the failure
+# only shows up much later as a bacon module that will not load.
+#
+# container-release is what install-container reads to refuse an image
+# built for another distro.  It is also just useful: an unpacked /usr
+# otherwise says nothing about where it came from.
+# ---------------------------------------------------------------------
+RUN set -eux; \
+    libdir=""; \
+    for d in /build/stage/usr/lib64/cmacs \
+             /build/stage/usr/lib/*/cmacs \
+             /build/stage/usr/lib/cmacs; do \
+        if [ -d "$d" ]; then \
+            libdir="${d#/build/stage}"; \
+            break; \
+        fi; \
+    done; \
+    if [ -z "$libdir" ]; then \
+        echo "no staged cmacs libdir found" >&2; \
+        find /build/stage/usr -name 'libcmacs-api.so*' >&2 || true; \
+        exit 1; \
+    fi; \
+    echo "==> cmacs libdir: ${libdir}"; \
+    mkdir -p /build/stage/etc/ld.so.conf.d; \
+    echo "${libdir}" > /build/stage/etc/ld.so.conf.d/cmacs.conf; \
+    mkdir -p /build/stage/usr/share/cmacs; \
+    { \
+        echo "distro=${CMACS_DISTRO}"; \
+        echo "release=${CMACS_RELEASE}"; \
+        echo "libdir=${libdir}"; \
+        echo "arch=$(uname -m)"; \
+        if [ -f /build/stage/.bundled-wayland ]; then \
+            echo "bundled_wayland=yes"; \
+        else \
+            echo "bundled_wayland=no"; \
+        fi; \
+        echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+        echo "version=$(sed -n 's/^AC_INIT(\[GNU Emacs\], *\[\([^]]*\)\].*/\1/p' configure.ac | head -1)"; \
+    } > /build/stage/usr/share/cmacs/container-release; \
+    rm -f /build/stage/.bundled-wayland; \
+    cat /build/stage/usr/share/cmacs/container-release
 
 # Build and install cmacs-mcp stdio relay (MCP client support)
 RUN make -C tools/cmacs-mcp clean all PREFIX=/usr \
