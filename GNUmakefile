@@ -87,6 +87,14 @@ CMACS_DEPS_GOALS = deps-list deps-list-fedora deps-list-debian \
 
 .PHONY: $(CMACS_DEPS_GOALS)
 
+## These are the FIRST targets in this file, and make takes the first
+## target it sees as the default goal.  Without this line a bare `make'
+## stopped building Emacs and printed a package list instead -- which
+## looks like a successful no-op, so a tree can sit unbuilt for hours
+## while every `make' appears to succeed.  `all' is what the included
+## Makefile means by default, and what it meant before these existed.
+.DEFAULT_GOAL := all
+
 ## Spelled out one target each rather than a `deps-list-%' pattern:
 ## GNU make does not apply pattern rules to .PHONY targets, so the
 ## pattern silently reported "Nothing to be done" for every distro.

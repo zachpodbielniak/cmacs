@@ -439,7 +439,32 @@ gowl *ARGS: gowl-modules
 # Build the gowl modules `just gowl' loads (debug tree, no ASan).
 [group('build')]
 gowl-modules:
-    @make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 modules
+    #!/usr/bin/env bash
+    set -euo pipefail
+    make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 modules
+    # A module and the compositor inside src/emacs must agree on the
+    # SHAPE of GowlClient.  Modules include core-private.h and read
+    # c->scene, c->mon and friends directly, so a field added to that
+    # struct moves every field after it -- and a module built against the
+    # new layout talking to an src/emacs built against the old one reads
+    # garbage pointers.
+    #
+    # It does not crash.  It surfaces as
+    #   GLib-GObject-CRITICAL: invalid uninstantiatable type '(null)'
+    #                          in cast to 'GObject'
+    # on every client map, and windows simply never appear -- while the
+    # bar, the wallpaper and the compositor itself look perfectly fine.
+    hdr="{{ gowl_dir }}/src/core/gowl-core-private.h"
+    if [[ -f src/emacs && "$hdr" -nt src/emacs ]]; then
+        echo "" >&2
+        echo "ERROR: $hdr is newer than src/emacs." >&2
+        echo "  The gowl modules and the compositor linked into" >&2
+        echo "  src/emacs would disagree about the layout of" >&2
+        echo "  GowlClient, and windows would never map." >&2
+        echo "  Rebuild cmacs first:  make -j\$(nproc)" >&2
+        echo "" >&2
+        exit 1
+    fi
 
 # Run cmacs --gowl under valgrind (slow, but catches use-after-free).
 [group('run')]
