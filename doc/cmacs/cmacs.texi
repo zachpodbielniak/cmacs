@@ -3871,7 +3871,8 @@ regions existed needs no changes.
 
 With no configuration at all the bar shows a shipped layout: the tag
 row and title left, the clock anchored centre, @code{cpu memory disk
-battery} right.  That layout is a starting point, not a base to add to
+battery tailscale} right.  Widgets that can tell whether they apply to
+a host hide themselves there, so it is usable unconfigured.  That layout is a starting point, not a base to add to
 --- the first configuration naming any widget list replaces it
 wholesale, including regions it does not mention.
 
@@ -3928,9 +3929,16 @@ Charge level and the session's power actions and profiles.
 Networking: the connection with a full panel (ping, rates, totals,
 signal, DNS provider, the Wi-Fi list), plus the individual readouts.
 @item tailscale
-Tailnet state, peers and exit nodes.  Hides itself entirely when
-Tailscale is not installed, and says so once when it is installed but
-has never signed in.
+Tailnet state, peers and exit nodes.  Ships in the default layout and
+decides for itself whether it belongs: ``is Tailscale installed'' is
+the wrong question on an image that ships it, so the widget keys on
+whether this host has actually joined a tailnet
+(@code{HaveNodeKey} in @code{tailscale status --json}, which stays true
+across a @code{tailscale down}).  Hidden on a host that never joined,
+shown and dimmed on one whose tailnet is down --- that is actionable,
+and the switch is one click away in the panel.  It keeps polling while
+hidden, so @code{tailscale up} makes it appear within a poll.  Override
+with @code{tailscale:always} or @code{tailscale:never}.
 @item audio, media
 PipeWire volume with a device panel (via @command{wpctl}), MPRIS
 now-playing with transport controls (via @command{playerctl}).  The
@@ -4299,10 +4307,10 @@ that names @code{GOWL_BAR_COLOR_PEACH} follows.
 The laid-out bar: each slot, then each widget with its region, its
 spec and its current label.  This distinguishes the three reasons a
 widget does not appear --- missing from the list (its spec resolved to
-no registered plugin), marked @code{[hidden]} (it measured to nothing,
-which for most widgets means it has nothing to show: no battery on a
-desktop, no wireless interface), or placed in a region other than the
-one intended.
+no registered plugin), marked @code{[off]} (the plugin has nothing to
+show on this host: no battery on a desktop, no wireless interface, no
+tailnet), marked @code{[hidden]} (it has something to show but did not
+fit), or placed in a region other than the one intended.
 @item M-x cmacs-gowl-bar-plugins
 What is registered, and what is being held back.
 @item M-x cmacs-gowl-bar-plugin-load

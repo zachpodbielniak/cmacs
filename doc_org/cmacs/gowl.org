@@ -2052,7 +2052,10 @@ existed needs no changes.
 
 With no configuration at all the bar shows a shipped layout: the tag
 row and title left, the clock anchored centre, =cpu memory disk
-battery= right.  That layout is a starting point, not a base to add
+battery tailscale= right.  Widgets that can tell whether they apply to
+a host hide themselves there --- no battery on a desktop, no Tailscale
+on a machine that never joined a tailnet --- so it is usable
+unconfigured.  That layout is a starting point, not a base to add
 to: *the first configuration naming any widget list replaces it
 wholesale*, including regions it does not mention.
 
@@ -2139,10 +2142,37 @@ temperature should both land where you can see what the machine is
 doing.  Their colour follows pressure (text, peach past 75%, red past
 90%) unless you set an explicit colour, which always wins.
 
-The Tailscale widget hides itself entirely when Tailscale is not
-installed, and says so once when it is installed but has never signed
-in.  Immutablue ships Tailscale, so that case is worth naming rather
-than leaving as a grey icon.
+**** Tailscale
+
+The =tailscale= widget ships in the default layout and decides for
+itself whether it belongs on this host.
+
+"Is Tailscale installed" is the wrong question: Immutablue ships it, so
+the answer is always yes and a widget keyed on it sits permanently grey
+on every machine that does not use it.  The question is whether *this
+host has joined a tailnet*, which =tailscale status --json= answers
+with =HaveNodeKey= --- true across a =tailscale down=, false only on a
+host that never joined or was logged out.
+
+| Host                    | Widget         |
+|-------------------------+----------------|
+| Not installed           | hidden         |
+| Installed, never joined | hidden         |
+| Joined, tailnet down    | shown, dimmed  |
+| Joined, running         | shown          |
+
+A host that uses Tailscale wants to see that it is down; that is
+actionable, and the switch is one click away in the panel.  A host that
+never joined wants nothing.
+
+The widget keeps polling while hidden, so =tailscale up= on a fresh
+host makes it appear within a poll --- no restart, no configuration.
+Override with the parameter or the =show= setting: =tailscale:always=,
+=tailscale:never=, or the default =auto=.
+
+A host that *is* a member whose session has expired raises a toast
+once.  A host that never joined does not: the widget is not in the bar
+there, so a toast pointing at its panel would point at nothing.
 
 *** Generic widgets
 
@@ -2368,7 +2398,8 @@ top     enabled visible anchor=clock
   left   title                        cmacs-gowl.el
   center clock                        Mon Sep 07  11:27
   right  cpu                          CPU 31%
-  right  battery              [hidden]
+  right  battery                [off]
+  right  tailscale
 #+end_example
 
 There are three reasons a widget does not show, and this tells them
@@ -2377,10 +2408,13 @@ apart:
 - *Missing from the list entirely* --- the spec did not resolve to a
   registered plugin.  A typo, or a plugin that failed to load; check
   =M-x cmacs-gowl-bar-plugins=.
-- *Listed but marked =[hidden]=* --- it measured to nothing, which for
-  most widgets means it has nothing to show: no battery on a desktop,
-  no swap, no wireless interface.  Deliberate; an empty widget would
-  leave a hole in the bar.
+- *Listed but marked =[off]=* --- the plugin is saying it has nothing
+  to show on this host: no battery on a desktop, no swap, no wireless
+  interface, no tailnet.  Deliberate; most widgets hide rather than
+  show a blank.
+- *Listed but marked =[hidden]=* --- it has something to show but did
+  not fit, so the bar dropped it rather than drawing it over its
+  neighbour.
 - *In the wrong region* --- usually a configuration that set only some
   regions on top of a layout it expected to be cleared.
 
