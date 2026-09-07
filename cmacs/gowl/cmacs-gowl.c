@@ -1522,7 +1522,13 @@ cmacs_gowl_find_module (const gchar *name)
 gboolean
 cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
 {
-  const gchar *names[] = { "tile", "monocle", "float", "scrolling", "animation", "layout-indicator" };
+  /* "cube" turns the desktop on a tag switch.  It is a second
+     GowlSceneEffect alongside "animation", not a replacement: it
+     registers ahead of it and hands down every call it does not answer,
+     so window motion is unchanged.  Under a non-GLES2 renderer it stands
+     down by itself and tag switches stay instant. */
+  const gchar *names[] = { "tile", "monocle", "float", "scrolling",
+                           "animation", "cube", "layout-indicator" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
@@ -1603,8 +1609,8 @@ the event loop source and returns. */)
           xsignal1 (Qgowl_error, msg);
         }
 
-      /* The early path already loaded animation; attach the other
-         bundled defaults before dispatching startup hooks. */
+      /* The early path already loaded animation and the cube; attach the
+         other bundled defaults before dispatching startup hooks. */
       {
         GowlModuleManager *mgr =
           gowl_compositor_get_module_manager (cmacs_gowl_compositor);

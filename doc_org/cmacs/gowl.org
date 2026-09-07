@@ -635,6 +635,59 @@ change window placement or interrupt an entrance or layout transition.
 It follows =animation-jiggle-strength= (0 disables it), and skips
 fullscreen and embedded windows.
 
+*** The desktop cube
+
+Switching tags turns the desktop instead of cutting to it: the visible
+desktop is one side of a solid, and the new tag is the next side round.
+Crossing several tags turns several times and shows each tag on the way
+past, so Super+1 followed by Super+4 turns three times through tags 2 and
+3 rather than jumping.
+
+CMacs bundles and loads Gowl's =cube.so= before windows map, including
+the early =--gowl= startup path. Standalone Gowl leaves it unloaded until
+the user sets =modules.cube.enabled: true=. =(gowl-disable-module "cube")=
+returns tag switches to an instant cut immediately;
+=(gowl-enable-module "cube")= brings it back.
+
+It runs *alongside* =animation.so=, not instead of it. gowl dispatches
+scene presentation to one provider, so the cube registers ahead of the
+animation module and hands down every call it does not answer itself ---
+window pops, fades, layout motion and jiggles are unchanged with both
+loaded. The one thing it does answer is the fade-in of windows revealed
+by the tag change it is about to animate: the rotation's first captured
+side already shows them, so fading them in as well would fade the desktop
+up after the rotation had landed.
+
+Each side is that tag's wallpaper and windows, captured once when the
+rotation starts. The bar and any notifications stay live above the
+rotation rather than being baked into every side. The CMacs frame is an
+ordinary tagged client and rides its own side; the views CMacs embeds
+INSIDE its buffers are pinned over the frame rather than placed by tag,
+so they go onto every side and their live copies come down for the
+rotation --- gowl parks them above the rotation, and left alone they
+would hang motionless while the desktop turned underneath.
+
+Both ends of the rotation are the flat desktop exactly: with no camera
+pull-back and no pitch the leading side projects to precisely the
+viewport, so a tag switch has no visible cut into or out of the effect.
+
+Defaults are =cube-duration= (520 ms for one turn),
+=cube-step-duration= (150 ms added per extra turn, capped at three times
+the base), =cube-curve= (=ease-in-out-cubic=), =cube-faces= (4, a cube;
+3 to 12 are allowed), =cube-zoom= (1.45), =cube-pitch= (14 degrees),
+=cube-shading= (0.78), =cube-reflection= (0.32), =cube-motion-blur=
+(0.35), =cube-caps= (on), =cube-backdrop-color= (=#12141f=) and
+=cube-all-monitors= (off --- only the focused output turns). Set
+=cube-duration= to 0, or =cube= to =false=, to switch it off. These live
+in =~/.config/gowl/config.yaml= alongside the =animation-*= keys.
+
+The cube borrows the compositor's GLES2 context rather than adding a
+renderer of its own. Under any other renderer it logs a message and
+stands down, and tag switches stay instant; a rotated output sits
+rotations out for the same reason. Tags that hold several bits at once
+use their lowest tag as the ordinal, so replacing a tag view turns and
+merely adding a tag to one does not.
+
 ** One palette for editor and compositor
 :PROPERTIES:
 :CUSTOM_ID: palette
