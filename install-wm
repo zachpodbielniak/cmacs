@@ -58,11 +58,40 @@ if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$EMACS_BIN" ]; then
     echo "Warning: $EMACS_BIN does not exist yet (build with 'make' first)." >&2
 fi
 
-# DesktopNames sets XDG_CURRENT_DESKTOP for the session.  Include `gowl'
-# so xdg-desktop-portal matches the gowl InputCapture/RemoteDesktop portal
-# backend (its .portal carries UseIn=gowl) and so the gowl-portals.conf
-# routing applies -- this is what lets deskflow's KVM input capture work
-# under cmacs --gowl.  `CMacs' is kept first for any CMacs-specific lookups.
+# DesktopNames sets XDG_CURRENT_DESKTOP for the session.  Order is
+# load-bearing and each name is here for a different consumer:
+#
+#   CMacs  -- first, for CMacs-specific lookups.
+#   gowl   -- xdg-desktop-portal reads <desktop>-portals.conf, and the gowl
+#             InputCapture/RemoteDesktop backend carries UseIn=gowl.  This
+#             is what lets deskflow's KVM input capture work under --gowl.
+#   GNOME  -- LAST, and only as a fallback for software that pattern-matches
+#             this variable against a hardcoded list of desktops it knows.
+#
+# That last one is not cosmetic.  Chromium -- and so every Electron app,
+# including Claude Desktop, VS Code and Slack -- picks its password store
+# by splitting XDG_CURRENT_DESKTOP on ':' and comparing each name against
+# a fixed set (GNOME, KDE, XFCE, Unity, Cinnamon, Pantheon, UKUI, LXQt).
+# A session naming none of them resolves to DESKTOP_ENVIRONMENT_OTHER, and
+# key_storage_util_linux then selects the PLAINTEXT backend rather than
+# libsecret.  The symptom is an app announcing it cannot save your session
+# and you will have to log in again next time -- and it applies equally to
+# secrets it ALREADY stored while running under GNOME, because the backend
+# changed underneath them.  (Chromium records this: its Local State grows
+# an "os_crypt":{"portal":{"prev_desktop":"GNOME"}} entry, and switching
+# desktops is exactly what invalidates it.)
+#
+# GNOME goes last so every first-match consumer still resolves to gowl:
+# xdg-desktop-portal picks gowl-portals.conf, being the first name here
+# with a matching <name>-portals.conf, and UseIn matching hits gowl before
+# GNOME.  gowl runs no XDG autostart .desktop files -- its autostart module
+# spawns an explicit list of commands from the config -- so nothing here
+# can trip an OnlyShowIn=GNOME entry.
+#
+# The keyring itself needs nothing: gnome-keyring-daemon is started by
+# pam_gnome_keyring at login and owns org.freedesktop.secrets no matter
+# which compositor is in front of it.  Only the advertised desktop name
+# was wrong.
 # The launcher does NOT `exec' emacs: when the compositor exits -- cleanly
 # OR by crash (SIGSEGV) -- the surviving shell must stop the session target
 # the compositor pulled in (gowl-session.target -> graphical-session.target).
@@ -76,7 +105,7 @@ Name=CMacs
 Comment=CMacs — Emacs as a Wayland Compositor
 Exec=/bin/bash -lc '${EMACS_BIN} --gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
 Type=Application
-DesktopNames=CMacs:gowl"
+DesktopNames=CMacs:gowl:GNOME"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "Would write to: $SESSION_FILE"
