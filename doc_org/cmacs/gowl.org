@@ -688,6 +688,157 @@ rotations out for the same reason. Tags that hold several bits at once
 use their lowest tag as the ordinal, so replacing a tag view turns and
 merely adding a tag to one does not.
 
+*** Turning the cube by hand
+
+With =cube-gesture= on (the default), a three-finger touchpad swipe turns
+the solid directly rather than triggering a rotation. The desktop is
+exactly as far round as your fingers have pushed it, and letting go
+settles to whichever side is nearer: past halfway it commits and changes
+tag, short of it the same rotation runs backwards to where it started.
+
+The drag is deliberately not eased. A curve applied to a direct
+manipulation makes the desktop lag behind the touchpad and then catch up,
+which reads as the machine being slow rather than as motion design.
+
+A gesture the cube claims never reaches the focused client --- a swipe
+that turned the desktop and also scrolled the browser underneath it is
+nobody's intent --- so =cube-gesture: false= is also how you give
+applications their three-finger swipes back.
+
+*** Overview: every tag at once
+
+Super+backtick, or a four-finger swipe up, pulls the camera back out of
+the tag you are on to show all of them as a grid of live thumbnails.
+Arrows or =hjkl= move, =1= to =9= jump straight to a tag, Return or a
+click picks, Escape leaves everything as it was, and clicking the gap
+dismisses without changing tag.
+
+CMacs bundles and loads gowl's =expo.so=; standalone gowl leaves it until
+the user sets =modules.expo.enabled: true=. =M-x cmacs-gowl-expo= opens
+it from Elisp.
+
+The grid moves as one object under a single transform, so it reads as a
+camera pulling back from one desktop rather than as nine pictures flying
+into formation --- and at both ends that transform is exact, so the
+overview opens out of the live desktop and closes back into the tag you
+picked with no cut. Settings are the =expo-*= keys; the interesting ones
+are =expo-tags= (fewer means bigger tiles), =expo-hide-empty= and
+=expo-columns=.
+
+*** Window switcher, with Emacs as the picker
+
+Super+Tab opens a strip of live window previews, in focus order, opening
+on the second card --- so one tap lands on the window you were in before
+this one. Hold Super and tap Tab to move; let go to commit. Each card is
+a capture of that WINDOW with everything else hidden, so three terminals
+with the same icon are told apart by what is in them.
+
+The more interesting door is =M-x cmacs-gowl-switch-window=. It runs an
+ordinary =completing-read= over the window list while the compositor's 3D
+strip follows the selection underneath it, and picking a candidate lands
+on the window you were looking at. That combination is the point:
+=completing-read= is the best list-of-choices widget on the machine ---
+your history, your completion style, your embark actions --- and the one
+thing it cannot do is show you what a window looks like. The compositor
+can do nothing else.
+
+The preview is best-effort by design. "Which candidate is the user on" is
+not part of the completion API, so it is read through whichever front end
+is installed (vertico, ivy, icomplete, selectrum) and simply does not
+happen when none is recognised. Losing it costs a picture; the command
+still selects the window you chose. Set
+=cmacs-gowl-switcher-preview= to nil to skip the strip entirely.
+
+The strip is driven by commands --- =switcher-next=, =switcher-select N=,
+=switcher-list= --- so anything that can call =gowl-run-command= can
+drive it.
+
+*** Magnifier
+
+Hold Super and scroll to magnify the whole output around the pointer;
+Super+plus, Super+minus and Super+0 do the same from the keyboard when
+you have not bound those keys yourself. It zooms towards the pointer
+rather than the middle of the screen, so what you are pointing at stays
+where it is.
+
+It sits above the bar, since a magnifier that magnified everything except
+the panel would be useless to somebody who needs it to read the panel,
+and it is the only effect that captures every frame --- the thing it
+magnifies is live. At 1:1 it puts everything away and costs nothing.
+
+=magnifier-smooth: false= turns off filtering, which is what somebody
+magnifying to inspect pixels actually wants. A scroll the magnifier
+claims never reaches the client, so =magnifier-modifier= has to name a
+combination applications do not use.
+
+*** Frosted glass and shadows
+
+Translucent windows (through the =alpha= module or a window rule) get a
+blurred backdrop, and every window gets a soft drop shadow. CMacs loads
+gowl's =blur.so= by default.
+
+*What the blur actually blurs is the wallpaper*, computed once and
+cropped per window --- not other windows. Doing that honestly would cost
+a full scene render per translucent window per frame; this costs one
+capture and one blur for as long as the wallpaper stays put. A
+translucent terminal over the desktop is indistinguishable either way; a
+translucent window over another window shows blurred wallpaper rather
+than a blurred copy of the window below.
+
+Shadows are computed rather than drawn and blurred: a blurred rectangle
+has a closed form, so a shadow costs one CPU pass when a window is
+resized and nothing per frame. Neither decoration claims any event, so
+loading this changes nothing about how windows move. Settings are the
+=blur-*= and =shadow-*= keys.
+
+*** A wallpaper per tag
+
+=wallpaper= is still the picture every tag uses. =wallpaper-tags=
+overrides it for individual tags and a tag with no entry keeps the
+default, so this is purely additive to an existing config:
+
+#+begin_src yaml
+wallpaper: "~/Pictures/default.jpg"
+wallpaper-fade: 320
+wallpaper-tags:
+  1: "~/Pictures/code.jpg"
+  4: "~/Pictures/mail.png"
+#+end_src
+
+Keys are the tag numbers in the bar, so 1-based; anything outside 1-9 is
+reported as a typo and skipped rather than landing on tag 1. A combined
+tag view uses its lowest tag to choose, the same rule the cube uses to
+pick a face. The change cross-fades rather than cutting, and the blurred
+backdrop behind translucent windows follows it.
+
+*** Reaching a plugin from Elisp
+
+=(gowl-run-command "expo")= runs a compositor command and returns the
+reply. That is how Elisp reaches a gowl plugin at all: a module is a
+shared object the compositor dlopens, and it exports a NAME rather than a
+function pointer --- so "expo" opens the overview without cmacs or gowl's
+core knowing that an overview exists. The same string works from a
+keybind (=@{ action: ipc_command, arg: "expo" @}=) and from the IPC
+socket.
+
+*** How six effects share one compositor
+
+All six --- animation, cube, expo, switcher, magnifier, blur --- are
+separate plugins implementing one interface, and CMacs loads all of them.
+gowl decides who gets a given hook per event rather than handing the
+whole interface to one module: the hooks that decide where a window IS
+stop at the first module that claims them, and the per-frame and teardown
+hooks reach every module. So the cube claims the reveal of a tag it is
+rotating to, expo claims one while the overview is up, blur claims
+nothing at all, and window geometry keeps reaching the animation module
+throughout.
+
+None of them adds a renderer; they borrow the context wlroots' GLES2
+renderer already owns. Under any other renderer each declines to run and
+the desktop behaves exactly as it did without it. Disable any of them at
+runtime with =(gowl-disable-module "expo")= and re-enable with
+=(gowl-enable-module "expo")=.
+
 ** One palette for editor and compositor
 :PROPERTIES:
 :CUSTOM_ID: palette

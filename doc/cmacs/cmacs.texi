@@ -2892,6 +2892,89 @@ instant; so does a rotated output. A tag view holding several tags uses
 its lowest tag as the ordinal, so replacing a view turns and merely
 adding a tag to one does not.
 
+CMacs bundles four more effect plugins the same way, all opt-in in
+standalone Gowl and all loaded here by default.
+
+@table @asis
+@item Overview (@file{expo.so})
+@kbd{Super+`}, or a four-finger swipe up, pulls the camera back out of
+the current tag to show every tag as a grid of live thumbnails. Arrows or
+@kbd{hjkl} move, @kbd{1}--@kbd{9} jump, @key{RET} or a click picks,
+@key{ESC} leaves things alone. The grid moves as one object under a
+single transform, and at both ends that transform is exact, so the
+overview opens out of the live desktop and closes back into the tag you
+picked with no cut. @code{M-x cmacs-gowl-expo} opens it from Elisp;
+settings are the @code{expo-*} keys.
+
+@item Window switcher (@file{switcher.so})
+@kbd{Super+@key{TAB}} opens a strip of live window previews in focus
+order, starting on the second card so one tap lands on the window you
+were in before this one. Each card is a capture of that window with
+everything else hidden.
+
+@code{M-x cmacs-gowl-switch-window} is the more interesting door: an
+ordinary @code{completing-read} over the window list with the
+compositor's 3D strip following the selection underneath it.
+@code{completing-read} has your history, completion style and Embark
+actions and cannot show you what a window looks like; the compositor can
+do nothing else. The preview is read through whichever completion front
+end is installed and is skipped when none is recognised --- losing it
+costs a picture, never the command. Set
+@code{cmacs-gowl-switcher-preview} to nil to skip the strip.
+
+@item Magnifier (@file{magnifier.so})
+Hold @key{Super} and scroll to magnify the whole output around the
+pointer; @kbd{Super++}, @kbd{Super+-} and @kbd{Super+0} do the same from
+the keyboard when those keys are not bound. It zooms towards the pointer
+rather than the screen's middle, sits above the bar, and puts everything
+away at 1:1. @code{magnifier-smooth: false} shows the actual pixels,
+which is what somebody magnifying to inspect them wants. A scroll it
+claims never reaches the client, so @code{magnifier-modifier} must name a
+combination applications do not use.
+
+@item Frosted glass and shadows (@file{blur.so})
+Translucent windows get a blurred backdrop and every window gets a soft
+drop shadow. The blur is of the WALLPAPER, computed once and cropped per
+window --- not of other windows, which would cost a full scene render per
+translucent window per frame. A translucent terminal over the desktop
+looks the same either way; one over another window shows blurred
+wallpaper rather than a blurred copy of the window below. Shadows are
+evaluated in closed form rather than drawn and blurred, so they cost one
+CPU pass per resize and nothing per frame.
+@end table
+
+A three-finger swipe turns the cube by hand rather than triggering a
+rotation: the desktop is exactly as far round as your fingers have pushed
+it, and letting go settles to whichever side is nearer. The drag is not
+eased, because a curve on a direct manipulation reads as lag.
+@code{cube-gesture: false} disables it, which is also how applications
+get their three-finger swipes back --- a gesture the cube claims never
+reaches the focused client.
+
+@code{wallpaper} remains the picture every tag uses;
+@code{wallpaper-tags} overrides it for individual tags, keyed by the
+1-based tag numbers in the bar, and @code{wallpaper-fade} cross-fades
+between them. A tag with no entry keeps the default, so this is additive
+to an existing config.
+
+All six effects --- animation, cube, expo, switcher, magnifier, blur ---
+are separate plugins over one interface, and Gowl decides who gets a
+given hook per event rather than handing the interface to one module.
+Hooks that decide where a window IS stop at the first claimant; per-frame
+and teardown hooks reach everyone. So the cube claims the reveal of a tag
+it is rotating to, blur claims nothing, and window geometry keeps
+reaching the animation module throughout. None of them adds a renderer:
+they borrow the context wlroots' GLES2 renderer already owns, and under
+any other renderer each declines and the desktop behaves as it did
+without it.
+
+@code{(gowl-run-command "expo")} runs a compositor command and returns
+the reply. That is how Elisp reaches a plugin: a module exports a NAME
+rather than a function pointer, so @code{"expo"} opens the overview
+without CMacs or Gowl's core knowing an overview exists. The same string
+works from a keybind (@code{@{ action: ipc_command, arg: "expo" @}}) and
+from the IPC socket.
+
 @noindent
 The control surface:
 

@@ -1522,13 +1522,19 @@ cmacs_gowl_find_module (const gchar *name)
 gboolean
 cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
 {
-  /* "cube" turns the desktop on a tag switch.  It is a second
-     GowlSceneEffect alongside "animation", not a replacement: it
-     registers ahead of it and hands down every call it does not answer,
-     so window motion is unchanged.  Under a non-GLES2 renderer it stands
-     down by itself and tag switches stay instant. */
+  /* The visual-effect plugins, all of which CMacs loads by default and
+     standalone gowl leaves to the user's config.
+
+     They coexist by design rather than by luck: gowl dispatches each
+     scene-effect hook per event, so "cube" claims the reveal of a tag it
+     is rotating to, "expo" claims one while the overview is up, "blur"
+     claims nothing at all, and window geometry keeps reaching
+     "animation" throughout.  Every one of them declines to load under a
+     renderer whose GL context it cannot borrow, leaving the desktop
+     exactly as it was without them. */
   const gchar *names[] = { "tile", "monocle", "float", "scrolling",
-                           "animation", "cube", "layout-indicator" };
+                           "animation", "cube", "expo", "switcher",
+                           "magnifier", "blur", "layout-indicator" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
@@ -4982,6 +4988,40 @@ DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
   return gowl_compositor_is_locked (cmacs_gowl_compositor) ? Qt : Qnil;
 }
 
+DEFUN ("gowl-run-command", Fgowl_run_command, Sgowl_run_command,
+       1, 1, 0,
+       doc: /* Run compositor command LINE and return the reply, or nil.
+
+LINE is a command word optionally followed by arguments, e.g. "expo",
+"switcher-next" or "switcher-select 3".  Loaded gowl modules are offered
+the command first, and the event is announced on the IPC socket either
+way.
+
+This is how Elisp reaches a plugin.  A gowl module is a shared object the
+compositor dlopens; it exports a NAME rather than a function pointer, so
+"expo" opens the overview without cmacs or gowl's core knowing that an
+overview exists.  The same string works from a keybind
+(`{ action: ipc_command, arg: "expo" }') and from the IPC socket. */)
+  (Lisp_Object line)
+{
+  gchar *reply;
+  Lisp_Object result = Qnil;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_STRING (line);
+
+  cmacs_gowl_lock ();
+  reply = gowl_compositor_run_command (cmacs_gowl_compositor, SSDATA (line));
+  cmacs_gowl_unlock ();
+
+  if (reply != NULL)
+    {
+      result = build_string (reply);
+      g_free (reply);
+    }
+  return result;
+}
+
 DEFUN ("gowl-reload-config", Fgowl_reload_config, Sgowl_reload_config,
        0, 1, 0,
        doc: /* Reload gowl config from PATH, a YAML file.
@@ -8101,6 +8141,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_config_generate_yaml);
 
   /* Modules */
+  defsubr (&Sgowl_run_command);
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);

@@ -567,6 +567,16 @@ authoritative and keeps re-runs idempotent."
               "Move window to previous monitor")
         (bind "Super+Ctrl+Shift+period" 'move-to-monitor "+1"
               "Move window to next monitor")
+        ;; Visual effects.  These reach the plugins through gowl's
+        ;; `ipc_command' action: a module exports a NAME rather than a
+        ;; function, so the compositor needs to know nothing about the
+        ;; overview or the switcher to dispatch to them.
+        (bind "Super+grave" 'ipc-command "expo"
+              "Overview: every tag at once")
+        (bind "Super+Tab" 'ipc-command "switcher-next"
+              "Window switcher: next")
+        (bind "Super+Shift+Tab" 'ipc-command "switcher-prev"
+              "Window switcher: previous")
         ;; Session.
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
