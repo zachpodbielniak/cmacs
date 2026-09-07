@@ -408,9 +408,17 @@ ctl *ARGS:
 # Run cmacs as a Wayland compositor (`--gowl`).  Same local-build env as
 # `run`, so the in-tree gowl modules (bar, wallpaper, …) are used, never
 # a system-installed copy.
+#
+# GOWL_OUTPUT_SIZE defaults to 1920x1200 here because this recipe is
+# almost always NESTED inside another session, where wlroots' wayland
+# backend otherwise opens a small default window that is too cramped to
+# tell whether a layout change is right.  It only applies to outputs
+# with no mode list of their own, so a real monitor still uses its
+# native mode and this is a no-op on bare metal.  Override it in the
+# environment for a different size.
 [group('run')]
 gowl *ARGS:
-    {{ local_env }} {{ emacs }} --gowl {{ ARGS }}
+    GOWL_OUTPUT_SIZE="${GOWL_OUTPUT_SIZE:-1920x1200}" {{ local_env }} {{ emacs }} --gowl {{ ARGS }}
 
 # Run cmacs --gowl under valgrind (slow, but catches use-after-free).
 [group('run')]
