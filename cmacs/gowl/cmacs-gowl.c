@@ -6429,6 +6429,20 @@ marked with the reason it is being held back. */)
   return cmacs_gowl_bar_command ("bar-plugins", NULL);
 }
 
+DEFUN ("gowl-bar-widgets", Fgowl_bar_widgets, Sgowl_bar_widgets,
+       0, 0, 0,
+       doc: /* Return the bar's laid-out widgets as a string.
+One line per bar slot, then one per widget with its region, its spec
+and its current label.  A widget marked [hidden] measured to nothing,
+which for most widgets means it has nothing to show -- no battery on a
+desktop, no wireless interface.  A widget missing entirely did not
+resolve to a registered plugin.  */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-widgets", NULL);
+}
+
 DEFUN ("gowl-bar-plugin-load", Fgowl_bar_plugin_load,
        Sgowl_bar_plugin_load, 1, 1, 0,
        doc: /* Load the bar plugin at PATH.
@@ -8349,6 +8363,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_frame_origin);
   defsubr (&Sgowl_bar_enable);
   defsubr (&Sgowl_bar_plugins);
+  defsubr (&Sgowl_bar_widgets);
   defsubr (&Sgowl_bar_plugin_load);
   defsubr (&Sgowl_bar_plugin_unload);
   defsubr (&Sgowl_bar_plugin_reload);

@@ -2357,6 +2357,33 @@ compiler takes --- a hundred milliseconds or so.  That is a deliberate,
 rare action; doing the registration off-thread would mean mutating the
 registry from a thread that does not own it.
 
+*** When a widget does not appear
+
+=M-x cmacs-gowl-bar-widgets= prints the laid-out bar --- each slot,
+then each widget with its region, its spec and its current label:
+
+#+begin_example
+top     enabled visible anchor=clock
+  left   tags                         1/3/1
+  left   title                        cmacs-gowl.el
+  center clock                        Mon Sep 07  11:27
+  right  cpu                          CPU 31%
+  right  battery              [hidden]
+#+end_example
+
+There are three reasons a widget does not show, and this tells them
+apart:
+
+- *Missing from the list entirely* --- the spec did not resolve to a
+  registered plugin.  A typo, or a plugin that failed to load; check
+  =M-x cmacs-gowl-bar-plugins=.
+- *Listed but marked =[hidden]=* --- it measured to nothing, which for
+  most widgets means it has nothing to show: no battery on a desktop,
+  no swap, no wireless interface.  Deliberate; an empty widget would
+  leave a hole in the bar.
+- *In the wrong region* --- usually a configuration that set only some
+  regions on top of a layout it expected to be cleared.
+
 *** Containment
 :PROPERTIES:
 :CUSTOM_ID: gowl-bar-containment
@@ -2402,6 +2429,7 @@ that record the next start loads it again and crashes again.
 | =gowl-bar-redraw=                | Force a full redraw                        |
 | =gowl-bar-set-title=             | Set the bar title (nil reverts)            |
 | =gowl-bar-plugins=               | The registered plugins, as a string        |
+| =gowl-bar-widgets=               | The laid-out widgets, per slot and region  |
 | =gowl-bar-plugin-load=           | Load a plugin from a path                  |
 | =gowl-bar-plugin-unload=         | Drop a plugin by name                      |
 | =gowl-bar-plugin-reload=         | Recompile and reload a plugin              |

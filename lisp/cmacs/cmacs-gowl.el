@@ -2315,6 +2315,24 @@ anything being held back after a fault."
       (display-buffer (current-buffer)))))
 
 ;;;###autoload
+(defun cmacs-gowl-bar-widgets ()
+  "Show the gowl bar's laid-out widgets.
+One line per slot, then one per widget with its region, its spec and
+its current label.  This is what distinguishes the three reasons a
+widget does not appear: it never resolved to a plugin (missing from
+the list), it has nothing to show (marked [hidden]), or it landed in a
+region other than the one intended."
+  (interactive)
+  (cmacs-gowl--bar-require)
+  (with-current-buffer (get-buffer-create "*gowl bar widgets*")
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (or (gowl-bar-widgets) "(the bar module is not loaded)\n")))
+    (goto-char (point-min))
+    (special-mode)
+    (display-buffer (current-buffer))))
+
+;;;###autoload
 (defun cmacs-gowl-bar-plugin-load (path)
   "Load the gowl bar plugin at PATH into the running session.
 PATH may be a compiled `.so' or a `.c' source.  Compiling a source

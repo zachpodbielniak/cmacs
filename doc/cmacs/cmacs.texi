@@ -4295,6 +4295,14 @@ Name theme roles, never hex literals.  A widget that writes
 that names @code{GOWL_BAR_COLOR_PEACH} follows.
 
 @table @code
+@item M-x cmacs-gowl-bar-widgets
+The laid-out bar: each slot, then each widget with its region, its
+spec and its current label.  This distinguishes the three reasons a
+widget does not appear --- missing from the list (its spec resolved to
+no registered plugin), marked @code{[hidden]} (it measured to nothing,
+which for most widgets means it has nothing to show: no battery on a
+desktop, no wireless interface), or placed in a region other than the
+one intended.
 @item M-x cmacs-gowl-bar-plugins
 What is registered, and what is being held back.
 @item M-x cmacs-gowl-bar-plugin-load
