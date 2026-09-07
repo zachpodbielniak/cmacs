@@ -31,6 +31,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'cmacs-gowl-focus)
 (require 'cmacs-gowl-app)
 
@@ -2260,6 +2261,195 @@ entries without a mode cycle."
   (when (fboundp 'gowl-dropdown-refresh)
     (ignore-errors (gowl-dropdown-refresh)))
   (message "Applied %d dropdowns" (length cmacs-gowl-dropdowns)))
+
+;;; Bar plugins, panels and toasts
+
+(defcustom cmacs-gowl-bar-plugin-directory
+  (expand-file-name "gowl/bar-plugins"
+                    (or (getenv "XDG_CONFIG_HOME")
+                        (expand-file-name ".config" (getenv "HOME"))))
+  "Where the gowl bar looks for widget plugins.
+A `.so' is loaded directly; a `.c' is compiled through crispy and
+cached, so a plugin needs no build system and no install step.  The
+bar scans this directory once at startup; use
+`cmacs-gowl-bar-plugin-load' to add one to a running session."
+  :type 'directory
+  :group 'cmacs-gowl)
+
+(defun cmacs-gowl--bar-require ()
+  "Signal unless a gowl session with a bar is running."
+  (unless (and (fboundp 'gowl-running-p) (gowl-running-p))
+    (user-error "Gowl compositor is not running"))
+  (unless (fboundp 'gowl-bar-plugins)
+    (user-error "This cmacs was built without the gowl bar")))
+
+(defun cmacs-gowl--bar-plugin-names ()
+  "Return the bar's registered plugin names.
+Parsed out of `gowl-bar-plugins', whose first column is the name."
+  (let ((raw (ignore-errors (gowl-bar-plugins))))
+    (when (stringp raw)
+      (delq nil
+            (mapcar (lambda (line)
+                      (let ((name (car (split-string line nil t))))
+                        (and name (not (string-empty-p name)) name)))
+                    (split-string raw "\n" t))))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-plugins ()
+  "Show the gowl bar's registered widget plugins.
+Lists built-in and loaded plugins with their versions, and marks
+anything being held back after a fault."
+  (interactive)
+  (cmacs-gowl--bar-require)
+  (let ((listing (gowl-bar-plugins))
+        (held (ignore-errors (gowl-bar-quarantined))))
+    (with-current-buffer (get-buffer-create "*gowl bar plugins*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (or listing "(the bar module is not loaded)\n"))
+        (when (and held (not (string-prefix-p "nothing" held)))
+          (insert "\nQuarantined:\n" held
+                  "\nClear one with M-x cmacs-gowl-bar-plugin-clear.\n")))
+      (goto-char (point-min))
+      (special-mode)
+      (display-buffer (current-buffer)))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-plugin-load (path)
+  "Load the gowl bar plugin at PATH into the running session.
+PATH may be a compiled `.so' or a `.c' source.  Compiling a source
+pauses the compositor for as long as the compiler takes."
+  (interactive
+   (list (read-file-name "Bar plugin: " cmacs-gowl-bar-plugin-directory
+                         nil t)))
+  (cmacs-gowl--bar-require)
+  (message "%s" (string-trim (or (gowl-bar-plugin-load
+                                  (expand-file-name path))
+                                 "no reply"))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-plugin-reload (name)
+  "Recompile and reload the gowl bar plugin NAME.
+The way to iterate on a plugin: edit the source, run this, see the
+change.  Only works for a plugin loaded from a file."
+  (interactive
+   (list (completing-read "Reload bar plugin: "
+                          (cmacs-gowl--bar-plugin-names) nil t)))
+  (cmacs-gowl--bar-require)
+  (message "%s" (string-trim (or (gowl-bar-plugin-reload name)
+                                 "no reply"))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-plugin-unload (name)
+  "Remove the gowl bar plugin NAME and every widget using it."
+  (interactive
+   (list (completing-read "Unload bar plugin: "
+                          (cmacs-gowl--bar-plugin-names) nil t)))
+  (cmacs-gowl--bar-require)
+  (message "%s" (string-trim (or (gowl-bar-plugin-unload name)
+                                 "no reply"))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-plugin-clear (name)
+  "Let the quarantined gowl bar plugin NAME load again.
+A plugin is held back after it faults, and after it was mid-load
+when a session ended.  Clear it once the plugin is fixed."
+  (interactive (list (read-string "Clear quarantine for plugin: ")))
+  (cmacs-gowl--bar-require)
+  (message "%s" (string-trim (or (gowl-bar-plugin-clear name)
+                                 "no reply"))))
+
+;;;###autoload
+(defun cmacs-gowl-bar-open-panel (widget)
+  "Open the gowl bar dropdown belonging to WIDGET.
+WIDGET is a widget id as it appears in the bar's widget list.  With
+a prefix argument, or an empty WIDGET, close whatever is open."
+  (interactive
+   (list (if current-prefix-arg
+             ""
+           (completing-read "Open bar panel: "
+                            (cmacs-gowl--bar-plugin-names) nil nil))))
+  (cmacs-gowl--bar-require)
+  (gowl-bar-panel (if (string-empty-p widget) nil widget)))
+
+;;;###autoload
+(defun cmacs-gowl-bar-toast (summary &optional body panel)
+  "Show SUMMARY as an on-screen toast on the gowl bar.
+BODY is an optional detail line.  PANEL names a bar widget whose
+dropdown the toast opens when clicked.
+
+This is the compositor's own overlay, drawn above fullscreen
+windows.  `cmacs-notify' still goes through D-Bus."
+  (interactive "sSummary: \nsBody: ")
+  (cmacs-gowl--bar-require)
+  (gowl-bar-notify summary
+                   (and body (not (string-empty-p body)) body)
+                   panel))
+
+(defcustom cmacs-gowl-bar-toast-panel-rules
+  '(("\\`\\(NetworkManager\\|nmcli\\)\\'" . "network")
+    ("\\`\\(wireplumber\\|pipewire\\|pavucontrol\\)\\'" . "audio")
+    ("\\`\\(podman\\|quadlet\\)\\'" . "podman")
+    ("\\`tailscale\\'" . "tailscale"))
+  "Which bar dropdown a forwarded notification should offer to open.
+Each entry is (APP-REGEXP . WIDGET).  When an arriving notification's
+application name matches, the toast becomes clickable and opens that
+widget's panel.
+
+This is what makes a notification actionable rather than merely
+informative: \"no known network in range\" is one click from the
+Wi-Fi list instead of a sentence telling you to go and find it."
+  :type '(alist :key-type regexp :value-type string)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-bar-toast-urgencies '(normal critical)
+  "Notification urgencies that also appear as an on-screen bar toast.
+Low-urgency traffic stays in the notification buffer, where it can be
+read later without having interrupted anything."
+  :type '(repeat symbol)
+  :group 'cmacs-gowl)
+
+(defun cmacs-gowl-bar--toast-panel-for (app)
+  "Return the bar widget whose panel suits a notification from APP."
+  (when (stringp app)
+    (cdr (seq-find (lambda (rule)
+                     (string-match-p (car rule) app))
+                   cmacs-gowl-bar-toast-panel-rules))))
+
+(defun cmacs-gowl-bar--toast-notification (n)
+  "Mirror notification plist N onto the gowl bar as a toast.
+Added to `cmacs-notify-daemon-functions' by
+`cmacs-gowl-bar-toast-mode'."
+  (let ((urgency (plist-get n :urgency)))
+    (when (and (memq urgency cmacs-gowl-bar-toast-urgencies)
+               (fboundp 'gowl-bar-notify)
+               (fboundp 'gowl-running-p)
+               (gowl-running-p))
+      ;; A failure here must not stop the notification reaching the
+      ;; buffer: the bar is the transient copy, the buffer is the
+      ;; record.
+      (ignore-errors
+        (gowl-bar-notify
+         (or (plist-get n :summary) "Notification")
+         (plist-get n :body)
+         (cmacs-gowl-bar--toast-panel-for (plist-get n :app)))))))
+
+;;;###autoload
+(define-minor-mode cmacs-gowl-bar-toast-mode
+  "Mirror incoming notifications onto the gowl bar as on-screen toasts.
+
+cmacs's notification daemon keeps history in an Org buffer, which is
+the right place for a record and the wrong place for something you
+need to see now.  With this on, a notification also appears as a card
+on the bar -- above fullscreen windows, and clickable when
+`cmacs-gowl-bar-toast-panel-rules' knows which dropdown resolves it."
+  :global t
+  :group 'cmacs-gowl
+  (if cmacs-gowl-bar-toast-mode
+      (add-hook 'cmacs-notify-daemon-functions
+                #'cmacs-gowl-bar--toast-notification)
+    (remove-hook 'cmacs-notify-daemon-functions
+                 #'cmacs-gowl-bar--toast-notification)))
 
 (provide 'cmacs-gowl)
 ;;; cmacs-gowl.el ends here

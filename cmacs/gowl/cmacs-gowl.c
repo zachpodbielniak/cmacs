@@ -6381,6 +6381,190 @@ Triggers an immediate redraw. */)
   return Qt;
 }
 
+/* Send one command to the bar module's IPC surface and return its reply
+   as a Lisp string, or nil when the bar is not loaded.  Every bar
+   DEFUN below is a thin wrapper over this.
+
+   The mutex is held for the call because the bar's command handlers
+   touch the scene graph (opening a panel, repainting after an unload).
+   `bar-plugin-load' and `bar-plugin-reload' also compile a C plugin
+   inside that window, which pauses the compositor for as long as gcc
+   takes -- a hundred milliseconds or so for a small plugin.  That is a
+   deliberate, rare action, and doing the registration off-thread would
+   mean mutating the registry from a thread that does not own it. */
+static Lisp_Object
+cmacs_gowl_bar_command (const char *command, const char *args)
+{
+  GowlModuleManager *mgr;
+  gchar *reply;
+
+  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+  if (mgr == NULL)
+    return Qnil;
+
+  pthread_mutex_lock (&cmacs_gowl_mutex);
+  reply = gowl_module_manager_dispatch_command (mgr, command, args);
+  pthread_mutex_unlock (&cmacs_gowl_mutex);
+
+  if (reply == NULL)
+    return Qnil;
+
+  {
+    Lisp_Object result = build_string (reply);
+
+    g_free (reply);
+    return result;
+  }
+}
+
+DEFUN ("gowl-bar-plugins", Fgowl_bar_plugins, Sgowl_bar_plugins,
+       0, 0, 0,
+       doc: /* Return the bar's registered widget plugins as a string.
+One line per plugin: its name, whether it is built in or was loaded
+from a file, its version, and a description.  A quarantined plugin is
+marked with the reason it is being held back. */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-plugins", NULL);
+}
+
+DEFUN ("gowl-bar-plugin-load", Fgowl_bar_plugin_load,
+       Sgowl_bar_plugin_load, 1, 1, 0,
+       doc: /* Load the bar plugin at PATH.
+PATH may be a compiled `.so' or a plain `.c' source, which is compiled
+through crispy and cached.  Compiling briefly pauses the compositor.
+
+Returns a status string. */)
+  (Lisp_Object path)
+{
+  CHECK_STRING (path);
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-plugin-load", SSDATA (path));
+}
+
+DEFUN ("gowl-bar-plugin-unload", Fgowl_bar_plugin_unload,
+       Sgowl_bar_plugin_unload, 1, 1, 0,
+       doc: /* Remove the bar plugin NAME and every widget using it.
+The shared object stays mapped; see the containment section of the bar
+documentation for why.
+
+Returns a status string. */)
+  (Lisp_Object name)
+{
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-plugin-unload", SSDATA (name));
+}
+
+DEFUN ("gowl-bar-plugin-reload", Fgowl_bar_plugin_reload,
+       Sgowl_bar_plugin_reload, 1, 1, 0,
+       doc: /* Recompile and reload the bar plugin NAME.
+Only meaningful for a plugin loaded from a file.  Compiling briefly
+pauses the compositor.
+
+Returns a status string. */)
+  (Lisp_Object name)
+{
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-plugin-reload", SSDATA (name));
+}
+
+DEFUN ("gowl-bar-quarantined", Fgowl_bar_quarantined,
+       Sgowl_bar_quarantined, 0, 0, 0,
+       doc: /* Return the bar plugins being held back, and why.
+A plugin is quarantined when it faults under the bar's guard, or when
+it was mid-load the last time the session ended. */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-quarantined", NULL);
+}
+
+DEFUN ("gowl-bar-plugin-clear", Fgowl_bar_plugin_clear,
+       Sgowl_bar_plugin_clear, 1, 1, 0,
+       doc: /* Let the quarantined bar plugin NAME load again.
+Use this after fixing whatever made it fault.
+
+Returns a status string. */)
+  (Lisp_Object name)
+{
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-plugin-clear", SSDATA (name));
+}
+
+DEFUN ("gowl-bar-panel", Fgowl_bar_panel, Sgowl_bar_panel, 0, 1, 0,
+       doc: /* Open the bar dropdown belonging to WIDGET.
+WIDGET is a widget id as it appears in the bar's widget list, e.g.
+"network" or "disk:/var".  With WIDGET nil, close whatever panel is
+open.
+
+Returns a status string. */)
+  (Lisp_Object widget)
+{
+  GOWL_CHECK_RUNNING ();
+
+  if (NILP (widget))
+    return cmacs_gowl_bar_command ("bar-panel", NULL);
+
+  CHECK_STRING (widget);
+  return cmacs_gowl_bar_command ("bar-panel", SSDATA (widget));
+}
+
+DEFUN ("gowl-bar-notify", Fgowl_bar_notify, Sgowl_bar_notify, 1, 3, 0,
+       doc: /* Show SUMMARY as an on-screen toast on the bar.
+BODY is an optional detail line.  PANEL, when given, is the id of a bar
+widget: the toast becomes clickable and opens that widget's dropdown,
+which is how a notification hands you the thing that resolves it.
+
+Toasts are drawn above fullscreen windows.  This is the compositor's
+own overlay -- `cmacs-notify' still routes through D-Bus to whatever
+notification daemon owns the session.
+
+Returns a status string. */)
+  (Lisp_Object summary, Lisp_Object body, Lisp_Object panel)
+{
+  GString *args;
+  Lisp_Object result;
+
+  CHECK_STRING (summary);
+  GOWL_CHECK_RUNNING ();
+
+  /* The IPC surface takes one string; `|' separates the three fields
+     because a summary never legitimately contains one and quoting a
+     nested encoding through an IPC line is not worth the complexity. */
+  args = g_string_new (SSDATA (summary));
+  if (!NILP (body) || !NILP (panel))
+    {
+      g_string_append_c (args, '|');
+      if (!NILP (body))
+        {
+          CHECK_STRING (body);
+          g_string_append (args, SSDATA (body));
+        }
+    }
+  if (!NILP (panel))
+    {
+      CHECK_STRING (panel);
+      g_string_append_c (args, '|');
+      g_string_append (args, SSDATA (panel));
+    }
+
+  result = cmacs_gowl_bar_command ("bar-notify", args->str);
+  g_string_free (args, TRUE);
+  return result;
+}
+
+DEFUN ("gowl-bar-dismiss", Fgowl_bar_dismiss, Sgowl_bar_dismiss, 0, 0, 0,
+       doc: /* Clear every on-screen bar toast, critical ones included. */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  return cmacs_gowl_bar_command ("bar-dismiss", NULL);
+}
+
 
 /* ── Xwidget integration ─────────────────────────────────────────────
  *
@@ -8164,6 +8348,15 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_usable_area);
   defsubr (&Sgowl_frame_origin);
   defsubr (&Sgowl_bar_enable);
+  defsubr (&Sgowl_bar_plugins);
+  defsubr (&Sgowl_bar_plugin_load);
+  defsubr (&Sgowl_bar_plugin_unload);
+  defsubr (&Sgowl_bar_plugin_reload);
+  defsubr (&Sgowl_bar_quarantined);
+  defsubr (&Sgowl_bar_plugin_clear);
+  defsubr (&Sgowl_bar_panel);
+  defsubr (&Sgowl_bar_notify);
+  defsubr (&Sgowl_bar_dismiss);
   defsubr (&Sgowl_bar_disable);
   defsubr (&Sgowl_bar_configure);
   defsubr (&Sgowl_bar_redraw);

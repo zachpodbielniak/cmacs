@@ -1995,101 +1995,417 @@ transparency persists across frames.
 
 ** Status Bar
 
-Compositor-level status bar showing, left to right: a dwm-style *tag
-indicator*, the focused window title, and system widgets (cpu, memory,
-clock, …).  Semi-transparent background so the wallpaper shows through.
-Tiling layout automatically accounts for bar height.  The bar follows
-the output size: resizing the monitor (or the host window of a nested
-=--gowl= session) rebuilds the bar at the new width so the right-aligned
-widgets stay flush with the right edge.
+The bar is a host for *plugins*.  Every widget it draws --- the tag
+row, the clock, the network readout, anything you drop into
+=~/.config/gowl/bar-plugins/= --- implements the same contract, and the
+shipped ones take no private path yours cannot.
+
+What it gives you:
+
+- Two bars, top and bottom, each with *left, centre and right regions*
+  and a *centre anchor* so one widget stays dead centre regardless of
+  what appears beside it.
+- A *dropdown panel* under whichever widget you click: sliders,
+  toggles, lists, graphs, a calendar --- described by the plugin,
+  rendered and navigated by the bar.
+- *Toasts*: on-screen notification cards drawn above fullscreen
+  windows.  A toast can name a panel, so a notification about the
+  network is one click from the Wi-Fi list.
+- Plugins as a compiled =.so= *or as a plain =.c= file*, compiled
+  on demand through crispy --- no build system, no install step, and a
+  reload that does not need a restart.
+- Everything themed from the session palette, so =(gowl-set-palette
+  "latte")= carries the bar, its panels, its toasts and every
+  third-party widget with it.
+- A plugin that faults is caught, held back and reported rather than
+  taking the session with it.  See [[#gowl-bar-containment][Containment]].
 
 Under =cmacs-gowl-mode= the bar is enabled automatically when
 =cmacs-gowl-bar-show-tags= is non-nil (the default); set it to nil to
-start without a bar (you can still =gowl-bar-enable= later).
+start without one (=gowl-bar-enable= still works later).
+
+*** Widgets and regions
 
 #+begin_src emacs-lisp
 (gowl-bar-enable)
 (gowl-bar-configure
-  '(("height" . "28")
-    ("bg-color" . "#1e1e2ecc")
-    ("fg-color" . "#cdd6f4")
-    ("font" . "Hack Nerd Font Mono")
-    ("font-size" . "13")))
+  '(("position" . "top")
+    ("height" . "30")
+    ("widgets-left"   . "tags title")
+    ("widgets-center" . "clock weather")
+    ("widgets-right"  . "audio network cpu memory disk:/var battery")
+    ("center-anchor"  . "clock")))
 #+end_src
 
-*** Tag Indicator
+Each list is space separated and in order.  The *right* region reads
+outward: the first entry ends up furthest right, the way every
+dwm-descended status list has always read.
 
-The left edge renders one numbered box per tag (1--9), coloured by
+=center-anchor= names one centre widget.  That widget is centred on the
+monitor and the rest of the centre region packs around it.  Without an
+anchor the centre region is centred *as a group*, which means the clock
+slides sideways every time the weather widget has something to say.
+
+A =widgets= key with no region keeps its historical meaning --- the
+right-hand status list --- so a configuration written before regions
+existed needs no changes.
+
+A widget is written =name=, =name:parameter= or
+=name:parameter@seconds=:
+
+| Spec                 | Means                                             |
+|----------------------+---------------------------------------------------|
+| =cpu=                | The =cpu= widget with its own defaults            |
+| =disk:/var=          | =disk=, watching =/var=                           |
+| =weather:Berlin@600= | Weather for Berlin, refreshed every ten minutes   |
+| =cmd:~/bin/pomo@5=   | A command's first line, every five seconds        |
+
+The interval suffix uses the *last* =@=, so =cmd:ssh me@host@30= parses
+the way you meant it.  The whole spec is the widget's identity, so two
+=disk:= widgets on different mounts stay separately addressable.
+
+*** The bottom bar
+
+A second bar, configured with =position: bottom=.  Both slots belong to
+one module; everything the top bar accepts works here.
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("position" . "bottom")
+    ("height" . "26")
+    ("widgets-left"  . "user host git")
+    ("widgets-right" . "ip podman tailscale")
+    ("tags.visible" . "false")))   ; one tag row is enough
+#+end_src
+
+From YAML, where a block names one module, the bottom bar's keys carry
+a =bottom-= prefix instead: =bottom-widgets-right=, =bottom-height=.
+
+*** Per-widget settings
+
+Two forms, in the same alist:
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(;; A colour: a palette role, or a hex literal.
+    ("cpu-color" . "green")
+    ("memory-color" . "blue")
+
+    ;; Anything else, as <widget>.<key>.  The widget is either a
+    ;; plugin name -- reaching every instance of it -- or one
+    ;; instance's whole spec.
+    ("clock.format" . "%a %b %d  %H:%M")
+    ("weather.param" . "Muskegon")
+    ("title.max-width" . "520")
+    ("toggle:caffeine.state-command" . "pgrep -x systemd-inhibit")))
+#+end_src
+
+*** What ships
+
+=M-x cmacs-gowl-bar-plugins= lists what is actually registered,
+including anything you have installed.
+
+| Group   | Widgets                                                                  |
+|---------+--------------------------------------------------------------------------|
+| Window  | =tags=, =title=, =layout=                                                |
+| System  | =cpu=, =memory=, =swap=, =disk=, =load=, =temp=, =gpu=, =io=, =uptime=, =host=, =user=, =battery=, =power= |
+| Network | =network=, =net=, =ip=, =wifi=, =vpn=, =tailscale=                       |
+| Desktop | =audio=, =media=, =podman=, =weather=, =git=, =keymap=, =display=        |
+| Generic | =button=, =toggle=, =cmd=, =label=, =spacer=                             |
+
+Aliases keep old names working: =mem=, =bat=, =vol=, =pod=, =time=,
+=hostname=, =workspaces=, =ts=.
+
+All the system widgets open the *same* panel, with the hero changed to
+match whichever you clicked --- a click on memory and a click on
+temperature should both land where you can see what the machine is
+doing.  Their colour follows pressure (text, peach past 75%, red past
+90%) unless you set an explicit colour, which always wins.
+
+The Tailscale widget hides itself entirely when Tailscale is not
+installed, and says so once when it is installed but has never signed
+in.  Immutablue ships Tailscale, so that case is worth naming rather
+than leaving as a grey icon.
+
+*** Generic widgets
+
+How to add something the shipped set does not cover without writing any
+C:
+
+#+begin_src emacs-lisp
+(gowl-bar-configure
+  '(("widgets-right" . "toggle:caffeine button:record cmd:~/bin/pomo@10")
+
+    ;; A toggle asks a command for its state and runs another to change it.
+    ("toggle:caffeine.state-command" . "pgrep -x systemd-inhibit")
+    ("toggle:caffeine.command-on"
+     . "sh -c 'systemd-inhibit --what=idle --why=caffeine sleep infinity &'")
+    ("toggle:caffeine.command-off" . "pkill -f 'systemd-inhibit.*caffeine'")
+    ("toggle:caffeine.icon-on" . "☕")
+    ("toggle:caffeine.color-on" . "yellow")
+
+    ;; A button just runs one; left, right and middle are separate.
+    ("button:record.icon" . "⏺")
+    ("button:record.command" . "wf-recorder -g \"$(slurp)\"")
+    ("button:record.command-right" . "pkill -INT wf-recorder")))
+#+end_src
+
+*** Tag indicator
+
+The =tags= widget renders one numbered box per tag (1--9), coloured by
 state:
 
-| State    | Meaning                                  |
-|----------+------------------------------------------|
-| selected | viewed on this monitor (filled)          |
+| State    | Meaning                                   |
+|----------+-------------------------------------------|
+| selected | viewed on this monitor (filled)           |
 | urgent   | has a client demanding attention (filled) |
-| occupied | has clients but not selected             |
-| empty    | no clients                               |
+| occupied | has clients but not selected              |
+| empty    | no clients                                |
 
-The indicator updates live as tags and windows change.  *The tag boxes
-are clickable*: left-click a box to view that tag on that monitor,
-right-click to toggle the tag's visibility — the same effect as
-=Super+N= / =Super+Ctrl+N=, but per the monitor whose bar you click
-(so it works naturally across monitors).
-
-Toggle it and recolour it with the =show-tags= key and the tag colour
-keys:
+*The boxes are clickable*: left-click views that tag on that monitor,
+right-click toggles it --- the same effect as =Super+N= /
+=Super+Ctrl+N=, but per the monitor whose bar you click, so it works
+naturally across monitors.
 
 #+begin_src emacs-lisp
 (gowl-bar-configure
   '(("show-tags" . "true")
-    ("tag-active-bg" . "#89b4fa")
-    ("tag-active-fg" . "#1e1e2e")
-    ("tag-occupied-fg" . "#cdd6f4")
-    ("tag-urgent-bg" . "#f38ba8")
-    ("tag-urgent-fg" . "#1e1e2e")
-    ("tag-empty-fg" . "#6c7086")))
+    ("tag-active-bg" . "accent")
+    ("tag-urgent-bg" . "red")
+    ("tag-empty-fg" . "overlay")))
 #+end_src
 
-| Function                          | Description                              |
-|-----------------------------------+------------------------------------------|
-| =gowl-bar-enable=                | Load and activate the bar module         |
-| =gowl-bar-disable=               | Deactivate and reclaim tiling space      |
-| =gowl-bar-configure=             | Configure bar appearance                 |
-| =gowl-bar-redraw=                | Force full redraw                        |
-| =gowl-bar-set-title=            | Set bar title (nil to revert to default) |
+*** Panels
 
-To keep the bar title in sync with the active Emacs buffer, use a
-polling timer (hooks fire before window state is finalized):
+Clicking a widget with a panel opens it under that widget (above it, for
+a bottom bar).  Clicking the same widget closes it; clicking a different
+one switches.  A click anywhere else dismisses it *and is swallowed*, so
+the click that closed a dropdown does not also land in the application
+behind it.
+
+| Key                  | Does                      |
+|----------------------+---------------------------|
+| =Escape=             | Close                     |
+| =Down= / =j= / =Tab= | Next interactive row      |
+| =Up= / =k=           | Previous row              |
+| =Return= / =Space=   | Activate the focused row  |
+
+The wheel scrolls a panel taller than the screen; sliders drag.  The
+wheel over =audio= changes the volume and over =display= the
+brightness.
+
+From Elisp, or a keybinding:
 
 #+begin_src emacs-lisp
-(run-with-timer 0.2 0.2
-  (lambda ()
-    (ignore-errors
-      (gowl-bar-set-title
-        (buffer-name (window-buffer (selected-window)))))))
+(gowl-bar-panel "network")   ; open the network dropdown
+(gowl-bar-panel nil)         ; close whatever is open
+
+(map! :leader
+      :desc "Bar panel" "b p" #'cmacs-gowl-bar-open-panel)
 #+end_src
 
-*** Configurable Widgets
+*** Theming
 
-The right side shows system widgets.  Default: =cpu memory disk
-battery clock=.  Configure which widgets appear and their colors:
+The bar has no colours of its own worth setting first --- it resolves
+everything out of the session palette:
 
 #+begin_src emacs-lisp
-(gowl-bar-configure
-  '(("widgets" . "cpu memory disk battery clock")
-    ("cpu-color" . "#a6e3a1")
-    ("memory-color" . "#89b4fa")
-    ("disk-color" . "#f9e2af")
-    ("battery-color" . "#94e2d5")
-    ("clock-color" . "#cdd6f4")))
+(gowl-set-palette "latte")   ; carries the bar, its panels and its toasts
 #+end_src
 
-| Widget    | Data Source              | Update   |
-|-----------+--------------------------+----------|
-| =cpu=     | =/proc/stat= (delta)     | 2s       |
-| =memory=  | =/proc/meminfo=          | 5s       |
-| =disk=    | =statvfs("/")=           | 30s      |
-| =battery= | =/sys/class/power_supply= | 60s      |
-| =clock=   | =time()=                 | 2s       |
+On top of that, =theme-*= keys adjust the bar specifically:
+
+| Key                   | Means                                                 |
+|-----------------------+-------------------------------------------------------|
+| =theme-<role>=        | One colour role, e.g. =theme-accent= as =mauve=       |
+| =theme-metric-<name>= | A pixel metric, e.g. =theme-metric-panel-width= = 400 |
+| =theme-scale=         | Multiply every metric at once, for HiDPI              |
+| =theme-font=          | The body font, as a Pango description                 |
+| =theme-icon-font=     | The font used for glyph icons                         |
+
+Roles: =base=, =mantle=, =crust=, =surface=, =surface-alt=, =overlay=,
+=text=, =subtext=, =muted=, =accent=, =red=, =green=, =yellow=,
+=blue=, =mauve=, =teal=, =peach=, =pink=, =sapphire=, =sky=,
+=lavender=, =flamingo=, =rosewater=, =maroon=.
+
+Metrics: =radius=, =pad-x=, =pad-y=, =gap=, =row-height=, =item-pad=,
+=item-gap=, =border=, =panel-width=, =panel-offset=, =shadow=,
+=toast-width=.
+
+The legacy =bg-color= and =fg-color= still work; they set =base= and
+=text=.
+
+*** Toasts
+
+The bar draws its own notification cards on the =OVERLAY= scene layer,
+so a critical notice is visible over a fullscreen window --- which is
+when it matters most.
+
+#+begin_src emacs-lisp
+(gowl-bar-notify "Backup finished" "1.4 GB written")
+(gowl-bar-notify "Wi-Fi is not configured"
+                 "No known network is in range"
+                 "network")     ; clicking it opens the Wi-Fi list
+(gowl-bar-dismiss)
+#+end_src
+
+The third argument is a *panel target*, and it is the point of the
+whole layer: a notification that hands you the thing that resolves it,
+rather than a sentence telling you to go and find it.
+
+cmacs's own notification daemon keeps history in an Org buffer, which
+is the right place for a record and the wrong place for something you
+need to see now.  =cmacs-gowl-bar-toast-mode= mirrors arriving
+notifications onto the bar as well:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-toast-mode 1)
+#+end_src
+
+=cmacs-gowl-bar-toast-panel-rules= maps an application name to the
+dropdown that resolves its notifications --- NetworkManager to
+=network=, wireplumber to =audio=, podman to =podman= --- so those
+toasts become clickable.  =cmacs-gowl-bar-toast-urgencies= decides
+which urgencies get a card at all; low-urgency traffic stays in the
+buffer, where it can be read later without having interrupted
+anything.
+
+*** Writing a plugin
+
+=deps/gowl/data/example-bar-plugin.c= is a complete, commented pomodoro
+timer with a panel.  Copy it into =~/.config/gowl/bar-plugins/= and it
+works --- no build system, no install step.
+
+The shape:
+
+#+begin_src c
+#include <gowl/barkit/gowl-bar-plugin.h>
+#include <gowl/barkit/gowl-bar-plugin-proxy.h>
+#include <gowl/barkit/gowl-bar-registry.h>
+
+static void
+hello_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)data;
+	gowl_bar_plugin_set_label(plugin, "hello");
+}
+
+static const GowlBarPluginVTable hello_vtable = {
+	sizeof(GowlBarPluginVTable),
+	NULL, NULL, NULL, NULL, NULL,
+	NULL, hello_poll, NULL,
+	NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL
+};
+
+static const GowlBarPluginDesc descs[] = {
+	{ GOWL_BAR_PLUGIN_ABI, "hello", "Hello", "A greeting", "1.0.0",
+	  &hello_vtable, NULL, { NULL, NULL, NULL, NULL } }
+};
+
+G_MODULE_EXPORT const GowlBarPluginDesc *
+gowl_bar_plugin_query(guint *n_descs)
+{
+	*n_descs = G_N_ELEMENTS(descs);
+	return descs;
+}
+#+end_src
+
+Every slot may be =NULL= and the bar uses its default, so the minimum
+viable plugin is one =poll= that sets a label.
+
+*The one rule that matters more than the rest*: =poll=, =draw=,
+=click=, =panel= and =action= run on the *compositor's dispatch
+thread*, which holds the lock every editor primitive needs.  A
+subprocess or a network request there freezes the editor as well as the
+bar.  Put that work in =poll_async=, which runs on a worker thread and
+may call the thread-safe setters.
+
+Name theme roles, never hex literals: a widget that writes =#fab387=
+stays that colour when the user switches flavour; one that names
+=GOWL_BAR_COLOR_PEACH= follows.
+
+Managing plugins:
+
+| Command                            | Does                                       |
+|------------------------------------+--------------------------------------------|
+| =M-x cmacs-gowl-bar-plugins=       | What is registered, and what is held back  |
+| =M-x cmacs-gowl-bar-plugin-load=   | Load one into the running session          |
+| =M-x cmacs-gowl-bar-plugin-reload= | Recompile and swap in an edit              |
+| =M-x cmacs-gowl-bar-plugin-unload= | Drop it and every widget using it          |
+| =M-x cmacs-gowl-bar-plugin-clear=  | Let a quarantined plugin load again        |
+
+Compiling a =.c= plugin pauses the compositor for as long as the
+compiler takes --- a hundred milliseconds or so.  That is a deliberate,
+rare action; doing the registration off-thread would mean mutating the
+registry from a thread that does not own it.
+
+*** Containment
+:PROPERTIES:
+:CUSTOM_ID: gowl-bar-containment
+:END:
+
+Bar plugins run *inside the compositor*, and under =emacs --gowl= the
+compositor is the whole session.  Two mechanisms narrow the blast
+radius.
+
+*The fault guard.*  Every call into a plugin --- poll, async poll,
+draw, click, panel build, panel action, and the load itself --- runs
+under a signal guard.  A =SIGSEGV=, =SIGBUS=, =SIGFPE=, =SIGILL= or
+=SIGABRT= raised inside one unwinds back to the call site; the bar then
+quarantines the plugin, drops it, and raises a critical toast naming
+it.  The session keeps running.  =SIGABRT= is in the set deliberately:
+=g_assert= and =g_error= are the likeliest way a plugin dies, and
+losing a session to somebody's failed assertion is exactly what this
+exists to prevent.
+
+The honest limit: this recovers a fault whose damage was confined to
+the faulting call.  A plugin that corrupts the heap and crashes later,
+somewhere else, is not recoverable by any in-process mechanism.
+Outside a guarded call the previous handler runs unchanged, so genuine
+compositor crashes still core.
+
+*The load journal.*  For the case the guard cannot catch --- the
+session dying anyway --- the bar records what it is about to load in
+=$XDG_STATE_HOME/gowl/bar-plugins.journal= and clears the entry when
+the load completes.  On the next start, an entry that was never cleared
+identifies the plugin that took the session down, so it is held back
+before it gets a second try and you are told which one it was.  Without
+that record the next start loads it again and crashes again.
+
+=M-x cmacs-gowl-bar-plugin-clear= releases one once you have fixed it.
+
+*** Functions
+
+| Function                         | Description                                |
+|----------------------------------+--------------------------------------------|
+| =gowl-bar-enable=                | Load and activate the bar module           |
+| =gowl-bar-disable=               | Deactivate and reclaim tiling space        |
+| =gowl-bar-configure=             | Configure a bar slot from an alist         |
+| =gowl-bar-redraw=                | Force a full redraw                        |
+| =gowl-bar-set-title=             | Set the bar title (nil reverts)            |
+| =gowl-bar-plugins=               | The registered plugins, as a string        |
+| =gowl-bar-plugin-load=           | Load a plugin from a path                  |
+| =gowl-bar-plugin-unload=         | Drop a plugin by name                      |
+| =gowl-bar-plugin-reload=         | Recompile and reload a plugin              |
+| =gowl-bar-quarantined=           | What is being held back, and why           |
+| =gowl-bar-plugin-clear=          | Release a quarantined plugin               |
+| =gowl-bar-panel=                 | Open a widget's dropdown (nil closes)      |
+| =gowl-bar-notify=                | Raise a toast, optionally opening a panel  |
+| =gowl-bar-dismiss=               | Clear every toast                          |
+
+Keeping the bar title in sync with the active buffer is event-driven
+rather than polled --- a 5 Hz timer keeps the whole redisplay cascade
+alive at idle:
+
+#+begin_src emacs-lisp
+(defun my/sync-bar-title (&rest _)
+  (ignore-errors
+    (gowl-bar-set-title (buffer-name (window-buffer (selected-window))))))
+
+(add-hook 'window-buffer-change-functions #'my/sync-bar-title)
+(add-hook 'window-selection-change-functions #'my/sync-bar-title)
+#+end_src
 
 ** Vanitygaps
 

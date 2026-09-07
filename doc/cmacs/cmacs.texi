@@ -3842,19 +3842,38 @@ it in sync with the active Emacs buffer:
 @end example
 
 @noindent
-The right side shows configurable system widgets.  Default:
-@code{cpu memory disk battery clock}.  Each widget can have its
-own color:
+Widgets are placed in three regions --- left, centre and right --- and
+one centre widget can be pinned to the middle of the monitor:
 
 @example
 (gowl-bar-configure
-  '(("widgets" . "cpu memory disk battery clock")
-    ("cpu-color" . "#a6e3a1")
-    ("memory-color" . "#89b4fa")
-    ("disk-color" . "#f9e2af")
-    ("battery-color" . "#94e2d5")
-    ("clock-color" . "#cdd6f4")))
+  '(("widgets-left"   . "tags title")
+    ("widgets-center" . "clock weather")
+    ("widgets-right"  . "audio network cpu memory disk:/var battery")
+    ("center-anchor"  . "clock")
+    ("cpu-color"      . "green")
+    ("memory-color"   . "blue")))
 @end example
+
+@noindent
+The right region reads outward: the first entry ends up furthest
+right, the way every dwm-descended status list has always read.
+
+@code{center-anchor} names one centre widget, which is then centred on
+the monitor with the rest of the centre region packed around it.
+Without an anchor the centre region is centred @emph{as a group}, so
+the clock slides sideways every time the weather widget has something
+to say.
+
+A @code{widgets} key with no region keeps its historical meaning ---
+the right-hand status list --- so a configuration written before
+regions existed needs no changes.
+
+Colours name a palette role (@code{green}, @code{accent}, @code{peach},
+@dots{}) as well as a hex literal.  A role follows the session palette,
+so @code{(gowl-set-palette "latte")} carries the bar, its dropdown
+panels, its toasts and every third-party widget with it.  See
+@ref{Bar Theming}.
 
 @noindent
 The left edge draws a numbered box per tag (1--9), coloured by state:
@@ -3877,34 +3896,55 @@ it with the tag colour keys:
 @end example
 
 @noindent
-The bar supports 25 widget types:
+Every widget is a plugin, and @kbd{M-x cmacs-gowl-bar-plugins} lists
+what is actually registered --- including anything installed into
+@file{~/.config/gowl/bar-plugins/}.  What ships:
 
 @table @code
-@item cpu, load, memory, swap, temp, gpu
-System monitoring: CPU %, load average, RAM, swap, temperature, GPU %.
-@item disk, io
-Storage: free space (with mount path), read/write throughput.
-@item battery, uptime
-Power and session: battery %, system uptime.
-@item net, wifi, ip, vpn
-Network: throughput (↓/↑), WiFi signal, local IP, VPN status.
-@item volume, media
-Audio: PipeWire volume (via @command{wpctl}), MPRIS now-playing
-(via @command{playerctl}).
-@item git, todo, podman
-Development: branch + dirty count (from focused client's CWD),
-Elisp-pushed TODO count, running Podman container count.
-@item cmd:@var{COMMAND}
-Custom command output with ANSI color support.  Colors apply
-only to ASCII printable characters; Unicode (emoji) uses the
-base widget color.  Leading @code{~/} in the command path is
-expanded to @env{$HOME} at spawn time.
+@item tags, title, layout
+Window management: the dwm-style tag row, the focused window's title,
+the active layout's symbol (click to cycle).
+@item cpu, load, memory, swap, temp, gpu, io, uptime
+System monitoring, all opening one system panel with the hero changed
+to match whichever you clicked.
+@item disk, host, user
+Storage free space (with mount path), host name, user name.
+@item battery, power
+Charge level and the session's power actions and profiles.
+@item network, net, ip, wifi, vpn
+Networking: the connection with a full panel (ping, rates, totals,
+signal, DNS provider, the Wi-Fi list), plus the individual readouts.
+@item tailscale
+Tailnet state, peers and exit nodes.  Hides itself entirely when
+Tailscale is not installed, and says so once when it is installed but
+has never signed in.
+@item audio, media
+PipeWire volume with a device panel (via @command{wpctl}), MPRIS
+now-playing with transport controls (via @command{playerctl}).  The
+wheel over @code{audio} changes the volume.
+@item podman
+Running containers, with start, stop and logs from the panel.
 @item weather
-Weather from @url{https://wttr.in} (15-minute cache).  Specify
-location: @code{weather:London}.
-@item host, user, keymap, clock
-Session info: hostname, username, keyboard layout, date/time.
+Current conditions and a three-day outlook from
+@url{https://wttr.in}.  Specify a location: @code{weather:London}.
+@item display
+Brightness, with the wheel and a slider, plus text size and night
+light.
+@item git, keymap
+The focused window's branch and dirty count, the keyboard layout.
+@item button, toggle, cmd, label, spacer
+The generic widgets --- how to add something the shipped set does not
+cover without writing any C.  See @ref{Bar Generic Widgets}.
 @end table
+
+@noindent
+Aliases keep the older names working: @code{mem}, @code{bat},
+@code{vol}, @code{pod}, @code{time}, @code{hostname},
+@code{workspaces}, @code{ts}.
+
+A system widget's colour follows pressure --- text, then peach past
+75%, then red past 90% --- unless you set an explicit colour, which
+always wins.
 
 @subsubsection Per-widget refresh interval
 
@@ -4017,6 +4057,288 @@ cmacs_eval(api,
   "(gowl-bar-configure '((\"position\" . \"bottom\") "
   "                      (\"widgets\"  . \"clock\")))");
 @end example
+
+@subsubsection Per-widget settings
+
+Beyond colour, a widget's own settings are written
+@code{@var{widget}.@var{key}}.  The widget is either a plugin name,
+reaching every instance of it, or one instance's whole spec:
+
+@example
+(gowl-bar-configure
+  '(("clock.format"    . "%a %b %d  %H:%M")
+    ("weather.param"   . "Muskegon")
+    ("title.max-width" . "520")
+    ("toggle:caffeine.state-command" . "pgrep -x systemd-inhibit")))
+@end example
+
+@subsubsection Generic Widgets
+@anchor{Bar Generic Widgets}
+@cindex bar, generic widgets
+@cindex bar, buttons
+
+Five widgets exist so the shipped set does not have to cover
+everything.  @code{button} runs a command --- with separate left,
+right and middle actions.  @code{toggle} asks a command for its state
+and runs another to change it, flipping optimistically so the click is
+answered at once.  @code{cmd} shows a command's first line of output.
+@code{label} is static text and @code{spacer} is fixed width,
+optionally a divider rule.
+
+@example
+(gowl-bar-configure
+  '(("widgets-right" . "toggle:caffeine button:record cmd:~/bin/pomo@@10")
+
+    ("toggle:caffeine.state-command" . "pgrep -x systemd-inhibit")
+    ("toggle:caffeine.command-on"
+     . "sh -c 'systemd-inhibit --what=idle --why=caffeine sleep infinity &'")
+    ("toggle:caffeine.command-off" . "pkill -f 'systemd-inhibit.*caffeine'")
+    ("toggle:caffeine.icon-on"  . "☕")
+    ("toggle:caffeine.color-on" . "yellow")
+
+    ("button:record.icon"          . "⏺")
+    ("button:record.command"       . "wf-recorder -g \"$(slurp)\"")
+    ("button:record.command-right" . "pkill -INT wf-recorder")))
+@end example
+
+@subsubsection Dropdown Panels
+@anchor{Bar Panels}
+@cindex bar, panels
+@cindex dropdown, bar
+
+Clicking a widget opens its @emph{panel}: a dropdown under that widget
+(above it, for a bottom bar) built from sliders, toggles, list rows,
+button rows, graphs, progress bars and a calendar.  The plugin
+describes the panel; the bar renders it, hit-tests it, scrolls it and
+navigates it --- which is what makes a third-party panel look and
+behave exactly like a shipped one.
+
+Clicking the same widget closes it; clicking a different one switches.
+A click anywhere else dismisses it @emph{and is swallowed}, so the
+click that closed a dropdown does not also land in the application
+behind it.
+
+@table @kbd
+@item @key{ESC}
+Close the panel.
+@item @key{DOWN}, @kbd{j}, @key{TAB}
+Move to the next interactive row.
+@item @key{UP}, @kbd{k}
+Move to the previous row.
+@item @key{RET}, @key{SPC}
+Activate the focused row.
+@end table
+
+The wheel scrolls a panel taller than the screen; sliders drag.
+
+@example
+(gowl-bar-panel "network")   ;; open the network dropdown
+(gowl-bar-panel nil)         ;; close whatever is open
+@end example
+
+@kbd{M-x cmacs-gowl-bar-open-panel} completes over the registered
+widgets.
+
+@subsubsection Toasts
+@anchor{Bar Toasts}
+@cindex bar, toasts
+@cindex notifications, on-screen
+
+The bar draws its own notification cards on the @code{OVERLAY} scene
+layer, so a critical notice is visible over a fullscreen window ---
+which is exactly when it matters most.
+
+@example
+(gowl-bar-notify "Backup finished" "1.4 GB written")
+(gowl-bar-notify "Wi-Fi is not configured"
+                 "No known network is in range"
+                 "network")   ;; clicking it opens the Wi-Fi list
+(gowl-bar-dismiss)
+@end example
+
+The third argument is a @emph{panel target}, and it is the point of the
+whole layer: a notification that hands you the thing that resolves it,
+rather than a sentence telling you to go and find it.
+
+cmacs's notification daemon keeps history in an Org buffer, which is the right place for a record and the wrong place
+for something you need to see now.  @code{cmacs-gowl-bar-toast-mode}
+mirrors arriving notifications onto the bar as well:
+
+@example
+(cmacs-gowl-bar-toast-mode 1)
+@end example
+
+@code{cmacs-gowl-bar-toast-panel-rules} maps an application name to the
+dropdown that resolves its notifications --- NetworkManager to
+@code{network}, wireplumber to @code{audio}, podman to @code{podman}
+--- so those toasts become clickable.
+@code{cmacs-gowl-bar-toast-urgencies} decides which urgencies get a
+card at all; low-urgency traffic stays in the buffer, where it can be
+read later without having interrupted anything.
+
+A toast raised at critical urgency never expires on its own and cannot
+be pushed off the stack by later chatter.  That is what a plugin-crash
+report uses.
+
+@subsubsection Bar Theming
+@anchor{Bar Theming}
+@cindex bar, theming
+
+The bar resolves every colour out of the session palette, so the first
+thing to reach for is not a bar setting at all:
+
+@example
+(gowl-set-palette "latte")
+@end example
+
+On top of that, @code{theme-*} keys adjust the bar specifically.
+@code{theme-@var{role}} overrides one colour role;
+@code{theme-metric-@var{name}} a pixel metric; @code{theme-scale}
+multiplies every metric at once for a HiDPI session; @code{theme-font}
+and @code{theme-icon-font} set the fonts.
+
+Roles: @code{base}, @code{mantle}, @code{crust}, @code{surface},
+@code{surface-alt}, @code{overlay}, @code{text}, @code{subtext},
+@code{muted}, @code{accent}, @code{red}, @code{green}, @code{yellow},
+@code{blue}, @code{mauve}, @code{teal}, @code{peach}, @code{pink},
+@code{sapphire}, @code{sky}, @code{lavender}, @code{flamingo},
+@code{rosewater}, @code{maroon}.
+
+Metrics: @code{radius}, @code{pad-x}, @code{pad-y}, @code{gap},
+@code{row-height}, @code{item-pad}, @code{item-gap}, @code{border},
+@code{panel-width}, @code{panel-offset}, @code{shadow},
+@code{toast-width}.
+
+The legacy @code{bg-color} and @code{fg-color} keys still work; they
+set the @code{base} and @code{text} roles.
+
+@subsubsection Bar Plugins
+@anchor{Bar Plugins}
+@cindex bar, plugins
+@cindex plugins, bar
+
+The bar loads widget plugins from
+@file{~/.config/gowl/bar-plugins/} at startup, as a compiled
+@file{.so} or as a plain @file{.c} source compiled on demand through
+crispy and cached by content hash.  There is no build system to set up
+and no install step.
+@env{GOWL_BAR_PLUGIN_DIR} overrides the location.
+
+@file{deps/gowl/data/example-bar-plugin.c} is a complete, commented
+pomodoro timer with a panel; copy it into that directory and it works.
+A plugin is a struct of function pointers plus a descriptor:
+
+@example
+#include <gowl/barkit/gowl-bar-plugin.h>
+#include <gowl/barkit/gowl-bar-plugin-proxy.h>
+#include <gowl/barkit/gowl-bar-registry.h>
+
+static void
+hello_poll(GowlBarPlugin *plugin, gpointer data)
+@{
+        (void)data;
+        gowl_bar_plugin_set_label(plugin, "hello");
+@}
+
+static const GowlBarPluginVTable hello_vtable = @{
+        sizeof(GowlBarPluginVTable),
+        NULL, NULL, NULL, NULL, NULL,
+        NULL, hello_poll, NULL,
+        NULL, NULL, NULL, NULL,
+        NULL, NULL, NULL, NULL
+@};
+
+static const GowlBarPluginDesc descs[] = @{
+        @{ GOWL_BAR_PLUGIN_ABI, "hello", "Hello", "A greeting", "1.0.0",
+          &hello_vtable, NULL, @{ NULL, NULL, NULL, NULL @} @}
+@};
+
+G_MODULE_EXPORT const GowlBarPluginDesc *
+gowl_bar_plugin_query(guint *n_descs)
+@{
+        *n_descs = G_N_ELEMENTS(descs);
+        return descs;
+@}
+@end example
+
+Every slot may be @code{NULL} and the bar uses its default, so the
+minimum viable plugin is one @code{poll} that sets a label.  The
+@code{size} member must be @code{sizeof} the struct as your file sees
+it: the bar checks each callback lies inside that size before calling
+it, which is what lets the vtable grow without breaking a plugin built
+against an older gowl.
+
+@quotation Important
+@code{poll}, @code{draw}, @code{click}, @code{panel} and @code{action}
+run on the @emph{compositor's dispatch thread}, which holds the lock
+every editor primitive needs.  A subprocess or a network request there
+freezes the editor as well as the bar.  Put that work in
+@code{poll_async}, which runs on a worker thread and may call the
+thread-safe setters.
+@end quotation
+
+Name theme roles, never hex literals.  A widget that writes
+@code{#fab387} stays that colour when the user switches flavour; one
+that names @code{GOWL_BAR_COLOR_PEACH} follows.
+
+@table @code
+@item M-x cmacs-gowl-bar-plugins
+What is registered, and what is being held back.
+@item M-x cmacs-gowl-bar-plugin-load
+Load one into the running session.
+@item M-x cmacs-gowl-bar-plugin-reload
+Recompile and swap in an edit, without a restart.
+@item M-x cmacs-gowl-bar-plugin-unload
+Drop it and every widget using it.
+@item M-x cmacs-gowl-bar-plugin-clear
+Let a quarantined plugin load again.
+@end table
+
+Compiling a @file{.c} plugin pauses the compositor for as long as the
+compiler takes --- around a hundred milliseconds.  That is a
+deliberate, rare action; registering off-thread would mean mutating the
+registry from a thread that does not own it.
+
+Unloading removes the plugin and its widgets but leaves the shared
+object mapped.  Unmapping code a queued worker or a pending callback
+may still point into is how a hot-unload becomes a crash somewhere
+else, and the memory saved is a few tens of kilobytes.  It is also why
+the vtable form is the one to use: a @code{GType} cannot be
+unregistered, so a plugin that defines its own class can be dropped but
+a recompiled version cannot re-register the same class name.
+
+@subsubsection Bar Plugin Containment
+@anchor{Bar Containment}
+@cindex bar, containment
+@cindex plugins, crash recovery
+
+Bar plugins run @emph{inside the compositor}, and under
+@option{--gowl} the compositor is the whole session.  Two mechanisms
+narrow the blast radius.
+
+@emph{The fault guard.}  Every call into a plugin --- poll, async poll,
+draw, click, panel build, panel action, and the load itself --- runs
+under a signal guard.  A @code{SIGSEGV}, @code{SIGBUS}, @code{SIGFPE},
+@code{SIGILL} or @code{SIGABRT} raised inside one unwinds back to the
+call site; the bar then quarantines the plugin, drops it, and raises a
+critical toast naming it.  The session keeps running.  @code{SIGABRT}
+is in the set deliberately: @code{g_assert} and @code{g_error} are the
+likeliest way a plugin dies, and losing a session to somebody's failed
+assertion is exactly what this exists to prevent.
+
+The honest limit: this recovers a fault whose damage was confined to
+the faulting call.  A plugin that corrupts the heap and crashes later,
+somewhere else, is not recoverable by any in-process mechanism.
+Outside a guarded call the previous handler runs unchanged, so genuine
+compositor crashes still produce a core dump.
+
+@emph{The load journal.}  For the case the guard cannot catch --- the
+session dying anyway --- the bar records what it is about to load in
+@file{$XDG_STATE_HOME/gowl/bar-plugins.journal} and clears the entry
+when the load completes.  On the next start, an entry that was never
+cleared identifies the plugin that took the session down, so it is held
+back before it gets a second try and you are told which one it was.
+Without that record the next start loads it again and crashes again.
 
 @subsection Rounded Corners
 @cindex rounded corners
