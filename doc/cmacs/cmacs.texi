@@ -1862,18 +1862,20 @@ Name=CMacs (Debug)
 Comment=CMacs in-repo dev build (cmacs --gowl)
 Exec=/usr/local/bin/cmacs-debug
 Type=Application
-DesktopNames=CMacs-Debug:wlroots
+DesktopNames=CMacs-Debug:wlroots:GNOME
 @end verbatim
 
-@code{DesktopNames} ends in @code{:wlroots} so @env{XDG_CURRENT_DESKTOP}
-becomes @code{CMacs-Debug:wlroots}.  The @code{wlroots} element is what
-the @command{xdg-desktop-portal-wlr} backend matches on (its
-@code{UseIn} lists @code{wlroots;sway;Wayfire;river;phosh;Hyprland}), so
-screen-sharing apps (Zoom, OBS, browsers) reach the wlroots
-@code{ScreenCast} portal instead of the GNOME backend, which fails under
-gowl because it requires Mutter.  Without @code{:wlroots} the portal
-frontend finds no @code{ScreenCast} backend and the share picker
-silently does nothing.
+Every element of @code{DesktopNames} is load-bearing, and so is the
+order.  @code{CMacs-Debug} keeps the session's own identity.
+@code{wlroots} is what the @command{xdg-desktop-portal-wlr} backend
+matches on (its @code{UseIn} lists
+@code{wlroots;sway;Wayfire;river;phosh;Hyprland}), so screen-sharing apps
+(Zoom, OBS, browsers) reach the wlroots @code{ScreenCast} portal instead
+of the GNOME backend, which fails under gowl because it requires Mutter;
+without it the portal frontend finds no @code{ScreenCast} backend and the
+share picker silently does nothing.  @code{GNOME} goes @emph{last} and is
+what keeps the keyring working --- see the subsection
+@emph{The Keyring, and Why @env{XDG_CURRENT_DESKTOP} Decides It} below.
 
 @emph{Monitor vs window capture.}  Sharing a whole monitor works whenever
 gowl is built against wlroots 0.19 or 0.20.  Sharing a @emph{single
@@ -1891,6 +1893,102 @@ make}) and log back in to test changes --- no OS image rebuild.  For
 instead (it keeps @env{WAYLAND_DISPLAY} so wlroots uses the nested
 backend).  Diagnose failures from @code{journalctl -b | grep -iE
 'gdm-wayland-session|cmacs|gowl|wlr|backend'}.
+
+@subsection The Keyring, and Why @env{XDG_CURRENT_DESKTOP} Decides It
+
+@emph{Symptom.}  An Electron app --- Claude Desktop, VS Code, Slack ---
+announces that it cannot save your session and you will have to log in
+again next time.  It worked under GNOME and stopped under
+@code{cmacs --gowl}.
+
+@emph{The keyring is not the problem.}  @command{gnome-keyring-daemon} is
+started by @code{pam_gnome_keyring} at login, owns
+@code{org.freedesktop.secrets}, and the login collection is unlocked,
+exactly as under GNOME.  Confirm with:
+
+@example
+busctl --user list | grep secrets
+busctl --user get-property org.freedesktop.secrets \
+    /org/freedesktop/secrets/collection/login \
+    org.freedesktop.Secret.Collection Locked      # expect: b false
+@end example
+
+@emph{What actually happens.}  Chromium --- and so every Electron app ---
+picks its password store by splitting @env{XDG_CURRENT_DESKTOP} on
+@code{:} and comparing each element against a fixed list: @code{GNOME},
+@code{KDE}, @code{XFCE}, @code{Unity}, @code{X-Cinnamon},
+@code{Pantheon}, @code{UKUI}, @code{LXQt}, @code{Deepin}.  A session
+naming none of them resolves to @code{DESKTOP_ENVIRONMENT_OTHER}, and
+@code{key_storage_util_linux} then selects the @strong{plaintext} backend
+instead of libsecret.
+
+It is worse than losing @emph{new} secrets.  The app records which
+desktop it last succeeded under, in its @file{Local State}:
+
+@example
+"os_crypt":@{"portal":@{"prev_desktop":"GNOME","prev_init_success":true@}@}
+@end example
+
+so moving between a GNOME session and a gowl one is precisely what
+invalidates what it had @emph{already} stored.
+
+@emph{The fix} is in the session's @code{DesktopNames}, and cmacs ships
+it: @code{CMacs:gowl:GNOME} for @file{cmacs.desktop},
+@code{gowl:wlroots:GNOME} for @file{gowl.desktop}, and
+@code{CMacs-Debug:wlroots:GNOME} for the debug session above.
+
+@code{GNOME} goes @emph{last} in all three.  @command{xdg-desktop-portal}
+resolves @file{<desktop>-portals.conf} and @code{UseIn} by @emph{first}
+match, so an earlier @code{GNOME} would silently move
+InputCapture/RemoteDesktop off the gowl backend and ScreenCast off
+wlroots --- breaking KVM capture and screen sharing in order to fix the
+keyring.  It cannot trip @code{OnlyShowIn=GNOME} autostart entries
+either: gowl runs no XDG autostart @file{.desktop} files at all, only the
+explicit command list in its @code{autostart} module config.
+@file{deps/gowl/tests/test-desktop-names.sh} enforces both halves.
+
+@subsubsection Applying It Without an Image Rebuild
+
+On an ostree/bootc host @file{/usr} is read-only, so the shipped session
+file cannot be edited in place.  For the @emph{current} session only
+(affecting apps launched after it):
+
+@example
+systemctl --user set-environment XDG_CURRENT_DESKTOP=CMacs:gowl:GNOME
+dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP
+@end example
+
+then fully quit and relaunch the app.  Because its @code{prev_desktop}
+was already @code{GNOME}, this normally @emph{recovers} the existing
+login rather than requiring a fresh one.
+
+To persist it, drop a session file in
+@file{/usr/local/share/wayland-sessions/} (@code{-> /var/usrlocal/},
+writable and preserved across image upgrades).  GDM enumerates
+@file{wayland-sessions} under every entry of @env{XDG_DATA_DIRS}, which
+includes @file{/usr/local/share} --- the same mechanism the
+@samp{CMacs (Debug)} session uses.
+
+@subsubsection Where the Shipped File Comes From
+
+On an Immutablue system the session file is not built there.
+@file{build/10-copy.sh} copies, in order: the @file{artifacts/overrides}
+tree, then standalone gowl (from its vendored submodule), then
+@emph{last} the cmacs container image built by cmacs's own
+@command{./build-container}:
+
+@example
+cp -a /mnt-cmacs/usr/. /usr/
+@end example
+
+Being last makes the cmacs image authoritative for everything it ships
+--- @file{/usr/share/wayland-sessions/cmacs.desktop} @emph{and}
+@file{/usr/share/xdg-desktop-portal/gowl-portals.conf}.  A fix to
+@file{install-wm} or to gowl's portals.conf therefore reaches a system by
+rebuilding and pushing the cmacs image, with no Immutablue override
+needed.  @file{gowl.desktop} is the exception: the cmacs image does not
+ship it, so the standalone gowl session file comes from Immutablue's own
+gowl build and follows that submodule's pin.
 
 @subsection Nested Mode: Capturing the Host's Shortcuts (Super)
 @cindex nested compositor
