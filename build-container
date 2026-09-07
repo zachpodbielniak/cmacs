@@ -59,6 +59,13 @@ EXTRA_ARGS=()
 
 : "${REGISTRY:=quay.io/zachpodbielniak/cmacs}"
 
+# Empty means "every core", which the Containerfile resolves.  Set it
+# when building several images at once, or on a small machine: Emacs's
+# ahead-of-time native compilation runs one gcc per Lisp file, and the
+# memory that costs is what turns an over-parallel build into an OOM
+# that reports itself only as "container exited on killed".
+: "${JOBS:=}"
+
 usage () {
 	cat <<'EOF'
 Usage: ./build-container [TARGET] [--push] [--only-push] [-- BUILDAH ARGS]
@@ -66,6 +73,9 @@ Usage: ./build-container [TARGET] [--push] [--only-push] [-- BUILDAH ARGS]
   TARGET       fedora version (44), ubuntu version (24.04, 26.04),
                or `arch'.  Default: 44
   --push       Build then push to the registry
+  --jobs N     Cap build parallelism (default: every core).  Lower it
+               when building several images at once, or on a small
+               machine -- native compilation is memory-hungry per job
   --only-push  Push without building
   -h, --help   Show this help
 
@@ -131,6 +141,7 @@ do
 	case "${1}" in
 		-h|--help)   usage; exit 0 ;;
 		--push)      DO_PUSH=1 ;;
+		--jobs)      JOBS="${2:-}"; shift ;;
 		--only-push) DO_PUSH=1; DO_BUILD=0 ;;
 		--)          shift; EXTRA_ARGS+=("$@"); break ;;
 		--*)         EXTRA_ARGS+=("${1}") ;;
@@ -167,6 +178,7 @@ then
 		--build-arg=BASE_IMAGE="${BASE_IMAGE}" \
 		--build-arg=CMACS_DISTRO="${DISTRO}" \
 		--build-arg=CMACS_RELEASE="${RELEASE}" \
+		--build-arg=CMACS_JOBS="${JOBS}" \
 		--build-arg=WHISPER_MODEL_NAME="${WHISPER_MODEL_NAME}" \
 		--build-arg=WHISPER_MODEL_URL="${WHISPER_MODEL_URL}" \
 		--build-arg=PIPER_VOICE_NAME="${PIPER_VOICE_NAME}" \

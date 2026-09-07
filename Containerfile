@@ -47,6 +47,20 @@ ARG CMACS_RELEASE=44
 # wins if both exist).  Total cost in the image: ~210 MB for the
 # defaults below.
 # ---------------------------------------------------------------------
+# Build parallelism.  Defaults to every core, which is right for a big
+# machine and wrong for two other cases:
+#
+#   * Several images built at once.  Emacs's ahead-of-time native
+#     compilation runs one gcc per Lisp file, so -j24 across five
+#     concurrent builds is 120 compilers -- which OOMs a 121 GB host and
+#     takes every build down with it, reported only as
+#     "container exited on killed".
+#   * A small machine.  native-comp is memory-hungry per job, so a
+#     4-core box with 8 GB wants -j2, not -j4.
+#
+# build-container exposes this as --jobs N.
+ARG CMACS_JOBS=
+
 ARG WHISPER_MODEL_NAME=ggml-base.en.bin
 ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 ARG PIPER_VOICE_NAME=en_US-amy-low.onnx
@@ -469,7 +483,7 @@ RUN ./autogen.sh \
         --with-cmacs-dbexplorer \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
-    && make -j"$(nproc)" \
+    && make -j"${CMACS_JOBS:-$(nproc)}" \
     && make install DESTDIR=/build/stage
 
 # ---------------------------------------------------------------------
