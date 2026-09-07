@@ -3872,7 +3872,7 @@ regions existed needs no changes.
 With no configuration at all the bar shows a shipped layout: the tag
 row and title left, the clock anchored centre, @code{cpu memory disk
 battery tailscale} right.  Widgets that can tell whether they apply to
-a host hide themselves there, so it is usable unconfigured.  That layout is a starting point, not a base to add to
+a host act on it there, so it is usable unconfigured.  That layout is a starting point, not a base to add to
 --- the first configuration naming any widget list replaces it
 wholesale, including regions it does not mention.
 
@@ -3930,15 +3930,28 @@ Networking: the connection with a full panel (ping, rates, totals,
 signal, DNS provider, the Wi-Fi list), plus the individual readouts.
 @item tailscale
 Tailnet state, peers and exit nodes.  Ships in the default layout and
-decides for itself whether it belongs: ``is Tailscale installed'' is
-the wrong question on an image that ships it, so the widget keys on
-whether this host has actually joined a tailnet
-(@code{HaveNodeKey} in @code{tailscale status --json}, which stays true
-across a @code{tailscale down}).  Hidden on a host that never joined,
-shown and dimmed on one whose tailnet is down --- that is actionable,
-and the switch is one click away in the panel.  It keeps polling while
-hidden, so @code{tailscale up} makes it appear within a poll.  Override
-with @code{tailscale:always} or @code{tailscale:never}.
+shows itself wherever Tailscale is installed, including on a host that
+has never joined a tailnet --- where it turns yellow and its panel
+carries a @emph{Join a tailnet} button.  On a Tailscale-native image
+that is the case you most want a prompt for: the machine is one click
+from being on the tailnet and has simply not been told to, and hiding
+the widget there would hide the button.
+
+Joining runs @code{tailscale up}, which publishes its sign-in URL
+through @code{tailscale status --json}; the next poll picks it up and
+the panel becomes an open-the-link view, so nothing parses the
+command's output.  That is also the one case that raises a toast, wired
+to the widget's own panel --- a join waiting on a browser is
+time-sensitive.  A host that has never joined gets no toast; the yellow
+widget is the invitation.
+
+Bringing a device up normally needs root, so the set-up panel offers
+@emph{Allow without sudo} (@code{pkexec tailscale set --operator=$USER},
+once).  A joined host whose tailnet is down shows dimmed rather than
+hidden --- that is actionable and the switch is one click away.
+Membership is read from @code{HaveNodeKey}, true across a
+@code{tailscale down}.  Override with @code{tailscale:always} or
+@code{tailscale:never}.
 @item audio, media
 PipeWire volume with a device panel (via @command{wpctl}), MPRIS
 now-playing with transport controls (via @command{playerctl}).  The
@@ -4309,7 +4322,7 @@ spec and its current label.  This distinguishes the three reasons a
 widget does not appear --- missing from the list (its spec resolved to
 no registered plugin), marked @code{[off]} (the plugin has nothing to
 show on this host: no battery on a desktop, no wireless interface, no
-tailnet), marked @code{[hidden]} (it has something to show but did not
+Tailscale installed), marked @code{[hidden]} (it has something to show but did not
 fit), or placed in a region other than the one intended.
 @item M-x cmacs-gowl-bar-plugins
 What is registered, and what is being held back.
