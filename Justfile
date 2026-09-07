@@ -416,9 +416,30 @@ ctl *ARGS:
 # with no mode list of their own, so a real monitor still uses its
 # native mode and this is a no-op on bare metal.  Override it in the
 # environment for a different size.
+
+# Run cmacs as a Wayland compositor (`--gowl`), nested at 1920x1200.
 [group('run')]
-gowl *ARGS:
+gowl *ARGS: gowl-modules
     GOWL_OUTPUT_SIZE="${GOWL_OUTPUT_SIZE:-1920x1200}" {{ local_env }} {{ emacs }} --gowl {{ ARGS }}
+
+# Build the gowl modules THIS RECIPE WILL LOAD, which is not the same set
+# a bare `make -C deps/gowl' produces.
+#
+# dep_buildtype is "debug", so local_env points CMACS_GOWL_MODULE_DIR at
+# deps/gowl/build/debug/modules -- while `make -C deps/gowl' with no
+# arguments builds build/release.  Editing a module, building it the
+# obvious way and running `just gowl' therefore ran the OLD module, with
+# no error and nothing to suggest the change had not taken: the bar comes
+# up looking exactly as it did before.  Hours went into a bar layout that
+# was never being loaded.
+#
+# Incremental, so this costs nothing when the modules are current.  Not
+# build-gowl-debug, which adds ASan and is a different thing to want.
+
+# Build the gowl modules `just gowl' loads (debug tree, no ASan).
+[group('build')]
+gowl-modules:
+    @make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 modules
 
 # Run cmacs --gowl under valgrind (slow, but catches use-after-free).
 [group('run')]
