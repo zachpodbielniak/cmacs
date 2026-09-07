@@ -420,6 +420,15 @@ RUN rm -f .git \
 # a prerequisite of the cmacs link, so it just links them.
 RUN make -C deps/cad-glib deps
 
+# Both makes take -j, and the SECOND one is the one that matters.
+#
+# `all' leaves the Lisp alone; it is `install' that runs `make -C lisp
+# all' and native-compiles ~1500 files.  With no -j on the install line
+# that entire phase ran one file at a time -- the longest part of every
+# image build, single-threaded, while 23 cores sat idle.  It looks like
+# the C compile is the expensive half and it is not: 892 CC lines
+# against 1496 ELC+ELN.
+#
 # Build cmacs.  --enable-cmacs-deps-debug builds the in-house deps at
 # -O0 -g3 (DWARF) so gdb and runtime C self-introspection (cintrospect) can
 # read their structs; this is our default.  Drop that one flag for a faster
@@ -484,7 +493,7 @@ RUN ./autogen.sh \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"${CMACS_JOBS:-$(nproc)}" \
-    && make install DESTDIR=/build/stage
+    && make -j"${CMACS_JOBS:-$(nproc)}" install DESTDIR=/build/stage
 
 # ---------------------------------------------------------------------
 # Register the cmacs API library path so bacon modules can find
