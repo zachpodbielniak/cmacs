@@ -2050,6 +2050,23 @@ A =widgets= key with no region keeps its historical meaning --- the
 right-hand status list --- so a configuration written before regions
 existed needs no changes.
 
+With no configuration at all the bar shows a shipped layout: the tag
+row and title left, the clock anchored centre, =cpu memory disk
+battery= right.  That layout is a starting point, not a base to add
+to: *the first configuration naming any widget list replaces it
+wholesale*, including regions it does not mention.
+
+That is what stops an upgrade showing the time twice.  A pre-regions
+configuration sets only =widgets=, and its list usually ends with a
+clock; the shipped centre clock is cleared before it is applied.  Such
+a configuration also gets =tags title= put back on its left, because
+the bar it was written for drew those unconditionally rather than
+listing them --- so an untouched old configuration comes out looking as
+it did, plus panels and toasts.
+
+Later calls are incremental again: one setting only =widgets-right=
+leaves the left and centre alone.
+
 A widget is written =name=, =name:parameter= or
 =name:parameter@seconds=:
 
