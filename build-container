@@ -66,6 +66,11 @@ EXTRA_ARGS=()
 # that reports itself only as "container exited on killed".
 : "${JOBS:=}"
 
+# One lock for the submodule checkout, shared by every concurrent
+# invocation in this tree.  Kept out of the tree itself so it is not a
+# stray untracked file.
+SUBMODULE_LOCK="${TMPDIR:-/tmp}/cmacs-submodule-$(id -u).lock"
+
 usage () {
 	cat <<'EOF'
 Usage: ./build-container [TARGET] [--push] [--only-push] [-- BUILDAH ARGS]
@@ -170,7 +175,23 @@ then
 	if [[ -d .git ]] || [[ -f .git ]]
 	then
 		echo "==> Ensuring submodules are initialised (recursive)"
-		git submodule update --init --recursive
+		# Serialised, because this mutates the SHARED working tree.
+		# Two concurrent builds out of one checkout otherwise race on
+		# the submodule config locks and one of them dies with
+		#
+		#   error: could not lock config file .../config: File exists
+		#   fatal: Failed to recurse into submodule path 'deps/cad-glib'
+		#
+		# which reads like a corrupt repository and is nothing of the
+		# sort.  Building several images at once is the normal case
+		# here -- there are five targets -- so it has to be safe.
+		if command -v flock >/dev/null 2>&1
+		then
+			flock "${SUBMODULE_LOCK}" \
+				git submodule update --init --recursive
+		else
+			git submodule update --init --recursive
+		fi
 	fi
 	buildah build \
 		--no-cache \
