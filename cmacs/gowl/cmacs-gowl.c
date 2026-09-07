@@ -1534,7 +1534,19 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
      exactly as it was without them. */
   const gchar *names[] = { "tile", "monocle", "float", "scrolling",
                            "animation", "cube", "expo", "switcher",
-                           "magnifier", "blur", "layout-indicator" };
+                           "magnifier", "blur", "layout-indicator",
+                           /* The look, and the two providers the bar and
+                              the keybinds expect to be there.  These were
+                              left to the user's config, which meant a
+                              fresh cmacs --gowl had square corners, no
+                              gaps, opaque windows, no window rules and no
+                              dropdown terminal until somebody wrote elisp
+                              to ask for them -- and the shipped bar
+                              defaults could never show through, because a
+                              config naming any widget list replaces them
+                              wholesale. */
+                           "alpha", "vanitygaps", "roundcorners",
+                           "windowrules", "dropdown" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
