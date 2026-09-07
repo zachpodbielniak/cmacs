@@ -679,6 +679,29 @@ ifeq (${ns_self_contained},no)
 	    $(LN_S_FILEONLY) "$$ctl_name" "$$cctl_name"; \
 	  echo "Installed $$ctl_name (+ $$cctl_name symlink) in ${bindir}"; \
 	fi
+	## xdg-desktop-portal-gowl: the InputCapture / RemoteDesktop portal
+	## backend.  Installed here as well as by gowl's own `make
+	## install-portal' so that a machine with only cmacs installed still
+	## gets a working software KVM under `emacs --gowl' -- the portal is
+	## what deskflow talks to in both directions, and without it the
+	## frontend routes InputCapture to a backend that needs Mutter.
+	## Byte-identical to gowl's copy, so installing both is harmless.
+	@if test -f $(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/xdg-desktop-portal-gowl; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${bindir}"; \
+		${INSTALL_PROGRAM} \
+			$(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/xdg-desktop-portal-gowl \
+			"$(DESTDIR)${bindir}/xdg-desktop-portal-gowl"; \
+		${MKDIR_P} "$(DESTDIR)${datadir}/xdg-desktop-portal/portals"; \
+		${INSTALL_DATA} $(srcdir)/deps/gowl/data/gowl.portal \
+			"$(DESTDIR)${datadir}/xdg-desktop-portal/portals/gowl.portal"; \
+		${INSTALL_DATA} $(srcdir)/deps/gowl/data/gowl-portals.conf \
+			"$(DESTDIR)${datadir}/xdg-desktop-portal/gowl-portals.conf"; \
+		${MKDIR_P} "$(DESTDIR)${datadir}/dbus-1/services"; \
+		sed 's|@BINDIR@|${bindir}|g' \
+			$(srcdir)/deps/gowl/data/org.freedesktop.impl.portal.desktop.gowl.service.in \
+			> "$(DESTDIR)${datadir}/dbus-1/services/org.freedesktop.impl.portal.desktop.gowl.service"; \
+		echo "Installed xdg-desktop-portal-gowl in ${bindir}"; \
+	fi
 	@if test -d $(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)${archlibdir}/gowl-modules"; \
 		for f in $(srcdir)/deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/modules/*.so; do \

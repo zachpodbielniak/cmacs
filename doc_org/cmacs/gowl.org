@@ -260,17 +260,53 @@ portal binary is launched at session start (and is D-Bus-activatable as a
 fallback).  Install =libeis-devel= (Fedora) before building.
 
 *Using it.*  Configure deskflow as usual (server on the machine whose
-keyboard/mouse you share, clients on the others).  Under =cmacs --gowl= the
-server's "ei screen for wayland" path now succeeds: move the pointer across
-the configured screen edge and input is captured and forwarded to the
-remote.
+keyboard/mouse you share, clients on the others).  Both roles work under
+=cmacs --gowl=: as a server, move the pointer across the configured screen
+edge and input is captured and forwarded to the remote; as a client, the
+remote machine's keyboard and mouse drive this one.
+
+*The two roles are not the same mechanism, and that is where client mode
+used to fail.*  libei clients declare a direction when they connect, and
+the portal takes the opposite role: a deskflow SERVER connects as a
+receiver (the portal pushes captured input at it) while a deskflow CLIENT
+connects as a sender (it pushes input at the portal, which injects it).
+The backend served only the first for a long time and hung up on senders,
+which is a failure with no symptom at all — the D-Bus handshake succeeds,
+the socket is handed over, and the connection dies the moment libei states
+its direction.  Client mode simply did nothing.  Both directions are now
+served; the details are in gowl's =docs/input-capture.org=.
+
+Three things came with that fix, each of which would have been the next
+thing to break:
+
+- An injecting client addresses *absolute* positions inside the regions on
+  its device, and those regions were only ever populated by an
+  InputCapture call the client never makes — so it had no coordinate space
+  to address.  Zones are now fetched at startup and on every output change.
+- Absolute positions travel in layout pixels rather than as a fraction of
+  the screen.  A Wayland fixed-point number between 0 and 1 has eight
+  fractional bits, so the old normalised form could not express a step
+  smaller than fifteen pixels on a 4K screen.
+- Injected keys now publish modifier state.  Without it a remote keyboard
+  types in lower case for ever and Ctrl-C does nothing, because a client
+  learns which modifiers are held from a message only the physical
+  keyboard path used to send.
+
+Injected keys reach the focused application, not the compositor's keybind
+table: =Super+1= typed on the remote machine goes to the app rather than
+switching tags.  That is deliberate — driving the local window manager
+from another machine is a larger step than driving the local applications.
 
 *Security.*  Input capture sees every keystroke and injection can drive any
 app; access is gated by the =xdg-desktop-portal= permission model.  The
 private Wayland protocol trusts only its single client (the portal binary,
 which the compositor launches) and is not a public interface.
 
-*Troubleshooting.*  If deskflow still logs =CreateSession failed=, the
+*Troubleshooting.*  If client mode does nothing at all — no pointer, no
+keys, nothing logged anywhere — the backend is an old one that rejects
+sender connections.  The portal is D-Bus activated, so an already-running
+copy survives an upgrade: =systemctl --user restart xdg-desktop-portal=
+after installing.  If deskflow instead logs =CreateSession failed=, the
 backend is not being routed: confirm =gowl= is in =XDG_CURRENT_DESKTOP=,
 the =gowl.portal= file is installed, and =libeis= was present at build time.
 Run =xdg-desktop-portal= with =G_MESSAGES_DEBUG=all= to see which backend it

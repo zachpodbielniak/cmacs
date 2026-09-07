@@ -2009,12 +2009,38 @@ routing InputCapture/RemoteDesktop to gowl (ScreenCast still goes to
 @env{XDG_CURRENT_DESKTOP} must contain @code{gowl}; @command{install-wm} sets
 @code{DesktopNames=CMacs:gowl} accordingly.
 
+Both KVM roles work.  They are not the same mechanism: libei clients
+declare a direction when they connect and the portal takes the opposite
+role, so a deskflow @emph{server} connects as a receiver (the portal
+pushes captured input at it) and a deskflow @emph{client} connects as a
+sender (it pushes input at the portal, which injects it).  The backend
+served only the first for a long time and hung up on senders --- a failure
+with no symptom, since the D-Bus handshake succeeds and the socket is
+handed over before the connection dies.  Client mode simply did nothing.
+
+Three things came with fixing it: the injection device now carries the
+compositor's monitor rectangles as regions (an injecting client addresses
+absolute positions inside them, and they used to be populated only by an
+InputCapture call a client never makes); absolute positions travel in
+layout pixels rather than as a fraction of the screen, because a
+fixed-point number between 0 and 1 cannot express a step smaller than
+fifteen pixels on a 4K display; and injected keys publish modifier state,
+without which a remote keyboard types in lower case for ever.
+
+Injected keys reach the focused application rather than the compositor's
+keybind table, so @kbd{Super+1} from the remote machine goes to the app
+rather than switching tags.
+
 Input capture sees every keystroke and injection can drive any application;
 access is gated by the @command{xdg-desktop-portal} permission model.  The
 private Wayland protocol trusts only its single client (the portal binary,
 which the compositor launches) and is not a public interface.
 
-Troubleshooting: if deskflow still logs @samp{CreateSession failed}, the
+Troubleshooting: if client mode does nothing at all---no pointer, no keys,
+nothing logged---the running backend is an old one that rejects sender
+connections.  It is D-Bus activated, so an existing process survives an
+upgrade: @code{systemctl --user restart xdg-desktop-portal} after
+installing.  If deskflow still logs @samp{CreateSession failed}, the
 backend is not routed---confirm @code{gowl} is in @env{XDG_CURRENT_DESKTOP},
 the @file{gowl.portal} file is installed, and @code{libeis} was present at
 build time (run @command{xdg-desktop-portal} with @env{G_MESSAGES_DEBUG=all}
