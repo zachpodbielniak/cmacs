@@ -122,6 +122,8 @@ RUN set -eux; \
             mesa-libGL-devel libX11-devel libXrandr-devel libXcursor-devel \
             libXinerama-devel libXi-devel \
             ffmpeg-free wl-clipboard \
+            poppler-utils \
+            libacl-devel libattr-devel \
             curl \
         ; \
         dnf clean all; \
@@ -165,6 +167,8 @@ RUN set -eux; \
             libx11-dev libxrandr-dev libxcursor-dev \
             libxinerama-dev libxi-dev \
             ffmpeg wl-clipboard \
+            poppler-utils libglib2.0-bin \
+            libacl1-dev libattr1-dev \
             meson ninja-build \
         ; \
         gcc_major="$(gcc -dumpversion | cut -d. -f1)"; \
@@ -215,6 +219,8 @@ RUN set -eux; \
             mesa libglvnd libpng \
             libx11 libxrandr libxcursor libxinerama libxi \
             ffmpeg wl-clipboard \
+            poppler \
+            acl attr \
             mariadb-libs \
         ; \
         pacman -S --noconfirm --needed wlroots0.20 \
@@ -444,7 +450,6 @@ RUN ./autogen.sh \
         --with-native-compilation=aot \
         --with-tree-sitter \
         --with-sqlite3 \
-        --with-json \
         --with-rsvg \
         --with-jpeg \
         --with-png \

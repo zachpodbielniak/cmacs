@@ -337,6 +337,14 @@ set_packages_fedora () {
 	# package here.  All three backends are optional at configure time:
 	# a missing one narrows which URL schemes work, it does not fail the
 	# build.
+	# cmacs-print: the CUPS virtual printer turns a spooled PDF into an
+	# annotatable org buffer, which needs poppler's pdftocairo + pdfinfo
+	# and gdbus to hand the job to a running instance.  Configure only
+	# WARNS when they are absent -- cmacs-print.el then loads and opens
+	# PDFs verbatim -- so a missing one is invisible until the first
+	# print.  ACL/xattr are upstream Emacs: without them file-name
+	# handlers silently lose extended attributes on copy.
+	PKGS_PRINT=(poppler-utils libacl-devel libattr-devel)
 	PKGS_DBEXPLORER=(mariadb-connector-c-devel)
 	PKG_CMD="${SUDO} dnf install -y"
 }
@@ -431,6 +439,9 @@ set_packages_debian () {
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip-dev libxml2-dev)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
+	# cmacs-print + ACL/xattr.  See the Fedora block.  gdbus is in
+	# libglib2.0-bin here, NOT in libglib2.0-dev.
+	PKGS_PRINT=(poppler-utils libglib2.0-bin libacl1-dev libattr1-dev)
 	PKGS_DBEXPLORER=(libmariadb-dev)
 	PKG_CMD="${SUDO} apt-get install -y"
 	# NOTE: Ubuntu 24.04 (noble) ships wlroots 0.17, wayland 1.22,
@@ -489,6 +500,8 @@ set_packages_arch () {
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
+	# cmacs-print + ACL/xattr.  See the Fedora block.
+	PKGS_PRINT=(poppler acl attr)
 	PKGS_DBEXPLORER=(mariadb-libs)
 	PKG_CMD="${SUDO} pacman -S --needed --noconfirm"
 }
@@ -523,6 +536,9 @@ set_packages_macos () {
 	# Homebrew's libxml2 is keg-only; pkg-config finds the SDK copy.
 	PKGS_OFFICE=(libzip libxml2)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
+	# cmacs-print + ACL/xattr.  See the Fedora block.  macOS carries
+	# ACL/xattr in libSystem, so there is nothing to install for those.
+	PKGS_PRINT=(poppler)
 	PKGS_DBEXPLORER=(mariadb-connector-c)
 	PKG_CMD="brew install"
 }
@@ -550,6 +566,9 @@ set_packages_freebsd () {
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
+	# cmacs-print + ACL/xattr.  See the Fedora block.  FreeBSD's ACL and
+	# extattr interfaces are in libc.
+	PKGS_PRINT=(poppler-utils)
 	PKGS_DBEXPLORER=(mariadb-connector-c)
 	PKG_CMD="${SUDO} pkg install -y"
 }
@@ -573,6 +592,7 @@ all_packages () {
 	     "${PKGS_LIBREGNUM[@]}" \
 	     "${PKGS_CAD[@]}" \
 	     "${PKGS_OFFICE[@]}" \
+	     "${PKGS_PRINT[@]}" \
 	     "${PKGS_DBEXPLORER[@]}"
 }
 
@@ -965,7 +985,7 @@ usage () {
 	echo ""
 	echo "Configure CMacs with:"
 	echo "  ./configure --with-pgtk --with-native-compilation \\"
-	echo "    --with-json --with-tree-sitter \\"
+	echo "    --with-tree-sitter \\"
 	echo "    --with-cmacs-glib --with-cmacs-gi \\"
 	echo "    --with-cmacs-crispy --with-cmacs-bacon --with-cmacs-gowl \\"
 	echo "    --with-cmacs-podomation --with-cmacs-libreclaw \\"

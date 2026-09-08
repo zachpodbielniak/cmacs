@@ -1670,7 +1670,11 @@ if test "$with_cmacs_video" != "no"; then
     if test "$with_cmacs_glib" = "no"; then
       AC_MSG_ERROR([--with-cmacs-video requires --with-cmacs-glib (GStreamer bus dispatches via the cmacs GMainContext)])
     fi
-    if test "$window_system" != "pgtk"; then
+    dnl CMACS: test $with_pgtk, not $window_system -- window_system is
+    dnl not assigned until the window-system probes far below this block,
+    dnl so the old test was always true and this warning fired on every
+    dnl build, --with-pgtk included.
+    if test "$with_pgtk" != "yes"; then
       AC_MSG_WARN([cmacs-video built without --with-pgtk: decode pipeline will run but no frames will be displayed (paint hook is in pgtkterm.c)])
     fi
     AC_DEFINE([HAVE_CMACS_VIDEO], 1, [CMacs GStreamer video subsystem])

@@ -70,7 +70,6 @@ configure_flags := """
     --with-native-compilation=aot
     --with-tree-sitter
     --with-sqlite3
-    --with-json
     --with-rsvg
     --with-jpeg
     --with-png

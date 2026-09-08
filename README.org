@@ -460,7 +460,6 @@ cd cmacs
   --with-native-compilation=aot \
   --with-tree-sitter \
   --with-sqlite3 \
-  --with-json \
   --with-rsvg \
   --with-jpeg \
   --with-png \
@@ -610,7 +609,6 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-native-compilation=aot \
   --with-tree-sitter \
   --with-sqlite3 \
-  --with-json \
   --with-rsvg \
   --with-jpeg \
   --with-png \
@@ -669,7 +667,6 @@ Emacs flags:
 - =--with-native-compilation=aot= --- ahead-of-time native compilation of all Elisp
 - =--with-tree-sitter= --- tree-sitter syntax parsing
 - =--with-sqlite3= --- SQLite3 support
-- =--with-json= --- native JSON parsing
 - =--with-rsvg= --- SVG image rendering
 - =--with-jpeg/png/gif/tiff/webp/xpm= --- image format support
 - =--with-gpm=no= --- disable GPM console mouse (not needed on desktop)
