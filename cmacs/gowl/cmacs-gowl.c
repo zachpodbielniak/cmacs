@@ -1546,7 +1546,15 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               config naming any widget list replaces them
                               wholesale. */
                            "alpha", "vanitygaps", "roundcorners",
-                           "windowrules", "dropdown" };
+                           "windowrules", "dropdown",
+                           /* The screenshot provider.  Without it the
+                              bar's screenshot button falls back to grim
+                              and slurp, which means no window capture
+                              through the scene, no in-compositor
+                              rubber band, and nothing on the clipboard
+                              unless wl-clipboard happens to be
+                              installed. */
+                           "screenshot" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
