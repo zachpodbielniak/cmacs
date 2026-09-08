@@ -42,22 +42,26 @@ ones that fail the build from the ones that merely narrow a feature.
 
 To get the package *names* rather than have them installed --- to paste
 into a Containerfile, an image build, a ticket, or another machine ---
-=make deps-list= prints one ready-to-run install command and nothing
-else on stdout:
+=install-deps --packages= prints one ready-to-run install command and
+nothing else on stdout:
 
 #+begin_example
-make deps-list            # this machine's distro
-make deps-list-fedora     # sudo dnf install -y ...
-make deps-list-ubuntu     # sudo apt-get install -y ...
-make deps-list-arch       # sudo pacman -S --needed --noconfirm ...
-make deps-list-macos      # brew install ...
-make deps-list-freebsd    # sudo pkg install -y ...
+./install-deps --packages          # this machine's distro
+./install-deps --packages arch     # sudo pacman -S --needed --noconfirm ...
+./install-deps --packages debian   # sudo apt-get install -y ...
+./install-deps --packages fedora   # sudo dnf install -y ...
+./install-deps --packages macos    # brew install ...
+./install-deps --packages freebsd  # sudo pkg install -y ...
+
+just deps-list                     # the same, for this machine
+just deps-list arch                # ... or another distro
 #+end_example
 
-Everything explanatory goes to stderr, so =make deps-list-arch 2>/dev/null=
-is a clean one-liner and =make deps-list | bash= works.  These targets
-run in an *unconfigured* tree --- that is the point of them, since the
-machine that needs the list is the one that cannot configure yet.
+Everything explanatory goes to stderr, so =just deps-list arch 2>/dev/null=
+is a clean one-liner and =just deps-list | bash= works.  Neither make nor
+just is required --- =install-deps= needs no configured tree, which is
+the point, since the machine that needs the list is the one that cannot
+build yet.
 
 =just run= is preferred over =src/emacs= directly: it exports
 =CMACS_MODULE_DIR= so the =cmacsgi= bacon builtin loads when you do
@@ -574,7 +578,7 @@ calling =./install-deps=, deliberately.  A container needs things a
 developer's machine already has (=curl=, =git=, =ca-certificates=) and
 does not want things a developer does.  =install-deps= remains the
 source of truth for the *host* install question, which is what
-=make deps-list= answers.
+=just deps-list= answers.
 
 ** Ubuntu 24.04 and the bundled Wayland stack
 
@@ -683,7 +687,7 @@ and least informative place to find out.
 
 When a dependency spans versions, prefer a check that inspects *every
 version installed* over one that inspects the one that would be chosen.
-=make deps-list= and =just check-deps= report what is present;
+=just deps-list= and =just check-deps= report what is present;
 =make WLROOTS=0.19= builds gowl against the older one explicitly, which
 is far cheaper than a container round trip.
 

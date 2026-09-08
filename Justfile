@@ -185,11 +185,23 @@ check-deps:
 # and exactly one install command to stdout, so this pipes and pastes:
 # `just deps-list arch 2>/dev/null', `just deps-list | bash'.  PLATFORM
 # defaults to this machine's distro.
+#
+# This lived in GNUmakefile first, which was a mistake twice over.  That
+# file is upstream Emacs, and the discipline is to keep edits to those
+# minimal -- but worse, a target defined before `include Makefile'
+# becomes make's DEFAULT GOAL, so a bare `make' stopped building Emacs
+# and printed a package list instead.  It exited 0, which reads as an
+# up-to-date tree, and the build silently stopped happening.
+#
+# Neither make nor just is actually required: `./install-deps --packages
+# [PLATFORM]' is the real entry point, and it needs no configured tree,
+# which matters because the machine that needs the list is the one that
+# cannot build yet.
 
 # Print a paste-ready package install command (fedora|debian|arch|macos|freebsd).
 [group('build')]
 deps-list PLATFORM='':
-    ./install-deps --packages {{ PLATFORM }}
+    @./install-deps --packages {{ PLATFORM }}
 
 # Build the cmacs container image.  TARGET is a fedora version (44), an
 # ubuntu version (24.04, 26.04) or `arch'; the base image is inferred from

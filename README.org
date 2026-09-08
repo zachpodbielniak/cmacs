@@ -436,14 +436,13 @@ just deps-list                    # this machine's distro
 just deps-list arch               # sudo pacman -S --needed --noconfirm ...
 just deps-list debian             # sudo apt-get install -y ...
 just deps-list fedora             # sudo dnf install -y ...
-make deps-list-arch               # same thing, without just
+./install-deps --packages arch    # same thing, without just
 #+end_src
 
 Everything explanatory goes to stderr, so =just deps-list arch 2>/dev/null=
-is a clean one-liner and =make deps-list | bash= works.  The =make=
-targets run in an *unconfigured* tree — that is the point of them,
-since the machine that needs the list is the one that cannot configure
-yet.
+is a clean one-liner and =just deps-list | bash= works.  =install-deps=
+needs no configured tree — that is the point, since the machine that
+needs the list is the one that cannot build yet.
 
 ** Quick Start (explicit steps)
 

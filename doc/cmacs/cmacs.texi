@@ -10922,23 +10922,24 @@ feature.
 
 To get the package @emph{names} rather than have them installed ---
 to paste into a Containerfile, an image build, a ticket, or another
-machine --- @command{make deps-list} prints one ready-to-run install
-command and nothing else on stdout:
+machine --- @command{install-deps --packages} prints one ready-to-run
+install command and nothing else on stdout:
 
 @example
-make deps-list            # this machine's distro
-make deps-list-fedora     # sudo dnf install -y ...
-make deps-list-ubuntu     # sudo apt-get install -y ...
-make deps-list-arch       # sudo pacman -S --needed --noconfirm ...
-make deps-list-macos      # brew install ...
-make deps-list-freebsd    # sudo pkg install -y ...
+./install-deps --packages          # this machine's distro
+./install-deps --packages arch     # sudo pacman -S --needed --noconfirm ...
+./install-deps --packages debian   # sudo apt-get install -y ...
+./install-deps --packages fedora   # sudo dnf install -y ...
+
+just deps-list                     # the same, for this machine
+just deps-list arch                # ... or another distro
 @end example
 
 Everything explanatory goes to stderr, so
-@code{make deps-list-arch 2>/dev/null} is a clean one-liner and
-@code{make deps-list | bash} works.  These targets run in an
-@emph{unconfigured} tree --- that is the point of them, since the
-machine that needs the list is the one that cannot configure yet.
+@code{just deps-list arch 2>/dev/null} is a clean one-liner and
+@code{just deps-list | bash} works.  Neither make nor just is required:
+@file{install-deps} needs no configured tree, which is the point, since
+the machine that needs the list is the one that cannot build yet.
 
 @subsection Distro Detection
 
@@ -11366,7 +11367,7 @@ calling @file{./install-deps}, deliberately: a container needs things
 a developer's machine already has (@command{curl}, @command{git},
 @code{ca-certificates}) and does not want things a developer does.
 @file{install-deps} remains the source of truth for the @emph{host}
-install question, which is what @command{make deps-list} answers.
+install question, which is what @command{just deps-list} answers.
 
 @subsection Ubuntu 24.04 and the Bundled Wayland Stack
 

@@ -425,9 +425,12 @@ package install is identical, because it is all `make`.
 - **Per-distro package lists live in the Containerfile**, deliberately — a container
   needs `curl`/`git`/`ca-certificates` a dev box already has, and not the dev extras.
   `install-deps` stays the source of truth for the *host* question, which is what
-  **`make deps-list[-fedora|-ubuntu|-arch|-macos|-freebsd]`** answers: one paste-ready
-  install command on stdout, all commentary on stderr, and it runs in an **unconfigured
-  tree** (the machine that needs the list is the one that cannot configure yet).
+  **`./install-deps --packages [PLATFORM]`** answers (`just deps-list [PLATFORM]` wraps
+  it): one paste-ready install command on stdout, all commentary on stderr, and it needs
+  no configured tree — the machine that needs the list is the one that cannot build yet.
+  Deliberately NOT a make target: a target defined before `include Makefile` in
+  `GNUmakefile` becomes make's **default goal**, so a bare `make` stopped building Emacs
+  and printed a package list, exiting 0 as though the tree were up to date.
 - **Ubuntu 24.04 builds wayland/wayland-protocols/pixman/wlroots from source** (noble has
   wlroots 0.17 / wayland 1.22 / pixman 0.42). The probe is on `pkg-config`, not the distro
   version, so a release that catches up takes the fast path with no edit. Two silent traps

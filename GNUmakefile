@@ -68,54 +68,6 @@ help:
 
 else
 
-## CMACS: `make deps-list' tells you which system packages to install.
-##
-## Defined here rather than in Makefile.in on purpose: its whole reason
-## to exist is to be run on a machine that cannot build cmacs yet, and
-## a target in Makefile.in would first send GNU make off to run
-## ./configure -- which needs the very packages the target is listing.
-##
-##   make deps-list            for this machine
-##   make deps-list-arch       for another distro
-##   make deps-list-ubuntu     (an alias for debian)
-##
-## The command goes to stdout on its own, so it can be piped as well as
-## pasted:  make deps-list-arch | tail -1 | sh
-CMACS_DEPS_GOALS = deps-list deps-list-fedora deps-list-debian \
-                   deps-list-ubuntu deps-list-arch deps-list-macos \
-                   deps-list-freebsd
-
-.PHONY: $(CMACS_DEPS_GOALS)
-
-## These are the FIRST targets in this file, and make takes the first
-## target it sees as the default goal.  Without this line a bare `make'
-## stopped building Emacs and printed a package list instead -- which
-## looks like a successful no-op, so a tree can sit unbuilt for hours
-## while every `make' appears to succeed.  `all' is what the included
-## Makefile means by default, and what it meant before these existed.
-.DEFAULT_GOAL := all
-
-## Spelled out one target each rather than a `deps-list-%' pattern:
-## GNU make does not apply pattern rules to .PHONY targets, so the
-## pattern silently reported "Nothing to be done" for every distro.
-deps-list:
-	@./install-deps --packages
-
-deps-list-fedora:
-	@./install-deps --packages fedora
-
-deps-list-debian deps-list-ubuntu:
-	@./install-deps --packages debian
-
-deps-list-arch:
-	@./install-deps --packages arch
-
-deps-list-macos:
-	@./install-deps --packages macos
-
-deps-list-freebsd:
-	@./install-deps --packages freebsd
-
 # If a Makefile already exists, just use it.
 
 ifeq ($(wildcard Makefile),Makefile)
@@ -139,10 +91,7 @@ else
 # Once 'configure' exists, run it.
 # Finally, run the actual 'make'.
 
-## CMACS: the deps-list goals are excluded so an unconfigured tree
-## answers them directly instead of running ./configure first.
-ORDINARY_GOALS = $(filter-out configure Makefile bootstrap \
-                              $(CMACS_DEPS_GOALS),$(MAKECMDGOALS))
+ORDINARY_GOALS = $(filter-out configure Makefile bootstrap,$(MAKECMDGOALS))
 
 default $(ORDINARY_GOALS): Makefile
 	$(MAKE) -f Makefile $(MAKECMDGOALS)
