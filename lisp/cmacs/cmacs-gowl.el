@@ -221,6 +221,9 @@ standalone gowl ships with (see
   Super+Shift+1..9    move focused client to tag N
   Super+Ctrl+1..9     toggle visibility of tag N
   Super+Shift+Ctrl+N  toggle tag N on focused client
+  Super+Shift+s       screenshot: select a region
+  Super+Print         screenshot: focused window
+  Print               screenshot: whole screen
   Super+, / Super+.   focus previous / next monitor
   Super+Ctrl+Shift+, / . move focused client to previous / next monitor
   Super+Shift+q       quit the compositor
@@ -578,6 +581,18 @@ authoritative and keeps re-runs idempotent."
               "Window switcher: next")
         (bind "Super+Shift+Tab" 'ipc-command "switcher-prev"
               "Window switcher: previous")
+        ;; Screenshots.  Reached by NAME through gowl's `ipc_command'
+        ;; action, exactly like expo and the switcher: the screenshot
+        ;; module saves the PNG under ~/Pictures/Screenshots and puts
+        ;; it on the clipboard itself, so nothing here has to know how
+        ;; a capture works, and these are inert (not broken) in a
+        ;; session where the module is not loaded.
+        (bind "Super+Shift+s" 'ipc-command "screenshot-area"
+              "Screenshot: select a region")
+        (bind "Super+Print" 'ipc-command "screenshot-window"
+              "Screenshot: focused window")
+        (bind "Print" 'ipc-command "screenshot-screen"
+              "Screenshot: whole screen")
         ;; Session.
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
