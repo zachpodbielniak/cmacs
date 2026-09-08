@@ -82,6 +82,27 @@ ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/mai
 # 44+, 0.19 on 42/43).  Arch versions the package (wlroots0.20).
 # Ubuntu versions it too (libwlroots-0.19-dev on 26.04) but 24.04 has
 # only 0.17, handled further down.
+#
+# Every Debian-side install after the main one is OPPORTUNISTIC: the
+# package may not exist on this release, and failure is swallowed with a
+# NOTE.  That is what makes `--no-remove' (the apt_try wrapper) load
+# bearing rather than tidy.  Without it apt is free to satisfy one of
+# them by DELETING packages the main install already put there, and the
+# `|| echo NOTE' hides that anything happened.
+#
+# 26.04 did exactly that: libmariadb-dev conflicts with the
+# libmysqlclient-dev that libocct-data-exchange-dev pulls in through
+# libvtk9-dev and libgdal-dev, so apt quietly removed six packages
+# including the OCCT data-exchange headers.  cad-glib then failed on
+# IGESControl_Reader.hxx six thousand log lines later, with nothing to
+# say that a package we had installed was gone.
+#
+# MySQL is probed before it is asked for, too: on 26.04 the OCCT chain
+# has already supplied default-libmysqlclient-dev (and mysqlclient.pc),
+# so orm-glib is satisfied and requesting MariaDB only starts the fight.
+#
+# NOTE: no `#' comments inside the RUN below.  Continued lines are
+# joined, so a comment would swallow the rest of the command.
 # ---------------------------------------------------------------------
 RUN set -eux; \
     case "${CMACS_DISTRO}" in \
@@ -171,19 +192,24 @@ RUN set -eux; \
             libacl1-dev libattr1-dev \
             meson ninja-build \
         ; \
+        apt_try() { \
+            apt-get install -y --no-install-recommends --no-remove "$@"; \
+        }; \
         gcc_major="$(gcc -dumpversion | cut -d. -f1)"; \
-        apt-get install -y --no-install-recommends \
-            "libgccjit-${gcc_major}-dev" || \
-            apt-get install -y --no-install-recommends libgccjit-dev; \
-        apt-get install -y --no-install-recommends libgirepository-2.0-dev \
+        apt_try "libgccjit-${gcc_major}-dev" || apt_try libgccjit-dev; \
+        apt_try libgirepository-2.0-dev \
             || echo "NOTE: no libgirepository-2.0-dev on this release"; \
-        apt-get install -y --no-install-recommends libdex-dev \
+        apt_try libdex-dev \
             || echo "NOTE: no libdex-dev on this release"; \
-        apt-get install -y --no-install-recommends libmariadb-dev \
-            || echo "NOTE: no libmariadb-dev on this release"; \
+        if pkg-config --exists mysqlclient || pkg-config --exists libmariadb; \
+        then \
+            echo "NOTE: MySQL/MariaDB headers already present"; \
+        else \
+            apt_try default-libmysqlclient-dev || apt_try libmariadb-dev \
+                || echo "NOTE: no MySQL/MariaDB dev package on this release"; \
+        fi; \
         for v in 0.20 0.19; do \
-            apt-get install -y --no-install-recommends \
-                "libwlroots-${v}-dev" && break; \
+            apt_try "libwlroots-${v}-dev" && break; \
         done \
             || echo "NOTE: no wlroots >= 0.19 packaged; building from source"; \
         ;; \

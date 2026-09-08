@@ -422,6 +422,18 @@ The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubunt
 `CMACS_RELEASE`; `CMACS_DISTRO` selects the package manager and everything after the
 package install is identical, because it is all `make`.
 
+- **An opportunistic `apt-get install` must pass `--no-remove`.** Everything after
+  the main install in the Debian branch may be absent on a given release, so failure
+  is swallowed with a `NOTE` — which means apt is also free to satisfy one by
+  *deleting* packages the main install already put there, invisibly. On 26.04
+  `libmariadb-dev` conflicted with the `libmysqlclient-dev` that
+  `libocct-data-exchange-dev` pulls in via VTK and GDAL; apt removed six packages
+  including the OCCT headers, and cad-glib failed on `IGESControl_Reader.hxx` six
+  thousand log lines later. Probe with `pkg-config` before asking for a package that
+  something else may already have satisfied. Same rule in `install-deps`, more so —
+  that one runs on a workstation.
+- **No `#` comments inside a `RUN`.** Continued lines are joined, so a comment
+  swallows the rest of the command. Put the explanation above the instruction.
 - **Per-distro package lists live in the Containerfile**, deliberately — a container
   needs `curl`/`git`/`ca-certificates` a dev box already has, and not the dev extras.
   `install-deps` stays the source of truth for the *host* question, which is what
