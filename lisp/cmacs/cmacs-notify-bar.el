@@ -36,12 +36,11 @@ Change this only if the widget is registered under another name."
   :type 'string
   :group 'cmacs-notify-bar)
 
-(defcustom cmacs-notify-bar-dnd nil
-  "Non-nil while Do Not Disturb is on.
-Set through `cmacs-notify-bar-toggle-dnd' rather than directly, so the
-bar is told."
-  :type 'boolean
-  :group 'cmacs-notify-bar)
+(defvaralias 'cmacs-notify-bar-dnd 'cmacs-notify-daemon-dnd
+  "Do Not Disturb lives in the daemon, not in this surface.
+Kept as an alias because the mode is the notification subsystem's
+concept: the filters that decide what still gets through are there too,
+and a second flag here would be a second answer to the same question.")
 
 (defvar cmacs-notify-bar--unread 0
   "Notifications that have arrived since the backlog was last shown.")
@@ -60,7 +59,7 @@ no bar to tell."
          (list (cons (concat w ".count")
                      (number-to-string cmacs-notify-bar--unread))
                (cons (concat w ".dnd")
-                     (if cmacs-notify-bar-dnd "1" "0"))
+                     (if cmacs-notify-daemon-dnd "1" "0"))
                ;; The tooltip and the panel's "Last" row.  Truncated
                ;; here rather than in C: the widget renders what it is
                ;; given, and a novel-length summary is the sender's
@@ -104,14 +103,12 @@ Notifications keep arriving and keep being recorded -- the backlog is
 the point -- but they stop interrupting.  This is what the bar widget's
 toggle runs."
   (interactive)
-  (setq cmacs-notify-bar-dnd (not cmacs-notify-bar-dnd))
-  ;; Suppress the interrupting halves only.  History and the hook stay
-  ;; live, so nothing is lost while the mode is on.
-  (setq cmacs-notify-daemon-echo (not cmacs-notify-bar-dnd)
-        cmacs-notify-daemon-pop-to-buffer-urgencies
-        (if cmacs-notify-bar-dnd nil '(critical)))
+  ;; The daemon owns the mode and does the suppressing; this only
+  ;; flips it and republishes.  Mangling the echo settings from here
+  ;; would leave them wrong for good if the toggle were interrupted.
+  (setq cmacs-notify-daemon-dnd (not cmacs-notify-daemon-dnd))
   (cmacs-notify-bar--push)
-  (message "Do not disturb %s" (if cmacs-notify-bar-dnd "on" "off")))
+  (message "Do not disturb %s" (if cmacs-notify-daemon-dnd "on" "off")))
 
 ;;;###autoload
 (define-minor-mode cmacs-notify-bar-mode

@@ -105,6 +105,52 @@ want notifications to outlive the session."
   :type '(choice (const :tag "No file log" nil) file)
   :group 'cmacs-notify-daemon)
 
+(defcustom cmacs-notify-daemon-dnd nil
+  "Non-nil while Do Not Disturb is on.
+
+Suppresses the interrupting halves --- the echo and the pop-to-buffer
+--- and nothing else.  Notifications keep arriving, keep being
+recorded, keep being logged and keep reaching
+`cmacs-notify-daemon-functions', because the backlog is the point of
+the mode rather than a side effect of it.
+
+`cmacs-notify-daemon-dnd-allow-rules' names what still gets through."
+  :type 'boolean
+  :group 'cmacs-notify-daemon)
+
+(defcustom cmacs-notify-daemon-discard-rules nil
+  "Rules for notifications to drop entirely.
+
+Each rule is a plist of field regexps, any of :app, :summary, :body and
+:urgency.  A notification matching EVERY field named in a rule matches
+that rule, and matching ANY rule discards it: it is not recorded, not
+echoed, and never reaches `cmacs-notify-daemon-functions'.  Matching is
+case-insensitive.
+
+    (setq cmacs-notify-daemon-discard-rules
+          \='((:app \"^Spotify$\")
+            (:summary \"backup\" :urgency low)))
+
+Discarding is not the same as Do Not Disturb: a discarded notification
+is gone in both modes, which is the point -- it is for the sender that
+is never worth hearing from, not for the hour you do not want to be
+interrupted."
+  :type '(repeat plist)
+  :group 'cmacs-notify-daemon)
+
+(defcustom cmacs-notify-daemon-dnd-allow-rules nil
+  "Rules for notifications that interrupt even during Do Not Disturb.
+
+Same shape as `cmacs-notify-daemon-discard-rules'.  Everything else is
+recorded silently while the mode is on, so nothing is lost -- only the
+interruption is suppressed.
+
+An allow list is what keeps the mode usable.  A Do Not Disturb that
+hides absolutely everything is one people switch off and never switch
+back on."
+  :type '(repeat plist)
+  :group 'cmacs-notify-daemon)
+
 (defcustom cmacs-notify-daemon-functions nil
   "Hook run with one argument, the plist of an arriving notification.
 Keys are :id, :app, :summary, :body, :urgency, :icon, :actions,
@@ -350,6 +396,39 @@ Active notifications are closed first, so their senders are told."
                  (concat " — " (car (split-string body "\n" t)))
                ""))))
 
+(defun cmacs-notify-daemon--rule-matches-p (rule n)
+  "Non-nil when notification N satisfies every field named in RULE."
+  (let ((ok t)
+        (tail rule))
+    (while (and ok tail)
+      (let* ((key (car tail))
+             (want (cadr tail))
+             (have (plist-get n key)))
+        (setq ok
+              (cond
+               ;; :urgency is a symbol, compared as one.  A regexp
+               ;; against `low' would be a surprise.
+               ((eq key :urgency) (eq want have))
+               ((null want) t)
+               ((not (stringp have)) nil)
+               (t (let ((case-fold-search t))
+                    (and (string-match-p want have) t))))))
+      (setq tail (cddr tail)))
+    ok))
+
+(defun cmacs-notify-daemon-matches-p (rules n)
+  "Non-nil when notification N matches any rule in RULES.
+A malformed rule is reported and skipped rather than aborting delivery:
+a broken filter must not cost you the notification it failed to
+classify."
+  (catch 'hit
+    (dolist (rule rules nil)
+      (condition-case err
+          (when (cmacs-notify-daemon--rule-matches-p rule n)
+            (throw 'hit t))
+        (error (message "cmacs-notify-daemon: bad rule %S: %s"
+                        rule (error-message-string err)))))))
+
 (defun cmacs-notify-daemon--log-to-file (n)
   "Append notification N to `cmacs-notify-daemon-log-file'."
   (when cmacs-notify-daemon-log-file
@@ -365,8 +444,22 @@ Active notifications are closed first, so their senders are told."
                       (error-message-string err))))))
 
 (defun cmacs-notify-daemon--deliver (n)
-  "Record and display notification N."
-  (let ((urg (plist-get n :urgency)))
+  "Record and display notification N.
+Discarded notifications return before anything at all is done with
+them: not recorded, not logged, not passed to the hook."
+  (unless (cmacs-notify-daemon-matches-p
+           cmacs-notify-daemon-discard-rules n)
+    (cmacs-notify-daemon--deliver-1 n)))
+
+(defun cmacs-notify-daemon--deliver-1 (n)
+  "Record and display notification N, which has survived the filters."
+  (let* ((urg (plist-get n :urgency))
+         ;; Do Not Disturb suppresses the INTERRUPTION only.  The
+         ;; notification is still recorded, logged and handed to the
+         ;; hook, because the backlog is the whole point of the mode.
+         (quiet (and cmacs-notify-daemon-dnd
+                     (not (cmacs-notify-daemon-matches-p
+                           cmacs-notify-daemon-dnd-allow-rules n)))))
     (push n cmacs-notify-daemon-history)
     (when (> (length cmacs-notify-daemon-history)
              cmacs-notify-daemon-history-limit)
@@ -383,10 +476,11 @@ Active notifications are closed first, so their senders are told."
                         fn (error-message-string err)))))
     (when (get-buffer cmacs-notify-daemon-buffer)
       (cmacs-notify-daemon-refresh))
-    (when (and cmacs-notify-daemon-echo
+    (when (and cmacs-notify-daemon-echo (not quiet)
                (memq urg cmacs-notify-daemon-echo-urgencies))
       (cmacs-notify-daemon--echo n))
-    (when (memq urg cmacs-notify-daemon-pop-to-buffer-urgencies)
+    (when (and (not quiet)
+               (memq urg cmacs-notify-daemon-pop-to-buffer-urgencies))
       (display-buffer (cmacs-notify-daemon-refresh)))))
 
 ;;; The specification's methods
