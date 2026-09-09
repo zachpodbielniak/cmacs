@@ -1559,7 +1559,11 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               draw into.  Without it they fall back to
                               the echo area, which is a message rather
                               than something you can read at a glance. */
-                           "osd" };
+                           "osd",
+                           /* The clipboard history store.  The bar
+                              widget and cmacs both read what it keeps;
+                              without it neither has anything to show. */
+                           "clipboard" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
