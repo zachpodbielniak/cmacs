@@ -1009,5 +1009,53 @@ directory, so with it set -- the usual case -- the file landed at
     (should (string-suffix-p "/.config/gowl/config.yaml"
                              (cmacs-gowl-dashboard-config-file)))))
 
+;;; Nested-vs-seat detection (source guards)
+
+;; These read the C sources rather than calling anything: the decision
+;; runs in early main(), before the Lisp VM exists, and the failure it
+;; guards against does not show up in the session that causes it.  A
+;; cmacs session that exits leaves its Wayland socket file behind (Emacs
+;; exits through exit(), so libwayland never removes it); treating that
+;; file as proof of a running compositor made the NEXT login nest itself
+;; into a dead socket and die at the display manager.  The liveness
+;; probe itself is tested for real in gowl (tests/test-wayland-socket.c);
+;; what can regress here is somebody reintroducing the file check.
+
+(defvar cmacs-gowl-tests--source-root
+  (and (or load-file-name buffer-file-name)
+       (expand-file-name
+        "../../" (file-name-directory (or load-file-name buffer-file-name))))
+  "Top of the cmacs source tree, or nil when tests run outside it.")
+
+(defun cmacs-gowl-tests--source (relative)
+  "Contents of RELATIVE under the source tree, or nil if unavailable."
+  (let ((file (and cmacs-gowl-tests--source-root
+                   (expand-file-name relative
+                                     cmacs-gowl-tests--source-root))))
+    (when (and file (file-readable-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (buffer-string)))))
+
+(ert-deftest cmacs-gowl-test-nested-detection-probes-liveness ()
+  "Nested detection must connect to a socket, not stat one.
+A socket file outlives the compositor that made it, so its presence
+answers a different question from the one the wlroots backend is about
+to ask."
+  (let ((src (cmacs-gowl-tests--source "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless src)
+    (should (string-match-p "cmacs_gowl_detect_nested" src))
+    (should (string-match-p "gowl_wayland_socket_live" src))))
+
+(ert-deftest cmacs-gowl-test-emacs-c-has-no-socket-file-probe ()
+  "The --gowl entry in emacs.c must not decide nestedness from a file.
+This is the exact hunk that wedged logins: it scanned
+$XDG_RUNTIME_DIR for wayland-0..3 and believed whichever file it
+found.  It now calls `cmacs_gowl_detect_nested', which probes."
+  (let ((src (cmacs-gowl-tests--source "src/emacs.c")))
+    (skip-unless src)
+    (should (string-match-p "cmacs_gowl_detect_nested" src))
+    (should-not (string-match-p "wayland-%d" src))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

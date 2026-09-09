@@ -1621,6 +1621,134 @@ cmacs_gowl_install_close_protection (GowlCompositor *compositor)
                     G_CALLBACK (cmacs_gowl_protect_session_close), NULL);
 }
 
+/* ── Is another compositor already running? ──────────────────────────
+ *
+ * The answer picks the wlroots backend: a live parent Wayland session
+ * means the `wayland' backend and we become a window inside it; no
+ * parent means DRM + libinput and we take the seat.  It also decides,
+ * inside gowl_compositor_start, whether we own the systemd user session
+ * (gowl_systemd_should_manage_session reads WAYLAND_DISPLAY and DISPLAY
+ * for exactly that).  Both readings are wrong if the evidence is stale.
+ *
+ * And it goes stale routinely.  A socket file in $XDG_RUNTIME_DIR is
+ * removed by libwayland only in wl_display_destroy(), which `emacs
+ * --gowl' never reaches -- Emacs exits through exit() with the
+ * compositor still alive -- so every cmacs logout leaves its own
+ * wayland-N behind for the rest of the boot.  The variables leak the
+ * same way: gowl imports WAYLAND_DISPLAY and DISPLAY into the systemd
+ * user manager at session start and nothing unsets them at session end.
+ *
+ * The bug that came of it: log out of a cmacs session, and the NEXT
+ * login found the leftover socket, declared itself nested, forced
+ * WLR_BACKENDS=wayland, and could not connect to a socket with nothing
+ * behind it.  The session died before drawing anything, dropping the
+ * user back at GDM with no message anywhere.  Logging into GNOME and
+ * out again appeared to fix it, because mutter's clean shutdown removes
+ * its socket -- so the workaround was to log into a desktop you did not
+ * want in order to be allowed into the one you did.
+ *
+ * So do not ask whether the file exists.  Ask what wlroots is about to
+ * ask: does anything answer.  A name that answers nothing is not a
+ * session and is actively harmful to keep -- wlr_backend_autocreate
+ * picks the wayland backend from the mere presence of WAYLAND_DISPLAY,
+ * and gowl reads it to decide it is somebody's guest -- so unset it.  */
+
+/* $DISPLAY as a local X11 socket path, or NULL when it does not name
+   one.  Only the plain `:N[.S]' form is resolved: anything else is a
+   remote or otherwise deliberate display, and guessing at those would
+   mean unsetting a display the user meant. */
+static char *
+cmacs_gowl_x_socket_path (const char *display)
+{
+  const char *p;
+
+  if (display == NULL || display[0] != ':' || display[1] == '\0')
+    return NULL;
+
+  for (p = display + 1; *p != '\0' && *p != '.'; p++)
+    if (*p < '0' || *p > '9')
+      return NULL;
+
+  return g_strdup_printf ("/tmp/.X11-unix/X%.*s",
+                          (int) (p - (display + 1)), display + 1);
+}
+
+gboolean
+cmacs_gowl_detect_nested (void)
+{
+  const char *wl_socket = getenv ("WAYLAND_SOCKET");
+  const char *wl_display = getenv ("WAYLAND_DISPLAY");
+  const char *x_display;
+  gboolean nested = FALSE;
+
+  /* A parent that handed us an already-connected fd is unambiguous, and
+     nothing about it can be stale. */
+  if (wl_socket != NULL && wl_socket[0] != '\0')
+    nested = TRUE;
+  else if (wl_display != NULL && wl_display[0] != '\0')
+    {
+      if (gowl_wayland_socket_live (wl_display))
+        nested = TRUE;
+      else
+        {
+          fprintf (stderr,
+                   "cmacs: WAYLAND_DISPLAY=%s has no compositor "
+                   "listening; ignoring it\n", wl_display);
+          unsetenv ("WAYLAND_DISPLAY");
+        }
+    }
+
+  /* Fall back to probing the usual names: some terminals do not
+     propagate WAYLAND_DISPLAY, so its absence is not proof of a seat.
+     Only a socket that answers counts. */
+  if (!nested)
+    {
+      const char *xdg = getenv ("XDG_RUNTIME_DIR");
+
+      if (xdg != NULL && xdg[0] != '\0')
+        {
+          int n;
+
+          for (n = 0; n <= 3 && !nested; n++)
+            {
+              char name[32];
+
+              snprintf (name, sizeof name, "wayland-%d", n);
+              if (gowl_wayland_socket_live (name))
+                {
+                  setenv ("WAYLAND_DISPLAY", name, 0);
+                  nested = TRUE;
+                }
+            }
+        }
+    }
+
+  /* A dead $DISPLAY is the same trap one protocol over: with no live
+     Wayland parent, wlr_backend_autocreate falls to the X11 backend on
+     the strength of this variable alone, and gowl reads it as evidence
+     that somebody else owns the session.  A previous session's XWayland
+     leaks in through the systemd user manager exactly like the Wayland
+     one does. */
+  x_display = getenv ("DISPLAY");
+  if (!nested && x_display != NULL && x_display[0] != '\0')
+    {
+      g_autofree char *x_path = cmacs_gowl_x_socket_path (x_display);
+
+      if (x_path != NULL && !g_file_test (x_path, G_FILE_TEST_EXISTS))
+        {
+          fprintf (stderr,
+                   "cmacs: DISPLAY=%s has no X server; ignoring it\n",
+                   x_display);
+          unsetenv ("DISPLAY");
+        }
+    }
+
+  if (nested)
+    setenv ("WLR_BACKENDS", "wayland", 0);
+
+  return nested;
+}
+
 DEFUN ("gowl-start", Fgowl_start, Sgowl_start, 0, 0, 0,
        doc: /* Create and start the gowl Wayland compositor.
 Returns non-nil on success.  Signals an error if already running.
@@ -1676,38 +1804,30 @@ the event loop source and returns. */)
       return Qt;
     }
 
-  /* If running inside an existing Wayland session, tell wlroots to
-     use the nested Wayland backend rather than trying DRM/libseat.
-     Use GDK to detect this reliably — env vars like WAYLAND_DISPLAY
-     may not be propagated to the process by all terminal emulators. */
-  {
-    gboolean nested = FALSE;
-    const char *wl_display = getenv ("WAYLAND_DISPLAY");
-
-    if (wl_display != NULL && wl_display[0] != '\0')
-      nested = TRUE;
-
+  /* If running inside an existing Wayland session, tell wlroots to use
+     the nested Wayland backend rather than trying DRM/libseat.  The
+     probe ignores dead sockets and dead display names (see
+     cmacs_gowl_detect_nested); GDK is consulted only after it, because
+     a GdkDisplay that is already connected is proof of a parent even
+     when nothing in the environment names one -- some terminals do not
+     propagate WAYLAND_DISPLAY. */
+  if (!cmacs_gowl_detect_nested ())
+    {
 #if defined (HAVE_PGTK) && defined (GDK_WINDOWING_WAYLAND)
-    if (!nested)
-      {
-        GdkDisplay *gdk_dpy = gdk_display_get_default ();
-        if (gdk_dpy != NULL && GDK_IS_WAYLAND_DISPLAY (gdk_dpy))
-          {
-            nested = TRUE;
-            /* wlroots needs WAYLAND_DISPLAY to connect.  GDK is
-               already connected to Wayland but the env var may not
-               be set (e.g. terminal didn't propagate it).  Recover
-               the socket name from GDK so wlroots can find it. */
-            const gchar *name = gdk_display_get_name (gdk_dpy);
-            if (name != NULL)
-              setenv ("WAYLAND_DISPLAY", name, 0);
-          }
-      }
-#endif
+      GdkDisplay *gdk_dpy = gdk_display_get_default ();
 
-    if (nested)
-      setenv ("WLR_BACKENDS", "wayland", 0);
-  }
+      if (gdk_dpy != NULL && GDK_IS_WAYLAND_DISPLAY (gdk_dpy))
+        {
+          /* wlroots needs WAYLAND_DISPLAY to connect; recover the
+             socket name from the display GDK is already talking to. */
+          const gchar *name = gdk_display_get_name (gdk_dpy);
+
+          if (name != NULL)
+            setenv ("WAYLAND_DISPLAY", name, 0);
+          setenv ("WLR_BACKENDS", "wayland", 0);
+        }
+#endif
+    }
 
   cmacs_gowl_compositor = gowl_compositor_new ();
   if (cmacs_gowl_compositor == NULL)

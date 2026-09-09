@@ -66,6 +66,13 @@ extern void cmacs_gowl_unlock (void);
 /* Inhibit parent compositor keyboard shortcuts (nested mode). */
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 
+/* Whether a live compositor already owns this seat, deciding the
+   wlroots backend.  Probes rather than trusting the environment: a
+   socket file or a display name left behind by a dead session would
+   otherwise nest us inside nothing.  Clears any dead WAYLAND_DISPLAY /
+   DISPLAY it finds, and sets WLR_BACKENDS=wayland when nested. */
+extern gboolean cmacs_gowl_detect_nested (void);
+
 /* Xwidget integration callbacks — called from xwidget.c for gowl type. */
 struct xwidget;
 #include <gtk/gtk.h>

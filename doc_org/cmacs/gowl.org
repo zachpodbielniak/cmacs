@@ -84,11 +84,12 @@ Wayland session that launches the freshly-built in-repo binary, then pick
    REPO=/var/home/zach/source/projects/cmacs   # <-- this checkout
    # A real seat session has no parent compositor, but the systemd --user
    # env can leak a stale WAYLAND_DISPLAY/DISPLAY (+ a leftover wayland-0
-   # socket).  cmacs treats a non-empty WAYLAND_DISPLAY as "nested" and
-   # forces WLR_BACKENDS=wayland, which then fails to connect.  Force the
-   # seat backend: cmacs only does setenv(WLR_BACKENDS,...,0) (no-overwrite),
-   # so our value wins and wlroots autocreate honours WLR_BACKENDS over the
-   # WAYLAND_DISPLAY/GDK heuristics.
+   # socket) from the session before it.  cmacs now probes those rather
+   # than believing them (see "Logging out, and being allowed back in"),
+   # so this is belt-and-braces -- keep it anyway: it also pins the seat
+   # backend for a test run started from a terminal inside a desktop.
+   # cmacs only does setenv(WLR_BACKENDS,...,0) (no-overwrite), so our
+   # value wins over anything it would infer.
    unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
    export WLR_BACKENDS=libinput,drm
    cd "$REPO" || exit 1
@@ -155,6 +156,64 @@ Wayland session that launches the freshly-built in-repo binary, then pick
 
 Each of these bounced us back to GDM at least once; diagnose from the
 journal: =journalctl -b | grep -iE 'gdm-wayland-session|cmacs|gowl|wlr|backend'=.
+
+** Logging out, and being allowed back in
+
+A cmacs session that ends does not tear down as cleanly as it looks.
+Emacs exits through =exit()= with the compositor still alive, so
+=wl_display_destroy= never runs and libwayland never removes
+=$XDG_RUNTIME_DIR/wayland-N=.  The file sits there for the rest of the
+boot, indistinguishable from a live compositor to anything that only
+tests whether it exists.
+
+That is what made logging back in fail.  cmacs decided nested-vs-seat by
+scanning the runtime directory for =wayland-0= through =wayland-3= and
+believing the first file it found, so:
+
+1. Log out of a cmacs session.  Its socket file stays behind.
+2. Log back into cmacs.  The scan finds the file, concludes it is
+   nested inside a parent compositor, and sets
+   =WLR_BACKENDS=wayland=.
+3. wlroots tries to connect to a socket with nothing listening, fails,
+   and the session exits before drawing a frame.  GDM comes back with
+   no error anywhere the user can see.
+4. Log into GNOME instead: it works, because mutter is launched as a
+   display server and never consults that file.  Log out of GNOME, and
+   *now* cmacs works again -- mutter's clean shutdown removed the
+   socket that was confusing us.
+
+Having to log into a desktop you don't want in order to be allowed into
+the one you do is the symptom; the cause is asking whether a file
+exists when the question was whether a compositor answers.
+
+Two changes, and each is worth having on its own:
+
+- =cmacs_gowl_detect_nested()= (=cmacs/gowl/cmacs-gowl.c=) *connects*
+  instead of stat-ing, via gowl's =gowl_wayland_socket_live()=.  A
+  =WAYLAND_DISPLAY= or =DISPLAY= that names nothing live is not merely
+  ignored but *unset*: =wlr_backend_autocreate= picks its backend from
+  the presence of those variables alone, and =gowl_systemd_start=
+  reads them to decide whether it owns the systemd user session -- a
+  phantom parent there means =graphical-session.target= never comes up
+  and portals, =gvfs= and =flatpak-session-helper= stay dead.  Both
+  variables leak between sessions for the same reason: gowl imports
+  them into the systemd user manager at session start and nothing
+  unsets them at session end.
+- gowl removes its own socket at exit
+  (=gowl_wayland_socket_unlink_on_exit()=), doing what
+  =wl_display_destroy= would have done, so a cmacs logout stops
+  leaving the evidence in the first place.
+
+If a session is failing this way right now, the running compositor's
+binary predates the fix; the leftovers can be cleared by hand from a
+TTY or over SSH:
+
+#+begin_src bash
+for s in "$XDG_RUNTIME_DIR"/wayland-[0-9]; do
+    [ -S "$s" ] || continue
+    ss -lx | grep -qF "$s" || rm -f "$s"
+done
+#+end_src
 
 ** The keyring, and why =XDG_CURRENT_DESKTOP= decides it
 :PROPERTIES:

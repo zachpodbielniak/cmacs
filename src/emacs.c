@@ -194,6 +194,7 @@ extern void cmacs_gowl_start_thread (void);
 extern void cmacs_gowl_install_close_protection (GowlCompositor *);
 extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
+extern gboolean cmacs_gowl_detect_nested (void);
 #endif
 
 #if defined HAVE_CMACS_GSURF || defined HAVE_XWIDGETS
@@ -1575,41 +1576,13 @@ android_emacs_init (int argc, char **argv, char *dump_file)
             GError *err = NULL;
             const gchar *socket;
 
-            /* Detect nested Wayland before GDK is available.
-               WAYLAND_DISPLAY may not be set (some terminals
-               don't propagate it), so also probe for the default
-               socket file in XDG_RUNTIME_DIR. */
-            {
-              const char *wl_display = getenv ("WAYLAND_DISPLAY");
-              int nested = (wl_display != NULL && wl_display[0] != '\0');
-
-              if (!nested)
-                {
-                  const char *xdg = getenv ("XDG_RUNTIME_DIR");
-                  if (xdg != NULL)
-                    {
-                      /* Try wayland-0 through wayland-3. */
-                      int n;
-                      for (n = 0; n <= 3 && !nested; n++)
-                        {
-                          char path[4096];
-                          snprintf (path, sizeof path,
-                                    "%s/wayland-%d", xdg, n);
-                          if (access (path, F_OK) == 0)
-                            {
-                              char name[32];
-                              snprintf (name, sizeof name,
-                                        "wayland-%d", n);
-                              setenv ("WAYLAND_DISPLAY", name, 0);
-                              nested = 1;
-                            }
-                        }
-                    }
-                }
-
-              if (nested)
-                setenv ("WLR_BACKENDS", "wayland", 0);
-            }
+            /* CMACS: decide nested-vs-seat before GDK exists, and
+               before the compositor reads the same variables to decide
+               whether it owns the systemd user session.  The probe
+               connects rather than trusting a name or a socket file --
+               both outlive the session that made them, and believing
+               one wedged the next login.  cmacs-gowl.c. */
+            cmacs_gowl_detect_nested ();
 
             comp = gowl_compositor_new ();
             if (comp == NULL)

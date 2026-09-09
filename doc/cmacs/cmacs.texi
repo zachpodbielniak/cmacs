@@ -1829,11 +1829,12 @@ writable, on @env{PATH}, and persistent across reboots and image upgrades);
 REPO=/path/to/cmacs          # <-- this checkout
 # A real seat session has no parent compositor, but the systemd --user
 # env can leak a stale WAYLAND_DISPLAY/DISPLAY (+ a leftover wayland-0
-# socket).  cmacs treats a non-empty WAYLAND_DISPLAY as "nested" and forces
-# WLR_BACKENDS=wayland, which then fails to connect.  Force the seat
-# backend: cmacs only does setenv(WLR_BACKENDS,...,0) (no-overwrite), so
-# this wins, and wlroots autocreate honours WLR_BACKENDS over the
-# WAYLAND_DISPLAY/GDK heuristics.
+# socket) from the session before it.  cmacs now probes those rather than
+# believing them (see "Logging Out, and Being Allowed Back In"), so this
+# is belt-and-braces -- keep it anyway: it also pins the seat backend for
+# a test run started from a terminal inside a desktop.  cmacs only does
+# setenv(WLR_BACKENDS,...,0) (no-overwrite), so this wins over anything
+# it would infer.
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
 export WLR_BACKENDS=libinput,drm
 cd "$REPO" || exit 1
@@ -1893,6 +1894,68 @@ make}) and log back in to test changes --- no OS image rebuild.  For
 instead (it keeps @env{WAYLAND_DISPLAY} so wlroots uses the nested
 backend).  Diagnose failures from @code{journalctl -b | grep -iE
 'gdm-wayland-session|cmacs|gowl|wlr|backend'}.
+
+@subsection Logging Out, and Being Allowed Back In
+@cindex logout wedge
+@cindex stale Wayland socket
+@cindex nested detection
+
+A cmacs session does not end as cleanly as it looks.  Emacs exits
+through @code{exit()} with the compositor still alive, so
+@code{wl_display_destroy} never runs and libwayland never removes
+@file{$XDG_RUNTIME_DIR/wayland-N}.  The file remains for the rest of the
+boot, indistinguishable from a live compositor to anything that only
+tests whether it exists.
+
+That is what made logging back in fail.  cmacs decided nested-versus-seat
+by scanning the runtime directory for @file{wayland-0} through
+@file{wayland-3} and believing the first file it found:
+
+@enumerate
+@item
+Log out of a cmacs session.  Its socket file stays behind.
+@item
+Log back into cmacs.  The scan finds the file, concludes it is nested
+inside a parent compositor, and sets @env{WLR_BACKENDS=wayland}.
+@item
+wlroots tries to connect to a socket with nothing listening, fails, and
+the session exits before drawing a frame.  GDM returns with no error
+visible to the user.
+@item
+GNOME logs in fine---mutter is launched as a display server and never
+consults that file---and logging out of GNOME then lets cmacs in again,
+because mutter's clean shutdown removed the socket.
+@end enumerate
+
+The cause is asking whether a file exists when the question was whether
+a compositor answers.  Two changes:
+
+@itemize @bullet
+@item
+@code{cmacs_gowl_detect_nested()} (@file{cmacs/gowl/cmacs-gowl.c})
+connects rather than stats, through gowl's
+@code{gowl_wayland_socket_live()}.  A @env{WAYLAND_DISPLAY} or
+@env{DISPLAY} naming nothing live is @emph{unset}, not merely ignored:
+@code{wlr_backend_autocreate} chooses its backend from the presence of
+those variables alone, and @code{gowl_systemd_start} reads them to decide
+whether it owns the systemd user session---a phantom parent there means
+@code{graphical-session.target} never comes up and portals, @code{gvfs}
+and @code{flatpak-session-helper} stay dead.
+@item
+gowl removes its own socket at exit
+(@code{gowl_wayland_socket_unlink_on_exit()}), doing what
+@code{wl_display_destroy} would have done.
+@end itemize
+
+If a session is failing this way now, its binary predates the fix; clear
+the leftovers from a TTY or over SSH:
+
+@verbatim
+for s in "$XDG_RUNTIME_DIR"/wayland-[0-9]; do
+    [ -S "$s" ] || continue
+    ss -lx | grep -qF "$s" || rm -f "$s"
+done
+@end verbatim
 
 @subsection The Keyring, and Why @env{XDG_CURRENT_DESKTOP} Decides It
 
