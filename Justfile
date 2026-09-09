@@ -257,12 +257,48 @@ container-check:
 #     rpng straight into its sources (header-only, no archive of their
 #     own) but never references raudio at all.
 #
+# The long tail after those is the crispy / yaml-glib / mcp-glib set.
+# src/Makefile.in passes CRISPY_DIR, YAML_GLIB_DIR (YAMLGLIB_DIR in
+# libregnum) and MCP_GLIB_DIR to every one of these sub-builds, so each
+# compiles and links against cmacs's canonical checkout and builds
+# nothing of its own.  Before that, cmacs built crispy five times,
+# yaml-glib six and mcp-glib four, from commits that did not agree.
+#
+# `deps-audit' calls these "used", because the default assignment in each
+# dep's config.mk still names them -- a heuristic cannot see a command
+# line.  They are listed here on the override instead, the same way
+# libregnum's cad-glib is.
+#
+# NOT here: deps/gowl's copies.  gowl compiles yaml-glib and crispy
+# SOURCES into libgowl.a rather than linking their archives, and its
+# hard-coded file lists have drifted from both -- current crispy has a
+# temp registry, a pkg-config resolver and a use-parser it never names.
+# Pointing it elsewhere needs gowl's own change, in gowl's own repo,
+# with object paths keyed to the source so switching copies cannot reuse
+# stale objects.  Until then its two copies remain, and the _gowl_strip
+# dedup rule keeps carrying them.
+#
 # The test that this list is still correct is `just deps-audit'.  Read
 # its third column, not its second: raygui, rres and rpng build no
 # library either, and removing them breaks graylib.
 SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum \
                     deps/libregnum=deps/cad-glib \
-                    deps/libregnum/deps/graylib=deps/raudio"
+                    deps/libregnum/deps/graylib=deps/raudio \
+                    deps/gsurf=deps/crispy \
+                    deps/libregnum=deps/crispy \
+                    deps/podomation=deps/crispy \
+                    deps/podomation=deps/mcp-glib \
+                    deps/podomation=deps/yaml-glib \
+                    deps/podomation/deps/ai-glib=deps/yaml-glib \
+                    deps/ai-glib=deps/yaml-glib \
+                    deps/libregnum=deps/yaml-glib \
+                    deps/clawtilla/deps/libreclaw=deps/yaml-glib \
+                    deps/clawtilla/deps/libreclaw=deps/mcp-glib \
+                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/crispy \
+                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/yaml-glib \
+                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/mcp-glib \
+                    deps/podomation=deps/bacon \
+                    deps/libregnum=deps/mcp-glib"
 
 # Populate deps/ submodules (crispy, bacon, gowl, libregnum, ...).
 [group('build')]

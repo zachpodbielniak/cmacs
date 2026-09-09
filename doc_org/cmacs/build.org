@@ -411,7 +411,25 @@ than a flag, because =git submodule update --recursive= cannot exclude a
 path below the top level --- and =sync= goes through the recipe for the
 same reason, since a bare =--recursive= would undo it.
 
-Together these take a fresh checkout from about 8 GB to under 4 GB.
+Together these take a fresh checkout from about 8 GB to under 4 GB, and
+leave exactly one *build* of crispy, yaml-glib and mcp-glib where there
+were five, six and four.
+
+*** The exception: deps that vendor sources
+
+=gowl=, =gsurf= and =bacon= do not link crispy's and yaml-glib's
+archives --- they compile those *sources* into their own, from file
+lists and pattern rules that spell =deps/crispy/...= literally.  Their
+=*_DIR= variables cover the include paths but not those rules, so the
+checkout has to stay even when nothing under it is built.  They are
+therefore absent from =SKIP_SUBMODULES=, and the =_gowl_strip= /
+=_bacon_strip= / =_gsurf_strip= rules still earn their keep.
+
+Fixing that properly means giving each a variable its rules also honour,
+and keying object paths to the source --- with identical object paths,
+switching =CRISPY_DIR= silently reuses objects compiled from the other
+copy, and the link fails on symbols from files the older list never
+named.  That is a change in each of those repositories, not here.
 
 ** =just deps-audit=, and why the third column is the whole point
 

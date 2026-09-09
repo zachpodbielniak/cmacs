@@ -11216,7 +11216,26 @@ It has to be a per-repository config setting
 top level---and @code{sync} goes through the recipe for the same reason,
 since a bare @option{--recursive} would undo it.
 
-Together these take a fresh checkout from about 8 GB to under 4 GB.
+Together these take a fresh checkout from about 8 GB to under 4 GB, and
+leave exactly one @emph{build} of crispy, yaml-glib and mcp-glib where
+there were five, six and four.
+
+@subsection The exception: deps that vendor sources
+
+@command{gowl}, @command{gsurf} and @command{bacon} do not link crispy's
+and yaml-glib's archives---they compile those @emph{sources} into their
+own, from file lists and pattern rules that spell
+@file{deps/crispy/...} literally.  Their @code{*_DIR} variables cover
+the include paths but not those rules, so the checkout has to stay even
+when nothing under it is built.  They are therefore absent from
+@code{SKIP_SUBMODULES}, and the @code{_gowl_strip} /
+@code{_bacon_strip} / @code{_gsurf_strip} rules still earn their keep.
+
+Fixing that properly means giving each a variable its rules also honour,
+and keying object paths to the source---with identical object paths,
+switching @code{CRISPY_DIR} silently reuses objects compiled from the
+other copy, and the link fails on symbols from files the older list
+never named.  That is a change in each of those repositories, not here.
 
 @subsection just deps-audit, and why the third column is the point
 

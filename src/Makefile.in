@@ -967,13 +967,47 @@ endif
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 CMACS_BACON_STATIC_LIB = $(srcdir)/../deps/bacon/build/$(CMACS_DEP_BUILDTYPE)/libbacon-1.0.a
 $(CMACS_BACON_STATIC_LIB):
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon lib-static
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) lib-static
 
 ## Build bacon module .so files (loaded at runtime, not linked into temacs).
 .PHONY: cmacs-bacon-dep-modules
 cmacs-bacon-dep-modules: $(CMACS_BACON_STATIC_LIB)
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon modules
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/bacon \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) modules
 endif
+
+## ── One copy of each shared dependency ──────────────────────────
+##
+## Several deps bundle their own crispy / yaml-glib / mcp-glib.  Left
+## alone cmacs builds crispy five times, yaml-glib six and mcp-glib four,
+## from commits that do NOT agree -- and all of them reach this binary,
+## where the _strip rules further down pick one implementation per symbol
+## arbitrarily.  That is an ABI mismatch waiting for a caller.
+##
+## Each of those deps uses the three-file Makefile pattern, so its
+## config.mk carries a *_DIR variable that drives `$(MAKE) -C' as well as
+## the include and link paths -- and a variable given on make's command
+## line beats the assignment in the makefile.  So each sub-build is told
+## where the real copy is and builds nothing of its own.
+##
+## The spellings differ per dep (YAMLGLIB_DIR in libregnum and bacon,
+## YAML_GLIB_DIR in podomation, libreclaw and ai-glib), which is why
+## these are passed per invocation rather than exported.
+CMACS_CANON_CRISPY    = $(abs_top_srcdir)/deps/crispy
+CMACS_CANON_YAML_GLIB = $(abs_top_srcdir)/deps/yaml-glib
+CMACS_CANON_MCP_GLIB  = $(abs_top_srcdir)/deps/mcp-glib
+## libregnum EMBEDS yaml-glib's objects into liblibregnum.a (ar ADDLIB),
+## so it needs the archive itself, not just the directory -- and it knows
+## the old layout, `build/libyaml-glib.a'.  Current yaml-glib builds
+## `build/release/libyaml-glib-1.0.a'.  The code compiles against the
+## newer headers untouched; only the file moved, so naming it is the
+## whole fix.  Release, because libregnum builds its deps DEBUG=0
+## regardless of its own build type.
+CMACS_CANON_YAML_GLIB_STATIC = \
+  $(CMACS_CANON_YAML_GLIB)/build/release/libyaml-glib-1.0.a
 
 ifeq ($(CMACS_CRISPY_BUNDLED),yes)
 CMACS_CRISPY_STATIC_LIB = $(srcdir)/../deps/crispy/build/$(CMACS_DEP_BUILDTYPE)/libcrispy.a
@@ -1016,10 +1050,17 @@ CMACS_PODOMATION_STATIC_LIB = $(srcdir)/../deps/podomation/build/$(CMACS_DEP_BUI
 ## sits next to ai-glib/ under deps/.  Only fires when --with-cmacs-ai
 ## is on; otherwise let podomation build its own copy as before.
 ifneq ($(CMACS_AI_OBJ),)
-CMACS_PODOMATION_AI_GLIB_OVERRIDES = AI_GLIB_DIR=../ai-glib
+CMACS_PODOMATION_AI_GLIB_OVERRIDES = AI_GLIB_DIR=../ai-glib \
+  BACON_DIR=$(abs_top_srcdir)/deps/bacon \
+  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB)
 $(CMACS_PODOMATION_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB)
 else
-CMACS_PODOMATION_AI_GLIB_OVERRIDES =
+CMACS_PODOMATION_AI_GLIB_OVERRIDES = BACON_DIR=$(abs_top_srcdir)/deps/bacon \
+  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB)
 endif
 
 $(CMACS_PODOMATION_STATIC_LIB):
@@ -1090,7 +1131,8 @@ endif
 CMACS_AI_GLIB_STATIC_LIB = $(srcdir)/../deps/ai-glib/build/$(CMACS_DEP_BUILDTYPE)/libai-glib-1.0.a
 ifneq ($(CMACS_AI_OBJ)$(CMACS_LIBRECLAW_OBJ),)
 $(CMACS_AI_GLIB_STATIC_LIB): FORCE
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/ai-glib GIR=1 all
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/ai-glib GIR=1 \
+	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) all
 endif
 
 ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
@@ -1112,6 +1154,8 @@ CMACS_LIBRECLAW_STATIC_LIB = $(CMACS_LIBRECLAW_DIR)/build/$(CMACS_DEP_BUILDTYPE)
 $(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(CMACS_LIBRECLAW_DIR) \
 	  AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib \
+	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	  static gir
 
 $(CMACS_LIBRECLAW_OBJ): $(CMACS_LIBRECLAW_STATIC_LIB)
@@ -1192,12 +1236,20 @@ $(CMACS_LIBREGNUM_STATIC_LIB): FORCE $(if $(CMACS_CAD_OBJ),$(CMACS_CAD_GLIB_STAT
 	if pkg-config --exists girepository-2.0; then \
 	  $(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
+	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \
+	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	    BUILD_GIR=$$gir CRISPY=1 HAS_GI=1 $(CMACS_CAD_LIBREGNUM_FLAGS) \
 	    GI_RUNTIME_CFLAGS="$$(pkg-config --cflags girepository-2.0)" \
 	    GI_RUNTIME_LIBS="$$(pkg-config --libs girepository-2.0)"; \
 	else \
 	  $(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libregnum \
 	    WARN_CFLAGS="-Wall -Wextra -Wno-unused-but-set-variable" \
+	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \
+	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	    BUILD_GIR=0 CRISPY=1 $(CMACS_CAD_LIBREGNUM_FLAGS); \
 	fi
 $(CMACS_LIBREGNUM_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
@@ -1299,6 +1351,7 @@ endif
 ## invariant).  gsurf builds standalone against its own copy by default.
 $(CMACS_GSURF_STATIC_LIB):
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
+	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
 	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)

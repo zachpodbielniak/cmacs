@@ -40,3 +40,6 @@
 [submodule "deps/clawtilla"]
 	path = deps/clawtilla
 	url = git@git-ssh.podbielniak.com:zachpodbielniak/clawtilla.git
+[submodule "deps/yaml-glib"]
+	path = deps/yaml-glib
+	url = git@gitlab.com:copyleft-games/yaml-glib.git
