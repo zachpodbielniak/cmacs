@@ -1198,6 +1198,8 @@ $(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB) | cmacs-canonical-dep
 	  AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib \
 	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
 	  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  BACON_DIR=$(abs_top_srcdir)/deps/bacon \
 	  static gir
 
 $(CMACS_LIBRECLAW_OBJ): $(CMACS_LIBRECLAW_STATIC_LIB)
@@ -1340,7 +1342,11 @@ ifneq ($(CMACS_SCREENSAVER_OBJ),)
 SCREENSAVER_MODULES_SO = $(srcdir)/../deps/screensavers/build/$(CMACS_DEP_BUILDTYPE)/blackhole.so
 $(SCREENSAVER_MODULES_SO): $(CMACS_LIBREGNUM_STATIC_LIB)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/screensavers modules \
-	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum)
+	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum) \
+	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \
+	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB)
 $(CMACS_SCREENSAVER_OBJ): | $(SCREENSAVER_MODULES_SO)
 endif
 
@@ -1396,6 +1402,7 @@ $(CMACS_GSURF_STATIC_LIB):
 	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
 	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
 	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
+	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \
 	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
