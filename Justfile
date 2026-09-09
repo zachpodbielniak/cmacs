@@ -232,10 +232,58 @@ container-check:
 # The top-level `make' builds deps/ in-tree, so a fresh clone cannot build
 # without them.  Idempotent: a no-op once they are at the right commit.
 
+# Nested submodules cmacs never builds, as "<parent dir>=<submodule name>".
+#
+# Each of these is a SECOND copy of something cmacs already has, and the
+# build is already pointed at the canonical one -- gsurf and screensavers
+# both take LIBREGNUM_DIR=deps/libregnum on the make command line (see
+# src/Makefile.in), so their own bundled copies are cloned, never built,
+# and never linked.  That was ~900 MB of a fresh clone doing nothing.
+#
+# Skipping is a per-repository config setting rather than a flag, because
+# `git submodule update --recursive' has no way to exclude a path below
+# the top level.  Setting it is idempotent and `just submodules' reapplies
+# it, so a fresh clone gets the same tree as an old one.
+#
+# The test that this list is still correct is `just deps-audit'.
+SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum"
+
 # Populate deps/ submodules (crispy, bacon, gowl, libregnum, ...).
 [group('build')]
 submodules:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Top level first: the skip list below configures repositories that
+    # do not exist until their parent is checked out.
+    git submodule update --init
+    for entry in {{ SKIP_SUBMODULES }}; do
+        parent="${entry%%=*}"
+        name="${entry#*=}"
+        if [[ -d "$parent/.git" || -f "$parent/.git" ]]; then
+            git -C "$parent" config "submodule.$name.update" none
+        fi
+    done
     git submodule update --init --recursive
+
+# A dep that starts genuinely using one of its bundled copies shows up
+# here as a disappearance rather than as a silent mis-build, which is why
+# this reports and does not assert.
+#
+# List nested submodules that are cloned but never built (SKIP candidates).
+[group('build')]
+deps-audit:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    printf '%-56s %8s  %s\n' PATH SIZE BUILT
+    git submodule foreach --recursive --quiet 'echo "$displaypath"' | sort | while read -r d; do
+        case "$d" in */deps/*|*/extlib/*|*/subprojects/*) ;; *) continue ;; esac
+        [[ -d "$d" ]] || continue
+        # Untracked archives only: a tracked .so is a shipped prebuilt
+        # (steamworks does this), not something this tree built.
+        if git -C "$d" ls-files --others --ignored --exclude-standard 2>/dev/null \
+             | grep -qE '\.(a|so)$'; then built=yes; else built=NO; fi
+        printf '%-56s %8s  %s\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1)" "$built"
+    done
 
 # Run autogen.sh.  Required after editing configure.ac.
 [group('build')]
@@ -724,7 +772,9 @@ log-unpushed:
 [group('vcs')]
 sync:
     git pull --rebase origin master
-    git submodule update --init --recursive
+    # Via the recipe, not a bare `--recursive': that would re-clone the
+    # nested copies SKIP_SUBMODULES exists to keep out.
+    just submodules
 
 # Compare current submodule pointer to its HEAD branch tip.
 [group('vcs')]
