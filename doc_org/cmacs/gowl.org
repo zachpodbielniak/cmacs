@@ -189,16 +189,25 @@ exists when the question was whether a compositor answers.
 Two changes, and each is worth having on its own:
 
 - =cmacs_gowl_detect_nested()= (=cmacs/gowl/cmacs-gowl.c=) *connects*
-  instead of stat-ing, via gowl's =gowl_wayland_socket_live()=.  A
-  =WAYLAND_DISPLAY= or =DISPLAY= that names nothing live is not merely
-  ignored but *unset*: =wlr_backend_autocreate= picks its backend from
-  the presence of those variables alone, and =gowl_systemd_start=
-  reads them to decide whether it owns the systemd user session -- a
-  phantom parent there means =graphical-session.target= never comes up
-  and portals, =gvfs= and =flatpak-session-helper= stay dead.  Both
-  variables leak between sessions for the same reason: gowl imports
-  them into the systemd user manager at session start and nothing
-  unsets them at session end.
+  instead of stat-ing.  A =WAYLAND_DISPLAY= or =DISPLAY= *proven* to
+  name nothing is not merely ignored but *unset*:
+  =wlr_backend_autocreate= picks its backend from the presence of those
+  variables alone, and =gowl_systemd_start= reads them to decide whether
+  it owns the systemd user session -- a phantom parent there means
+  =graphical-session.target= never comes up and portals, =gvfs= and
+  =flatpak-session-helper= stay dead.  Both variables leak between
+  sessions for the same reason: gowl imports them into the systemd user
+  manager at session start and nothing unsets them at session end.
+
+  The policy itself is gowl's (=gowl_wayland_detect_parent_session()=),
+  not cmacs's, because *which way it errs matters more than the answer*.
+  A probe can fail to reach a verdict at all -- no =$XDG_RUNTIME_DIR=,
+  a path too long for =sockaddr_un=, no free file descriptors -- and
+  reading that as "no parent" while nested inside GNOME would make gowl
+  claim the session and stop =graphical-session.target= on the way out,
+  ending the host desktop.  So uncertainty resolves to "there is a
+  parent", which costs a nested compositor nothing, and the asymmetry is
+  unit-tested next to the code rather than asserted here.
 - gowl removes its own socket at exit
   (=gowl_wayland_socket_unlink_on_exit()=), doing what
   =wl_display_destroy= would have done, so a cmacs logout stops

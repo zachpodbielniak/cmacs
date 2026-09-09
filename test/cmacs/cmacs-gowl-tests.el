@@ -1038,14 +1038,21 @@ directory, so with it set -- the usual case -- the file landed at
         (buffer-string)))))
 
 (ert-deftest cmacs-gowl-test-nested-detection-probes-liveness ()
-  "Nested detection must connect to a socket, not stat one.
-A socket file outlives the compositor that made it, so its presence
-answers a different question from the one the wlroots backend is about
-to ask."
+  "Nested detection must delegate to gowl, not decide for itself.
+The policy lives in `gowl_wayland_detect_parent_session\=' because the
+direction it errs in is what matters: a probe that reaches no verdict
+has to resolve to \"there is a parent\".  Backwards, inside a GNOME
+session, gowl believes it owns the seat and stops
+graphical-session.target on the way out --- which is GNOME\='s.  That
+asymmetry is unit-tested over there; re-deciding it here would put it
+somewhere nothing tests."
   (let ((src (cmacs-gowl-tests--source "cmacs/gowl/cmacs-gowl.c")))
     (skip-unless src)
     (should (string-match-p "cmacs_gowl_detect_nested" src))
-    (should (string-match-p "gowl_wayland_socket_live" src))))
+    (should (string-match-p "gowl_wayland_detect_parent_session" src))
+    ;; No second opinion about the environment: one unset in a place
+    ;; with no test around it is the whole hazard.
+    (should-not (string-match-p "unsetenv (\"WAYLAND_DISPLAY\")" src))))
 
 (ert-deftest cmacs-gowl-test-emacs-c-has-no-socket-file-probe ()
   "The --gowl entry in emacs.c must not decide nestedness from a file.

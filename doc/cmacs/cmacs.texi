@@ -1933,14 +1933,23 @@ a compositor answers.  Two changes:
 @itemize @bullet
 @item
 @code{cmacs_gowl_detect_nested()} (@file{cmacs/gowl/cmacs-gowl.c})
-connects rather than stats, through gowl's
-@code{gowl_wayland_socket_live()}.  A @env{WAYLAND_DISPLAY} or
-@env{DISPLAY} naming nothing live is @emph{unset}, not merely ignored:
+connects rather than stats.  A @env{WAYLAND_DISPLAY} or @env{DISPLAY}
+@emph{proven} to name nothing is unset, not merely ignored:
 @code{wlr_backend_autocreate} chooses its backend from the presence of
 those variables alone, and @code{gowl_systemd_start} reads them to decide
 whether it owns the systemd user session---a phantom parent there means
 @code{graphical-session.target} never comes up and portals, @code{gvfs}
 and @code{flatpak-session-helper} stay dead.
+
+@item
+The policy is gowl's (@code{gowl_wayland_detect_parent_session()}),
+because which way it errs matters more than the answer.  A probe can
+reach no verdict at all---no @env{XDG_RUNTIME_DIR}, a path too long for
+@code{sockaddr_un}, no free file descriptors---and reading that as ``no
+parent'' while nested inside GNOME would make gowl claim the session and
+stop @code{graphical-session.target} on the way out, ending the host
+desktop.  Uncertainty therefore resolves to ``there is a parent'', which
+costs a nested compositor nothing.
 @item
 gowl removes its own socket at exit
 (@code{gowl_wayland_socket_unlink_on_exit()}), doing what

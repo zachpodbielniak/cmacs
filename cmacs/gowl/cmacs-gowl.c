@@ -1647,101 +1647,19 @@ cmacs_gowl_install_close_protection (GowlCompositor *compositor)
  * its socket -- so the workaround was to log into a desktop you did not
  * want in order to be allowed into the one you did.
  *
- * So do not ask whether the file exists.  Ask what wlroots is about to
- * ask: does anything answer.  A name that answers nothing is not a
- * session and is actively harmful to keep -- wlr_backend_autocreate
- * picks the wayland backend from the mere presence of WAYLAND_DISPLAY,
- * and gowl reads it to decide it is somebody's guest -- so unset it.  */
-
-/* $DISPLAY as a local X11 socket path, or NULL when it does not name
-   one.  Only the plain `:N[.S]' form is resolved: anything else is a
-   remote or otherwise deliberate display, and guessing at those would
-   mean unsetting a display the user meant. */
-static char *
-cmacs_gowl_x_socket_path (const char *display)
-{
-  const char *p;
-
-  if (display == NULL || display[0] != ':' || display[1] == '\0')
-    return NULL;
-
-  for (p = display + 1; *p != '\0' && *p != '.'; p++)
-    if (*p < '0' || *p > '9')
-      return NULL;
-
-  return g_strdup_printf ("/tmp/.X11-unix/X%.*s",
-                          (int) (p - (display + 1)), display + 1);
-}
+ * The policy lives in gowl (gowl_wayland_detect_parent_session), where
+ * it is unit-tested, because the direction it errs in matters more than
+ * the answer: a probe that cannot reach a verdict must resolve to
+ * "there is a parent".  Getting that backwards inside a GNOME session
+ * would make gowl believe it owns the seat and stop
+ * graphical-session.target on the way out, which is GNOME's, and which
+ * ends the user's whole desktop.  Only the wlroots backend hint is
+ * cmacs's to add.  */
 
 gboolean
 cmacs_gowl_detect_nested (void)
 {
-  const char *wl_socket = getenv ("WAYLAND_SOCKET");
-  const char *wl_display = getenv ("WAYLAND_DISPLAY");
-  const char *x_display;
-  gboolean nested = FALSE;
-
-  /* A parent that handed us an already-connected fd is unambiguous, and
-     nothing about it can be stale. */
-  if (wl_socket != NULL && wl_socket[0] != '\0')
-    nested = TRUE;
-  else if (wl_display != NULL && wl_display[0] != '\0')
-    {
-      if (gowl_wayland_socket_live (wl_display))
-        nested = TRUE;
-      else
-        {
-          fprintf (stderr,
-                   "cmacs: WAYLAND_DISPLAY=%s has no compositor "
-                   "listening; ignoring it\n", wl_display);
-          unsetenv ("WAYLAND_DISPLAY");
-        }
-    }
-
-  /* Fall back to probing the usual names: some terminals do not
-     propagate WAYLAND_DISPLAY, so its absence is not proof of a seat.
-     Only a socket that answers counts. */
-  if (!nested)
-    {
-      const char *xdg = getenv ("XDG_RUNTIME_DIR");
-
-      if (xdg != NULL && xdg[0] != '\0')
-        {
-          int n;
-
-          for (n = 0; n <= 3 && !nested; n++)
-            {
-              char name[32];
-
-              snprintf (name, sizeof name, "wayland-%d", n);
-              if (gowl_wayland_socket_live (name))
-                {
-                  setenv ("WAYLAND_DISPLAY", name, 0);
-                  nested = TRUE;
-                }
-            }
-        }
-    }
-
-  /* A dead $DISPLAY is the same trap one protocol over: with no live
-     Wayland parent, wlr_backend_autocreate falls to the X11 backend on
-     the strength of this variable alone, and gowl reads it as evidence
-     that somebody else owns the session.  A previous session's XWayland
-     leaks in through the systemd user manager exactly like the Wayland
-     one does. */
-  x_display = getenv ("DISPLAY");
-  if (!nested && x_display != NULL && x_display[0] != '\0')
-    {
-      g_autofree char *x_path = cmacs_gowl_x_socket_path (x_display);
-
-      if (x_path != NULL && !g_file_test (x_path, G_FILE_TEST_EXISTS))
-        {
-          fprintf (stderr,
-                   "cmacs: DISPLAY=%s has no X server; ignoring it\n",
-                   x_display);
-          unsetenv ("DISPLAY");
-        }
-    }
+  gboolean nested = gowl_wayland_detect_parent_session ();
 
   if (nested)
     setenv ("WLR_BACKENDS", "wayland", 0);
