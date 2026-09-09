@@ -1554,7 +1554,12 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               rubber band, and nothing on the clipboard
                               unless wl-clipboard happens to be
                               installed. */
-                           "screenshot" };
+                           "screenshot",
+                           /* The centred level overlay the media keys
+                              draw into.  Without it they fall back to
+                              the echo area, which is a message rather
+                              than something you can read at a glance. */
+                           "osd" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)

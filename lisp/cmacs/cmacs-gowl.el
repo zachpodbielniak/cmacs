@@ -688,6 +688,12 @@ When launched with --gowl, the compositor is already running and
 Emacs is rendering inside it.  This function ensures the dispatch
 thread is running and applies configuration."
   (gowl-start)  ;; no-op if already running via --gowl
+  ;; Publish notification state to the bar's `notifications' widget.
+  ;; Guarded: a build without the daemon, or a bar without the widget,
+  ;; must not stop the compositor from starting.
+  (ignore-errors
+    (require 'cmacs-notify-bar)
+    (cmacs-notify-bar-mode 1))
   ;; Reflect the Elisp defcustom onto the live GowlConfig so any
   ;; later `gowl-reload-config' honours it.
   (cmacs-gowl-apply-config-evaluation)

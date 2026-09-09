@@ -89,14 +89,17 @@ See `cmacs-gowl-media-osd-function' to render it elsewhere."
   :type 'integer
   :group 'cmacs-gowl-media)
 
-(defcustom cmacs-gowl-media-osd-function #'cmacs-gowl-media-osd-echo
+(defcustom cmacs-gowl-media-osd-function #'cmacs-gowl-media-osd-compositor
   "Function called to display an OSD.
 Receives (LABEL VALUE TEXT): LABEL is a short string such as
 \"Volume\", VALUE is a float in 0.0-1.0 or nil when the quantity has no
 level (a track change, say), and TEXT is the already-rendered line
 that `cmacs-gowl-media-osd-echo' would show.
 
-Replace this to route the OSD somewhere other than the echo area --- a
+The default draws a centred pill in the compositor through the `osd'
+module, and falls back to the echo area when that module is not loaded.
+
+Replace this to route the OSD somewhere else --- a
 gowl layer surface, a posframe, or `cmacs-notify' once a notification
 daemon is running."
   :type 'function
@@ -150,6 +153,28 @@ own main loop."
   "Show TEXT in the echo area.  The default `cmacs-gowl-media-osd-function'."
   (let ((message-log-max nil))          ; an OSD does not belong in *Messages*
     (message "%s" text)))
+
+(defun cmacs-gowl-media-osd-compositor (label value text)
+  "Draw an OSD pill in the compositor for LABEL at VALUE.
+Falls back to `cmacs-gowl-media-osd-echo' when the `osd' module is not
+loaded, so a session without it still reports the level rather than
+going silent.
+
+VALUE is a float in 0.0-1.0, or nil for a message with no level.  TEXT
+is the echo-area rendering, used only by the fallback."
+  (let* ((kind (cond ((string-match-p "\\`\\(?:Volume\\|Sink\\)" label) "volume")
+                     ((string-match-p "\\`\\(?:Mic\\|Source\\)" label) "mic")
+                     ((string-match-p "\\`Brightness" label) "brightness")
+                     (t "show")))
+         (reply
+          (ignore-errors
+            (if (and value (not (string= kind "show")))
+                (gowl-run-command
+                 (format "osd %s %d" kind (round (* 100 value))))
+              (gowl-run-command (format "osd show %s" label))))))
+    ;; run-command answers nothing when no module claims the name.
+    (unless (and reply (string-prefix-p "OK" reply))
+      (cmacs-gowl-media-osd-echo label value text))))
 
 (defun cmacs-gowl-media--osd (label value &optional suffix)
   "Render an OSD for LABEL at VALUE, a float in 0.0-1.0 or nil.
