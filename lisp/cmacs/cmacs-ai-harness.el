@@ -52,6 +52,19 @@
 (declare-function cmacs-ai-harness-set-working-directory "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-provider-name "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-model "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-provider "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-reset "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-native-session "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-native-context "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-carried-context "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-clear-carried-context "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-import-native-context-p "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-import-native-context "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-native-context-limit "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-native-context-limit "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-report-async "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-process-timeout "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-process-timeout "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-executor "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-set-local-tools "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-local-tools-p "cmacs-ai-harness.c")
@@ -126,6 +139,26 @@
 (defface cmacs-ai-harness-todo-done '((t :inherit success :strike-through t))
   "Face for a finished todo item." :group 'cmacs-ai-harness)
 
+;; ai-glib gained six syntax roles when its tool previews learned to show
+;; bounded edit diffs and command output.  They are mapped straight onto
+;; the font-lock faces the rest of Emacs already uses, so a preview here
+;; looks like the same code would look in a source buffer -- which is the
+;; whole point of reading it in Emacs rather than in the terminal harness.
+;; Without these the tags resolve to no face and the preview is a wall of
+;; one colour: legible, but strictly worse than what the library offers.
+(defface cmacs-ai-harness-syntax-keyword '((t :inherit font-lock-keyword-face))
+  "Face for a language keyword in a tool preview." :group 'cmacs-ai-harness)
+(defface cmacs-ai-harness-syntax-string '((t :inherit font-lock-string-face))
+  "Face for a quoted string in a tool preview." :group 'cmacs-ai-harness)
+(defface cmacs-ai-harness-syntax-comment '((t :inherit font-lock-comment-face))
+  "Face for a comment in a tool preview." :group 'cmacs-ai-harness)
+(defface cmacs-ai-harness-syntax-number '((t :inherit font-lock-constant-face))
+  "Face for a numeric literal in a tool preview." :group 'cmacs-ai-harness)
+(defface cmacs-ai-harness-syntax-type '((t :inherit font-lock-type-face))
+  "Face for a type name in a tool preview." :group 'cmacs-ai-harness)
+(defface cmacs-ai-harness-syntax-function '((t :inherit font-lock-function-name-face))
+  "Face for a function name in a tool preview." :group 'cmacs-ai-harness)
+
 (defun cmacs-ai-harness--face-for (tag)
   "Return the face for style role TAG, or nil when there is none.
 TAG is a string from `ai_style_tag_to_string'.  A role with no face --
@@ -142,6 +175,48 @@ from nothing, so the surrounding text is left alone."
   "Provider used by \\[cmacs-ai-harness], or nil for the configured default.
 See `cmacs-ai-providers' for the symbols this accepts."
   :type 'symbol
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-import-native-context t
+  "Whether switching provider carries the old CLI's own history across.
+
+A wrapped CLI keeps a transcript of its own that this buffer never sees:
+the blocks here are what the library observed, and a coding agent
+remembers a great deal more than it says out loud.  With this on,
+\\[cmacs-ai-harness-switch-provider] reads that transcript first and hands
+it to the incoming provider as context, so the conversation survives the
+move.  With it off the switch is clean and the new provider starts from
+only what is on screen.
+
+Only some CLIs keep a transcript this build can read --- claude-code,
+claude-tmux, codex-cli and grok-build.  The rest carry nothing and say
+so rather than pretending."
+  :type 'boolean
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-process-timeout nil
+  "Milliseconds a wrapped CLI gets for one run, or nil for ai-glib's default.
+
+The library's default is thirty minutes, a guard against a CLI wedged on
+a half-open socket pinning the session forever.  ai-glib's own `ai' and
+`ai-tui' disable it outright, on the grounds that a long agentic run
+legitimately outlives any deadline you would pick and being killed
+mid-edit is worse than waiting; set this to 0 to do the same here.
+
+Ignored for providers that are not CLI wrappers -- an HTTP provider has
+no subprocess to put a deadline on."
+  :type '(choice (const :tag "ai-glib default (30 minutes)" nil)
+                 (const :tag "No deadline" 0)
+                 integer)
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-native-context-limit 65536
+  "Byte ceiling on carried native history, or nil for the library default.
+
+Trimming keeps the most recent turns and says in the carried text that
+it trimmed, because a model handed a silently shortened history cannot
+tell that anything is missing."
+  :type '(choice (const :tag "Library default" nil) integer)
   :group 'cmacs-ai-harness)
 
 (defcustom cmacs-ai-harness-model nil
@@ -433,6 +508,15 @@ multi-byte character in the buffer."
 
           (`(:error ,message)
            (message "cmacs-ai-harness: %s" message))
+
+          ;; Reports arrive here rather than as a return value because
+          ;; the query spawns the CLI and waits on it -- see
+          ;; `cmacs-ai-harness-usage'.
+          (`(:report ,kind ,text)
+           (cmacs-ai-harness--show-report kind text))
+
+          (`(:report-error ,message)
+           (message "cmacs-ai-harness: usage report failed -- %s" message))
 
           (`(:builtin ,name ,arguments)
            (cmacs-ai-harness--builtin name arguments)))))))
@@ -746,6 +830,210 @@ where the token includes a slash."
                     (concat "  " a)))
                 :exclusive 'no))))))
 
+;;;; Session control --------------------------------------------------
+;;
+;; ai-tui grew these alongside a panel system, a theme picker and an
+;; animation loop.  The capabilities are worth having; the chrome is not,
+;; because Emacs already has better versions of all of it -- a buffer is
+;; a panel, `customize-face' is a theme picker, and nothing here needs to
+;; animate.  So each of these is an ordinary command that prints an
+;; ordinary message, and the results land in ordinary buffers.
+
+(defun cmacs-ai-harness--apply-native-context-settings ()
+  "Push this buffer's session knobs onto the live session.
+
+Called at startup and after anything that rebuilds or replaces the
+underlying conversation, because those settings live on the session
+rather than in the buffer."
+  (when (fboundp 'cmacs-ai-harness-set-import-native-context)
+    (ignore-errors
+      (cmacs-ai-harness-set-import-native-context
+       cmacs-ai-harness--handle cmacs-ai-harness-import-native-context)
+      (when cmacs-ai-harness-native-context-limit
+        (cmacs-ai-harness-set-native-context-limit
+         cmacs-ai-harness--handle
+         cmacs-ai-harness-native-context-limit))))
+  ;; Errors are swallowed rather than guarded on provider kind: the
+  ;; setter refuses a non-CLI session, which is the common case and not
+  ;; worth a message every time a chat session opens.
+  (when (and cmacs-ai-harness-process-timeout
+             (fboundp 'cmacs-ai-harness-set-process-timeout))
+    (ignore-errors
+      (cmacs-ai-harness-set-process-timeout
+       cmacs-ai-harness--handle cmacs-ai-harness-process-timeout))))
+
+(defun cmacs-ai-harness-switch-provider (provider &optional model)
+  "Move this session onto PROVIDER, optionally pinning MODEL.
+
+The conversation continues -- the transcript on screen, the message
+history behind it, the system prompt and the working directory all stay.
+Only who answers the next turn changes.
+
+When the outgoing provider is a CLI and
+`cmacs-ai-harness-import-native-context' is on, that CLI's own
+transcript is carried across as context, because it remembers a great
+deal this buffer never saw.  \\[cmacs-ai-harness-show-carried-context]
+shows what was carried.
+
+Refused while a turn is in flight."
+  (interactive
+   (let ((p (intern (completing-read
+                     "Switch to provider: "
+                     (mapcar #'symbol-name (cmacs-ai-providers))
+                     nil t))))
+     (list p (cmacs-ai--read-model p))))
+  (unless cmacs-ai-harness--handle
+    (user-error "Not in a harness buffer"))
+  (when (cmacs-ai-harness-busy-p cmacs-ai-harness--handle)
+    (user-error "Still working -- %s to stop it first"
+                (substitute-command-keys "\\[cmacs-ai-harness-kill]")))
+  (cmacs-ai-harness--apply-native-context-settings)
+  (cmacs-ai-harness-set-provider cmacs-ai-harness--handle provider model)
+  (setq cmacs-ai-harness--provider (symbol-name provider))
+  ;; The two halves of tool wiring are chosen by provider kind, and the
+  ;; kind may just have changed: an HTTP provider takes local tools, a
+  ;; CLI runs its own and takes an MCP config instead.  Re-deciding is
+  ;; not optional -- keeping the old wiring is how a switched session
+  ;; ends up with no tools and no indication of it.
+  (cmacs-ai-harness--wire-tools)
+  (force-mode-line-update)
+  (let ((carried (and (fboundp 'cmacs-ai-harness-carried-context)
+                      (cmacs-ai-harness-carried-context
+                       cmacs-ai-harness--handle))))
+    (message "cmacs-ai-harness: now %s%s%s"
+             (or (cmacs-ai-harness-provider-name cmacs-ai-harness--handle)
+                 provider)
+             (if model (format " (%s)" model) "")
+             (if carried
+                 (format ", carrying %s of history"
+                         (file-size-human-readable (string-bytes carried)))
+               ""))))
+
+(defun cmacs-ai-harness-show-carried-context ()
+  "Show the native history this session is carrying, if any.
+
+Non-nil only between a provider switch that harvested one and the turn
+that spends it."
+  (interactive)
+  (let ((text (and cmacs-ai-harness--handle
+                   (fboundp 'cmacs-ai-harness-carried-context)
+                   (cmacs-ai-harness-carried-context
+                    cmacs-ai-harness--handle))))
+    (if (null text)
+        (message "cmacs-ai-harness: nothing carried")
+      (cmacs-ai-harness--show-text "*ai-harness carried context*" text))))
+
+(defun cmacs-ai-harness-reset-session ()
+  "Start a genuinely fresh session on the same provider.
+
+Not the same as clearing the buffer.  A wrapped CLI keeps its own
+session id, so emptying the transcript leaves it happily resuming the
+conversation you thought you had thrown away; this drops that id and
+builds a new conversation, which also forgets tool approvals, todos and
+agent results.
+
+Settings are kept: provider, model, system prompt, working directory."
+  (interactive)
+  (unless cmacs-ai-harness--handle
+    (user-error "Not in a harness buffer"))
+  (when (cmacs-ai-harness-busy-p cmacs-ai-harness--handle)
+    (user-error "Still working -- %s to stop it first"
+                (substitute-command-keys "\\[cmacs-ai-harness-kill]")))
+  (when (yes-or-no-p "Discard this session and start fresh? ")
+    (cmacs-ai-harness-reset cmacs-ai-harness--handle)
+    (cmacs-ai-harness--apply-native-context-settings)
+    ;; The reset built a new executor, so the tools registered on the old
+    ;; one are gone with it.
+    (cmacs-ai-harness--wire-tools)
+    (cmacs-ai-harness--redraw)
+    (goto-char (point-max))
+    (message "cmacs-ai-harness: fresh session on %s"
+             (or (cmacs-ai-harness-provider-name cmacs-ai-harness--handle)
+                 "this provider"))))
+
+(defun cmacs-ai-harness--show-text (name text)
+  "Show TEXT in a read-only buffer called NAME."
+  (let ((buf (get-buffer-create name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text)
+        (goto-char (point-min)))
+      (special-mode))
+    (display-buffer buf)
+    buf))
+
+(defun cmacs-ai-harness--show-report (kind text)
+  "Show a provider usage report of KIND carrying TEXT."
+  (cmacs-ai-harness--show-text
+   (format "*ai-harness %s*" kind)
+   (if (string-empty-p text)
+       (format "The provider returned an empty %s report.\n" kind)
+     text)))
+
+(defun cmacs-ai-harness-usage (&optional history)
+  "Ask this session's provider what it has been spending.
+
+With a prefix argument, ask for HISTORY -- past periods -- instead of
+the current quota windows.
+
+The answer arrives in its own buffer when the provider replies, not
+here: the query spawns the CLI as a JSON-RPC peer and can sit there for
+half a minute, and Emacs does not wait on that.  Under `--gowl' Emacs is
+also the compositor, so waiting would freeze the desktop, not merely the
+editor.
+
+Only some CLIs report at all; codex and grok do."
+  (interactive "P")
+  (unless cmacs-ai-harness--handle
+    (user-error "Not in a harness buffer"))
+  (unless (fboundp 'cmacs-ai-harness-report-async)
+    (user-error "This cmacs predates provider usage reports"))
+  (let ((kind (if history 'history 'usage)))
+    (cmacs-ai-harness-report-async cmacs-ai-harness--handle kind nil)
+    (message "cmacs-ai-harness: asked %s for %s; the answer opens when it lands"
+             (or (cmacs-ai-harness-provider-name cmacs-ai-harness--handle)
+                 "the provider")
+             kind)))
+
+(defun cmacs-ai-harness-show-native-session ()
+  "Show what the wrapped CLI remembers of this session, in its own words.
+
+A CLI keeps a transcript of its own that this buffer never sees.  This
+reads it -- the same text a provider switch would carry -- so you can
+look before deciding to carry it.
+
+Returns nothing useful for a provider with no readable store: this build
+reads claude-code, claude-tmux, codex-cli and grok-build, and declines
+to half-read the SQLite ones, because a partial history is invisible to
+the model that receives it."
+  (interactive)
+  (unless cmacs-ai-harness--handle
+    (user-error "Not in a harness buffer"))
+  (let ((info (and (fboundp 'cmacs-ai-harness-native-session)
+                   (cmacs-ai-harness-native-session
+                    cmacs-ai-harness--handle))))
+    (if (null info)
+        (message "cmacs-ai-harness: %s keeps no session this build can read"
+                 (or (cmacs-ai-harness-provider-name cmacs-ai-harness--handle)
+                     "this provider"))
+      (let ((text (cmacs-ai-harness-native-context
+                   cmacs-ai-harness--handle nil)))
+        (cmacs-ai-harness--show-text
+         "*ai-harness native session*"
+         (concat
+          (format ";; provider   : %s\n" (plist-get info :provider))
+          (format ";; session id : %s\n" (or (plist-get info :session-id) "-"))
+          (format ";; file       : %s\n" (or (plist-get info :path) "-"))
+          (format ";; messages   : %s%s\n"
+                  (plist-get info :messages)
+                  (if (plist-get info :compacted)
+                      (format " (compacted; %s dropped before the boundary)"
+                              (plist-get info :dropped))
+                    ""))
+          "\n"
+          (or text "(nothing readable)\n")))))))
+
 ;;;; The mode ---------------------------------------------------------
 
 (defvar cmacs-ai-harness-mode-map
@@ -763,6 +1051,15 @@ where the token includes a slash."
     (define-key m (kbd "C-c E") #'cmacs-ai-harness-export-markdown)
     (define-key m (kbd "TAB") #'completion-at-point)
     (define-key m (kbd "C-c C-t") #'cmacs-ai-harness-toggle-block)
+    ;; Session control.  `C-c C-r' is reset rather than anything to do
+    ;; with regions, and `C-c C-p' is provider rather than paragraph
+    ;; motion: inside this buffer neither of those default meanings is
+    ;; reachable anyway, because the transcript above the prompt is
+    ;; read-only.
+    (define-key m (kbd "C-c C-p") #'cmacs-ai-harness-switch-provider)
+    (define-key m (kbd "C-c C-r") #'cmacs-ai-harness-reset-session)
+    (define-key m (kbd "C-c C-u") #'cmacs-ai-harness-usage)
+    (define-key m (kbd "C-c C-n") #'cmacs-ai-harness-show-native-session)
     m)
   "Keymap for `cmacs-ai-harness-mode'.")
 
@@ -801,6 +1098,15 @@ opens a dedicated buffer to write a long one in.
 \\[cmacs-ai-harness-export-markdown] as markdown.  \\[completion-at-point]
 completes slash commands and @paths from the same files the terminal
 harness reads.
+
+Session control, all of it plain commands rather than a panel:
+\\[cmacs-ai-harness-switch-provider] moves the conversation to another
+provider and carries the old CLI's own history across,
+\\[cmacs-ai-harness-reset-session] starts genuinely fresh (which
+clearing the buffer does not -- a CLI keeps its own session id),
+\\[cmacs-ai-harness-show-native-session] shows what the wrapped CLI
+remembers, and \\[cmacs-ai-harness-usage] asks the provider what it has
+been spending.
 
 The transcript above the prompt is read-only and is owned by the library:
 it is redrawn from ai-glib's blocks, not edited in place."
@@ -980,6 +1286,7 @@ final tool call would fail in a way that reads as a cmacs bug."
         (ignore-errors
           (cmacs-ai-harness-set-system-prompt
            cmacs-ai-harness--handle cmacs-ai-harness-system-prompt)))
+      (cmacs-ai-harness--apply-native-context-settings)
       (cmacs-ai-harness--wire-tools)
       (let ((this buf))
         (cmacs-ai-harness-set-callback

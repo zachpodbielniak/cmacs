@@ -42,6 +42,10 @@ The directory is not cosmetic. =CLAUDE.md=, =.claude=, the project's own command
 | =C-c C-e= | export the session as Org |
 | =C-c E= | export the session as markdown |
 | =C-c C-t= | expand or collapse the block at point |
+| =C-c C-p= | switch provider, carrying the old CLI's own history |
+| =C-c C-r= | reset: a genuinely fresh session on the same provider |
+| =C-c C-n= | show what the wrapped CLI remembers |
+| =C-c C-u= | ask the provider what it has been spending (=C-u= for history) |
 | =TAB= | complete a =/command= or an =@path= |
 
 =C-c C-k= is one key for two things because that is what the terminal harness's =^C= does, and the two are never ambiguous: there is either a run to stop or there is not.
@@ -96,8 +100,47 @@ Right-click (or =cmacs-ai-menu-pick=) offers a *Harness* group in these buffers:
 | =cmacs-ai-harness-default-directory-function= | project root | where a new harness runs |
 | =cmacs-ai-harness-executor-functions= | nil | hook, =(EXECUTOR PROVIDER)= |
 | =cmacs-ai-harness-run-chat-executor-functions= | nil | also run the chat hook |
+| =cmacs-ai-harness-import-native-context= | t | carry a CLI's own history across a provider switch |
+| =cmacs-ai-harness-native-context-limit= | 65536 | byte ceiling on what is carried |
+| =cmacs-ai-harness-process-timeout= | nil | ms for one CLI run; 0 removes the deadline |
 
 Faces are one per ai-glib style role --- =cmacs-ai-harness-tool-name=, =cmacs-ai-harness-added=, and so on. The library's tags are *roles, not colours*: =added= says "this run is an addition" and says nothing about green, so the mapping is cmacs's and a theme can override any of it.
+
+* Session control
+
+ai-glib grew mid-flight provider switching, native-history import, session reset and usage reporting at the same time as =ai-tui= grew a panel system, a theme picker and an animation loop. The capabilities are worth having. The chrome is not, because Emacs already has better versions of all of it: a buffer /is/ a panel, =customize-face= /is/ a theme picker, and nothing here needs to animate. So each of these is an ordinary command that prints an ordinary message, and every result lands in an ordinary buffer.
+
+** Switching provider mid-session
+
+=C-c C-p= moves the conversation to another provider. The transcript on screen, the message history behind it, the system prompt and the working directory all stay; only who answers the next turn changes. It is refused while a turn is in flight, and refused if the incoming provider cannot accept the tool endpoint this session is using --- in which case the current provider is left untouched rather than half-swapped.
+
+The interesting part is what a CLI leaves behind. A wrapped coding agent keeps a transcript of its own that this buffer never sees: the blocks here are what the library observed, and the agent remembers a great deal more. With =cmacs-ai-harness-import-native-context= on (the default), the switch reads that transcript first and hands it to the incoming provider as context, so the conversation survives the move. =cmacs-ai-harness-show-carried-context= shows exactly what was carried.
+
+Trimming to =cmacs-ai-harness-native-context-limit= keeps the /end/ of the transcript --- the recent turns --- and says so in the text it hands over, because a model given a silently shortened history cannot tell anything is missing.
+
+This build reads =claude-code=, =claude-tmux=, =codex-cli= and =grok-build=. The others keep history in SQLite and are deliberately *not* half-read: a partial import is invisible to the model that receives it. =ai-tui= carries 700 lines of its own readers for those, plus a sqlite3 dependency, which ai-glib kept out of the library on purpose; cmacs uses the library's readers and says "nothing readable" for the rest.
+
+** Reset is not clear
+
+=C-c C-r= and a cleared buffer are different operations and the difference matters.
+
+=/clear= empties the transcript this buffer renders. A wrapped CLI keeps its *own* session id, so after a clear it carries on resuming the conversation you thought you had thrown away --- the buffer looks empty and the agent does not.
+
+=C-c C-r= drops that session id, turns off =continue-session=, and builds a new conversation. That also forgets tool approvals, todos and agent results, and gives the session a new executor --- so tools are re-wired afterwards, which is why the command does it for you. Provider, model, system prompt and working directory are kept.
+
+** What the CLI remembers
+
+=C-c C-n= shows the wrapped CLI's own transcript: which file it lives in, how many messages survived the last compaction, how many were dropped before that boundary, and the text itself. This is the same text a provider switch would carry, so it answers "what would I be handing over" before you hand it over.
+
+** Usage
+
+=C-c C-u= asks the provider what it has been spending; =C-u C-c C-u= asks for past periods instead of the current quota windows.
+
+The answer arrives in its own buffer when the provider replies, and *not* as a return value. The query spawns the CLI as a JSON-RPC peer and can sit there for half a minute. Blocking Emacs for that would be bad on its own; under =--gowl= Emacs is also the compositor, so it would freeze the desktop rather than merely the editor. Only some CLIs report at all --- codex and grok do.
+
+** Deadlines
+
+A wrapped CLI gets thirty minutes for one run, ai-glib's default, so a CLI wedged on a half-open socket cannot pin the session forever. ai-glib's own =ai= and =ai-tui= binaries disable it outright, on the grounds that a long agentic run legitimately outlives any deadline you would pick and being killed mid-edit is worse than waiting. Set =cmacs-ai-harness-process-timeout= to 0 for the same behaviour here.
 
 * Tools
 

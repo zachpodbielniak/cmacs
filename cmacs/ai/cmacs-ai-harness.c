@@ -95,6 +95,9 @@ typedef struct
 static GHashTable *cmacs_ai__harnesses;      /* guint -> CmacsAiHarness* */
 static guint       cmacs_ai__next_harness = 1;
 
+/* Defined with the signal handlers it mirrors, below. */
+static void cmacs_ai_harness__disconnect_signals (CmacsAiHarness *h);
+
 static void
 cmacs_ai_harness__free (gpointer data)
 {
@@ -112,21 +115,7 @@ cmacs_ai_harness__free (gpointer data)
       h->executor_handle = 0;
     }
 
-  if (h->conversation != NULL)
-    {
-      AiTranscript *t = ai_conversation_get_transcript (h->conversation);
-
-      if (t != NULL)
-        {
-          if (h->sig_items) g_signal_handler_disconnect (t, h->sig_items);
-          if (h->sig_block) g_signal_handler_disconnect (t, h->sig_block);
-        }
-
-      if (h->sig_busy)
-        g_signal_handler_disconnect (h->conversation, h->sig_busy);
-      if (h->sig_activity)
-        g_signal_handler_disconnect (h->conversation, h->sig_activity);
-    }
+  cmacs_ai_harness__disconnect_signals (h);
 
   cmacs_ai_harness__callback_drop (h->handle);
 
@@ -249,6 +238,68 @@ cmacs_ai_harness__provider_type (Lisp_Object sym)
   return cmacs_ai_provider_type_from_symbol (sym);
 }
 
+/* ── Provider switching, native history, reset, reports ──────────
+ *
+ * Everything below arrived in ai-glib alongside ai-tui's session work.
+ * The TUI spends it on chrome this buffer deliberately does without --
+ * panels, themes, animation -- but the capabilities underneath are not
+ * chrome, and an Emacs buffer is a better place for most of them than a
+ * terminal is: switching provider mid-session, starting genuinely
+ * fresh, and reading the CLI's own transcript are all things you want
+ * where you already keep the rest of your work.
+ */
+
+/* Signal wiring, factored out of cmacs-ai-harness-new so a reset can
+ * rebuild the conversation and re-attach identically.  Two different
+ * wirings for the same four signals is how streaming works before a
+ * reset and silently stops after one. */
+/* A C string that may be NULL or empty, as a Lisp string or nil. */
+static Lisp_Object
+cmacs_ai_harness__opt_string (const gchar *text)
+{
+  return (text != NULL && *text != '\0') ? build_string (text) : Qnil;
+}
+
+static void
+cmacs_ai_harness__connect_signals (CmacsAiHarness *h)
+{
+  AiTranscript *t = ai_conversation_get_transcript (h->conversation);
+
+  h->sig_items = g_signal_connect (t, "items-changed",
+                                   G_CALLBACK (on_items_changed), h);
+  /* Not optional.  Streaming mutates a block in place, which
+   * ::items-changed does not cover -- without this the buffer shows
+   * the first delta of each reply and then stops. */
+  h->sig_block = g_signal_connect (t, "block-changed",
+                                   G_CALLBACK (on_block_changed), h);
+  h->sig_busy = g_signal_connect (h->conversation, "notify::busy",
+                                  G_CALLBACK (on_busy_notify), h);
+  h->sig_activity = g_signal_connect (h->conversation, "notify::activity",
+                                      G_CALLBACK (on_activity_notify), h);
+}
+
+static void
+cmacs_ai_harness__disconnect_signals (CmacsAiHarness *h)
+{
+  AiTranscript *t;
+
+  if (h->conversation == NULL) return;
+
+  t = ai_conversation_get_transcript (h->conversation);
+
+  if (t != NULL)
+    {
+      if (h->sig_items) g_signal_handler_disconnect (t, h->sig_items);
+      if (h->sig_block) g_signal_handler_disconnect (t, h->sig_block);
+    }
+  if (h->sig_busy)
+    g_signal_handler_disconnect (h->conversation, h->sig_busy);
+  if (h->sig_activity)
+    g_signal_handler_disconnect (h->conversation, h->sig_activity);
+
+  h->sig_items = h->sig_block = h->sig_busy = h->sig_activity = 0;
+}
+
 static GObject *
 cmacs_ai_harness__make_provider (Lisp_Object provider_sym,
                                  Lisp_Object model)
@@ -341,22 +392,7 @@ Free with `cmacs-ai-harness-free'.  */)
   h->completion = ai_completion_context_new (
     h->commands, ai_conversation_get_working_directory (h->conversation));
 
-  {
-    AiTranscript *t = ai_conversation_get_transcript (h->conversation);
-
-    h->sig_items = g_signal_connect (t, "items-changed",
-                                     G_CALLBACK (on_items_changed), h);
-    /* Not optional.  Streaming mutates a block in place, which
-     * ::items-changed does not cover -- without this the buffer shows
-     * the first delta of each reply and then stops. */
-    h->sig_block = g_signal_connect (t, "block-changed",
-                                     G_CALLBACK (on_block_changed), h);
-  }
-
-  h->sig_busy = g_signal_connect (h->conversation, "notify::busy",
-                                  G_CALLBACK (on_busy_notify), h);
-  h->sig_activity = g_signal_connect (h->conversation, "notify::activity",
-                                      G_CALLBACK (on_activity_notify), h);
+  cmacs_ai_harness__connect_signals (h);
 
   handle = h->handle;
   g_hash_table_replace (cmacs_ai__harnesses,
@@ -1103,6 +1139,456 @@ DEFUN ("cmacs-ai-harness-model", Fcmacs_ai_harness_model,
   return model ? build_string (model) : Qnil;
 }
 
+DEFUN ("cmacs-ai-harness-set-provider", Fcmacs_ai_harness_set_provider,
+       Scmacs_ai_harness_set_provider, 2, 3, 0,
+       doc: /* Move harness HANDLE onto PROVIDER, optionally running MODEL.
+
+The conversation continues: the transcript, the completed message
+history, the system prompt and the working directory all stay.  What
+changes is who answers the next turn.
+
+When HANDLE wraps a CLI and `cmacs-ai-harness-import-native-context-p'
+is non-nil, that CLI's own transcript is harvested first and carried to
+the new provider as context -- otherwise switching away from a coding
+agent would silently drop everything it alone remembered.  See
+`cmacs-ai-harness-carried-context'.
+
+Signals an error while a turn is in flight, and if PROVIDER cannot
+accept the tool endpoint this session is using; the current provider is
+left untouched in both cases.  */)
+  (Lisp_Object handle, Lisp_Object provider, Lisp_Object model)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  g_autoptr (GObject) prov = NULL;
+  g_autoptr (GError) gerror = NULL;
+
+  CHECK_SYMBOL (provider);
+  if (!NILP (model)) CHECK_STRING (model);
+
+  prov = cmacs_ai_harness__make_provider (provider, model);
+  if (prov == NULL)
+    error ("cmacs-ai-harness: could not build that provider");
+
+  if (!ai_conversation_set_provider (h->conversation, prov, &gerror))
+    error ("cmacs-ai-harness: %s",
+           gerror ? gerror->message : "could not switch provider");
+
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-import-native-context-p",
+       Fcmacs_ai_harness_import_native_context_p,
+       Scmacs_ai_harness_import_native_context_p, 1, 1, 0,
+       doc: /* Return non-nil if HANDLE carries native history across a switch.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  return ai_conversation_get_import_native_context (h->conversation)
+         ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-set-import-native-context",
+       Fcmacs_ai_harness_set_import_native_context,
+       Scmacs_ai_harness_set_import_native_context, 2, 2, 0,
+       doc: /* Set whether HANDLE carries native history across a switch to ENABLED.
+
+A CLI keeps its own transcript that the in-process message history
+knows nothing about.  With this on, switching provider first reads that
+transcript and hands it to the new provider as context.  */)
+  (Lisp_Object handle, Lisp_Object enabled)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  ai_conversation_set_import_native_context (h->conversation,
+                                             !NILP (enabled));
+  return NILP (enabled) ? Qnil : Qt;
+}
+
+DEFUN ("cmacs-ai-harness-native-context-limit",
+       Fcmacs_ai_harness_native_context_limit,
+       Scmacs_ai_harness_native_context_limit, 1, 1, 0,
+       doc: /* Return the byte ceiling on HANDLE's carried native context.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  return make_uint (ai_conversation_get_native_context_limit (h->conversation));
+}
+
+DEFUN ("cmacs-ai-harness-set-native-context-limit",
+       Fcmacs_ai_harness_set_native_context_limit,
+       Scmacs_ai_harness_set_native_context_limit, 2, 2, 0,
+       doc: /* Cap HANDLE's carried native context at LIMIT bytes.
+
+Trimming keeps the END of the transcript -- the recent turns -- and says
+so in the text it hands over, because a model given a silently truncated
+history cannot tell that anything is missing.  */)
+  (Lisp_Object handle, Lisp_Object limit)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  CHECK_FIXNAT (limit);
+  ai_conversation_set_native_context_limit (h->conversation,
+                                            (guint) XFIXNAT (limit));
+  return limit;
+}
+
+DEFUN ("cmacs-ai-harness-carried-context", Fcmacs_ai_harness_carried_context,
+       Scmacs_ai_harness_carried_context, 1, 1, 0,
+       doc: /* Return the native history HANDLE is carrying, or nil.
+
+Non-nil only after a provider switch that harvested one.  It is prepended
+to the next turn; `cmacs-ai-harness-clear-carried-context' drops it.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  const gchar *text = ai_conversation_get_carried_context (h->conversation);
+
+  return (text != NULL && *text != '\0') ? build_string (text) : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-clear-carried-context",
+       Fcmacs_ai_harness_clear_carried_context,
+       Scmacs_ai_harness_clear_carried_context, 1, 1, 0,
+       doc: /* Drop the native history HANDLE is carrying.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+
+  ai_conversation_clear_carried_context (h->conversation);
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-native-session", Fcmacs_ai_harness_native_session,
+       Scmacs_ai_harness_native_session, 1, 1, 0,
+       doc: /* Return HANDLE's wrapped CLI's own session transcript, as a plist.
+
+Keys are :provider, :session-id, :path, :kind, :messages (a count),
+:compacted and :dropped.  :kind is `jsonl' for a transcript this build
+can read and `unsupported' otherwise -- opencode, cursor and antigravity
+keep history in SQLite and are deliberately not half-read, because a
+partial import is invisible to the model that receives it.
+
+Returns nil when HANDLE is not a CLI session, or when the CLI has no
+transcript on disk yet.  Signals nothing: no session is an ordinary
+answer, not a failure.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+  g_autoptr (AiNativeSession) session = NULL;
+  g_autoptr (GError) gerror = NULL;
+  Lisp_Object kind, name, id, path;
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov)) return Qnil;
+
+  session = ai_cli_client_read_native_session (AI_CLI_CLIENT (prov),
+                                               &gerror);
+  if (session == NULL) return Qnil;
+
+  kind = (ai_native_session_get_kind (session) == AI_NATIVE_SESSION_JSONL)
+         ? intern ("jsonl") : intern ("unsupported");
+
+  /* Built one at a time rather than inside the listn() argument list.
+   * Argument evaluation order is unspecified, so a shared cursor
+   * assigned across the arguments reads back whichever value the
+   * compiler felt like -- and puts the path under :session-id on a
+   * build that evaluates right to left. */
+  name = cmacs_ai_harness__opt_string (ai_native_session_get_provider (session));
+  id = cmacs_ai_harness__opt_string (ai_native_session_get_session_id (session));
+  path = cmacs_ai_harness__opt_string (ai_native_session_get_path (session));
+
+  return listn (14,
+    intern (":provider"), name,
+    intern (":session-id"), id,
+    intern (":path"), path,
+    intern (":kind"), kind,
+    intern (":messages"),
+    make_uint (g_list_length (ai_native_session_get_messages (session))),
+    intern (":compacted"),
+    ai_native_session_get_compacted (session) ? Qt : Qnil,
+    intern (":dropped"),
+    make_uint (ai_native_session_get_dropped (session)));
+}
+
+DEFUN ("cmacs-ai-harness-native-context", Fcmacs_ai_harness_native_context,
+       Scmacs_ai_harness_native_context, 1, 2, 0,
+       doc: /* Return HANDLE's wrapped CLI's own transcript as context text.
+
+MAX-BYTES caps the result, keeping the most recent turns; nil means the
+`cmacs-ai-harness-native-context-limit' of this session.  Returns nil
+when there is no readable native session.
+
+This is what a provider switch carries.  Reading it directly is for
+showing the user what would be carried, before carrying it.  */)
+  (Lisp_Object handle, Lisp_Object max_bytes)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+  g_autoptr (AiNativeSession) session = NULL;
+  g_autoptr (GError) gerror = NULL;
+  g_autofree gchar *text = NULL;
+  gsize cap;
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov)) return Qnil;
+
+  if (NILP (max_bytes))
+    cap = ai_conversation_get_native_context_limit (h->conversation);
+  else
+    {
+      CHECK_FIXNAT (max_bytes);
+      cap = (gsize) XFIXNAT (max_bytes);
+    }
+
+  session = ai_cli_client_read_native_session (AI_CLI_CLIENT (prov),
+                                               &gerror);
+  if (session == NULL) return Qnil;
+
+  text = ai_native_session_to_context_text (session, cap);
+
+  return (text != NULL && *text != '\0') ? build_string (text) : Qnil;
+}
+
+DEFUN ("cmacs-ai-harness-process-timeout",
+       Fcmacs_ai_harness_process_timeout,
+       Scmacs_ai_harness_process_timeout, 1, 1, 0,
+       doc: /* Return HANDLE's per-run CLI deadline in milliseconds, or 0 if none.
+
+Signals an error when HANDLE is not a CLI session; an HTTP provider has
+no subprocess to put a deadline on.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov))
+    error ("cmacs-ai-harness: not a CLI session");
+
+  return make_int (ai_cli_client_get_process_timeout_ms (AI_CLI_CLIENT (prov)));
+}
+
+DEFUN ("cmacs-ai-harness-set-process-timeout",
+       Fcmacs_ai_harness_set_process_timeout,
+       Scmacs_ai_harness_set_process_timeout, 2, 2, 0,
+       doc: /* Give HANDLE's CLI MILLISECONDS to finish one run; 0 removes the limit.
+
+The library's default is thirty minutes, which exists so a CLI wedged on
+a half-open socket cannot pin the session forever.  ai-glib's own `ai'
+and `ai-tui' turn it off outright, because a long agentic run legitimately
+outlives any deadline you would pick, and being killed mid-edit is worse
+than waiting.
+
+Signals an error when HANDLE is not a CLI session.  */)
+  (Lisp_Object handle, Lisp_Object milliseconds)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+
+  CHECK_FIXNAT (milliseconds);
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov))
+    error ("cmacs-ai-harness: not a CLI session");
+
+  ai_cli_client_set_process_timeout_ms (AI_CLI_CLIENT (prov),
+                                        (gint) XFIXNAT (milliseconds));
+  return milliseconds;
+}
+
+DEFUN ("cmacs-ai-harness-reset", Fcmacs_ai_harness_reset,
+       Scmacs_ai_harness_reset, 1, 1, 0,
+       doc: /* Start a genuinely fresh session on HANDLE's current provider.
+
+Distinct from `cmacs-ai-harness-clear', which empties the transcript the
+buffer renders and nothing else.  A wrapped CLI keeps its OWN session,
+so after a clear it happily carries on resuming the conversation you
+thought you had thrown away.  This drops that session id, turns off
+`continue-session', and builds a new conversation -- which also forgets
+tool approvals, todos and agent results.
+
+Settings are kept: system prompt, working directory, token ceiling,
+streaming, local-tools flag and the command set.
+
+The executor is new, so any custom tools registered on the old one are
+gone: callers must re-wire tools afterwards.  Signals an error while a
+turn is in flight.  */)
+  (Lisp_Object handle)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+  AiConversation *fresh;
+  const gchar *system_prompt;
+  const gchar *directory;
+
+  if (ai_conversation_get_busy (h->conversation))
+    error ("cmacs-ai-harness: cannot reset while a turn is in flight");
+
+  if (prov == NULL)
+    error ("cmacs-ai-harness: session has no provider to reset onto");
+
+  /* Hold the provider across the swap: the old conversation owns the
+   * only other reference, and it is about to be dropped. */
+  g_object_ref (prov);
+
+  /* A cleared transcript is not a new session as far as the CLI is
+   * concerned -- it resumes from its own id, and --continue overrides a
+   * missing one.  Both have to go or "reset" resets nothing. */
+  if (AI_IS_CLI_CLIENT (prov))
+    {
+      GParamSpec *spec;
+
+      ai_cli_client_set_session_id (AI_CLI_CLIENT (prov), NULL);
+
+      spec = g_object_class_find_property (G_OBJECT_GET_CLASS (prov),
+                                           "continue-session");
+      if (spec != NULL && (spec->flags & G_PARAM_WRITABLE) != 0)
+        g_object_set (prov, "continue-session", FALSE, NULL);
+    }
+
+  /* The custom-tool closures belong to the outgoing executor.  Dropping
+   * the handle here is what keeps them from being rooted for the life
+   * of the process, exactly as at free time. */
+  if (h->executor_handle != 0)
+    {
+      cmacs_ai_tools_drop (h->executor_handle);
+      h->executor_handle = 0;
+    }
+
+  system_prompt = ai_conversation_get_system_prompt (h->conversation);
+  directory = ai_conversation_get_working_directory (h->conversation);
+
+  fresh = ai_conversation_new (prov);
+
+  if (system_prompt != NULL)
+    ai_conversation_set_system_prompt (fresh, system_prompt);
+  if (directory != NULL)
+    ai_conversation_set_working_directory (fresh, directory);
+  ai_conversation_set_max_tokens (fresh,
+    ai_conversation_get_max_tokens (h->conversation));
+  ai_conversation_set_stream (fresh,
+    ai_conversation_get_stream (h->conversation));
+  ai_conversation_set_local_tools (fresh,
+    ai_conversation_get_local_tools (h->conversation));
+  ai_conversation_set_import_native_context (fresh,
+    ai_conversation_get_import_native_context (h->conversation));
+  ai_conversation_set_native_context_limit (fresh,
+    ai_conversation_get_native_context_limit (h->conversation));
+  if (h->commands != NULL)
+    ai_conversation_set_command_set (fresh, h->commands);
+
+  cmacs_ai_harness__disconnect_signals (h);
+  g_clear_object (&h->conversation);
+  h->conversation = fresh;
+  cmacs_ai_harness__connect_signals (h);
+
+  g_object_unref (prov);
+
+  /* The buffer is rendering blocks that no longer exist. */
+  cmacs_ai_harness__emit (h, list4 (intern (":items-changed"), make_uint (0),
+                                    make_uint (0), make_uint (0)));
+
+  return Qt;
+}
+
+/* ── Usage and history reports ────────────────────────────────────
+ *
+ * Strictly asynchronous, and not negotiably so: the query spawns the
+ * CLI as a JSON-RPC peer and waits up to thirty seconds for it.  Thirty
+ * seconds of a blocked Emacs is bad enough on its own; under `--gowl'
+ * the editor is also the compositor, so it would be thirty seconds of a
+ * frozen desktop.
+ *
+ * The result arrives through the harness's existing event callback, so
+ * there is no second delivery mechanism to keep alive.  user_data is
+ * the integer handle rather than the struct: a session freed while a
+ * query is in flight must leave the callback with a stale handle to
+ * fail to look up, not a dangling pointer to dereference.
+ */
+
+static void
+on_report_finished (GObject *source, GAsyncResult *res, gpointer user)
+{
+  guint handle = GPOINTER_TO_UINT (user);
+  CmacsAiHarness *h;
+  g_autoptr (AiCliReport) report = NULL;
+  g_autoptr (GError) gerror = NULL;
+  g_autofree gchar *text = NULL;
+
+  h = (cmacs_ai__harnesses == NULL)
+      ? NULL
+      : g_hash_table_lookup (cmacs_ai__harnesses, GUINT_TO_POINTER (handle));
+
+  report = ai_cli_client_query_report_finish (AI_CLI_CLIENT (source), res,
+                                              &gerror);
+
+  /* The session went away while the CLI was answering.  Nothing to
+   * deliver it to, and nothing wrong with that. */
+  if (h == NULL) return;
+
+  if (report == NULL)
+    {
+      cmacs_ai_harness__emit (h,
+        list2 (intern (":report-error"),
+               build_string (gerror ? gerror->message
+                                    : "usage query failed")));
+      return;
+    }
+
+  text = ai_cli_report_to_text (report);
+
+  cmacs_ai_harness__emit (h,
+    list3 (intern (":report"),
+           (ai_cli_report_get_kind (report) == AI_CLI_REPORT_USAGE)
+           ? intern ("usage") : intern ("history"),
+           text ? build_string (text) : build_string ("")));
+}
+
+DEFUN ("cmacs-ai-harness-report-async", Fcmacs_ai_harness_report_async,
+       Scmacs_ai_harness_report_async, 1, 3, 0,
+       doc: /* Ask HANDLE's provider for a usage or history report.
+
+KIND is `usage' (the default) or `history'.  LIMIT bounds how many
+historical periods are asked for; nil means the provider's own default.
+
+Returns t once the query is under way.  The answer arrives later on the
+session's event callback as (:report KIND TEXT), or (:report-error
+MESSAGE) -- never as a return value, because the query spawns the CLI
+and waits on it, and Emacs must not.
+
+Signals an error when the provider is not a CLI.  Only some CLIs report
+at all: codex and grok do, over their own JSON-RPC; others answer with
+an error through the callback.  */)
+  (Lisp_Object handle, Lisp_Object kind, Lisp_Object limit)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+  AiCliReportKind report_kind = AI_CLI_REPORT_USAGE;
+  guint n = 0;
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov))
+    error ("cmacs-ai-harness: usage reports need a CLI provider");
+
+  if (!NILP (kind))
+    {
+      CHECK_SYMBOL (kind);
+      if (EQ (kind, intern ("history")))
+        report_kind = AI_CLI_REPORT_HISTORY;
+      else if (!EQ (kind, intern ("usage")))
+        error ("cmacs-ai-harness: report kind must be `usage' or `history'");
+    }
+
+  if (!NILP (limit))
+    {
+      CHECK_FIXNAT (limit);
+      n = (guint) XFIXNAT (limit);
+    }
+
+  ai_cli_client_query_report_async (AI_CLI_CLIENT (prov), report_kind, n,
+                                    NULL, on_report_finished,
+                                    GUINT_TO_POINTER (h->handle));
+  return Qt;
+}
+
 /* ── Registration ───────────────────────────────────────────────── */
 
 void syms_of_cmacs_ai_harness (void);
@@ -1140,6 +1626,20 @@ syms_of_cmacs_ai_harness (void)
   defsubr (&Scmacs_ai_harness_set_working_directory);
   defsubr (&Scmacs_ai_harness_provider_name);
   defsubr (&Scmacs_ai_harness_model);
+
+  defsubr (&Scmacs_ai_harness_set_provider);
+  defsubr (&Scmacs_ai_harness_import_native_context_p);
+  defsubr (&Scmacs_ai_harness_set_import_native_context);
+  defsubr (&Scmacs_ai_harness_native_context_limit);
+  defsubr (&Scmacs_ai_harness_set_native_context_limit);
+  defsubr (&Scmacs_ai_harness_carried_context);
+  defsubr (&Scmacs_ai_harness_clear_carried_context);
+  defsubr (&Scmacs_ai_harness_native_session);
+  defsubr (&Scmacs_ai_harness_native_context);
+  defsubr (&Scmacs_ai_harness_reset);
+  defsubr (&Scmacs_ai_harness_report_async);
+  defsubr (&Scmacs_ai_harness_process_timeout);
+  defsubr (&Scmacs_ai_harness_set_process_timeout);
 }
 
 #endif /* HAVE_CMACS_AI */

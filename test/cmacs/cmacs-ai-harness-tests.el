@@ -594,6 +594,155 @@ loaded everything."
           (should (string-match-p "TOOLS=mcp" out)))
       (delete-file script))))
 
+;;;; Session control -------------------------------------------------
+;;
+;; These arrived with ai-glib's mid-flight provider switching.  The point
+;; of testing them here rather than trusting the library is that the
+;; hazards are on THIS side of the bridge: a switch that leaves the tool
+;; wiring pointing at the old provider's kind, and a reset that empties
+;; the buffer while the wrapped CLI happily keeps resuming its own
+;; session.  Neither is visible from ai-glib's own tests.
+
+(ert-deftest cmacs-ai-harness-test-session-control-commands-exist ()
+  "The session-control surface is commands and keys, not a panel.
+An Emacs buffer already has better versions of ai-tui's chrome; what has
+to exist here is the capability underneath it."
+  (skip-unless (fboundp 'cmacs-ai-harness-set-provider))
+  (dolist (c '(cmacs-ai-harness-switch-provider
+               cmacs-ai-harness-reset-session
+               cmacs-ai-harness-usage
+               cmacs-ai-harness-show-native-session
+               cmacs-ai-harness-show-carried-context))
+    (should (commandp c)))
+  (dolist (pair '(("C-c C-p" . cmacs-ai-harness-switch-provider)
+                  ("C-c C-r" . cmacs-ai-harness-reset-session)
+                  ("C-c C-u" . cmacs-ai-harness-usage)
+                  ("C-c C-n" . cmacs-ai-harness-show-native-session)))
+    (should (eq (lookup-key cmacs-ai-harness-mode-map (kbd (car pair)))
+                (cdr pair)))))
+
+(ert-deftest cmacs-ai-harness-test-syntax-roles-have-faces ()
+  "ai-glib's six syntax roles map onto Emacs's own font-lock faces.
+A role with no face renders unstyled, which is not a crash and is
+exactly why it would go unnoticed: the tool preview simply comes out as
+one colour."
+  (skip-unless (fboundp 'cmacs-ai-harness--face-for))
+  (dolist (tag '("syntax-keyword" "syntax-string" "syntax-comment"
+                 "syntax-number" "syntax-type" "syntax-function"))
+    (should (facep (cmacs-ai-harness--face-for tag))))
+  ;; Still nil for a role that carries no meaning, rather than a face
+  ;; that inherits from nothing.
+  (should-not (cmacs-ai-harness--face-for "default")))
+
+(ert-deftest cmacs-ai-harness-test-native-context-settings-applied ()
+  "A new session carries the customized native-context settings."
+  (skip-unless (fboundp 'cmacs-ai-harness-import-native-context-p))
+  (let ((cmacs-ai-harness-import-native-context t)
+        (cmacs-ai-harness-native-context-limit 4096))
+    (cmacs-ai-harness-tests--with-session
+      (should (cmacs-ai-harness-import-native-context-p
+               cmacs-ai-harness--handle))
+      (should (= 4096 (cmacs-ai-harness-native-context-limit
+                       cmacs-ai-harness--handle)))))
+  (let ((cmacs-ai-harness-import-native-context nil)
+        (cmacs-ai-harness-native-context-limit 4096))
+    (cmacs-ai-harness-tests--with-session
+      (should-not (cmacs-ai-harness-import-native-context-p
+                   cmacs-ai-harness--handle)))))
+
+(ert-deftest cmacs-ai-harness-test-switch-provider-keeps-the-session ()
+  "Switching provider continues the conversation rather than replacing it.
+The handle, the buffer and the working directory all survive; only who
+answers the next turn changes."
+  (skip-unless (fboundp 'cmacs-ai-harness-set-provider))
+  (cmacs-ai-harness-tests--with-session
+    (let ((handle cmacs-ai-harness--handle)
+          (dir (cmacs-ai-harness-working-directory cmacs-ai-harness--handle)))
+      (cmacs-ai-harness-set-provider handle 'claude-code)
+      (should (eq handle cmacs-ai-harness--handle))
+      (should (cmacs-ai-harness-cli-p handle))
+      (should (equal dir (cmacs-ai-harness-working-directory handle)))
+      ;; And back, to prove the move is not one-way.
+      (cmacs-ai-harness-set-provider handle 'ollama)
+      (should-not (cmacs-ai-harness-cli-p handle)))))
+
+(ert-deftest cmacs-ai-harness-test-reset-keeps-provider-and-directory ()
+  "A reset is a new session on the SAME provider, not a new provider."
+  (skip-unless (fboundp 'cmacs-ai-harness-reset))
+  (cmacs-ai-harness-tests--with-session
+    (let* ((handle cmacs-ai-harness--handle)
+           (provider (cmacs-ai-harness-provider-name handle))
+           (dir (cmacs-ai-harness-working-directory handle)))
+      (should (cmacs-ai-harness-reset handle))
+      (should (equal provider (cmacs-ai-harness-provider-name handle)))
+      (should (equal dir (cmacs-ai-harness-working-directory handle)))
+      (should (= 0 (cmacs-ai-harness-block-count handle)))
+      ;; The session still works afterwards -- the signals were re-attached.
+      ;; Without that the buffer goes quiet on the next turn and nothing
+      ;; says why.
+      (should-not (cmacs-ai-harness-busy-p handle)))))
+
+(ert-deftest cmacs-ai-harness-test-native-session-is-nil-for-non-cli ()
+  "An HTTP provider has no private transcript, and that is not an error."
+  (skip-unless (fboundp 'cmacs-ai-harness-native-session))
+  (cmacs-ai-harness-tests--with-session
+    (should-not (cmacs-ai-harness-native-session cmacs-ai-harness--handle))
+    (should-not (cmacs-ai-harness-native-context
+                 cmacs-ai-harness--handle nil))
+    (should-not (cmacs-ai-harness-carried-context
+                 cmacs-ai-harness--handle))))
+
+(ert-deftest cmacs-ai-harness-test-usage-needs-a-cli ()
+  "Usage reports are a CLI feature and say so rather than hanging."
+  (skip-unless (fboundp 'cmacs-ai-harness-report-async))
+  (cmacs-ai-harness-tests--with-session
+    (should-error (cmacs-ai-harness-report-async
+                   cmacs-ai-harness--handle 'usage nil))))
+
+(ert-deftest cmacs-ai-harness-test-report-kind-is-checked ()
+  "A misspelled report kind is refused, not silently treated as usage."
+  (skip-unless (fboundp 'cmacs-ai-harness-report-async))
+  (cmacs-ai-harness-tests--with-session
+    (cmacs-ai-harness-set-provider cmacs-ai-harness--handle 'codex-cli)
+    (should-error (cmacs-ai-harness-report-async
+                   cmacs-ai-harness--handle 'usege nil))))
+
+(ert-deftest cmacs-ai-harness-test-codex-is-a-first-class-provider ()
+  "codex-cli builds, reports itself as a CLI, and both spellings work.
+The provider table is shared by client, stream, config and harness; a
+provider that resolves in one and not another is the failure this
+guards, and it has happened before."
+  (skip-unless (fboundp 'cmacs-ai-harness-new))
+  (dolist (sym '(codex-cli codex))
+    (let ((h (cmacs-ai-harness-new sym nil temporary-file-directory)))
+      (unwind-protect
+          (progn
+            (should (cmacs-ai-harness-cli-p h))
+            (should (stringp (cmacs-ai-harness-provider-name h)))
+            (should (string-match-p "odex" (cmacs-ai-harness-provider-name h))))
+        (cmacs-ai-harness-free h))))
+  (should (memq 'codex-cli (cmacs-ai-providers))))
+
+(ert-deftest cmacs-ai-harness-test-process-timeout-is-settable ()
+  "A CLI run's deadline is reachable and 0 removes it.
+ai-glib's own binaries disable this; the cmacs harness kept the 30-minute
+default silently, so a long agent run could die here and not in ai-tui."
+  (skip-unless (fboundp 'cmacs-ai-harness-set-process-timeout))
+  (let ((h (cmacs-ai-harness-new 'codex-cli nil temporary-file-directory)))
+    (unwind-protect
+        (progn
+          ;; The library default, which is what cmacs inherits.
+          (should (= 1800000 (cmacs-ai-harness-process-timeout h)))
+          (cmacs-ai-harness-set-process-timeout h 0)
+          (should (= 0 (cmacs-ai-harness-process-timeout h)))
+          (cmacs-ai-harness-set-process-timeout h 5000)
+          (should (= 5000 (cmacs-ai-harness-process-timeout h))))
+      (cmacs-ai-harness-free h)))
+  ;; An HTTP provider has no subprocess, and says so rather than
+  ;; pretending to have set something.
+  (cmacs-ai-harness-tests--with-session
+    (should-error (cmacs-ai-harness-process-timeout cmacs-ai-harness--handle))))
+
 (provide 'cmacs-ai-harness-tests)
 
 ;;; cmacs-ai-harness-tests.el ends here
