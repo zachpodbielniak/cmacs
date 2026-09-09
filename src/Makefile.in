@@ -1052,7 +1052,16 @@ $(CMACS_GOWL_STATIC_LIB): FORCE | cmacs-canonical-deps
 
 ## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)
 ## need gowl-version.h, which is generated during the gowl lib build.
-$(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
+##
+## emacs.o is in that set and is easy to miss, because it is an UPSTREAM
+## object: the `--gowl' early-main hook makes emacs.c include <gowl.h>
+## directly.  Without this a from-scratch parallel build can compile
+## emacs.o before gowl has generated its headers and stop with
+## `fatal error: gowl-version.h: No such file or directory' -- which
+## reads as a missing submodule and is a missing edge.  It survived
+## because an incremental build always has the header from last time.
+$(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ) emacs.o: \
+  $(CMACS_GOWL_STATIC_LIB)
 
 ## Build runtime modules, including the default animation engine. Always
 ## delegate so module source/header changes and missing .so files are handled.
