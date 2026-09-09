@@ -1060,8 +1060,13 @@ $(CMACS_GOWL_STATIC_LIB): FORCE | cmacs-canonical-deps
 ## `fatal error: gowl-version.h: No such file or directory' -- which
 ## reads as a missing submodule and is a missing edge.  It survived
 ## because an incremental build always has the header from last time.
-$(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ) emacs.o: \
-  $(CMACS_GOWL_STATIC_LIB)
+## Every cmacs object, because ~90 of them include cmacs-eval-dispatch.h
+## which reaches gowl.h -- naming three groups covered the ones that
+## happened to compile first and left the rest to luck.  Plus emacs.o and
+## xwidget.o, the two UPSTREAM objects that reach it (the `--gowl'
+## early-main hook, and the gowl xwidget backend), which is why they are
+## easy to miss: nothing about their names says cmacs.
+$(CMACS_ALL_OBJ) emacs.o xwidget.o: $(CMACS_GOWL_STATIC_LIB)
 
 ## Build runtime modules, including the default animation engine. Always
 ## delegate so module source/header changes and missing .so files are handled.
