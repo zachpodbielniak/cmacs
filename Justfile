@@ -232,99 +232,20 @@ container-check:
 # The top-level `make' builds deps/ in-tree, so a fresh clone cannot build
 # without them.  Idempotent: a no-op once they are at the right commit.
 
-# Nested submodules cmacs never builds, as "<parent dir>=<submodule name>".
+# The list and the mechanism live in admin/cmacs-submodules.sh, not here:
+# CI and build-container need the same skips on a fresh clone and neither
+# has `just'.  A second copy of the list is a copy that goes stale.
 #
-# Each of these is a SECOND copy of something cmacs already has, and the
-# build is already pointed at the canonical one -- gsurf and screensavers
-# both take LIBREGNUM_DIR=deps/libregnum on the make command line (see
-# src/Makefile.in), so their own bundled copies are cloned, never built,
-# and never linked.  That was ~900 MB of a fresh clone doing nothing.
+# Read `just deps-audit's third column before adding to it: raygui, rres
+# and rpng build no library either, and removing them breaks graylib.
 #
-# Skipping is a per-repository config setting rather than a flag, because
-# `git submodule update --recursive' has no way to exclude a path below
-# the top level.  Setting it is idempotent and `just submodules' reapplies
-# it, so a fresh clone gets the same tree as an old one.
-#
-# The two added after the libregnum pair:
-#
-#   deps/libregnum=deps/cad-glib      libregnum's Makefile builds its
-#     bundled cad-glib only when CAD_GLIB_DIR still points at it, and
-#     src/Makefile.in passes CAD_GLIB_DIR=deps/cad-glib.  libregnum's own
-#     comment names cmacs as the case that overrides it.  209 MB, and it
-#     drags solvespace and seven extlib trees along.
-#
-#   .../graylib=deps/raudio           graylib compiles raygui, rres and
-#     rpng straight into its sources (header-only, no archive of their
-#     own) but never references raudio at all.
-#
-# The long tail after those is the crispy / yaml-glib / mcp-glib set.
-# src/Makefile.in passes CRISPY_DIR, YAML_GLIB_DIR (YAMLGLIB_DIR in
-# libregnum) and MCP_GLIB_DIR to every one of these sub-builds, so each
-# compiles and links against cmacs's canonical checkout and builds
-# nothing of its own.  Before that, cmacs built crispy five times,
-# yaml-glib six and mcp-glib four, from commits that did not agree.
-#
-# `deps-audit' calls these "used", because the default assignment in each
-# dep's config.mk still names them -- a heuristic cannot see a command
-# line.  They are listed here on the override instead, the same way
-# libregnum's cad-glib is.
-#
-# NOT here: deps/gowl's copies.  gowl compiles yaml-glib and crispy
-# SOURCES into libgowl.a rather than linking their archives, and its
-# hard-coded file lists have drifted from both -- current crispy has a
-# temp registry, a pkg-config resolver and a use-parser it never names.
-# Pointing it elsewhere needs gowl's own change, in gowl's own repo,
-# with object paths keyed to the source so switching copies cannot reuse
-# stale objects.  Until then its two copies remain, and the _gowl_strip
-# dedup rule keeps carrying them.
-#
-# The test that this list is still correct is `just deps-audit'.  Read
-# its third column, not its second: raygui, rres and rpng build no
-# library either, and removing them breaks graylib.
-SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum \
-                    deps/libregnum=deps/cad-glib \
-                    deps/libregnum/deps/graylib=deps/raudio \
-                    deps/gsurf=deps/crispy \
-                    deps/libregnum=deps/crispy \
-                    deps/podomation=deps/crispy \
-                    deps/podomation=deps/mcp-glib \
-                    deps/podomation=deps/yaml-glib \
-                    deps/podomation/deps/ai-glib=deps/yaml-glib \
-                    deps/ai-glib=deps/yaml-glib \
-                    deps/libregnum=deps/yaml-glib \
-                    deps/clawtilla/deps/libreclaw=deps/yaml-glib \
-                    deps/clawtilla/deps/libreclaw=deps/mcp-glib \
-                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/crispy \
-                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/yaml-glib \
-                    deps/clawtilla/deps/libreclaw/deps/podomation=deps/mcp-glib \
-                    deps/podomation=deps/bacon \
-                    deps/libregnum=deps/mcp-glib"
-
-# Populate deps/ submodules (crispy, bacon, gowl, libregnum, ...).
+# Populate deps/ submodules, minus the copies nothing builds.
 [group('build')]
 submodules:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # URL changes in .gitmodules do NOT reach an already-cloned
-    # submodule on their own: `git submodule update' uses the URL cached
-    # in .git/config when the submodule was first initialised.  Without
-    # this, a dep that moved forge -- or a submodule replaced by another
-    # at the same path -- keeps fetching from the old remote and the
-    # failure looks like a stale pin rather than a stale URL.
-    git submodule sync --recursive
-    # Top level first: the skip list below configures repositories that
-    # do not exist until their parent is checked out.
-    git submodule update --init
-    for entry in {{ SKIP_SUBMODULES }}; do
-        parent="${entry%%=*}"
-        name="${entry#*=}"
-        if [[ -d "$parent/.git" || -f "$parent/.git" ]]; then
-            git -C "$parent" config "submodule.$name.update" none
-        fi
-    done
-    git submodule update --init --recursive
+    ./admin/cmacs-submodules.sh
 
-# Anything reported UNUSED is a SKIP_SUBMODULES candidate; the WHY column
+# Anything reported UNUSED is a skip candidate for
+# admin/cmacs-submodules.sh; the WHY column
 # says how a checkout earned "used" (built / named by an ancestor's
 # makefiles / included by a source).
 #
@@ -827,7 +748,7 @@ sync:
     set -euo pipefail
     git pull --rebase origin master
     # Via the recipe, not a bare `--recursive': that would re-clone the
-    # nested copies SKIP_SUBMODULES exists to keep out, and would miss
+    # nested copies admin/cmacs-submodules.sh exists to keep out, and miss
     # the URL sync a moved submodule needs.
     just submodules
     # A submodule REMOVED upstream leaves its directory behind -- git

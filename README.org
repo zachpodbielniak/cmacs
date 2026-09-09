@@ -533,7 +533,7 @@ cd cmacs
 If you already cloned without =--recursive=:
 
 #+begin_src bash
-git submodule update --init --recursive
+./admin/cmacs-submodules.sh   # or: just submodules
 #+end_src
 
 *** 2. Install Dependencies

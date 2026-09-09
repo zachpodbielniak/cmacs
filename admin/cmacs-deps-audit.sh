@@ -37,6 +37,7 @@ printf '%-58s %7s  %-8s %s\n' PATH SIZE STATUS WHY
 printf '%-58s %7s  %-8s %s\n' "$(printf '%.58s' "------------------------------------------------------------")" \
        "-------" "--------" "---"
 
+# shellcheck disable=SC2016  # git expands $displaypath, not us
 git submodule foreach --recursive --quiet 'echo "$displaypath"' 2>/dev/null | sort | while read -r d; do
 	case "$d" in
 	*/deps/*|*/extlib/*|*/subprojects/*) ;;
@@ -44,7 +45,6 @@ git submodule foreach --recursive --quiet 'echo "$displaypath"' 2>/dev/null | so
 	esac
 	[ -d "$d" ] || continue
 
-	base=$(basename "$d")
 	parent=${d%/*}          # .../deps or .../extlib
 	parent=${parent%/*}     # the repository holding it
 	# The last two components, e.g. `deps/raudio' or `extlib/eigen'.
@@ -87,7 +87,7 @@ git submodule foreach --recursive --quiet 'echo "$displaypath"' 2>/dev/null | so
 		hdrs=$(find "$d" -maxdepth 3 -name '*.h' -printf '%f\n' 2>/dev/null \
 		       | sort -u | head -40)
 		for h in $hdrs; do
-			if grep -rqE "#include *[<\"]$h[>\"]" "$parent/src" 2>/dev/null; then
+			if grep -rqE "#include *[<\"]${h}[>\"]" "$parent/src" 2>/dev/null; then
 				why="include:$h"
 				break
 			fi

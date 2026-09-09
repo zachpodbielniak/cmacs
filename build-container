@@ -185,12 +185,15 @@ then
 		# which reads like a corrupt repository and is nothing of the
 		# sort.  Building several images at once is the normal case
 		# here -- there are five targets -- so it has to be safe.
+		# Via the script, not a bare `--recursive': the skip list is
+		# per-repository config that a fresh clone has not got yet, so
+		# a bare update here pulls ~4 GB this image never builds.
 		if command -v flock >/dev/null 2>&1
 		then
 			flock "${SUBMODULE_LOCK}" \
-				git submodule update --init --recursive
+				./admin/cmacs-submodules.sh
 		else
-			git submodule update --init --recursive
+			./admin/cmacs-submodules.sh
 		fi
 	fi
 	buildah build \

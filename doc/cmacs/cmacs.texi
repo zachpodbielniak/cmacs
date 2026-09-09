@@ -10974,7 +10974,7 @@ The equivalent by hand:
 
 @example
 ./install-deps --system
-git submodule update --init --recursive
+./admin/cmacs-submodules.sh   # or: just submodules
 ./autogen.sh
 ./configure   # see the flag set below
 make -j$(nproc)

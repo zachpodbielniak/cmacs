@@ -54,7 +54,7 @@ YAMLGLIB_SRCS := $(sort $(wildcard $(YAMLGLIB_DIR)/src/*.c))
 # and not the reason.  Say the reason.
 ifeq ($(YAMLGLIB_SRCS),)
 $(error No yaml-glib sources under $(YAMLGLIB_DIR)/src -- \
-	run `git submodule update --init --recursive')
+	run `./admin/cmacs-submodules.sh')
 endif
 
 # Optional GNU readline for REPL line editing (fgets fallback).

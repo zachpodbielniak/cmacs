@@ -52,7 +52,7 @@ is marked `/* CMACS: ... */`; the full catalogue with rationale is
 ## Build
 
 From a fresh clone, `just bootstrap` is the whole thing — it runs `install-deps`
-(system packages), `git submodule update --init --recursive`, `autogen`,
+(system packages), `admin/cmacs-submodules.sh`, `autogen`,
 `configure` with the flag set below, `clean-stale-lisp`, and `make`. It is
 idempotent, so re-running it on a built tree is cheap. Distro detection reads
 `ID` then `ID_LIKE` from `/etc/os-release` (so Omarchy/CachyOS/Nobara/Pop!_OS
@@ -210,7 +210,8 @@ git worktree add ../cmacs-wt -b my-feature
 
 cd ../cmacs-wt
 # 2. submodules must be initialised to commit into deps/* (libregnum, graylib, …)
-git submodule update --init --recursive
+./admin/cmacs-submodules.sh   # NOT a bare `git submodule update --recursive':
+                              # the skips are per-repo config a fresh clone lacks
 
 # 3. overlay the main tree's files+artifacts, preserving mtimes, keeping git metadata.
 #    (rsync of tracked sources restores their original — older — mtimes so the copied

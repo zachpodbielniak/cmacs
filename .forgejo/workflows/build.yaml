@@ -30,7 +30,10 @@ jobs:
         run: |
           git config --global url."https://git.podbielniak.com/".insteadOf "git@git-ssh.podbielniak.com:"
           git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
-          git submodule update --init --recursive
+          # Not a bare `--recursive': the skips are per-repository config
+          # and CI is a fresh clone every run, so that would fetch ~4 GB
+          # of nested copies this build never touches.
+          ./admin/cmacs-submodules.sh
 
       - name: Login to quay.io
         env:
