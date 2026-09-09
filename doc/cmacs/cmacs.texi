@@ -11245,6 +11245,78 @@ Together these take a fresh checkout from about 8 GB to under 4 GB, and
 leave exactly one @emph{build} of crispy, yaml-glib and mcp-glib where
 there were five, six and four.
 
+@subsection Deps that vendor sources
+
+@command{gowl}, @command{gsurf} and @command{bacon} do not link crispy's
+and yaml-glib's archives---they compile those @emph{sources} into their
+own.  They take @code{CRISPY_DIR}, @code{YAMLGLIB_DIR} and
+@code{MCP_GLIB_DIR} as build arguments like everything else, so they are
+pointed at the canonical checkout too and build nothing of their own.  A
+bare @command{make} in a standalone clone of any of them still uses its
+own submodules.
+
+Two things that took two attempts to get right there:
+
+@itemize @bullet
+@item
+Their source lists are @emph{discovered}, not written down.  A curated
+list is fine while the copy is the submodule pinned beside it and
+silently wrong the moment the variable points at a newer one---current
+crispy grew a temp registry, a pkg-config resolver and a use-parser,
+current yaml-glib a writer and a comment index, and the link failed on
+those symbols with nothing to say they were new files.  @file{main.c}
+and @file{crispy-repl.c} are excluded deliberately: the second pulls in
+readline, which a compositor should not link for a REPL it never opens.
+@item
+Object paths stay fixed under @code{OBJDIR} regardless of the variables,
+so switching copies leaves objects @emph{and} @file{.d} files describing
+the other one.  A stale @file{.d} naming a source that no longer exists
+makes make fail during graph construction---before any recipe could have
+cleaned it up---so the guard is a @emph{parse-time} check, not a rule:
+@code{-include} of the @file{.d} files happens at parse time too, and
+the guard has to win that race.
+@end itemize
+
+@subsection Keeping a checkout current
+
+@command{just pull} (an alias for @command{just sync}) rebases cmacs
+onto origin and then runs @command{just submodules}, which is the half
+that moves the deps.  @command{just submodules} on its own populates
+deps/ at whatever commits are @emph{already pinned} and never fetches,
+so it completes an update rather than being one.
+
+Two things that update does which a bare @code{git submodule update
+--recursive} does not:
+
+@itemize @bullet
+@item
+@code{git submodule sync --recursive} first, because a URL change in
+@file{.gitmodules} does @emph{not} reach an already-cloned
+submodule---git uses the URL cached in @file{.git/config} when it was
+first initialised, and the failure then reads as a stale pin rather than
+a stale URL.
+@item
+It reports directories left behind by a submodule removed upstream.  git
+unregisters those and does not delete them, so they linger as untracked
+checkouts that still look like deps.  It reports and never removes: the
+directory may hold work.
+@end itemize
+
+@subsection Then stop cloning what nobody builds
+
+An overridden copy is still cloned.  @code{SKIP_SUBMODULES} in the
+@file{Justfile} lists those, as @code{<parent dir>=<submodule name>}
+pairs, and the @code{submodules} recipe applies them before recursing.
+It has to be a per-repository config setting
+(@code{submodule.<name>.update none}) rather than a flag, because
+@code{git submodule update --recursive} cannot exclude a path below the
+top level---and @code{sync} goes through the recipe for the same reason,
+since a bare @option{--recursive} would undo it.
+
+Together these take a fresh checkout from about 8 GB to under 4 GB, and
+leave exactly one @emph{build} of crispy, yaml-glib and mcp-glib where
+there were five, six and four.
+
 @subsection The exception: deps that vendor sources
 
 @command{gowl}, @command{gsurf} and @command{bacon} do not link crispy's

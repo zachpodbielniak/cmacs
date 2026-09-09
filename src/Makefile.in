@@ -1022,7 +1022,9 @@ CMACS_GOWL_STATIC_LIB = $(srcdir)/../deps/gowl/build/$(CMACS_DEP_BUILDTYPE)/libg
 ## place and the link failed on symbols the new sources plainly define.
 ## gowl's own build decides incrementality, same as every other dep here.
 $(CMACS_GOWL_STATIC_LIB): FORCE
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl lib
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) lib
 
 ## Objects that include gowl.h (directly or via cmacs-eval-dispatch.h)
 ## need gowl-version.h, which is generated during the gowl lib build.
@@ -1032,7 +1034,9 @@ $(CMACS_GOWL_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_BACON_OBJ): $(CMACS_GOWL_STATIC_LIB)
 ## delegate so module source/header changes and missing .so files are handled.
 .PHONY: cmacs-gowl-dep-modules
 cmacs-gowl-dep-modules: $(CMACS_GOWL_STATIC_LIB)
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl modules
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) modules
 ## --gowl must have its required module even when building just src/emacs.
 emacs$(EXEEXT) temacs$(EXEEXT): | cmacs-gowl-dep-modules
 
@@ -1352,6 +1356,8 @@ endif
 $(CMACS_GSURF_STATIC_LIB):
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
 	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
@@ -1420,7 +1426,8 @@ CMACS_EMACSCTL_BIN = @CMACS_EMACSCTL_BIN@
 ifneq ($(CMACS_EMACSCTL_BIN),)
 all: emacsctl$(EXEEXT)
 emacsctl$(EXEEXT): FORCE
-	$(MAKE) -C $(srcdir)/../cmacs/emacsctl OUTDIR=$(abspath .) all
+	$(MAKE) -C $(srcdir)/../cmacs/emacsctl OUTDIR=$(abspath .) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) all
 endif
 
 ## CMACS: Build the out-of-process screensaver renderer

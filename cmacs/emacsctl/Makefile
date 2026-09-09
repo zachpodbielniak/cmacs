@@ -36,7 +36,12 @@ PKG_LIBS   := $(shell pkg-config --libs $(PKGS))
 # yaml-glib package --- only libyaml (yaml-0.1 above).  Exactly one
 # copy links into this binary, so the static-library dedup concern
 # from src/Makefile.in does not apply here.
-YAMLGLIB_DIR ?= ../../deps/bacon/deps/yaml-glib
+# cmacs's canonical copy, not a dep's bundled one: bacon, gowl and gsurf
+# all take YAMLGLIB_DIR now and are pointed here too, so there is one
+# yaml-glib in the tree and emacsctl links the same one as everything
+# else.  src/Makefile.in passes this explicitly; the default is for a
+# direct `make -C cmacs/emacsctl'.
+YAMLGLIB_DIR ?= ../../deps/yaml-glib
 
 # Wildcarded rather than hand-listed, for the same reason bacon's own
 # Makefile wildcards it: the explicit list went stale every time the

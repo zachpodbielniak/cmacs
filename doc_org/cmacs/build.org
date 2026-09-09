@@ -435,6 +435,69 @@ Together these take a fresh checkout from about 8 GB to under 4 GB, and
 leave exactly one *build* of crispy, yaml-glib and mcp-glib where there
 were five, six and four.
 
+*** Deps that vendor sources
+
+=gowl=, =gsurf= and =bacon= do not link crispy's and yaml-glib's
+archives --- they compile those *sources* into their own.  They take
+=CRISPY_DIR=, =YAMLGLIB_DIR= and =MCP_GLIB_DIR= as build arguments like
+everything else, so they are pointed at the canonical checkout too and
+build nothing of their own.  A bare =make= in a standalone clone of any
+of them still uses its own submodules.
+
+Two things that took two attempts to get right there, both worth knowing
+before touching those makefiles:
+
+- Their source lists are *discovered*, not written down.  A curated list
+  is fine while the copy is the submodule pinned beside it and silently
+  wrong the moment the variable points at a newer one --- current crispy
+  grew a temp registry, a pkg-config resolver and a use-parser, current
+  yaml-glib a writer and a comment index, and the link failed on those
+  symbols with nothing to say they were new files.  =main.c= and
+  =crispy-repl.c= are excluded deliberately: the second pulls in
+  readline, which a compositor should not link for a REPL it never
+  opens.
+- Object paths stay fixed under =OBJDIR= regardless of the variables, so
+  switching copies leaves objects *and* =.d= files describing the other
+  one.  A stale =.d= naming a source that no longer exists makes make
+  fail during graph construction --- before any recipe could have
+  cleaned it up --- so the guard is a *parse-time* check, not a rule:
+  =-include= of the =.d= files happens at parse time too, and the guard
+  has to win that race.
+
+** Keeping a checkout current
+
+=just pull= (an alias for =just sync=) rebases cmacs onto origin and then
+runs =just submodules=, which is the half that moves the deps.
+=just submodules= on its own populates deps/ at whatever commits are
+*already pinned* and never fetches, so it completes an update rather than
+being one.
+
+Two things that update does which a bare =git submodule update
+--recursive= does not:
+
+- =git submodule sync --recursive= first, because a URL change in
+  =.gitmodules= does *not* reach an already-cloned submodule --- git uses
+  the URL cached in =.git/config= when it was first initialised, and the
+  failure then reads as a stale pin rather than a stale URL.
+- It reports directories left behind by a submodule that was removed
+  upstream.  git unregisters those and does not delete them, so they
+  linger as untracked checkouts that still look like deps.  It reports
+  and never removes: the directory may hold work.
+
+** Then stop cloning what nobody builds
+
+An overridden copy is still cloned.  =SKIP_SUBMODULES= in the =Justfile=
+lists those, as =<parent dir>=<submodule name>= pairs, and the
+=submodules= recipe applies them before recursing.  It has to be a
+per-repository config setting (=submodule.<name>.update none=) rather
+than a flag, because =git submodule update --recursive= cannot exclude a
+path below the top level --- and =sync= goes through the recipe for the
+same reason, since a bare =--recursive= would undo it.
+
+Together these take a fresh checkout from about 8 GB to under 4 GB, and
+leave exactly one *build* of crispy, yaml-glib and mcp-glib where there
+were five, six and four.
+
 *** The exception: deps that vendor sources
 
 =gowl=, =gsurf= and =bacon= do not link crispy's and yaml-glib's

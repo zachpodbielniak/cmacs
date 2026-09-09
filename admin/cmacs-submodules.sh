@@ -45,6 +45,25 @@ SKIP=(
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/crispy"
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/yaml-glib"
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/mcp-glib"
+	"deps/clawtilla/deps/libreclaw/deps/ai-glib=deps/yaml-glib"
+	# gowl, gsurf and bacon compile crispy's and yaml-glib's SOURCES into
+	# their own archives.  They now take CRISPY_DIR / YAMLGLIB_DIR /
+	# MCP_GLIB_DIR as build arguments and src/Makefile.in points every one
+	# at the canonical checkout, so their bundled copies are dead weight
+	# here -- and a standalone clone of any of them still defaults to its
+	# own submodule.
+	"deps/gowl=deps/crispy"
+	"deps/gowl=deps/yaml-glib"
+	"deps/gowl=deps/mcp-glib"
+	"deps/gsurf=deps/yaml-glib"
+	"deps/gsurf=deps/mcp-glib"
+	"deps/bacon=deps/crispy"
+	"deps/bacon=deps/yaml-glib"
+	"deps/podomation/deps/bacon=deps/crispy"
+	"deps/podomation/deps/bacon=deps/yaml-glib"
+	# freetype's meson subproject.  cad-glib builds freetype through
+	# cmake and by compiling sources directly, and never names dlg.
+	"deps/cad-glib/deps/solvespace/extlib/freetype=dlg"
 )
 
 # A URL change in .gitmodules does NOT reach an already-cloned submodule:
