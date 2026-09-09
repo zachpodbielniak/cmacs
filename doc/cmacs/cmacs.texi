@@ -11177,6 +11177,74 @@ system-installed @code{bacon-1.0} via pkg-config instead.
   requires @option{--with-cmacs-audio}
 @end multitable
 
+@section One Copy of Each Dependency
+
+cmacs's deps bundle their own copies of deps cmacs already has.  Left
+alone that is 128 submodule checkouts and roughly 8 GB for a fresh
+clone, most of it never compiled---and the copies disagree: crispy
+appeared at five distinct commits, mcp-glib at five, yaml-glib at four,
+all linked into one binary.  That is the hazard the static-library dedup
+machinery papers over, so the fewer copies reach it the better.
+
+@subsection Point the dep at the canonical copy
+
+Every dep uses the three-file Makefile pattern, so every
+@file{config.mk} carries @code{*_DIR} variables---and a variable given
+on make's command line beats the assignment in the makefile.  A dep can
+simply be told where the real copy lives:
+
+@example
+$(MAKE) -C deps/gsurf        LIBREGNUM_DIR=$(abspath deps/libregnum)
+$(MAKE) -C deps/screensavers LIBREGNUM_DIR=$(abspath deps/libregnum)
+$(MAKE) -C deps/libregnum    CAD=1 CAD_GLIB_DIR=.../deps/cad-glib
+$(MAKE) -C .../libreclaw     AI_GLIB_DIR=.../deps/ai-glib
+@end example
+
+gsurf's own @file{config.mk} documents the convention: ``An embedder
+(e.g.@: cmacs) overrides @code{LIBREGNUM_DIR} @dots{} so only ONE
+libregnum is ever linked into the host.''  Prefer this to anything else;
+it is the difference between one library in the binary and two.
+
+@subsection Then stop cloning what nobody builds
+
+An overridden copy is still cloned.  @code{SKIP_SUBMODULES} in the
+@file{Justfile} lists those, as @code{<parent dir>=<submodule name>}
+pairs, and the @code{submodules} recipe applies them before recursing.
+It has to be a per-repository config setting
+(@code{submodule.<name>.update none}) rather than a flag, because
+@code{git submodule update --recursive} cannot exclude a path below the
+top level---and @code{sync} goes through the recipe for the same reason,
+since a bare @option{--recursive} would undo it.
+
+Together these take a fresh checkout from about 8 GB to under 4 GB.
+
+@subsection just deps-audit, and why the third column is the point
+
+@file{admin/cmacs-deps-audit.sh} classifies every nested checkout as
+@emph{used} or @emph{UNUSED} and says why: it was @strong{built}, an
+ancestor's makefiles @strong{name} it, or a source @strong{includes} a
+header from it.
+
+Read the reason, not the size.  ``Produces no library'' is not
+``unused'', and two of these nearly went in the bin:
+
+@itemize @bullet
+@item
+@code{raygui}, @code{rres} and @code{rpng} are @strong{header-only},
+compiled straight into graylib's sources, and build no archive of their
+own.  @code{raudio}, sitting right beside them, genuinely is unused.
+@item
+solvespace's @file{extlib/eigen} and @file{extlib/mimalloc} are used by
+@emph{cad-glib}, whose Makefile compiles the solver itself with
+@code{-isystem $(SLVS_DIR)/extlib/eigen}---from two levels above them.
+An audit that only looks at the immediately containing repository calls
+both dead.
+@end itemize
+
+So the script searches every ancestor, and it @emph{reports} rather than
+asserting: a dep that starts using a bundled copy should surface as a
+row changing, not as a build that silently picks the wrong copy.
+
 @section Bundled Models (container builds)
 
 @code{./build-container} bundles a default English STT model and

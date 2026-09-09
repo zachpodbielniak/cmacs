@@ -245,8 +245,24 @@ container-check:
 # the top level.  Setting it is idempotent and `just submodules' reapplies
 # it, so a fresh clone gets the same tree as an old one.
 #
-# The test that this list is still correct is `just deps-audit'.
-SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum"
+# The two added after the libregnum pair:
+#
+#   deps/libregnum=deps/cad-glib      libregnum's Makefile builds its
+#     bundled cad-glib only when CAD_GLIB_DIR still points at it, and
+#     src/Makefile.in passes CAD_GLIB_DIR=deps/cad-glib.  libregnum's own
+#     comment names cmacs as the case that overrides it.  209 MB, and it
+#     drags solvespace and seven extlib trees along.
+#
+#   .../graylib=deps/raudio           graylib compiles raygui, rres and
+#     rpng straight into its sources (header-only, no archive of their
+#     own) but never references raudio at all.
+#
+# The test that this list is still correct is `just deps-audit'.  Read
+# its third column, not its second: raygui, rres and rpng build no
+# library either, and removing them breaks graylib.
+SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum \
+                    deps/libregnum=deps/cad-glib \
+                    deps/libregnum/deps/graylib=deps/raudio"
 
 # Populate deps/ submodules (crispy, bacon, gowl, libregnum, ...).
 [group('build')]
@@ -265,25 +281,14 @@ submodules:
     done
     git submodule update --init --recursive
 
-# A dep that starts genuinely using one of its bundled copies shows up
-# here as a disappearance rather than as a silent mis-build, which is why
-# this reports and does not assert.
+# Anything reported UNUSED is a SKIP_SUBMODULES candidate; the WHY column
+# says how a checkout earned "used" (built / named by an ancestor's
+# makefiles / included by a source).
 #
-# List nested submodules that are cloned but never built (SKIP candidates).
+# Audit nested submodules: which this tree actually uses, and why.
 [group('build')]
 deps-audit:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    printf '%-56s %8s  %s\n' PATH SIZE BUILT
-    git submodule foreach --recursive --quiet 'echo "$displaypath"' | sort | while read -r d; do
-        case "$d" in */deps/*|*/extlib/*|*/subprojects/*) ;; *) continue ;; esac
-        [[ -d "$d" ]] || continue
-        # Untracked archives only: a tracked .so is a shipped prebuilt
-        # (steamworks does this), not something this tree built.
-        if git -C "$d" ls-files --others --ignored --exclude-standard 2>/dev/null \
-             | grep -qE '\.(a|so)$'; then built=yes; else built=NO; fi
-        printf '%-56s %8s  %s\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1)" "$built"
-    done
+    ./admin/cmacs-deps-audit.sh
 
 # Run autogen.sh.  Required after editing configure.ac.
 [group('build')]

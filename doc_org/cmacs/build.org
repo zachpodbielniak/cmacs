@@ -23,7 +23,7 @@ The equivalent by hand:
 
 #+begin_example
 ./install-deps --system   # system packages (Fedora, Ubuntu, Arch, macOS, FreeBSD)
-git submodule update --init --recursive   # populate deps/
+just submodules           # populate deps/ (see One Copy of Each Dependency)
 ./autogen.sh              # first time only
 ./configure               # auto-detects bundled deps in deps/
 make -j$(nproc)           # builds deps + emacs
@@ -370,6 +370,70 @@ Variables set by configure and used in =src/Makefile.in=:
 | =CMACS_GOWL_CFLAGS=    | Gowl/wlroots include paths                     |
 | =CMACS_GOWL_LIBS=      | Gowl/wlroots link flags                        |
 | =CMACS_SRCDIR=         | Absolute path to =src/= (for runtime lib paths) |
+
+* One Copy of Each Dependency
+
+cmacs's deps bundle their own copies of deps cmacs already has.  Left
+alone that is 128 submodule checkouts and about 8 GB for a fresh clone,
+most of it never compiled --- and the copies disagree: crispy appeared at
+five distinct commits, mcp-glib at five, yaml-glib at four, all linked
+into one binary.  That is the hazard the next section papers over, so
+the fewer copies reach it, the better.
+
+Two mechanisms, and the first is the one that matters.
+
+** Point the dep at the canonical copy
+
+Every dep uses the three-file Makefile pattern, so every =config.mk=
+carries =*_DIR= variables --- and a variable given on make's command line
+beats the assignment in the makefile.  So a dep can simply be told where
+the real copy lives:
+
+#+begin_example
+$(MAKE) -C deps/gsurf        LIBREGNUM_DIR=$(abspath deps/libregnum)
+$(MAKE) -C deps/screensavers LIBREGNUM_DIR=$(abspath deps/libregnum)
+$(MAKE) -C deps/libregnum    CAD=1 CAD_GLIB_DIR=$(abs_top_srcdir)/deps/cad-glib
+$(MAKE) -C .../libreclaw     AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib
+#+end_example
+
+gsurf's own =config.mk= documents the convention: "An embedder (e.g.
+cmacs) overrides =LIBREGNUM_DIR= ... so only ONE libregnum is ever linked
+into the host."  Prefer this to anything else; it is the difference
+between one library in the binary and two.
+
+** Then stop cloning what nobody builds
+
+An overridden copy is still cloned.  =SKIP_SUBMODULES= in the =Justfile=
+lists those, as =<parent dir>=<submodule name>= pairs, and the
+=submodules= recipe applies them before recursing.  It has to be a
+per-repository config setting (=submodule.<name>.update none=) rather
+than a flag, because =git submodule update --recursive= cannot exclude a
+path below the top level --- and =sync= goes through the recipe for the
+same reason, since a bare =--recursive= would undo it.
+
+Together these take a fresh checkout from about 8 GB to under 4 GB.
+
+** =just deps-audit=, and why the third column is the whole point
+
+=admin/cmacs-deps-audit.sh= classifies every nested checkout as *used* or
+*UNUSED*, and says why: it was *built*, an ancestor's makefiles *name*
+it, or a source *includes* a header from it.
+
+Read the reason, not the size.  "Produces no library" is not "unused",
+and two of these nearly went in the bin:
+
+- =raygui=, =rres= and =rpng= are *header-only*, compiled straight into
+  graylib's sources.  They build no archive of their own.  =raudio=,
+  sitting right beside them, genuinely is unused.
+- solvespace's =extlib/eigen= and =extlib/mimalloc= are used by
+  *cad-glib*, whose Makefile compiles the solver itself with =-isystem
+  $(SLVS_DIR)/extlib/eigen= --- from two levels above them.  An audit
+  that only looks at the immediately containing repository calls both
+  dead.
+
+So the script searches every ancestor, and it *reports* rather than
+asserting: a dep that starts using a bundled copy should surface as a row
+changing, not as a build that silently picks the wrong copy.
 
 * Static Library Deduplication
 
