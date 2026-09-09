@@ -189,6 +189,26 @@ invocation, so leave this as `bemenu' unless you adapt the picker."
   :type 'string
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-tile-new-frames t
+  "When non-nil, new Emacs frames under `--gowl' are left to the tiler.
+
+A frame carrying a `fullscreen' parameter asks the compositor for a
+real fullscreen surface, which by definition is not tiled: it covers
+the output, sits above everything, and ignores gaps and layout.  That
+is right for a video player and wrong for the second editor window,
+which should take its share of the screen like anything else.
+
+The parameter arrives from the frame defaults rather than from any
+deliberate choice --- a Doom or user config that maximises frames on a
+normal desktop keeps doing it here, where the tiler was going to size
+the window anyway.  Stripping it at frame creation is more reliable
+than removing it from `default-frame-alist' once at startup, because
+anything that appends to that list later undoes the removal silently.
+
+Set to nil to let a frame's fullscreen request stand."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-default-keybindings t
   "When non-nil, install the standard dwm-style compositor keybindings
 on `cmacs-gowl-mode' enable.
@@ -682,6 +702,19 @@ back to the action and argument where it does not."
         (special-mode)
         (display-buffer (current-buffer))))))
 
+(defun cmacs-gowl--tile-new-frame (frame)
+  "Drop FRAME's fullscreen request so the compositor can tile it.
+Added to `after-make-frame-functions'; see
+`cmacs-gowl-tile-new-frames'."
+  (when (and cmacs-gowl-tile-new-frames
+             (frame-live-p frame)
+             (display-graphic-p frame)
+             (frame-parameter frame 'fullscreen))
+    ;; Setting it to nil un-fullscreens an already-mapped frame as well
+    ;; as clearing the request, which matters because the frame is
+    ;; created before this hook runs.
+    (set-frame-parameter frame 'fullscreen nil)))
+
 (defun cmacs-gowl--start ()
   "Start the Gowl compositor and apply configuration.
 When launched with --gowl, the compositor is already running and
@@ -694,6 +727,15 @@ thread is running and applies configuration."
   (ignore-errors
     (require 'cmacs-notify-bar)
     (cmacs-notify-bar-mode 1))
+  ;; New frames belong to the tiler.  Both hooks, because a frame from
+  ;; `emacsclient -c' goes through the server's hook and one from
+  ;; `make-frame' does not.
+  (when cmacs-gowl-tile-new-frames
+    (setq default-frame-alist
+          (assq-delete-all 'fullscreen default-frame-alist))
+    (add-hook 'after-make-frame-functions #'cmacs-gowl--tile-new-frame)
+    (add-hook 'server-after-make-frame-hook
+              (lambda () (cmacs-gowl--tile-new-frame (selected-frame)))))
   ;; Reflect the Elisp defcustom onto the live GowlConfig so any
   ;; later `gowl-reload-config' honours it.
   (cmacs-gowl-apply-config-evaluation)
