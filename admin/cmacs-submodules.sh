@@ -71,16 +71,44 @@ SKIP=(
 # and the failure then reads as a stale pin rather than a stale URL.
 git submodule sync --recursive >/dev/null
 
-# Top level first -- the skips below configure repositories that do not
-# exist until their parent is checked out.
-git submodule update --init
+# Level by level, NOT `git submodule update --init --recursive'.
+#
+# A skip is per-repository config, so it can only be written once its
+# PARENT is checked out -- and a parent three levels down does not exist
+# until an earlier pass cloned it.  `--recursive' does the whole tree in
+# one call and gives no opportunity to configure a repository that is
+# about to be created, so the deep skips silently did nothing on a fresh
+# clone: six checkouts nobody builds came down anyway, while an already
+# populated tree looked correct because the config had persisted from
+# when those directories did exist.
+#
+# So: configure a repository, update only its immediate submodules, then
+# descend into whatever that produced.
+queue=("")
 
-for entry in "${SKIP[@]}"; do
-	parent=${entry%%=*}
-	name=${entry#*=}
-	if [ -e "$parent/.git" ]; then
-		git -C "$parent" config "submodule.$name.update" none
-	fi
+while [ ${#queue[@]} -gt 0 ]; do
+	repo=${queue[0]}
+	queue=("${queue[@]:1}")
+	dir=${repo:-.}
+
+	for entry in "${SKIP[@]}"; do
+		parent=${entry%%=*}
+		name=${entry#*=}
+		if [ "$parent" = "$repo" ]; then
+			git -C "$dir" config "submodule.$name.update" none
+		fi
+	done
+
+	git -C "$dir" submodule update --init
+
+	# Descend into the ones that are now checked out.  A skipped
+	# submodule has no .git and is simply not followed.
+	while read -r path; do
+		[ -n "$path" ] || continue
+		child=${repo:+$repo/}$path
+		[ -e "$child/.git" ] || continue
+		queue+=("$child")
+	done < <(git config -f "$dir/.gitmodules" \
+	           --get-regexp '^submodule\..*\.path$' 2>/dev/null \
+	         | awk '{print $2}')
 done
-
-git submodule update --init --recursive
