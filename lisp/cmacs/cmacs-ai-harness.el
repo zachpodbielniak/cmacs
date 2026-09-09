@@ -65,6 +65,8 @@
 (declare-function cmacs-ai-harness-report-async "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-process-timeout "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-set-process-timeout "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-set-env "cmacs-ai-harness.c")
+(declare-function cmacs-brigade--codex-overlay "cmacs-brigade-run")
 (declare-function cmacs-ai-harness-executor "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-set-local-tools "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-local-tools-p "cmacs-ai-harness.c")
@@ -1161,6 +1163,10 @@ one; the kind string is what tells ai-glib which it is being handed."
   ;; in all along.  cmacs-ai cannot `require' the brigade at top level
   ;; (the brigade requires cmacs-ai), but it can here, at use.
   (require 'cmacs-brigade-host nil 'noerror)
+  ;; The codex branch below lives in cmacs-brigade-run, which nothing
+  ;; else here pulls in -- the same "guarded on fboundp and therefore
+  ;; dependent on load order" trap the require above exists to close.
+  (require 'cmacs-brigade-run nil 'noerror)
   (cond
    ((not (fboundp 'cmacs-brigade-host-provision))
     (message "cmacs-ai-harness: %s takes tools over MCP, and \
@@ -1177,6 +1183,26 @@ cmacs-brigade-host could not be loaded; built --without-cmacs-ai-brigade?"
        ((null endpoint)
         (message "cmacs-ai-harness: could not provision MCP tools for %s"
                  (or cmacs-ai-harness--provider "this agent")))
+       ;; Codex takes no config endpoint at all -- it reads
+       ;; CODEX_HOME/config.toml and has no flag naming another file --
+       ;; so ai-glib's client declares no kind and `set-mcp-config'
+       ;; refuses it.  Delivery is an overlay home instead, which is
+       ;; what the brigade's own codex worker already does; reusing it
+       ;; keeps one implementation of the symlink-auth.json care that
+       ;; makes an overlay usable at all.
+       ((eq fmt 'codex)
+        (if-let* ((overlay (and (fboundp 'cmacs-brigade--codex-overlay)
+                                (cmacs-brigade--codex-overlay
+                                 (plist-get endpoint :path)))))
+            (progn
+              (cmacs-ai-harness-set-env cmacs-ai-harness--handle
+                                        "CODEX_HOME" overlay)
+              (setq cmacs-ai-harness--cli-endpoint endpoint
+                    cmacs-ai-harness--tools 'mcp))
+          (message "cmacs-ai-harness: could not build a CODEX_HOME \
+overlay; this session has no cmacs tools")
+          (ignore-errors
+            (cmacs-brigade-host-revoke (format "harness-%s" (buffer-name))))))
        ((not (cmacs-ai-harness-set-mcp-config
               cmacs-ai-harness--handle
               (plist-get endpoint :path)

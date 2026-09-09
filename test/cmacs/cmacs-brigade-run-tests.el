@@ -89,12 +89,24 @@ failure with its own would lose the original."
 
 ;;;; Host provisioning
 
+(defun cmacs-brigade-run-tests--mcp-socket ()
+  "Ensure the MCP server is up, and return its socket path or nil.
+
+`cmacs-mcp-start\=' signals when the server is already running, so a test
+that calls it unconditionally is a test that only passes while it is the
+only caller.  That held until a second provisioning test was added, and
+then the failure landed on the OTHER test -- the one that had not
+changed -- reported as \"MCP server already running\" from a line that
+had been correct for months."
+  (unless (cmacs-mcp-socket-path)
+    (ignore-errors (cmacs-mcp-start)))
+  (cmacs-mcp-socket-path))
+
 (ert-deftest cmacs-brigade-host-provision-round-trip ()
   "A provision writes a 0600 config with an expanded allowlist."
   (skip-unless (and (featurep 'cmacs-brigade-host)
                     (fboundp 'cmacs-mcp-start)))
-  (cmacs-mcp-start)
-  (skip-unless (cmacs-mcp-socket-path))
+  (skip-unless (cmacs-brigade-run-tests--mcp-socket))
   (let ((p (cmacs-brigade-host-provision "test-agent" "memory")))
     (should p)
     (unwind-protect
@@ -120,6 +132,62 @@ failure with its own would lose the original."
             (should (plist-get env :CMACS_BRIGADE_SOCKET))))
       (cmacs-brigade-host-revoke "test-agent"))
     (should-not (file-exists-p (plist-get p :path)))))
+
+(ert-deftest cmacs-brigade-host-provision-every-registered-format ()
+  "Every dialect in the format table survives the real provision path.
+
+The round-trip test above provisions the DEFAULT format, so for a long
+time exactly one of four emitters was ever reached from
+`cmacs-brigade-host-provision\='.  codex reuses the grok emitter, which
+walks the environment as pairs, but the call site converted the plist to
+pairs only when the format was literally `grok\=' -- so a codex session
+died with `wrong-type-argument: listp, :CMACS_BRIGADE_SOCKET\=' before it
+was given a single tool.
+
+The emitters were unit-tested; that is what made this survivable.  Each
+was called with the shape it wanted rather than the shape provision
+actually hands it, so the tests agreed with the code and both were
+wrong.  Hence provisioning here, not emitting."
+  (skip-unless (and (featurep 'cmacs-brigade-host)
+                    (fboundp 'cmacs-mcp-start)))
+  (skip-unless (cmacs-brigade-run-tests--mcp-socket))
+  (dolist (fmt (mapcar #'car cmacs-brigade-host-config-formats))
+    (let ((agent (format "test-fmt-%s" fmt)))
+      (unwind-protect
+          (let ((p (cmacs-brigade-host-provision agent "memory" :format fmt)))
+            (should p)
+            (should (eq fmt (plist-get p :format)))
+            (should (file-exists-p (plist-get p :path)))
+            ;; The environment has to have reached the file whatever the
+            ;; dialect: an emitter that silently dropped it would leave
+            ;; the relay with no socket to dial and no way to say so.
+            (let ((text (with-temp-buffer
+                          (insert-file-contents (plist-get p :path))
+                          (buffer-string))))
+              (should (string-match-p "CMACS_BRIGADE_SOCKET" text))
+              (should (string-match-p "CMACS_BRIGADE_ALLOW" text))))
+        (cmacs-brigade-host-revoke agent)))))
+
+(ert-deftest cmacs-brigade-host-env-pairs-takes-either-shape ()
+  "The TOML emitters normalize their own environment.
+
+Keeping this in the emitter rather than the call site is the actual fix:
+a call site that picks the shape has to name the dialects wanting it,
+and that list is always one dialect short."
+  (skip-unless (fboundp 'cmacs-brigade-host--env-pairs))
+  (should-not (cmacs-brigade-host--env-pairs nil))
+  ;; A plist, which is what provision builds.
+  (should (equal '(("A" . "1") ("B" . "2"))
+                 (cmacs-brigade-host--env-pairs '(:A "1" :B "2"))))
+  ;; An alist, unchanged.
+  (should (equal '(("A" . "1"))
+                 (cmacs-brigade-host--env-pairs '(("A" . "1")))))
+  ;; And the emitter renders both rather than signalling on one.
+  (dolist (env '((:CMACS_BRIGADE_SOCKET "/tmp/s")
+                 (("CMACS_BRIGADE_SOCKET" . "/tmp/s"))))
+    (should (string-match-p
+             (regexp-quote "CMACS_BRIGADE_SOCKET = \"/tmp/s\"")
+             (cmacs-brigade-host--config-codex "cmd" nil env)))))
 
 (ert-deftest cmacs-brigade-host-revoke-is-idempotent ()
   "Revoking twice is not an error."

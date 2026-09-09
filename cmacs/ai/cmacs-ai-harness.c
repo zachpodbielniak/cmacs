@@ -1350,6 +1350,46 @@ showing the user what would be carried, before carrying it.  */)
   return (text != NULL && *text != '\0') ? build_string (text) : Qnil;
 }
 
+DEFUN ("cmacs-ai-harness-set-env", Fcmacs_ai_harness_set_env,
+       Scmacs_ai_harness_set_env, 2, 3, 0,
+       doc: /* Set environment variable NAME to VALUE for HANDLE's CLI.
+
+VALUE nil removes the variable.  Both are strings; NAME is not encoded
+as a file name and VALUE is, because the only callers so far pass paths.
+
+This is the escape hatch for a CLI whose configuration arrives through
+the environment and not through an MCP config file.  Codex is the case
+it exists for: it reads its MCP servers from CODEX_HOME/config.toml with
+no flag pointing anywhere else, so ai-glib's codex client declares no
+config endpoint at all and `cmacs-ai-harness-set-mcp-config' refuses it.
+Pointing CODEX_HOME at an overlay is the delivery mechanism that works.
+
+Signals an error when HANDLE is not a CLI session: an HTTP provider
+spawns nothing to carry an environment.  */)
+  (Lisp_Object handle, Lisp_Object name, Lisp_Object value)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *prov = ai_conversation_get_provider (h->conversation);
+
+  CHECK_STRING (name);
+  if (!NILP (value)) CHECK_STRING (value);
+
+  if (prov == NULL || !AI_IS_CLI_CLIENT (prov))
+    error ("cmacs-ai-harness: not a CLI session");
+
+  if (NILP (value))
+    ai_cli_client_unset_env (AI_CLI_CLIENT (prov), SSDATA (name));
+  else
+    {
+      Lisp_Object enc = ENCODE_FILE (value);
+
+      ai_cli_client_set_env (AI_CLI_CLIENT (prov), SSDATA (name),
+                             SSDATA (enc));
+    }
+
+  return NILP (value) ? Qnil : Qt;
+}
+
 DEFUN ("cmacs-ai-harness-process-timeout",
        Fcmacs_ai_harness_process_timeout,
        Scmacs_ai_harness_process_timeout, 1, 1, 0,
@@ -1640,6 +1680,7 @@ syms_of_cmacs_ai_harness (void)
   defsubr (&Scmacs_ai_harness_report_async);
   defsubr (&Scmacs_ai_harness_process_timeout);
   defsubr (&Scmacs_ai_harness_set_process_timeout);
+  defsubr (&Scmacs_ai_harness_set_env);
 }
 
 #endif /* HAVE_CMACS_AI */

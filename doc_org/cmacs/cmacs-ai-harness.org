@@ -175,6 +175,16 @@ warning face for *no tools* if wiring failed. That indicator is not decoration
 --- a provider that silently took none is otherwise invisible from the
 transcript.
 
+** Codex takes an overlay, not a config file
+
+Every other CLI agent is handed a path: claude and opencode read a config file named on the command line, grok takes an overlay =GROK_HOME= from ai-glib. Codex reads =CODEX_HOME/config.toml= and has *no flag naming another file*, so ai-glib's codex client declares no config endpoint at all and =cmacs-ai-harness-set-mcp-config= refuses it.
+
+Delivery is therefore an overlay home: a 0700 directory holding our =config.toml= --- the user's own settings first, our server table appended --- with every other entry of the real =~/.codex= symlinked in. =auth.json= above all, or the run arrives unauthenticated and the failure reads as a model error. =CODEX_HOME= is then set on the session with =cmacs-ai-harness-set-env=.
+
+The =-c mcp_servers...= override would have avoided the directory entirely and is deliberately not used: it puts the socket path and the token in argv, which is world-readable through =/proc=.
+
+This is the same overlay the brigade's own =codex= worker builds, and it is the same function --- one implementation of the symlink care that makes an overlay usable at all.
+
 ** Dialects
 
 The agents do not agree on a config schema. =cmacs-brigade-host-provision= takes

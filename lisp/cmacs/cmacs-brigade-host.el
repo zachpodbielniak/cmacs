@@ -88,6 +88,38 @@ than written once and hoped over."
                     :enabled t
                     :environment env))))
 
+(defun cmacs-brigade-host--env-pairs (env)
+  "ENV as a list of (NAME . VALUE) string pairs.
+
+`cmacs-brigade-host-provision\=' builds one environment, a plist, and hands
+it to whichever emitter the provider asked for.  The JSON dialects embed
+that plist as-is; TOML has to walk it, and walking a plist as though it
+were an alist is a `wrong-type-argument\=' on the first key.
+
+Accepting both shapes here is deliberate.  The alternative -- and what
+this replaces -- was for the call site to convert for the one dialect it
+knew wanted pairs, which put dialect knowledge in the one place the
+format table exists to keep it out of.  It broke the moment a second
+TOML agent arrived: codex reuses the grok emitter, was not named in that
+condition, and every codex session died before it got a single tool."
+  (cond
+   ((null env) nil)
+   ;; An alist already: its first element is a cons whose car is not a
+   ;; keyword.  A plist's first element is the keyword itself.
+   ((consp (car env)) env)
+   (t
+    (let (pairs)
+      (while env
+        (let ((key (car env))
+              (value (cadr env)))
+          (push (cons (if (keywordp key)
+                          (substring (symbol-name key) 1)
+                        (format "%s" key))
+                      value)
+                pairs))
+        (setq env (cddr env)))
+      (nreverse pairs)))))
+
 (defun cmacs-brigade-host--config-grok (command args env)
   "A TOML fragment declaring one [mcp_servers.*] table.
 
@@ -116,14 +148,15 @@ provider appends this to a copy of the user's own config."
           (format "command = %S\n" command)
           (format "args = [%s]\n"
                   (mapconcat (lambda (a) (format "%S" a)) args ", "))
-          (if env
-              (concat "\n[mcp_servers.cmacs-brigade.env]\n"
-                      (mapconcat
-                       (lambda (pair)
-                         (format "%s = %S" (car pair) (cdr pair)))
-                       env "\n")
-                      "\n")
-            "")))
+          (let ((pairs (cmacs-brigade-host--env-pairs env)))
+            (if pairs
+                (concat "\n[mcp_servers.cmacs-brigade.env]\n"
+                        (mapconcat
+                         (lambda (pair)
+                           (format "%s = %S" (car pair) (cdr pair)))
+                         pairs "\n")
+                        "\n")
+              ""))))
 
 (defun cmacs-brigade-host--config-codex (command args env)
   "A TOML fragment for Codex's config.toml.
@@ -162,10 +195,13 @@ here.")
   (pcase format
     ('opencode "mcp-config-opencode")
     ('grok     "mcp-config-grok")
-    ;; ai-glib's codex client declares no MCP endpoint kind, so an
-    ;; in-process codex run gets no tools.  Naming the kind anyway keeps
-    ;; the table honest about the dialect; the brigade's own `codex'
-    ;; worker is what actually delivers it, through CODEX_HOME.
+    ;; ai-glib's codex client declares no MCP endpoint kind, so nothing
+    ;; is ever handed this string: codex reads CODEX_HOME/config.toml
+    ;; and has no flag naming another file, so both callers deliver an
+    ;; overlay home instead -- the brigade's `codex' worker and, since
+    ;; it grew the same branch, the harness.  The entry stays because it
+    ;; names the dialect correctly, and the day the client declares a
+    ;; kind this is the string it will declare.
     ('codex    "mcp-config-codex")
     (_         "mcp-config")))
 
@@ -226,18 +262,14 @@ about the 0600 write, the revoke-before-provision and the sweep."
                     :CMACS_BRIGADE_TOKEN token
                     :CMACS_BRIGADE_RESTRICT_PRIVILEGED restrict
                     :CMACS_BRIGADE_BLOCK_RECURSIVE block))
+         ;; One environment for every dialect.  An emitter that needs
+         ;; another shape converts it -- see
+         ;; `cmacs-brigade-host--env-pairs'.  Choosing the shape here
+         ;; means naming the dialects that want it, and the list is
+         ;; always one short.
          (config (funcall emit (cmacs-brigade--relay-command)
                           (list "--mcp-relay")
-                          (if (eq fmt 'grok)
-                              ;; TOML wants an alist, not a plist.
-                              (list (cons "CMACS_BRIGADE_SOCKET" socket)
-                                    (cons "CMACS_BRIGADE_ALLOW" expanded)
-                                    (cons "CMACS_BRIGADE_TOKEN" token)
-                                    (cons "CMACS_BRIGADE_RESTRICT_PRIVILEGED"
-                                          restrict)
-                                    (cons "CMACS_BRIGADE_BLOCK_RECURSIVE"
-                                          block))
-                            env))))
+                          env)))
     (make-directory dir t)
     (set-file-modes dir #o700)
     ;; `with-file-modes' sets the umask for the duration, so the file is

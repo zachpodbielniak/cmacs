@@ -743,6 +743,50 @@ default silently, so a long agent run could die here and not in ai-tui."
   (cmacs-ai-harness-tests--with-session
     (should-error (cmacs-ai-harness-process-timeout cmacs-ai-harness--handle))))
 
+(ert-deftest cmacs-ai-harness-test-every-cli-provider-gets-tools ()
+  "Every CLI provider ends up with tools, by whatever route it takes.
+
+Two bugs hid behind the fact that only ONE CLI provider was ever tested
+end to end.  The provision call site converted its environment plist to
+pairs for the literal format `grok\\=', so codex -- which reuses the grok
+emitter -- died with `wrong-type-argument: listp,
+:CMACS_BRIGADE_SOCKET\\='.  Behind that sat a second: codex reads
+CODEX_HOME/config.toml and has no flag naming another file, so ai-glib's
+client declares no config endpoint and the harness has to deliver an
+overlay home instead.
+
+Run in a subprocess per provider because provisioning writes real files
+and mints real credentials, and a half-provisioned session leaking into
+the next test would be worse than the bug."
+  (skip-unless (fboundp 'cmacs-ai-harness-cli-p))
+  (skip-unless (file-executable-p (expand-file-name invocation-name
+                                                    invocation-directory)))
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (lisp (expand-file-name "lisp" source-directory)))
+    (dolist (provider '(codex-cli grok-build claude-code opencode))
+      (let ((script (make-temp-file "cmacs-harness-tools" nil ".el"))
+            out)
+        (unwind-protect
+            (progn
+              (with-temp-file script
+                (insert (format "%S\n" '(require 'cmacs-ai-harness))
+                        (format "%S\n" '(cmacs-mcp-start))
+                        (format "%S\n"
+                                `(let ((b (cmacs-ai-harness--start
+                                           ',provider nil
+                                           temporary-file-directory)))
+                                   (with-current-buffer b
+                                     (princ (format "TOOLS=%S"
+                                                    cmacs-ai-harness--tools)))
+                                   (kill-buffer b)))))
+              (setq out (with-output-to-string
+                          (call-process emacs nil standard-output nil
+                                        "-Q" "--batch" "-L" lisp "-l" script)))
+              ;; `mcp' means it got them.  nil is the defect, and so is a
+              ;; backtrace: the plist bug signalled rather than degrading.
+              (should (string-match-p "TOOLS=mcp" out)))
+          (delete-file script))))))
+
 (provide 'cmacs-ai-harness-tests)
 
 ;;; cmacs-ai-harness-tests.el ends here
