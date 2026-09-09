@@ -11205,6 +11205,31 @@ gsurf's own @file{config.mk} documents the convention: ``An embedder
 libregnum is ever linked into the host.''  Prefer this to anything else;
 it is the difference between one library in the binary and two.
 
+@subsection Keeping a checkout current
+
+@command{just pull} (an alias for @command{just sync}) rebases cmacs
+onto origin and then runs @command{just submodules}, which is the half
+that moves the deps.  @command{just submodules} on its own populates
+deps/ at whatever commits are @emph{already pinned} and never fetches,
+so it completes an update rather than being one.
+
+Two things that update does which a bare @code{git submodule update
+--recursive} does not:
+
+@itemize @bullet
+@item
+@code{git submodule sync --recursive} first, because a URL change in
+@file{.gitmodules} does @emph{not} reach an already-cloned
+submodule---git uses the URL cached in @file{.git/config} when it was
+first initialised, and the failure then reads as a stale pin rather than
+a stale URL.
+@item
+It reports directories left behind by a submodule removed upstream.  git
+unregisters those and does not delete them, so they linger as untracked
+checkouts that still look like deps.  It reports and never removes: the
+directory may hold work.
+@end itemize
+
 @subsection Then stop cloning what nobody builds
 
 An overridden copy is still cloned.  @code{SKIP_SUBMODULES} in the

@@ -401,6 +401,26 @@ cmacs) overrides =LIBREGNUM_DIR= ... so only ONE libregnum is ever linked
 into the host."  Prefer this to anything else; it is the difference
 between one library in the binary and two.
 
+** Keeping a checkout current
+
+=just pull= (an alias for =just sync=) rebases cmacs onto origin and then
+runs =just submodules=, which is the half that moves the deps.
+=just submodules= on its own populates deps/ at whatever commits are
+*already pinned* and never fetches, so it completes an update rather than
+being one.
+
+Two things that update does which a bare =git submodule update
+--recursive= does not:
+
+- =git submodule sync --recursive= first, because a URL change in
+  =.gitmodules= does *not* reach an already-cloned submodule --- git uses
+  the URL cached in =.git/config= when it was first initialised, and the
+  failure then reads as a stale pin rather than a stale URL.
+- It reports directories left behind by a submodule that was removed
+  upstream.  git unregisters those and does not delete them, so they
+  linger as untracked checkouts that still look like deps.  It reports
+  and never removes: the directory may hold work.
+
 ** Then stop cloning what nobody builds
 
 An overridden copy is still cloned.  =SKIP_SUBMODULES= in the =Justfile=
