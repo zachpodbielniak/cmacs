@@ -305,6 +305,13 @@ SKIP_SUBMODULES := "deps/gsurf=deps/libregnum deps/screensavers=deps/libregnum \
 submodules:
     #!/usr/bin/env bash
     set -euo pipefail
+    # URL changes in .gitmodules do NOT reach an already-cloned
+    # submodule on their own: `git submodule update' uses the URL cached
+    # in .git/config when the submodule was first initialised.  Without
+    # this, a dep that moved forge -- or a submodule replaced by another
+    # at the same path -- keeps fetching from the old remote and the
+    # failure looks like a stale pin rather than a stale URL.
+    git submodule sync --recursive
     # Top level first: the skip list below configures repositories that
     # do not exist until their parent is checked out.
     git submodule update --init
@@ -809,13 +816,33 @@ log-unpushed:
     @echo "==> deps/gowl (origin/master..HEAD)"
     @cd {{ gowl_dir }} && git log --oneline origin/master..HEAD || true
 
+# `just pull' is the same operation under the name people reach for.
+# It is an alias rather than a second recipe so the two cannot drift.
+alias pull := sync
+
 # Pull latest on cmacs + gowl + bring submodules in line.
 [group('vcs')]
 sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
     git pull --rebase origin master
     # Via the recipe, not a bare `--recursive': that would re-clone the
-    # nested copies SKIP_SUBMODULES exists to keep out.
+    # nested copies SKIP_SUBMODULES exists to keep out, and would miss
+    # the URL sync a moved submodule needs.
     just submodules
+    # A submodule REMOVED upstream leaves its directory behind -- git
+    # unregisters it and does not delete it, so it lingers as an
+    # untracked checkout that still looks like a dep.  Reported, never
+    # removed: it may hold work, and this is the one case where guessing
+    # costs more than saying something.  deps/libreclaw is the live
+    # example, replaced by deps/clawtilla/deps/libreclaw.
+    for d in deps/*/; do
+        d=${d%/}
+        [[ -e "$d/.git" ]] || continue
+        git config -f .gitmodules --get-regexp path 2>/dev/null \
+          | awk '{print $2}' | grep -qx "$d" && continue
+        echo "note: $d is no longer a submodule of cmacs; remove it when you are sure it holds nothing you want"
+    done
 
 # Compare current submodule pointer to its HEAD branch tip.
 [group('vcs')]
