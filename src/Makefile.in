@@ -1094,17 +1094,23 @@ $(CMACS_AI_GLIB_STATIC_LIB): FORCE
 endif
 
 ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
-## Build liblc-1.0.a (+ GIR/typelib) from deps/libreclaw/ as a static
-## library.  The full libreclaw target produces shared, static, the
-## CLI binary, and (since 0.18.0) Lc-1.0.gir/typelib by default.
-## We depend on the static lib but invoke the `all` target so the
-## GIR files also get produced and can be referenced by cmacs-gi at
-## runtime via GI_TYPELIB_PATH.  AI_GLIB_DIR is overridden so
-## libreclaw's nested deps/ai-glib sub-make becomes a no-op and the
-## canonical cmacs build is consumed instead.
-CMACS_LIBRECLAW_STATIC_LIB = $(srcdir)/../deps/libreclaw/build/$(CMACS_DEP_BUILDTYPE)/liblc-1.0.a
+## Build liblc-1.0.a (+ GIR/typelib) from CLAWTILLA'S libreclaw as a
+## static library.  libreclaw is not a submodule of cmacs: it is
+## clawtilla's, and cmacs builds that one copy.  The two move together,
+## so a second pin here would put two versions of one library into the
+## same binary -- the exact hazard the dedup rules below exist for.
+##
+## The full libreclaw target produces shared, static, the CLI binary,
+## and (since 0.18.0) Lc-1.0.gir/typelib by default.  We depend on the
+## static lib but invoke the `all` target so the GIR files also get
+## produced and can be referenced by cmacs-gi at runtime via
+## GI_TYPELIB_PATH.  AI_GLIB_DIR is overridden so libreclaw's nested
+## deps/ai-glib sub-make becomes a no-op and the canonical cmacs build
+## is consumed instead -- the same one-copy rule, one level down.
+CMACS_LIBRECLAW_DIR = $(srcdir)/../deps/clawtilla/deps/libreclaw
+CMACS_LIBRECLAW_STATIC_LIB = $(CMACS_LIBRECLAW_DIR)/build/$(CMACS_DEP_BUILDTYPE)/liblc-1.0.a
 $(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB)
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/libreclaw \
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(CMACS_LIBRECLAW_DIR) \
 	  AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib \
 	  static gir
 

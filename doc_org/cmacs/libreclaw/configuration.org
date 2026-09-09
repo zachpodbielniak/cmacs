@@ -55,7 +55,7 @@ auto-generated config]] below.
 
 The YAML schema is owned by libreclaw (not cmacs) so that upgrading
 libreclaw automatically expands the set of supported keys.  See the
-libreclaw documentation at =deps/libreclaw/docs/configuration.md=
+libreclaw documentation at =deps/clawtilla/deps/libreclaw/docs/configuration.md=
 for the canonical reference.
 
 * First-run auto-generated config

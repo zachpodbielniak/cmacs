@@ -5,7 +5,7 @@
  *
  * DEFUNs for driving libreclaw's LcCmacsChannel from Elisp.  The
  * channel itself is implemented in
- * deps/libreclaw/src/channel/lc-cmacs-channel.c — an in-process
+ * deps/clawtilla/deps/libreclaw/src/channel/lc-cmacs-channel.c — an in-process
  * LcChannel that lets the Emacs host push inbound messages into
  * libreclaw's pipeline and receive AI responses via a callback.
  *

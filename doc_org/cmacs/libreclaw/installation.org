@@ -25,15 +25,26 @@ sudo apt install \
 
 * Submodule
 
-LibreClaw lives under =deps/libreclaw= as a git submodule.  After
-cloning cmacs, run:
+LibreClaw is *not* a submodule of cmacs.  It is clawtilla's, and cmacs
+builds that one copy, at =deps/clawtilla/deps/libreclaw=.
+
+The two projects move together, so a second pin here would put two
+versions of the same library into one binary --- which is what the
+static-library dedup rules in =src/Makefile.in= exist to survive, and
+not a thing to add more of on purpose.  Clawtilla owns the pin:
+*bumping libreclaw means bumping clawtilla*.
+
+After cloning cmacs, run:
 
 #+begin_src bash
-git submodule update --init --recursive deps/libreclaw
+git submodule update --init deps/clawtilla
+git -C deps/clawtilla submodule update --init --recursive deps/libreclaw
 #+end_src
 
 The nested submodules =deps/ai-glib=, =deps/yaml-glib=, and
-=deps/podomation= inside libreclaw are pulled in at the same time.
+=deps/podomation= inside libreclaw are pulled in at the same time ---
+though cmacs overrides =AI_GLIB_DIR= so libreclaw compiles against
+cmacs's canonical =deps/ai-glib= rather than building a second one.
 
 * Configure flag
 
@@ -55,7 +66,7 @@ make -j$(nproc)
 
 Like the other cmacs subsystems, libreclaw supports:
 
-- =--with-cmacs-libreclaw= — build from =deps/libreclaw= (default)
+- =--with-cmacs-libreclaw= — build from =deps/clawtilla/deps/libreclaw= (default)
 - =--with-cmacs-libreclaw=system= — link against a system-installed
   =libreclaw >= 0.21.0= via =pkg-config= (0.21.0 added the bridge
   subsystem used by the remote mode; libdex-1 was also added to the
@@ -75,10 +86,10 @@ installed via =make install=, these land in
 =$(libdir)/girepository-1.0= and =$(datadir)/gir-1.0= respectively.
 
 For in-tree builds, point =GI_TYPELIB_PATH= at
-=deps/libreclaw/build/release= so =cmacs-gi=' =(gi-require "Lc" "1.0")=
+=deps/clawtilla/deps/libreclaw/build/release= so =cmacs-gi=' =(gi-require "Lc" "1.0")=
 finds the typelib:
 
 #+begin_src bash
-export GI_TYPELIB_PATH=$(pwd)/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+export GI_TYPELIB_PATH=$(pwd)/deps/clawtilla/deps/libreclaw/build/release:$GI_TYPELIB_PATH
 src/emacs
 #+end_src

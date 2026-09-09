@@ -51,7 +51,7 @@ cmacs-gi isn't built — check @code{(fboundp 'gi-require)}.
 The typelib isn't on @env{GI_TYPELIB_PATH}.  For in-tree builds:
 
 @example
-export GI_TYPELIB_PATH=$PWD/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+export GI_TYPELIB_PATH=$PWD/deps/clawtilla/deps/libreclaw/build/release:$GI_TYPELIB_PATH
 @end example
 @end enumerate
 

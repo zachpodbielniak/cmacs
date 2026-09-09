@@ -23,14 +23,24 @@ sudo apt install \
 
 @subsection Submodule
 
-LibreClaw lives under @file{deps/libreclaw} as a git submodule.
+LibreClaw is @emph{not} a submodule of cmacs.  It is clawtilla's, and
+cmacs builds that one copy, at @file{deps/clawtilla/deps/libreclaw}.
+
+The two projects move together, so a second pin here would put two
+versions of the same library into one binary---which is what the
+static-library dedup rules in @file{src/Makefile.in} exist to survive,
+and not a thing to add more of on purpose.  Clawtilla owns the pin:
+@strong{bumping libreclaw means bumping clawtilla}.
 
 @example
-git submodule update --init --recursive deps/libreclaw
+git submodule update --init deps/clawtilla
+git -C deps/clawtilla submodule update --init --recursive deps/libreclaw
 @end example
 
 Nested submodules (@file{deps/ai-glib}, @file{deps/yaml-glib},
-@file{deps/podomation} inside libreclaw) come along for the ride.
+@file{deps/podomation} inside libreclaw) come along for the ride---though
+cmacs overrides @code{AI_GLIB_DIR} so libreclaw compiles against cmacs's
+canonical @file{deps/ai-glib} rather than building a second one.
 
 @subsection Configure flag
 
@@ -52,7 +62,7 @@ Like other subsystems:
 
 @itemize
 @item
-@code{--with-cmacs-libreclaw} — build from @file{deps/libreclaw}
+@code{--with-cmacs-libreclaw} — build from @file{deps/clawtilla/deps/libreclaw}
 @item
 @code{--with-cmacs-libreclaw=system} — link against
 @code{libreclaw >= 0.21.0} via pkg-config (0.21.0 added the bridge
@@ -73,9 +83,9 @@ Starting with libreclaw 0.18.0, the build always produces
 @file{$(libdir)/girepository-1.0} and @file{$(datadir)/gir-1.0}.
 
 For in-tree builds, set @env{GI_TYPELIB_PATH} to
-@file{deps/libreclaw/build/release} so cmacs-gi finds the typelib:
+@file{deps/clawtilla/deps/libreclaw/build/release} so cmacs-gi finds the typelib:
 
 @example
-export GI_TYPELIB_PATH=$PWD/deps/libreclaw/build/release:$GI_TYPELIB_PATH
+export GI_TYPELIB_PATH=$PWD/deps/clawtilla/deps/libreclaw/build/release:$GI_TYPELIB_PATH
 src/emacs
 @end example

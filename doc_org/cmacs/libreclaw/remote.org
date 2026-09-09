@@ -316,7 +316,7 @@ without needing a direct socket connection to cmacs.
 
 Flow: =claude-code (stdio) → libreclaw-bridge-mcp → /api/v1/bridge/tools/call (REST) → bridge → cmacs= (and the response retraces).
 
-Setup is documented in =deps/libreclaw/docs/bridge.md=
+Setup is documented in =deps/clawtilla/deps/libreclaw/docs/bridge.md=
 ("libreclaw-bridge-mcp shim").  Briefly: install the binary on the
 server, issue an API key with scopes =bridge.read= +
 =bridge.invoke=, add an entry to claude-code's =.mcp.json= that
@@ -340,4 +340,4 @@ entries are silently ignored in 0.21.0.
 | MCP tool calls hang on the server side          | The matching tool isn't registered on cmacs's MCP server; check ~(cmacs-mcp-server-p)~ is non-nil        |
 
 See also: =doc_org/cmacs/libreclaw/api.org= for the full DEFUN
-reference and =deps/libreclaw/src/bridge/= for the wire-level codec.
+reference and =deps/clawtilla/deps/libreclaw/src/bridge/= for the wire-level codec.

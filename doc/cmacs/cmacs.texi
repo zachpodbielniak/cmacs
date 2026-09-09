@@ -11134,7 +11134,7 @@ system-installed @code{bacon-1.0} via pkg-config instead.
   gmodule-2.0 libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan
   libpq yaml-0.1 libdex-1
   @tab LibreClaw chat/Matrix gateway with embedded + remote
-  (bridge) modes (built from deps/libreclaw/, needs libreclaw
+  (bridge) modes (built from deps/clawtilla/deps/libreclaw/, needs libreclaw
   >= 0.21.0; libdex-1 is new in 0.21 for the bridge subsystem's
   embedded mcp-glib)
 @item cmacs-libreclaw (system) @tab libreclaw >= 0.21.0

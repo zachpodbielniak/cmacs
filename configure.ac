@@ -869,7 +869,23 @@ if test "$with_cmacs_libreclaw" != "no"; then
     # Use system-installed libreclaw (for distro packaging)
     PKG_CHECK_MODULES([CMACS_LIBRECLAW], [libreclaw >= 0.21.0])
   else
-    # Build liblc-1.0 from deps/libreclaw/ (default).  Pull in the
+    # Build liblc-1.0 from clawtilla's libreclaw (default).
+    #
+    # libreclaw is NOT a submodule of cmacs.  It is clawtilla's, and
+    # cmacs uses that one copy: the two are developed in lockstep, so a
+    # second pin here would be a second version of the same library
+    # linked into the same binary -- which is the class of problem the
+    # static-lib dedup rule in src/Makefile.in exists to paper over.
+    # Clawtilla owns the pin; bumping libreclaw means bumping clawtilla.
+    #
+    # Spelled once, in two forms, because the block below needs both a
+    # $(srcdir)-relative path and an absolute one.  Twelve hard-coded
+    # copies of the path is what made moving it a chore rather than an
+    # edit.
+    cmacs_libreclaw_dir="\$(srcdir)/../deps/clawtilla/deps/libreclaw"
+    cmacs_libreclaw_abs="\$(abs_top_srcdir)/deps/clawtilla/deps/libreclaw"
+
+    # Pull in the
     # full dep set libreclaw needs: libsoup-3.0 for Matrix, libetpan
     # for IMAP/SMTP, libpq for postgres audit, libcmark for markdown
     # rendering, sqlite3 for audit log, plus json-glib and yaml,
@@ -878,18 +894,18 @@ if test "$with_cmacs_libreclaw" != "no"; then
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
        libsoup-3.0 json-glib-1.0 libcmark sqlite3 libetpan libpq
        yaml-0.1 libdex-1])
-    CMACS_LIBRECLAW_CFLAGS="-I\$(srcdir)/../deps/libreclaw/src \
-      -I\$(srcdir)/../deps/libreclaw/build/$cmacs_dep_buildtype \
+    CMACS_LIBRECLAW_CFLAGS="-I$cmacs_libreclaw_dir/src \
+      -I$cmacs_libreclaw_dir/build/$cmacs_dep_buildtype \
       -I\$(abs_top_srcdir)/deps/ai-glib/src \
       -I\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype \
-      -I\$(srcdir)/../deps/libreclaw/deps/yaml-glib/src \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/module \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/interfaces \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/src/core \
-      -I\$(srcdir)/../deps/libreclaw/deps/podomation/build/release \
+      -I$cmacs_libreclaw_dir/deps/yaml-glib/src \
+      -I$cmacs_libreclaw_dir/deps/podomation/src \
+      -I$cmacs_libreclaw_dir/deps/podomation/src/module \
+      -I$cmacs_libreclaw_dir/deps/podomation/src/interfaces \
+      -I$cmacs_libreclaw_dir/deps/podomation/src/core \
+      -I$cmacs_libreclaw_dir/deps/podomation/build/release \
       -DLC_COMPILATION \
-      -DCMACS_LIBRECLAW_GIR_DIR=\\\"\$(abs_top_srcdir)/deps/libreclaw/build/$cmacs_dep_buildtype\\\" \
+      -DCMACS_LIBRECLAW_GIR_DIR=\\\"$cmacs_libreclaw_abs/build/$cmacs_dep_buildtype\\\" \
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
     # podomation's generated pod-version.h is under build/release, NOT
     # build/$cmacs_dep_buildtype: libreclaw builds its vendored deps with
@@ -903,10 +919,10 @@ if test "$with_cmacs_libreclaw" != "no"; then
     # its htmx-glib submodule with DEBUG=0 unconditionally, so the archive lives
     # under build/release/ regardless of $cmacs_dep_buildtype.  It exports only
     # htmx_* symbols and vendors no deps of its own, so no dedup rule is needed.
-    CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/libreclaw/build/$cmacs_dep_buildtype/liblc-1.0.a \
+    CMACS_LIBRECLAW_LIBS="-Wl,--whole-archive $cmacs_libreclaw_dir/build/$cmacs_dep_buildtype/liblc-1.0.a \
       -Wl,--no-whole-archive \
       \$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
-      \$(srcdir)/../deps/libreclaw/deps/htmx-glib/build/release/libhtmx-glib-1.0.a \
+      $cmacs_libreclaw_dir/deps/htmx-glib/build/release/libhtmx-glib-1.0.a \
       $CMACS_LIBRECLAW_DEPS_LIBS"
     CMACS_LIBRECLAW_BUNDLED=yes
   fi

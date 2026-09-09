@@ -25,7 +25,7 @@ engine, and surfaces each room as an org-mode buffer in the style of
 
 * At a glance
 
-- *Submodule*: =deps/libreclaw= — pinned to libreclaw =v0.21.0+=
+- *Source*: =deps/clawtilla/deps/libreclaw= — clawtilla's submodule, not cmacs's; clawtilla owns the pin
 - *Configure flag*: =--with-cmacs-libreclaw=
 - *Dependencies*: glib, gobject, gio, libsoup-3.0, json-glib, libcmark,
   sqlite3, libetpan, libpq, yaml-0.1

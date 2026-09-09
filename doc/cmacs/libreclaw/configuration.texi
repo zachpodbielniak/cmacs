@@ -52,7 +52,7 @@ live edits to the YAML take effect without a full restart.
 @end itemize
 
 The YAML schema is owned by libreclaw, not cmacs.  See
-@file{deps/libreclaw/docs/configuration.md} for the canonical
+@file{deps/clawtilla/deps/libreclaw/docs/configuration.md} for the canonical
 reference.
 
 @subsection First-run auto-generated config

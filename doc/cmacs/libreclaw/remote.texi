@@ -58,7 +58,7 @@ the server-side bridge is built as a library target; full YAML
 auto-wiring lands in a follow-up.  Until then, a small embedding
 wrapper can use @code{lc_bridge_server_new} /
 @code{lc_bridge_server_start} directly.  See
-@file{deps/libreclaw/docs/bridge.md} for a worked example.
+@file{deps/clawtilla/deps/libreclaw/docs/bridge.md} for a worked example.
 
 The key must have @code{bridge} in its scope set:
 
@@ -300,7 +300,7 @@ Flow:
 /api/v1/bridge/tools/call (REST) -> bridge -> cmacs}
 (and the response retraces the path).
 
-Setup is documented in @file{deps/libreclaw/docs/bridge.md}
+Setup is documented in @file{deps/clawtilla/deps/libreclaw/docs/bridge.md}
 (``libreclaw-bridge-mcp shim'').  Briefly: install the binary on the
 server, issue an API key with scopes @code{bridge.read} +
 @code{bridge.invoke}, add an entry to claude-code's
@@ -371,5 +371,5 @@ The matching tool isn't registered on cmacs's MCP server; check
 @end table
 
 See also @ref{LibreClaw API Reference} for the full DEFUN reference
-and @file{deps/libreclaw/docs/bridge.md} for the wire-level codec
+and @file{deps/clawtilla/deps/libreclaw/docs/bridge.md} for the wire-level codec
 specification.

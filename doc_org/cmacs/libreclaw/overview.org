@@ -35,7 +35,7 @@ webhook receivers, and dispatches to Claude or OpenAI via ai-glib.
   Local ──┘    │  └── cmacs/libreclaw/cmacs-libreclaw.c ──┐ │
                │                                          ▼ │
                │   ┌────────────────────────────────────────┐
-               │   │ libreclaw 0.18.0 (deps/libreclaw)      │
+               │   │ libreclaw 0.18.0 (deps/clawtilla/deps/libreclaw)      │
                │   │   LcApp ─ LcChannelManager ─ LcChannels│
                │   │          ─ LcSessionManager             │
                │   │          ─ LcPodomation ──┐             │

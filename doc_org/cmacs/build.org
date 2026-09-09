@@ -249,7 +249,7 @@ rest (see the Ubuntu 24.04 section below).
 | Bacon    | =bacon-1.0= pkg-config         | =deps/bacon/=              |
 | Gowl     | =gowl= pkg-config              | =deps/gowl/= + wlroots     |
 | Podomation | =podomation-1.0= pkg-config  | =deps/podomation/=         |
-| LibreClaw | =libreclaw >= 0.18.0= pkg-config | =deps/libreclaw/=        |
+| LibreClaw | =libreclaw >= 0.18.0= pkg-config | =deps/clawtilla/deps/libreclaw/= (clawtilla's) |
 | Org-Ex   | (built from =cmacs/org-ex/lib/=) | (always bundled)         |
 | MCP      | =mcp-glib-1.0= pkg-config      | =deps/mcp-glib/=           |
 | API      | (built from =cmacs/api/=)      | (always bundled)           |

@@ -5,7 +5,7 @@
 
 The hatch wizard scaffolds a new libreclaw workspace inside a
 REPL-style org buffer.  It drives libreclaw 0.18.0's =lc_hatch_*=
-library API (in =deps/libreclaw/src/hatch/=) through a back-and-
+library API (in =deps/clawtilla/deps/libreclaw/src/hatch/=) through a back-and-
 forth conversation with the user — the wizard asks a question,
 you type your answer below the =** you= heading, press =C-c C-c=,
 and the next question appears underneath.
