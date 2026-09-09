@@ -401,23 +401,47 @@ WORKDIR /build/cmacs
 # AiGlib-1.0.typelib lands in the system GI search path for downstream
 # consumers (python-gi, gjs, the bacon `cmacsgi' builtin, etc.).
 #
+# Paths, not bare names: libreclaw is clawtilla's submodule now
+# (deps/clawtilla/deps/libreclaw), and the old `[ -d ]' guard would have
+# skipped it in silence -- an image quietly missing libreclaw.  A missing
+# dep is a hard failure here instead.
+#
+# CANON_DIRS is the same one-copy rule src/Makefile.in applies: every dep
+# that bundles crispy / yaml-glib / mcp-glib is pointed at the canonical
+# checkout.  Without it these sub-makes reach for bundled copies that
+# admin/cmacs-submodules.sh deliberately does not clone, and the build
+# fails on a directory that is empty on purpose.  Both spellings are
+# passed because the deps disagree (YAMLGLIB_DIR in gowl and bacon,
+# YAML_GLIB_DIR in podomation, libreclaw and ai-glib); a make variable
+# a given dep does not use is simply ignored.
+#
 # The find/rm below is a hermetic-build safety net: even though
 # .containerignore excludes build artifacts, any *.elc/*.eln/native-lisp
 # that leaks in from the COPYed working tree would otherwise be reused by
 # the incremental `make' below (mtime trap) and shipped STALE — notably a
 # tramp-compat.elc byte-compiled under an older Emacs version.  Deleting
 # them forces a fresh compile under this image's Emacs.
-RUN rm -f .git \
+RUN CANON_DIRS="CRISPY_DIR=/build/cmacs/deps/crispy \
+      YAMLGLIB_DIR=/build/cmacs/deps/yaml-glib \
+      YAML_GLIB_DIR=/build/cmacs/deps/yaml-glib \
+      MCP_GLIB_DIR=/build/cmacs/deps/mcp-glib \
+      BACON_DIR=/build/cmacs/deps/bacon \
+      AI_GLIB_DIR=/build/cmacs/deps/ai-glib" \
+    && rm -f .git \
     && find . \( -name '*.elc' -o -name '*.eln' \) -delete \
     && rm -rf native-lisp src/*.pdmp deps/whisper.cpp/build \
-    && for dep in mcp-glib crispy bacon gowl podomation ai-glib libreclaw; do \
-           if [ -d "deps/${dep}" ]; then \
+    && for dep in deps/mcp-glib deps/crispy deps/bacon deps/gowl \
+                  deps/podomation deps/ai-glib \
+                  deps/clawtilla/deps/libreclaw; do \
+           if [ -d "${dep}" ]; then \
                gir=""; \
-               if [ "${dep}" = "ai-glib" ]; then gir="GIR=1"; fi; \
-               make -C "deps/${dep}" clean all PREFIX=/usr ${gir} \
+               case "${dep}" in */ai-glib) gir="GIR=1";; esac; \
+               make -C "${dep}" clean all PREFIX=/usr ${gir} ${CANON_DIRS} \
                    || { echo "FAILED: build ${dep}" >&2; exit 1; }; \
-               make -C "deps/${dep}" install PREFIX=/usr ${gir} \
+               make -C "${dep}" install PREFIX=/usr ${gir} ${CANON_DIRS} \
                    || { echo "FAILED: install ${dep}" >&2; exit 1; }; \
+           else \
+               echo "FAILED: ${dep} is not checked out" >&2; exit 1; \
            fi; \
        done \
     && if ! command -v piper >/dev/null 2>&1; then \
