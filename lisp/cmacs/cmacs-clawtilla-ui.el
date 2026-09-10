@@ -260,13 +260,26 @@ Defined INTO each mode's own map rather than inherited from a shared
 parent, and that is not a style choice.  `cmacs-evil-setup-mode-map'
 promotes a map's OWN bindings and deliberately skips inherited ones --
 promoting what a `special-mode' keymap inherits would put SPC, the Doom
-leader, above Evil.  So a shared parent means these five keys are never
-promoted, and under Doom `g', `n' and TAB stay Evil's while the rest of
-the mode works: a buffer half of whose keys respond."
+leader, above Evil.  So a shared parent means these keys are never
+promoted, and under Doom TAB stays Evil's while the rest of the mode
+works: a buffer half of whose keys respond.
+
+The section motions are `C-j'/`C-k' and `gj'/`gk', and refresh is `gr',
+because a clawtilla buffer is promoted to Evil *intercept* precedence:
+whatever it binds, Evil cannot get back.  A pure motion key must
+therefore never appear here.  `n' and `p' would have taken
+`evil-search-next' and `evil-paste-after', and a bare `g' would have
+taken the whole `g' prefix -- `gg' included -- which is the same defect
+that made `k' report \\='No agent at point\\=' instead of moving the cursor.
+These are the keys `evil-collection-magit' moves Magit\\='s own `n'/`p' to,
+so the muscle memory is one a Doom user already has.  Binding part of a
+prefix is safe: `gj' shadows only `gj', and `gg' still falls through."
   (define-key map (kbd "TAB") #'cmacs-clawtilla-toggle-fold)
-  (define-key map (kbd "n") #'cmacs-clawtilla-next-section)
-  (define-key map (kbd "p") #'cmacs-clawtilla-previous-section)
-  (define-key map (kbd "g") #'cmacs-clawtilla-refresh)
+  (define-key map (kbd "C-j") #'cmacs-clawtilla-next-section)
+  (define-key map (kbd "C-k") #'cmacs-clawtilla-previous-section)
+  (define-key map (kbd "g j") #'cmacs-clawtilla-next-section)
+  (define-key map (kbd "g k") #'cmacs-clawtilla-previous-section)
+  (define-key map (kbd "g r") #'cmacs-clawtilla-refresh)
   (define-key map (kbd "q") #'quit-window)
   map)
 

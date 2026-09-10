@@ -441,13 +441,13 @@ is not shared control, it is a corrupted command line."
   "What this computer can do."
   ["View"
    [("TAB" "next view" cmacs-clawtilla-computer-next-view)
-    ("g" "refresh" cmacs-clawtilla-refresh)]]
+    ("gr" "refresh" cmacs-clawtilla-refresh)]]
   ["Shell and screen"
-   [("e" "run a command" cmacs-clawtilla-computer-exec)
-    ("f" "grab a frame" cmacs-clawtilla-computer-frame)
-    ("F" "the screen" cmacs-clawtilla-computer-screen)]
-   [("t" "take the screen" cmacs-clawtilla-computer-takeover)
-    ("T" "hand it back" cmacs-clawtilla-computer-release)
+   [("!" "run a command" cmacs-clawtilla-computer-exec)
+    ("v" "grab a frame" cmacs-clawtilla-computer-frame)
+    ("V" "the screen" cmacs-clawtilla-computer-screen)]
+   [("u" "take the screen" cmacs-clawtilla-computer-takeover)
+    ("U" "hand it back" cmacs-clawtilla-computer-release)
     ("i" "type into it" cmacs-clawtilla-computer-input)]
    [("o" "watch it" cmacs-clawtilla-computer-observe)
     ("O" "stop watching" cmacs-clawtilla-computer-observe-stop)
@@ -466,14 +466,14 @@ is not shared control, it is a corrupted command line."
   (let ((map (make-sparse-keymap)))
     (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-computer-next-view)
-    (define-key map (kbd "e") #'cmacs-clawtilla-computer-exec)
-    (define-key map (kbd "f") #'cmacs-clawtilla-computer-frame)
-    (define-key map (kbd "t") #'cmacs-clawtilla-computer-takeover)
-    (define-key map (kbd "T") #'cmacs-clawtilla-computer-release)
+    (define-key map (kbd "!") #'cmacs-clawtilla-computer-exec)
+    (define-key map (kbd "v") #'cmacs-clawtilla-computer-frame)
+    (define-key map (kbd "u") #'cmacs-clawtilla-computer-takeover)
+    (define-key map (kbd "U") #'cmacs-clawtilla-computer-release)
     (define-key map (kbd "m") #'cmacs-clawtilla-computer-mount-add)
     (define-key map (kbd "d") #'cmacs-clawtilla-computer-mount-remove)
     (define-key map (kbd "c") #'cmacs-clawtilla-computer-copy)
-    (define-key map (kbd "F") #'cmacs-clawtilla-computer-screen)
+    (define-key map (kbd "V") #'cmacs-clawtilla-computer-screen)
     (define-key map (kbd "i") #'cmacs-clawtilla-computer-input)
     (define-key map (kbd "o") #'cmacs-clawtilla-computer-observe)
     (define-key map (kbd "O") #'cmacs-clawtilla-computer-observe-stop)

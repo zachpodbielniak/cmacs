@@ -952,7 +952,7 @@ doing."
     ("c" "compose" cmacs-clawtilla-chat-compose)
     ("a" "attach a file" cmacs-clawtilla-chat-attach)]
    [("r" "send the last again" cmacs-clawtilla-chat-retry)
-    ("w" "copy the last" cmacs-clawtilla-chat-copy-last)
+    ("C" "copy the last" cmacs-clawtilla-chat-copy-last)
     ("x" "export" cmacs-clawtilla-chat-export)]]
   ["Agent"
    [("s" "start" (lambda () (interactive)
@@ -982,7 +982,7 @@ doing."
     (define-key map (kbd "c") #'cmacs-clawtilla-chat-compose)
     (define-key map (kbd "a") #'cmacs-clawtilla-chat-attach)
     (define-key map (kbd "r") #'cmacs-clawtilla-chat-retry)
-    (define-key map (kbd "w") #'cmacs-clawtilla-chat-copy-last)
+    (define-key map (kbd "C") #'cmacs-clawtilla-chat-copy-last)
     (define-key map (kbd "x") #'cmacs-clawtilla-chat-export)
     (define-key map (kbd "?") #'cmacs-clawtilla-chat-menu)
     map)

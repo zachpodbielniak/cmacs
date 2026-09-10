@@ -416,19 +416,86 @@ This is what makes them work under Doom, and it is not obvious.
 `cmacs-evil-setup-mode-map' promotes a map's OWN bindings and skips
 inherited ones on purpose -- promoting what a `special-mode' keymap
 inherits would put SPC, the Doom leader, above Evil.  So a shared
-parent map means those keys are never promoted: under Evil `g', `n' and
-TAB stay Evil's while the rest of the mode responds, which is a buffer
-half of whose keys work and no error anywhere."
+parent map means those keys are never promoted: under Evil TAB and the
+section motions stay Evil's while the rest of the mode responds, which
+is a buffer half of whose keys work and no error anywhere.
+
+`g j' rather than a bare `g': see
+`cmacs-clawtilla-tests--motion-keys' for why the prefix stays Evil's."
   (skip-unless (cmacs-clawtilla-tests--available-p))
   (dolist (entry cmacs-clawtilla-tests--modes)
     (require (cdr entry) nil t)
     (let ((map (symbol-value (intern (format "%s-map" (car entry))))))
-      (dolist (key '("TAB" "n" "p" "g" "q"))
+      (dolist (key '("TAB" "C-j" "C-k" "g j" "g k" "g r" "q"))
         ;; Looked up with the parent detached: inheriting it is exactly
         ;; the failure being ruled out, so a plain lookup would pass.
         (let ((own (copy-keymap map)))
           (set-keymap-parent own nil)
           (should (lookup-key own (kbd key))))))))
+
+(defconst cmacs-clawtilla-tests--motion-keys
+  '("j" "k" "h" "l" "w" "b" "e" "W" "B" "E"
+    "0" "$" "^" "G" "H" "M" "L" "{" "}" "(" ")" "%" "/"
+    "n" "N" "f" "F" "t" "T" ";" "g"
+    "C-u" "C-d" "C-f" "C-b" "C-e" "C-y" "C-o")
+  "The keys an Evil user navigates with.
+
+Not a list of every key Evil binds.  A clawtilla buffer is read-only,
+so taking `d', `c', `x' or `i' costs nothing -- there is nothing to
+delete, change or insert.  `evil-collection' says so itself: its
+read-only setup remaps `i', `a', `o', `p', `d', `c', `x' and friends
+to `ignore' in exactly these buffers.  Taking a MOTION costs the
+buffer: `k' is how you move up, and a `k' that interrupts a turn
+instead means somebody pressing it to scroll gets an error, or worse,
+stops an agent.
+
+`g' is in the list as a whole prefix.  A bare `g' takes `gg', `ge' and
+every other `g' motion at once, so the rule is that `g' may be a prefix
+keymap but never a command -- `gj'/`gk'/`gr' are fine and are what
+`evil-collection-magit' uses.  `n' is here because it is
+`evil-search-next': `evil-collection-magit' moves Magit's own `n'/`p'
+off it for this reason, so a Doom user already expects section motion
+on `C-j'/`C-k'.")
+
+(defconst cmacs-clawtilla-tests--doom-leader-keys
+  '("SPC" "," "M-SPC")
+  "Doom's leader, localleader and alternate leader.
+
+Taking one of these in an intercept map does not merely shadow a
+motion, it removes the user's entire command tree inside the buffer.")
+
+(ert-deftest cmacs-clawtilla-no-mode-steals-a-motion-key ()
+  "No clawtilla buffer binds a key an Evil user needs to navigate.
+
+These maps are Evil INTERCEPT maps, so whatever they bind wins
+outright -- which is what makes them work under Doom and also what
+makes this rule necessary.  Stealing an editing key in a read-only
+buffer is free; stealing `k' is not.
+
+Checked as a rule rather than remembered, because the list of commands
+grows and each new one picks a letter."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let ((offenders nil))
+    (dolist (entry cmacs-clawtilla-tests--modes)
+      (require (cdr entry) nil t)
+      (let* ((name (intern (format "%s-map" (car entry))))
+             (map (and (boundp name) (symbol-value name))))
+        (when map
+          ;; The parent is detached: an inherited binding is not
+          ;; promoted into the intercept map, so it does not shadow
+          ;; Evil and is not this rule's business.
+          (let ((own (copy-keymap map)))
+            (set-keymap-parent own nil)
+            (dolist (key (append cmacs-clawtilla-tests--motion-keys
+                                 cmacs-clawtilla-tests--doom-leader-keys))
+              ;; `commandp', not non-nil: `g' is deliberately a prefix
+              ;; keymap holding `gj'/`gk'/`gr', and a prefix shadows
+              ;; only the sequences it actually completes.
+              (let ((def (lookup-key own (kbd key))))
+                (when (commandp def)
+                  (push (format "%s binds %s to %s" (car entry) key def)
+                        offenders))))))))
+    (should (null offenders))))
 
 (ert-deftest cmacs-clawtilla-every-mode-registers-with-evil ()
   "Every clawtilla mode calls `cmacs-clawtilla-setup-evil'.

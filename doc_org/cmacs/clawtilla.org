@@ -77,21 +77,34 @@ address*, and is never the default.
 | =*clawtilla alerts*= | what is worth interrupting you for |
 | =*clawtilla teach*= | recorded demonstrations |
 
-Every one of them takes =?= for a transient of what it can do, =g= to
-refresh, =TAB= to fold a section or move to the next page, and =n= / =p=
-to move between sections.
+Every one of them takes =?= for a transient of what it can do, =gr= to
+refresh, =TAB= to fold a section or move to the next page, and =C-j= /
+=C-k= (or =gj= / =gk=) to move between sections.
 
 *Under Doom and Evil the keys are yours.*  Every clawtilla buffer starts
 in Evil's =motion= state and its keymap is installed as an Evil
 /intercept/ map, so the mode's keys answer before Evil's --- without
-that, =RET= is =evil-ret=, =g= opens Evil's prefix, =n= searches, =TAB=
-jumps the jump list, and =?= is =evil-search-backward=, which means even
-the transient listing the keys cannot be reached.
+that, =RET= is =evil-ret= and =?= is =evil-search-backward=, which means
+even the transient listing the keys cannot be reached.
 
 Only keys a buffer binds itself are promoted.  =SPC= is not one of them,
 so the Doom leader still works --- verified against Doom's actual
 mechanism, an emulation map, rather than assumed.  evil-snipe is turned
 off in these buffers, which is what lets =s= and =S= be start and stop.
+
+*Intercept precedence cuts both ways, so a motion key is never taken.*
+Whatever these maps bind, Evil cannot get it back: =k= bound to
+"interrupt" is not a key that also scrolls, it is a key that reports /No
+agent at point/ when you meant to move up.  So =h j k l w b e= and the
+rest stay Evil's, =n= stays =evil-search-next=, and =g= is left a prefix
+--- this client adds =gj=, =gk= and =gr= to it and =gg= still goes to the
+top.  Section motion on =C-j= / =C-k= is not an invention either: it is
+where =evil-collection= moves Magit's own =n= / =p=, for this reason.
+Editing keys are a different matter and are taken freely, because a
+read-only buffer has nothing to insert or delete --- =evil-collection=
+says as much by remapping =i=, =a=, =o=, =p= and =d= to =ignore= in
+exactly these buffers.  The rule is enforced by a test rather than
+remembered, since every new command picks a letter.
 
 *They take over the window rather than splitting it.*  These buffers are
 the thing you are doing and not a reference you glance at: a transcript
@@ -113,7 +126,7 @@ counting the same thing is three chances to disagree about what "active"
 means.
 
 =RET= opens an agent's conversation, =o= its page, =s= / =S= / =R= start,
-stop and restart it, =k= interrupts a running turn, =!= resets the
+stop and restart it, =i= interrupts a running turn, =!= resets the
 session and =D= removes the agent.  =M-p= and =M-n= move it in the list.
 
 *A reset is not a restart.*  A restart brings the same conversation back;
@@ -190,11 +203,12 @@ Shell, Screen, Mounts and Exchange --- four, in that order, because
 =clawt_computer_view_count()= says so and not because this client lists
 them.
 
-=e= runs a command.  =F= fetches the screen, =o= watches it and =O=
-stops; watching is stopped explicitly rather than when the buffer goes
-away, because the daemon is producing frames for somebody.
+=!= runs a command.  =v= grabs a frame and =V= fetches the whole screen,
+=o= watches it and =O= stops; watching is stopped explicitly rather than
+when the buffer goes away, because the daemon is producing frames for
+somebody.
 
-=t= takes the screen over and =T= hands it back.  *Typing into a screen
+=u= takes the screen over and =U= hands it back.  *Typing into a screen
 the agent is still driving is not shared control*, it is a corrupted
 command line, so =i= refuses unless you have taken it over.
 
@@ -221,8 +235,9 @@ its credential in the daemon and hands only the tools to the agents;
 Which events are worth interrupting you for is
 =clawt_alert_tier_for_event= --- four tiers, one of which is "skip", so
 a turn's constant step events do not become alerts.  =a= shows every
-tier rather than the filtered set; =H= loads the daemon's own event log,
-which goes back further than this client has been connected.
+tier rather than the filtered set, =x= clears what is shown, and =o=
+loads the daemon's own event log, which goes back further than this
+client has been connected.
 
 An alert that lands while the buffer is in front of you *arrives already
 read*.  Marking it unread would leave a count that reading cannot clear.

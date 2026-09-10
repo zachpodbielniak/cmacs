@@ -699,10 +699,10 @@ between trying again and not."
   "What settings can do."
   ["Panel"
    [("TAB" "next panel" cmacs-clawtilla-settings-next-panel)
-    ("g" "refresh" cmacs-clawtilla-refresh)]]
+    ("gr" "refresh" cmacs-clawtilla-refresh)]]
   ["Change"
    [("RET" "change setting" cmacs-clawtilla-settings-set)
-    ("h" "check health" cmacs-clawtilla-settings-health)
+    ("i" "check health" cmacs-clawtilla-settings-health)
     ("o" "operator profile" cmacs-clawtilla-settings-operator)]]
   ["Integrations"
    [("A" "add" cmacs-clawtilla-settings-integration-add)
@@ -725,7 +725,7 @@ between trying again and not."
    [("d" "share a folder" cmacs-clawtilla-settings-folder-add)
     ("X" "stop sharing" cmacs-clawtilla-settings-folder-remove)]]
   ["Cloud images"
-   [("i" "catalogue" cmacs-clawtilla-settings-image-catalog)
+   [("I" "catalogue" cmacs-clawtilla-settings-image-catalog)
     ("l" "downloaded" cmacs-clawtilla-settings-image-list)]
    [("G" "download" cmacs-clawtilla-settings-image-download)
     ("C" "cancel" cmacs-clawtilla-settings-image-cancel)
@@ -737,7 +737,7 @@ between trying again and not."
     (define-key map (kbd "TAB") #'cmacs-clawtilla-settings-next-panel)
     (define-key map (kbd "RET") #'cmacs-clawtilla-settings-set)
     (define-key map (kbd "c") #'cmacs-clawtilla-settings-connect-account)
-    (define-key map (kbd "h") #'cmacs-clawtilla-settings-health)
+    (define-key map (kbd "i") #'cmacs-clawtilla-settings-health)
     (define-key map (kbd "D") #'cmacs-clawtilla-settings-revoke)
     (define-key map (kbd "?") #'cmacs-clawtilla-settings-menu)
     map)

@@ -11018,16 +11018,32 @@ default.
 The fleet, one conversation per agent, an agent's own page, its
 computer, then Work, Automation, Library, Settings, Alerts and
 recordings.  Every buffer takes @kbd{?} for a transient of what it can
-do, @kbd{g} to refresh, @kbd{TAB} to fold or change page, and @kbd{n}
-and @kbd{p} to move between sections.
+do, @kbd{g r} to refresh, @kbd{TAB} to fold or change page, and
+@kbd{C-j} and @kbd{C-k} (or @kbd{g j} and @kbd{g k}) to move between
+sections.
 
 Under Doom and Evil the keys are yours.  Every clawtilla buffer starts
 in Evil's @code{motion} state and its keymap is installed as an Evil
 @emph{intercept} map, so the mode's keys answer before Evil's --- without
-that @kbd{RET} is @code{evil-ret}, @kbd{g} opens Evil's prefix, @kbd{n}
-searches, and @kbd{?} is @code{evil-search-backward}, so even the
-transient listing the keys cannot be reached.  Only keys a buffer binds
-itself are promoted, so @kbd{SPC} and the Doom leader are untouched.
+that @kbd{RET} is @code{evil-ret} and @kbd{?} is
+@code{evil-search-backward}, so even the transient listing the keys
+cannot be reached.  Only keys a buffer binds itself are promoted, so
+@kbd{SPC} and the Doom leader are untouched.
+
+Intercept precedence cuts both ways, so a motion key is never taken.
+Whatever these maps bind, Evil cannot get back: @kbd{k} bound to
+``interrupt'' is not a key that also scrolls, it is a key that reports
+@samp{No agent at point} when you meant to move up.  So @kbd{h}, @kbd{j},
+@kbd{k}, @kbd{l} and the rest stay Evil's, @kbd{n} stays
+@code{evil-search-next}, and @kbd{g} is left a prefix --- this client
+adds @kbd{g j}, @kbd{g k} and @kbd{g r} to it, and @kbd{g g} still goes
+to the top.  Section motion on @kbd{C-j} and @kbd{C-k} is where
+@code{evil-collection} moves Magit's own @kbd{n} and @kbd{p}, for the
+same reason.  Editing keys are taken freely, because a read-only buffer
+has nothing to insert or delete --- @code{evil-collection} says as much
+by remapping @kbd{i}, @kbd{a}, @kbd{o}, @kbd{p} and @kbd{d} to
+@code{ignore} in exactly these buffers.  A test enforces the rule, since
+every new command picks a letter.
 
 They take over the window rather than splitting it.  These buffers are
 the thing you are doing and not a reference you glance at: a transcript

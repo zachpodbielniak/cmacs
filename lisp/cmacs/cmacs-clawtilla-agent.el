@@ -571,16 +571,16 @@ take a URL rather than a path is the library's answer too."
   ["Agent"
    [("RET" "change field" cmacs-clawtilla-agent-set)
     ("TAB" "next page" cmacs-clawtilla-agent-next-page)
-    ("M" "pick a model" cmacs-clawtilla-agent-models)]
+    ("m" "pick a model" cmacs-clawtilla-agent-models)]
    [("v" "avatar" cmacs-clawtilla-agent-avatar)
     ("V" "set avatar" cmacs-clawtilla-agent-avatar-set)
     ("C" "clear avatar" cmacs-clawtilla-agent-avatar-clear)]
-   [("g" "refresh" cmacs-clawtilla-refresh)
+   [("gr" "refresh" cmacs-clawtilla-refresh)
     ("q" "quit" quit-window)]]
   ["Mailbox"
-   [("k" "acknowledge" cmacs-clawtilla-agent-ack)
+   [("a" "acknowledge" cmacs-clawtilla-agent-ack)
     ("u" "requeue" cmacs-clawtilla-agent-requeue)]
-   [("Z" "dead letters" cmacs-clawtilla-agent-dead-letters)
+   [("d" "dead letters" cmacs-clawtilla-agent-dead-letters)
     ("P" "purge" cmacs-clawtilla-agent-purge)]]
   ["Fleet"
    [("D" "design an agent" cmacs-clawtilla-agent-design)
@@ -594,11 +594,11 @@ take a URL rather than a path is the library's answer too."
     (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-agent-set)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-agent-next-page)
-    (define-key map (kbd "k") #'cmacs-clawtilla-agent-ack)
+    (define-key map (kbd "a") #'cmacs-clawtilla-agent-ack)
     (define-key map (kbd "u") #'cmacs-clawtilla-agent-requeue)
-    (define-key map (kbd "Z") #'cmacs-clawtilla-agent-dead-letters)
+    (define-key map (kbd "d") #'cmacs-clawtilla-agent-dead-letters)
     (define-key map (kbd "P") #'cmacs-clawtilla-agent-purge)
-    (define-key map (kbd "M") #'cmacs-clawtilla-agent-models)
+    (define-key map (kbd "m") #'cmacs-clawtilla-agent-models)
     (define-key map (kbd "v") #'cmacs-clawtilla-agent-avatar)
     (define-key map (kbd "?") #'cmacs-clawtilla-agent-menu)
     map)

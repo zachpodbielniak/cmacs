@@ -288,8 +288,8 @@ the daemon's and goes back further, which is the difference between
    [("RET" "open what it is about" cmacs-clawtilla-alerts-visit)
     ("a" "show every tier" cmacs-clawtilla-alerts-toggle-filter)]
    [("m" "mark all read" cmacs-clawtilla-alerts-mark-all-read)
-    ("k" "forget them" cmacs-clawtilla-alerts-clear)
-    ("H" "load the daemon's log" cmacs-clawtilla-alerts-history)]])
+    ("x" "forget them" cmacs-clawtilla-alerts-clear)
+    ("o" "load the daemon's log" cmacs-clawtilla-alerts-history)]])
 
 (defvar cmacs-clawtilla-alerts-mode-map
   (let ((map (make-sparse-keymap)))
@@ -297,8 +297,8 @@ the daemon's and goes back further, which is the difference between
     (define-key map (kbd "RET") #'cmacs-clawtilla-alerts-visit)
     (define-key map (kbd "a") #'cmacs-clawtilla-alerts-toggle-filter)
     (define-key map (kbd "m") #'cmacs-clawtilla-alerts-mark-all-read)
-    (define-key map (kbd "k") #'cmacs-clawtilla-alerts-clear)
-    (define-key map (kbd "H") #'cmacs-clawtilla-alerts-history)
+    (define-key map (kbd "x") #'cmacs-clawtilla-alerts-clear)
+    (define-key map (kbd "o") #'cmacs-clawtilla-alerts-history)
     (define-key map (kbd "?") #'cmacs-clawtilla-alerts-menu)
     map)
   "Keymap for `cmacs-clawtilla-alerts-mode'.")

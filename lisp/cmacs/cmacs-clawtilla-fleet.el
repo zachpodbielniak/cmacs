@@ -394,17 +394,17 @@ interleave in a way nobody asked for."
    [("s" "start" cmacs-clawtilla-fleet-start)
     ("S" "stop" cmacs-clawtilla-fleet-stop)
     ("R" "restart" cmacs-clawtilla-fleet-restart)]
-   [("k" "interrupt turn" cmacs-clawtilla-fleet-interrupt)
+   [("i" "interrupt turn" cmacs-clawtilla-fleet-interrupt)
     ("!" "reset session" cmacs-clawtilla-fleet-reset)
     ("D" "remove" cmacs-clawtilla-fleet-remove)]]
   ["Fleet"
    [("c" "create agent" cmacs-clawtilla-agent-create)
-    ("i" "import agent" cmacs-clawtilla-agent-import)]
+    ("I" "import agent" cmacs-clawtilla-agent-import)]
    [("h" "hold fleet" cmacs-clawtilla-fleet-hold)
     ("H" "resume fleet" cmacs-clawtilla-fleet-resume)]
    [("M-p" "move up" cmacs-clawtilla-fleet-move-up)
     ("M-n" "move down" cmacs-clawtilla-fleet-move-down)]
-   [("g" "refresh" cmacs-clawtilla-refresh)
+   [("gr" "refresh" cmacs-clawtilla-refresh)
     ("q" "quit" quit-window)]])
 
 (defun cmacs-clawtilla-fleet-hold ()
@@ -432,7 +432,7 @@ interleave in a way nobody asked for."
     (define-key map (kbd "s") #'cmacs-clawtilla-fleet-start)
     (define-key map (kbd "S") #'cmacs-clawtilla-fleet-stop)
     (define-key map (kbd "R") #'cmacs-clawtilla-fleet-restart)
-    (define-key map (kbd "k") #'cmacs-clawtilla-fleet-interrupt)
+    (define-key map (kbd "i") #'cmacs-clawtilla-fleet-interrupt)
     (define-key map (kbd "!") #'cmacs-clawtilla-fleet-reset)
     (define-key map (kbd "D") #'cmacs-clawtilla-fleet-remove)
     (define-key map (kbd "M-p") #'cmacs-clawtilla-fleet-move-up)

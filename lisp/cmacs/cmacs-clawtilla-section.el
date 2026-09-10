@@ -588,7 +588,7 @@ command whose name comes from a skill exists in no client's source."
   "What this page can do."
   ["Page"
    [("TAB" "next page" cmacs-clawtilla-section-next-page)
-    ("g" "refresh" cmacs-clawtilla-refresh)]]
+    ("gr" "refresh" cmacs-clawtilla-refresh)]]
   ["Row"
    [("RET" "show in full" cmacs-clawtilla-section-show)
     ("r" "run / enable" cmacs-clawtilla-section-run)]
