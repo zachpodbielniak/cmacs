@@ -56,6 +56,7 @@
 (declare-function cmacs-clawtilla--time-label "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--step-summary "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--steps "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--step-precedes "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--unread-should-count
                   "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla-fleet "cmacs-clawtilla-fleet")
@@ -194,17 +195,45 @@ notice."
       (delete-region cmacs-clawtilla-chat--steps-start (point-max)))
     (setq cmacs-clawtilla-chat--steps-start nil)))
 
+(defun cmacs-clawtilla-chat--newest-ts ()
+  "Return the timestamp of the newest message drawn, or 0."
+  (let ((newest 0))
+    (save-excursion
+      (goto-char (point-max))
+      (let ((limit 0))
+        (while (and (> (point) (point-min)) (< limit 200))
+          (let ((section (cmacs-clawtilla-section-at-point)))
+            (when (and section (eq (plist-get section :type) 'message))
+              (setq newest (max newest
+                                (or (alist-get 'ts (plist-get section :value))
+                                    0)))))
+          (forward-line -1)
+          (setq limit (1+ limit)))))
+    newest))
+
 (defun cmacs-clawtilla-chat--draw-activity ()
   "Draw what the agent is doing right now, under the transcript."
   (when cmacs-clawtilla-chat--steps
     (setq cmacs-clawtilla-chat--steps-start (point-max))
     (goto-char (point-max))
-    (let* ((json (json-serialize (vconcat cmacs-clawtilla-chat--steps)))
-           (summary (cmacs-clawtilla--step-summary
-                     json cmacs-clawtilla-chat--agent)))
-      (insert "\n" (cmacs-clawtilla-dim
-                    (concat "· " (or summary "working")))
-              "\n"))))
+    (let* ((newest (cmacs-clawtilla-chat--newest-ts))
+           ;; Steps that predate the last message have already been
+           ;; overtaken by it: they belong in the history above rather
+           ;; than in the live line below, which is how a finished
+           ;; turn's steps stop piling up under the transcript.
+           (live (seq-remove
+                  (lambda (step)
+                    (and (> newest 0)
+                         (cmacs-clawtilla--step-precedes
+                          (json-serialize step) newest
+                          cmacs-clawtilla-chat--agent)))
+                  cmacs-clawtilla-chat--steps))
+           (json (json-serialize (vconcat live)))
+           (summary (and live
+                         (cmacs-clawtilla--step-summary
+                          json cmacs-clawtilla-chat--agent))))
+      (when summary
+        (insert "\n" (cmacs-clawtilla-dim (concat "· " summary)) "\n")))))
 
 
 ;;;; Loading.
@@ -587,6 +616,76 @@ losing a conversation."
     (display-buffer (current-buffer))))
 
 
+;;;; Attachments already sent, and rooms.
+
+(defun cmacs-clawtilla-chat-attachment-get ()
+  "Fetch the attachment at point and open it."
+  (interactive)
+  (let* ((message (cmacs-clawtilla-value-at-point 'message))
+         (id (and message (or (alist-get 'attachment message)
+                              (alist-get 'attachment_id message)))))
+    (unless id (user-error "No attachment on the message at point"))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "attachment.get" (list (cons 'id id))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let* ((name (or (cmacs-clawtilla-get data 'name) id))
+                (encoded (cmacs-clawtilla-get data 'data))
+                (file (expand-file-name name temporary-file-directory)))
+           (when encoded
+             (let ((coding-system-for-write 'binary))
+               (with-temp-file file
+                 (set-buffer-multibyte nil)
+                 (insert (base64-decode-string encoded))))
+             (find-file file))))))))
+
+(defun cmacs-clawtilla-chat-attachment-remove ()
+  "Remove the attachment at point."
+  (interactive)
+  (let* ((message (cmacs-clawtilla-value-at-point 'message))
+         (id (and message (or (alist-get 'attachment message)
+                              (alist-get 'attachment_id message)))))
+    (unless id (user-error "No attachment on the message at point"))
+    (when (yes-or-no-p "Remove that attachment? ")
+      (cmacs-clawtilla-request
+       (cmacs-clawtilla-current) "attachment.remove" (list (cons 'id id))
+       (lambda (_d e) (message "clawtilla: %s" (or e "removed")))))))
+
+(defun cmacs-clawtilla-chat-room-create (room name members)
+  "Make a room called NAME with id ROOM holding MEMBERS.
+
+Creating it writes the config entry AND makes the room, because writing
+the config is not creating it: a room that lived only in the running
+daemon was one somebody made, used, restarted, and could not find --
+with its transcript still on disk and nothing that would reopen it."
+  (interactive (list (read-string "Room id: ")
+                     (read-string "Name: ")
+                     (read-string "Members (comma separated): ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "room.create"
+   (list (cons 'room room) (cons 'name name) (cons 'members members))
+   (lambda (_d e) (message "clawtilla: %s" (or e (format "made %s" room))))))
+
+(defun cmacs-clawtilla-chat-room-set ()
+  "Change this room.
+
+A `members' list REPLACES the membership rather than adding to it, so
+it is how somebody is taken out of a room as well as put in -- and
+membership is permission, so it is worth knowing which one you are
+doing."
+  (interactive)
+  (let* ((field (completing-read "Change: "
+                                 '("name" "members" "require_mention") nil t))
+         (value (read-string
+                 (if (equal field "members")
+                     "Members (this REPLACES the list): "
+                   (format "%s: " field)))))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "room.set"
+     (list (cons 'room cmacs-clawtilla-chat--room) (cons field value))
+     (lambda (_d e) (message "clawtilla: %s" (or e "changed"))))))
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-chat-menu ()
@@ -610,7 +709,12 @@ losing a conversation."
    [("f" "files" cmacs-clawtilla-chat-files)
     ("m" "memory" cmacs-clawtilla-chat-memory)]
    [("t" "tasks" cmacs-clawtilla-chat-tasks)
-    ("F" "flow" cmacs-clawtilla-chat-flow)]])
+    ("F" "flow" cmacs-clawtilla-chat-flow)]]
+  ["Attachments and rooms"
+   [("g" "open the attachment" cmacs-clawtilla-chat-attachment-get)
+    ("D" "remove it" cmacs-clawtilla-chat-attachment-remove)]
+   [("N" "make a room" cmacs-clawtilla-chat-room-create)
+    ("E" "change this room" cmacs-clawtilla-chat-room-set)]])
 
 (defvar cmacs-clawtilla-chat-mode-map
   (let ((map (make-sparse-keymap)))

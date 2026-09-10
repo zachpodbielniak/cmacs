@@ -352,6 +352,310 @@ secret is shown here and none is accepted."
                                     "checked"))))))
 
 
+;;;; Integrations.
+
+(defun cmacs-clawtilla-settings--row-id ()
+  "Return the id of the row at point, or signal."
+  (let ((row (cmacs-clawtilla-value-at-point 'setting-row)))
+    (unless row (user-error "Nothing at point"))
+    (or (alist-get 'id row) (alist-get 'name row)
+        (user-error "That row has no id"))))
+
+(defun cmacs-clawtilla-settings--reload ()
+  "Return a callback that reports an error or reloads this buffer."
+  (let ((buffer (current-buffer)))
+    (lambda (_data err)
+      (if err
+          (message "clawtilla: %s" err)
+        (when (buffer-live-p buffer)
+          (cmacs-clawtilla-settings--load buffer))))))
+
+(defun cmacs-clawtilla-settings-integration-add ()
+  "Add an integration.
+
+The types are asked for rather than listed: matrix, email, webhook,
+local, cmacs, mcp, notify and connector are the daemon's set today and
+a client holding its own copy is one that disagrees after an upgrade."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "integration.types" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let* ((types (cmacs-clawtilla-get data 'types))
+                (names (mapcar (lambda (entry)
+                                 (if (stringp entry) entry
+                                   (or (alist-get 'id entry)
+                                       (alist-get 'type entry))))
+                               types))
+                (type (completing-read "Type: " names nil t))
+                (id (read-string "Call it: "))
+                (agent (read-string "For which agent (blank for all): ")))
+           (cmacs-clawtilla-request
+            (cmacs-clawtilla-current) "integration.add"
+            (append (list (cons 'id id) (cons 'type type))
+                    (unless (string-empty-p agent)
+                      (list (cons 'agent agent))))
+            (with-current-buffer buffer
+              (cmacs-clawtilla-settings--reload)))))))))
+
+(defun cmacs-clawtilla-settings-integration-update ()
+  "Change a field of the integration at point."
+  (interactive)
+  (let* ((id (cmacs-clawtilla-settings--row-id))
+         (field (read-string "Field: "))
+         (value (read-string (format "%s: " field))))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "integration.update"
+     (list (cons 'id id) (cons field value))
+     (cmacs-clawtilla-settings--reload))))
+
+(defun cmacs-clawtilla-settings-integration-remove ()
+  "Remove the integration at point."
+  (interactive)
+  (let ((id (cmacs-clawtilla-settings--row-id)))
+    (when (yes-or-no-p (format "Remove %s? " id))
+      (cmacs-clawtilla-request
+       (cmacs-clawtilla-current) "integration.remove" (list (cons 'id id))
+       (cmacs-clawtilla-settings--reload)))))
+
+(defun cmacs-clawtilla-settings-notify-test ()
+  "Send a test notification through the integration at point."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "integration.notify_test"
+   (list (cons 'id (cmacs-clawtilla-settings--row-id)))
+   (lambda (_d e) (message "clawtilla: %s" (or e "test sent")))))
+
+(defun cmacs-clawtilla-settings-matrix-login (user password)
+  "Sign an integration in to Matrix as USER.
+
+The password is sent to the daemon and never stored here.  It is read
+with `read-passwd' so it does not land in the minibuffer history, which
+is a file."
+  (interactive (list (read-string "Matrix user: ") (read-passwd "Password: ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "integration.matrix_login"
+   (list (cons 'id (cmacs-clawtilla-settings--row-id))
+         (cons 'user user) (cons 'password password))
+   (lambda (_d e) (message "clawtilla: %s" (or e "signed in")))))
+
+(defun cmacs-clawtilla-settings-matrix-rooms ()
+  "List the Matrix rooms the integration at point can see."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "integration.matrix_rooms"
+   (list (cons 'id (cmacs-clawtilla-settings--row-id)))
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (with-current-buffer (get-buffer-create "*clawtilla matrix rooms*")
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (dolist (room (cmacs-clawtilla-get data 'rooms))
+             (insert (format "%-40s %s\n"
+                             (or (alist-get 'id room) "?")
+                             (or (alist-get 'name room) ""))))
+           (goto-char (point-min))
+           (special-mode))
+         (display-buffer (current-buffer)))))))
+
+
+;;;; Connectors.
+
+(defun cmacs-clawtilla-settings-connector-await ()
+  "Wait for the connection begun earlier to finish."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "connector.await"
+   (list (cons 'connector (cmacs-clawtilla-settings--row-id)))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-connector-key (key)
+  "Connect the account at point with an API KEY.
+
+For the services that have no authorisation dance.  The key goes to the
+daemon and is never held here; `read-passwd' keeps it out of the
+minibuffer history."
+  (interactive (list (read-passwd "API key: ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "connector.key"
+   (list (cons 'connector (cmacs-clawtilla-settings--row-id))
+         (cons 'key key))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-connector-refresh ()
+  "Refresh the credential of the account at point."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "connector.refresh"
+   (list (cons 'connector (cmacs-clawtilla-settings--row-id)))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-registry-refresh ()
+  "Refetch the catalogue of services that can be connected."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "connector.registry_refresh" nil
+   (cmacs-clawtilla-settings--reload)))
+
+
+;;;; Teams.
+
+(defun cmacs-clawtilla-settings-team-create (id name)
+  "Make a team called NAME with id ID."
+  (interactive (list (read-string "Team id: ") (read-string "Name: ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "team.create"
+   (list (cons 'id id) (cons 'name name))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-team-set ()
+  "Change the team at point.
+
+`id' is refused by the daemon and not offered here: everything refers
+to a team by it."
+  (interactive)
+  (let* ((id (cmacs-clawtilla-settings--row-id))
+         (field (completing-read "Change: "
+                                 '("name" "description" "lead" "members"
+                                   "handles" "color")
+                                 nil t))
+         (value (read-string (format "%s: " field))))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "team.set"
+     (list (cons 'id id) (cons field value))
+     (cmacs-clawtilla-settings--reload))))
+
+(defun cmacs-clawtilla-settings-team-remove ()
+  "Remove the team at point.
+
+The agents that named it are not removed with it -- the daemon answers
+how many are now orphaned, and saying that number is the point of
+asking."
+  (interactive)
+  (let ((id (cmacs-clawtilla-settings--row-id))
+        (buffer (current-buffer)))
+    (when (yes-or-no-p (format "Remove team %s? " id))
+      (cmacs-clawtilla-request
+       (cmacs-clawtilla-current) "team.remove" (list (cons 'id id))
+       (lambda (data err)
+         (if err
+             (message "clawtilla: %s" err)
+           (let ((orphaned (cmacs-clawtilla-get data 'orphaned)))
+             (message "clawtilla: removed%s"
+                      (if (and orphaned (> orphaned 0))
+                          (format "; %d agent%s now in no team" orphaned
+                                  (if (= orphaned 1) "" "s"))
+                        "")))
+           (when (buffer-live-p buffer)
+             (cmacs-clawtilla-settings--load buffer))))))))
+
+
+;;;; Folders shared with every agent.
+
+(defun cmacs-clawtilla-settings-folder-add (source target mode)
+  "Share SOURCE with every agent at TARGET, with MODE."
+  (interactive (list (read-directory-name "Share: ")
+                     (read-string "Mount at: ")
+                     (completing-read "Mode: " '("ro" "rw") nil t "ro")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "defaults.mount.add"
+   (list (cons 'source source) (cons 'target target) (cons 'mode mode))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-folder-remove ()
+  "Stop sharing the folder at point with every agent."
+  (interactive)
+  (let ((row (cmacs-clawtilla-value-at-point 'setting-row)))
+    (unless row (user-error "No folder at point"))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "defaults.mount.remove"
+     (list (cons 'target (alist-get 'target row)))
+     (cmacs-clawtilla-settings--reload))))
+
+
+;;;; Cloud images.
+
+(defun cmacs-clawtilla-settings-image-catalog ()
+  "Show the cloud images that can be downloaded."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "image.vm_catalog" nil
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (with-current-buffer (get-buffer-create "*clawtilla images*")
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (dolist (image (cmacs-clawtilla-get data 'images))
+             (insert (format "%-30s %s\n"
+                             (or (alist-get 'id image) "?")
+                             (or (alist-get 'description image) ""))))
+           (goto-char (point-min))
+           (special-mode))
+         (display-buffer (current-buffer)))))))
+
+(defun cmacs-clawtilla-settings-image-download (id)
+  "Start downloading cloud image ID."
+  (interactive "sImage: ")
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "image.vm_download" (list (cons 'id id))
+   (lambda (_d e) (message "clawtilla: %s" (or e "download started")))))
+
+(defun cmacs-clawtilla-settings-image-cancel ()
+  "Stop the download at point."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "image.vm_cancel"
+   (list (cons 'id (cmacs-clawtilla-settings--row-id)))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-image-remove ()
+  "Delete the cloud image at point."
+  (interactive)
+  (let ((id (cmacs-clawtilla-settings--row-id)))
+    (when (yes-or-no-p (format "Delete image %s? " id))
+      (cmacs-clawtilla-request
+       (cmacs-clawtilla-current) "image.vm_remove" (list (cons 'id id))
+       (cmacs-clawtilla-settings--reload)))))
+
+(defun cmacs-clawtilla-settings-image-list ()
+  "List the cloud images already downloaded."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "image.vm_list" nil
+   (cmacs-clawtilla-settings--reload)))
+
+
+;;;; Who the operator is.
+
+(defun cmacs-clawtilla-settings-operator ()
+  "Show and change what the fleet knows about you.
+
+Agents read this, so it is worth being accurate: the name here is what
+they call you."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "operator.get" nil
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (let* ((profile (or (cmacs-clawtilla-get data 'operator) data))
+              (field (completing-read
+                      "Change: "
+                      (mapcar (lambda (pair) (symbol-name (car pair)))
+                              profile)
+                      nil nil))
+              (current (alist-get (intern field) profile))
+              (value (read-string (format "%s: " field)
+                                  (and current (format "%s" current)))))
+         (cmacs-clawtilla-request
+          (cmacs-clawtilla-current) "operator.set"
+          (list (cons (intern field) value))
+          (lambda (_d e) (message "clawtilla: %s" (or e "saved")))))))))
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-settings-menu ()
@@ -361,9 +665,34 @@ secret is shown here and none is accepted."
     ("g" "refresh" cmacs-clawtilla-refresh)]]
   ["Change"
    [("RET" "change setting" cmacs-clawtilla-settings-set)
-    ("h" "check health" cmacs-clawtilla-settings-health)]
+    ("h" "check health" cmacs-clawtilla-settings-health)
+    ("o" "operator profile" cmacs-clawtilla-settings-operator)]]
+  ["Integrations"
+   [("A" "add" cmacs-clawtilla-settings-integration-add)
+    ("U" "update" cmacs-clawtilla-settings-integration-update)
+    ("R" "remove" cmacs-clawtilla-settings-integration-remove)]
+   [("n" "send a test" cmacs-clawtilla-settings-notify-test)
+    ("M" "matrix sign-in" cmacs-clawtilla-settings-matrix-login)
+    ("L" "matrix rooms" cmacs-clawtilla-settings-matrix-rooms)]]
+  ["Connectors"
    [("c" "connect an account" cmacs-clawtilla-settings-connect-account)
-    ("D" "revoke" cmacs-clawtilla-settings-revoke)]])
+    ("w" "wait for it" cmacs-clawtilla-settings-connector-await)
+    ("K" "connect with a key" cmacs-clawtilla-settings-connector-key)]
+   [("f" "refresh credential" cmacs-clawtilla-settings-connector-refresh)
+    ("F" "refresh catalogue" cmacs-clawtilla-settings-registry-refresh)
+    ("D" "revoke" cmacs-clawtilla-settings-revoke)]]
+  ["Teams and folders"
+   [("t" "make a team" cmacs-clawtilla-settings-team-create)
+    ("e" "change a team" cmacs-clawtilla-settings-team-set)
+    ("x" "remove a team" cmacs-clawtilla-settings-team-remove)]
+   [("d" "share a folder" cmacs-clawtilla-settings-folder-add)
+    ("X" "stop sharing" cmacs-clawtilla-settings-folder-remove)]]
+  ["Cloud images"
+   [("i" "catalogue" cmacs-clawtilla-settings-image-catalog)
+    ("l" "downloaded" cmacs-clawtilla-settings-image-list)]
+   [("G" "download" cmacs-clawtilla-settings-image-download)
+    ("C" "cancel" cmacs-clawtilla-settings-image-cancel)
+    ("Z" "delete" cmacs-clawtilla-settings-image-remove)]])
 
 (defvar cmacs-clawtilla-settings-mode-map
   (let ((map (make-sparse-keymap)))

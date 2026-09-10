@@ -456,6 +456,30 @@ not validate, which trusts whatever answers on that address."
    (cmacs-clawtilla-connection-name conn)
    (cmacs-clawtilla-connection-ever-connected conn)))
 
+(defun cmacs-clawtilla-status (&optional conn)
+  "Report what CONN's daemon says about itself.
+
+Two counts of agents, and they mean different things: how many the
+configuration declares, and how many have a link dialled in right now.
+An agent that is configured and not connected is the ordinary case, so
+a client showing only one of them reports either a fleet that is always
+broken or one that is always fine."
+  (interactive)
+  (let ((conn (or conn (cmacs-clawtilla-current))))
+    (cmacs-clawtilla-request
+     conn "control.status" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (message "clawtilla %s: %s configured, %s connected, %s client%s%s"
+                  (cmacs-clawtilla-get data 'version)
+                  (cmacs-clawtilla-get data 'agents)
+                  (cmacs-clawtilla-get data 'connected)
+                  (cmacs-clawtilla-get data 'clients)
+                  (if (eql 1 (cmacs-clawtilla-get data 'clients)) "" "s")
+                  (if (eq t (cmacs-clawtilla-get data 'hold 'held))
+                      "; fleet held" "")))))))
+
 (defun cmacs-clawtilla-disconnect (&optional conn)
   "Close CONN and forget it."
   (interactive)

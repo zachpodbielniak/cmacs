@@ -243,6 +243,230 @@ it exists, and `make parity' fails a client holding its own copy."
     (cmacs-clawtilla-agent--draw)))
 
 
+;;;; The mailbox, and what to do about a stuck one.
+
+(defun cmacs-clawtilla-agent--mail-id ()
+  "Return the id of the mailbox item at point, or signal."
+  (let ((item (cmacs-clawtilla-value-at-point 'mail)))
+    (unless item (user-error "No mailbox item at point"))
+    (or (alist-get 'id item) (user-error "That item has no id"))))
+
+(defun cmacs-clawtilla-agent--mailbox (kind &optional payload)
+  "Send KIND with PAYLOAD for this agent's mailbox and reload."
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) kind
+     (append (list (cons 'agent cmacs-clawtilla-agent--id)) payload)
+     (lambda (_data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (when (buffer-live-p buffer)
+           (cmacs-clawtilla-agent--load buffer)))))))
+
+(defun cmacs-clawtilla-agent-ack ()
+  "Acknowledge the mailbox item at point."
+  (interactive)
+  (cmacs-clawtilla-agent--mailbox
+   "mailbox.ack" (list (cons 'id (cmacs-clawtilla-agent--mail-id)))))
+
+(defun cmacs-clawtilla-agent-requeue ()
+  "Put the item at point back on the queue."
+  (interactive)
+  (cmacs-clawtilla-agent--mailbox
+   "mailbox.requeue" (list (cons 'id (cmacs-clawtilla-agent--mail-id)))))
+
+(defun cmacs-clawtilla-agent-dead-letters ()
+  "Show what this agent's mailbox gave up on.
+
+Its own view rather than a filter on the queue: a dead letter is not
+waiting for anything, and showing it beside things that are invites
+somebody to wait for it too."
+  (interactive)
+  (let ((agent cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "mailbox.dead" (list (cons 'agent agent))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (with-current-buffer (get-buffer-create
+                               (format "*clawtilla dead: %s*" agent))
+           (let ((inhibit-read-only t))
+             (erase-buffer)
+             (let ((items (or (cmacs-clawtilla-get data 'items)
+                              (cmacs-clawtilla-get data 'messages))))
+               (if (null items)
+                   (insert (cmacs-clawtilla-dim "nothing gave up") "\n")
+                 (dolist (item items)
+                   (insert (format "%-14s %s\n"
+                                   (or (alist-get 'from item) "?")
+                                   (or (alist-get 'body item) ""))))))
+             (goto-char (point-min))
+             (special-mode))
+           (display-buffer (current-buffer))))))))
+
+(defun cmacs-clawtilla-agent-purge ()
+  "Throw away everything waiting in this agent's mailbox."
+  (interactive)
+  (when (yes-or-no-p
+         (format "Discard everything waiting for %s? "
+                 cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-agent--mailbox "mailbox.purge")))
+
+
+;;;; The face an agent shows.
+
+(defun cmacs-clawtilla-agent-avatar ()
+  "Show this agent's avatar."
+  (interactive)
+  (let ((agent cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "agent.avatar" (list (cons 'agent agent))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let ((encoded (cmacs-clawtilla-get data 'image)))
+           (if (null encoded)
+               (message "clawtilla: %s has no avatar" agent)
+             (with-current-buffer (get-buffer-create
+                                   (format "*clawtilla avatar: %s*" agent))
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert-image
+                  (create-image (base64-decode-string encoded) nil t))
+                 (special-mode))
+               (display-buffer (current-buffer))))))))))
+
+(defun cmacs-clawtilla-agent-avatar-set (file)
+  "Give this agent the picture in FILE."
+  (interactive "fAvatar: ")
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "agent.avatar_set"
+   (list (cons 'agent cmacs-clawtilla-agent--id)
+         (cons 'image (base64-encode-string
+                       (with-temp-buffer
+                         (set-buffer-multibyte nil)
+                         (insert-file-contents-literally file)
+                         (buffer-string))
+                       t)))
+   (lambda (_d e) (message "clawtilla: %s" (or e "avatar set")))))
+
+(defun cmacs-clawtilla-agent-avatar-clear ()
+  "Take this agent's avatar away."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "agent.avatar_clear"
+   (list (cons 'agent cmacs-clawtilla-agent--id))
+   (lambda (_d e) (message "clawtilla: %s" (or e "avatar cleared")))))
+
+(defun cmacs-clawtilla-agent-models ()
+  "Offer the models this fleet's providers actually have.
+
+Asked of the daemon rather than typed: a model name that is nearly
+right fails at the first turn, by which time the agent exists and the
+error mentions the provider rather than the typo."
+  (interactive)
+  (let ((buffer (current-buffer))
+        (agent cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "model.list" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let* ((models (cmacs-clawtilla-get data 'models))
+                (names (mapcar (lambda (m)
+                                 (or (alist-get 'id m) (alist-get 'name m)
+                                     (format "%s" m)))
+                               models))
+                (choice (completing-read "Model: " names nil t)))
+           (cmacs-clawtilla-request
+            (cmacs-clawtilla-current) "agent.set"
+            (list (cons 'agent agent) (cons 'model choice))
+            (lambda (_d e)
+              (if e (message "clawtilla: %s" e)
+                (when (buffer-live-p buffer)
+                  (cmacs-clawtilla-agent--load buffer)))))))))))
+
+(defun cmacs-clawtilla-agent-discover ()
+  "Find agents the daemon can see but does not manage."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "agent.discover" nil
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (let ((found (cmacs-clawtilla-get data 'agents)))
+         (if (null found)
+             (message "clawtilla: nothing unmanaged found")
+           (with-current-buffer (get-buffer-create "*clawtilla discover*")
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (dolist (entry found)
+                 (insert (format "%-20s %s\n"
+                                 (or (alist-get 'id entry) "?")
+                                 (or (alist-get 'path entry) ""))))
+               (goto-char (point-min))
+               (special-mode))
+             (display-buffer (current-buffer)))))))))
+
+(defun cmacs-clawtilla-agent-forget ()
+  "Stop managing this agent, leaving what it made alone."
+  (interactive)
+  (when (yes-or-no-p (format "Stop managing %s? " cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "agent.forget"
+     (list (cons 'agent cmacs-clawtilla-agent--id))
+     (lambda (_d e) (message "clawtilla: %s" (or e "forgotten"))))))
+
+
+;;;; The agent designer.
+
+(defun cmacs-clawtilla-agent-design (brief)
+  "Have the fleet design an agent from BRIEF, then show what it proposes.
+
+Proposed, not created.  `cmacs-clawtilla-agent-design-commit' is what
+makes it, and the two are separate because an agent is a machine as
+well as a config: committing one builds a container or boots a VM."
+  (interactive "sWhat should this agent do? ")
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "design.agent" (list (cons 'brief brief))
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (with-current-buffer (get-buffer-create "*clawtilla design*")
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (dolist (pair (or (cmacs-clawtilla-get data 'agent) data))
+             (insert (propertize (format "%-18s " (car pair))
+                                 'face 'cmacs-clawtilla-heading)
+                     (format "%s" (cdr pair)) "\n"))
+           (insert "\n" (cmacs-clawtilla-dim
+                         "M-x cmacs-clawtilla-agent-design-commit to make it")
+                   "\n")
+           (goto-char (point-min))
+           (special-mode))
+         (display-buffer (current-buffer)))))))
+
+(defun cmacs-clawtilla-agent-design-commit (&optional start)
+  "Create the agent that was designed, starting it unless START is nil."
+  (interactive (list (y-or-n-p "Start it once made? ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "design.commit"
+   (list (cons 'start (if start t :false)))
+   (lambda (data err)
+     (cond
+      (err (message "clawtilla: %s" err))
+      ((cmacs-clawtilla-get data 'start_error)
+       (message "clawtilla: made, but did not start: %s"
+                (cmacs-clawtilla-get data 'start_error)))
+      (t (message "clawtilla: made"))))))
+
+(defun cmacs-clawtilla-agent-design-discard ()
+  "Throw away the design that has not been committed."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "design.discard" nil
+   (lambda (_d e) (message "clawtilla: %s" (or e "discarded")))))
+
 ;;;; Creating and importing.
 
 ;;;###autoload
@@ -307,15 +531,36 @@ take a URL rather than a path is the library's answer too."
   "What this agent's page can do."
   ["Agent"
    [("RET" "change field" cmacs-clawtilla-agent-set)
-    ("TAB" "next page" cmacs-clawtilla-agent-next-page)]
+    ("TAB" "next page" cmacs-clawtilla-agent-next-page)
+    ("M" "pick a model" cmacs-clawtilla-agent-models)]
+   [("v" "avatar" cmacs-clawtilla-agent-avatar)
+    ("V" "set avatar" cmacs-clawtilla-agent-avatar-set)
+    ("C" "clear avatar" cmacs-clawtilla-agent-avatar-clear)]
    [("g" "refresh" cmacs-clawtilla-refresh)
-    ("q" "quit" quit-window)]])
+    ("q" "quit" quit-window)]]
+  ["Mailbox"
+   [("k" "acknowledge" cmacs-clawtilla-agent-ack)
+    ("u" "requeue" cmacs-clawtilla-agent-requeue)]
+   [("Z" "dead letters" cmacs-clawtilla-agent-dead-letters)
+    ("P" "purge" cmacs-clawtilla-agent-purge)]]
+  ["Fleet"
+   [("D" "design an agent" cmacs-clawtilla-agent-design)
+    ("K" "commit the design" cmacs-clawtilla-agent-design-commit)
+    ("X" "discard it" cmacs-clawtilla-agent-design-discard)]
+   [("o" "discover unmanaged" cmacs-clawtilla-agent-discover)
+    ("F" "forget this one" cmacs-clawtilla-agent-forget)]])
 
 (defvar cmacs-clawtilla-agent-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map cmacs-clawtilla-common-map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-agent-set)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-agent-next-page)
+    (define-key map (kbd "k") #'cmacs-clawtilla-agent-ack)
+    (define-key map (kbd "u") #'cmacs-clawtilla-agent-requeue)
+    (define-key map (kbd "Z") #'cmacs-clawtilla-agent-dead-letters)
+    (define-key map (kbd "P") #'cmacs-clawtilla-agent-purge)
+    (define-key map (kbd "M") #'cmacs-clawtilla-agent-models)
+    (define-key map (kbd "v") #'cmacs-clawtilla-agent-avatar)
     (define-key map (kbd "?") #'cmacs-clawtilla-agent-menu)
     map)
   "Keymap for `cmacs-clawtilla-agent-mode'.")

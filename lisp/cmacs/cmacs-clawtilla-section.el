@@ -316,6 +316,226 @@ library.")
     (display-buffer buffer)))
 
 
+;;;; Routines.
+
+(defun cmacs-clawtilla-section--presets ()
+  "Return the schedule presets, with cron behind Custom.
+
+Most standing work is one of five shapes, and nobody should have to
+write `0 9 * * 1-5' to get weekday mornings.  Cron is still there for
+the sixth."
+  '("manual" "hourly" "daily" "weekdays" "weekly" "custom"))
+
+(defun cmacs-clawtilla-section-routine-add (id schedule prompt)
+  "Add a routine ID running PROMPT on SCHEDULE."
+  (interactive
+   (let* ((id (read-string "Routine id: "))
+          (preset (completing-read "When: "
+                                   (cmacs-clawtilla-section--presets) nil t))
+          (schedule (if (equal preset "custom")
+                        (read-string "Cron: ")
+                      preset))
+          (prompt (read-string "Do what: ")))
+     (list id schedule prompt)))
+  (cmacs-clawtilla-section--send
+   "routine.add" (append (list (cons 'id id) (cons 'schedule schedule)
+                               (cons 'prompt prompt))
+                         (cmacs-clawtilla-section--scope))))
+
+(defun cmacs-clawtilla-section-routine-update ()
+  "Change the routine at point."
+  (interactive)
+  (let* ((id (cmacs-clawtilla-section--row-id))
+         (field (completing-read "Change: "
+                                 '("schedule" "prompt" "enabled" "agent")
+                                 nil t))
+         (value (if (equal field "schedule")
+                    (let ((preset (completing-read
+                                   "When: "
+                                   (cmacs-clawtilla-section--presets) nil t)))
+                      (if (equal preset "custom")
+                          (read-string "Cron: ")
+                        preset))
+                  (read-string (format "%s: " field)))))
+    (cmacs-clawtilla-section--send
+     "routine.update" (list (cons 'id id) (cons field value)))))
+
+
+;;;; Triggers.
+
+(defun cmacs-clawtilla-section-trigger-add (id kind agent)
+  "Add trigger ID of KIND delivering to AGENT."
+  (interactive (list (read-string "Trigger id: ")
+                     (read-string "Kind: ")
+                     (read-string "Deliver to: ")))
+  (cmacs-clawtilla-section--send
+   "trigger.add" (list (cons 'id id) (cons 'kind kind) (cons 'agent agent))))
+
+(defun cmacs-clawtilla-section-trigger-update ()
+  "Change the trigger at point."
+  (interactive)
+  (let* ((id (cmacs-clawtilla-section--row-id))
+         (field (read-string "Field: "))
+         (value (read-string (format "%s: " field))))
+    (cmacs-clawtilla-section--send
+     "trigger.update" (list (cons 'id id) (cons field value)))))
+
+(defun cmacs-clawtilla-section-trigger-capture ()
+  "Capture the next event this trigger would match, without acting."
+  (interactive)
+  (cmacs-clawtilla-section--send
+   "trigger.capture" (list (cons 'id (cmacs-clawtilla-section--row-id)))))
+
+(defun cmacs-clawtilla-section-trigger-rotate ()
+  "Rotate the webhook secret of the trigger at point."
+  (interactive)
+  (when (yes-or-no-p "Rotate this trigger's secret? ")
+    (cmacs-clawtilla-section--send
+     "trigger.rotate" (list (cons 'id (cmacs-clawtilla-section--row-id))))))
+
+(defun cmacs-clawtilla-section-trigger-deliveries ()
+  "Show what this trigger has delivered."
+  (interactive)
+  (let ((id (cmacs-clawtilla-section--row-id)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "trigger.deliveries" (list (cons 'id id))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (with-current-buffer (get-buffer-create
+                               (format "*clawtilla deliveries: %s*" id))
+           (let ((inhibit-read-only t))
+             (erase-buffer)
+             (dolist (row (cmacs-clawtilla-get data 'deliveries))
+               (insert (format "%-14s %-12s %-10s %s\n"
+                               (or (alist-get 'receipt row) "?")
+                               (or (alist-get 'agent row) "")
+                               (or (alist-get 'state row) "")
+                               (or (alist-get 'parent row) ""))))
+             (goto-char (point-min))
+             (special-mode)
+             (setq-local cmacs-clawtilla-section--nick id))
+           (display-buffer (current-buffer))))))))
+
+(defun cmacs-clawtilla-section-trigger-replay (receipt run)
+  "Replay delivery RECEIPT of the trigger at point, running it if RUN.
+
+Previewing and executing are one frame with a flag, and the flag
+defaults to off: a replay that acts is indistinguishable from the
+original event downstream, so it should never be the thing that happens
+because somebody pressed the obvious key.
+
+Execution needs a positive receipt.  A blank one previews the latest
+snapshot instead, which is what the daemon does with zero."
+  (interactive
+   (list (read-number "Receipt (0 previews the latest): " 0)
+         (and (yes-or-no-p "Actually run it? ")
+              (yes-or-no-p "It will act as though the event just happened.  Sure? "))))
+  (let ((id (cmacs-clawtilla-section--row-id)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "trigger.replay"
+     (list (cons 'id id) (cons 'receipt receipt) (cons 'run (if run t :false)))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         ;; A successful envelope means the batch outcomes were
+         ;; recorded, not that they all worked: `failed' and `results'
+         ;; are where partial failure lives, and a client that read only
+         ;; the envelope would report a success that was not one.
+         (let ((failed (or (cmacs-clawtilla-get data 'failed) 0)))
+           (message "clawtilla: %s%s"
+                    (if (eq t (cmacs-clawtilla-get data 'matches))
+                        "matched" "did not match")
+                    (if (> failed 0)
+                        (format "; %d recipient%s failed" failed
+                                (if (= failed 1) "" "s"))
+                      ""))))))))
+
+
+;;;; Skills.
+
+(defun cmacs-clawtilla-section-skill-create (id description)
+  "Create skill ID described by DESCRIPTION."
+  (interactive (list (read-string "Skill id: ")
+                     (read-string "What it does: ")))
+  (cmacs-clawtilla-section--send
+   "skill.create" (list (cons 'id id) (cons 'description description))))
+
+(defun cmacs-clawtilla-section-skill-import (from)
+  "Import a skill from FROM.
+
+It arrives switched OFF, which is the daemon's decision and worth
+knowing: a skill that starts working the moment it lands is one nobody
+read first."
+  (interactive "sImport from: ")
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "skill.import" (list (cons 'from from))
+     (lambda (_data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (message "clawtilla: imported, and switched off until you enable it")
+         (when (buffer-live-p buffer)
+           (cmacs-clawtilla-section--load buffer)))))))
+
+(defun cmacs-clawtilla-section-skill-expand ()
+  "Show the skill at point with everything it references pulled in."
+  (interactive)
+  (let ((id (cmacs-clawtilla-section--row-id)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "skill.expand" (list (cons 'id id))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (with-current-buffer (get-buffer-create
+                               (format "*clawtilla skill: %s*" id))
+           (let ((inhibit-read-only t))
+             (erase-buffer)
+             (insert (or (cmacs-clawtilla-get data 'text)
+                         (cmacs-clawtilla-get data 'content) ""))
+             (goto-char (point-min))
+             (special-mode))
+           (display-buffer (current-buffer))))))))
+
+(defun cmacs-clawtilla-section-skill-commands ()
+  "Show the slash commands the skill at point adds.
+
+These are why the slash-command parity check cannot see everything: a
+command whose name comes from a skill exists in no client's source."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "skill.commands"
+   (list (cons 'id (cmacs-clawtilla-section--row-id)))
+   (lambda (data err)
+     (if err
+         (message "clawtilla: %s" err)
+       (message "clawtilla: %s"
+                (or (string-join
+                     (mapcar (lambda (c)
+                               (if (stringp c) c (or (alist-get 'name c) "")))
+                             (cmacs-clawtilla-get data 'commands))
+                     " ")
+                    "no commands"))))))
+
+(defun cmacs-clawtilla-section-skill-reload ()
+  "Reread the skills from disk."
+  (interactive)
+  (cmacs-clawtilla-section--send "skill.reload" nil))
+
+(defun cmacs-clawtilla-section-skill-assign (agent)
+  "Give the skill at point to AGENT."
+  (interactive "sGive it to: ")
+  (cmacs-clawtilla-section--send
+   "skill.assign" (list (cons 'id (cmacs-clawtilla-section--row-id))
+                        (cons 'agent agent))))
+
+(defun cmacs-clawtilla-section-skill-unassign (agent)
+  "Take the skill at point away from AGENT."
+  (interactive "sTake it from: ")
+  (cmacs-clawtilla-section--send
+   "skill.unassign" (list (cons 'id (cmacs-clawtilla-section--row-id))
+                          (cons 'agent agent))))
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-section-menu ()
@@ -328,7 +548,25 @@ library.")
     ("r" "run / enable" cmacs-clawtilla-section-run)]
    [("a" "answer" cmacs-clawtilla-section-answer)
     ("d" "dismiss" cmacs-clawtilla-section-dismiss)
-    ("D" "remove" cmacs-clawtilla-section-remove)]])
+    ("D" "remove" cmacs-clawtilla-section-remove)]]
+  ["Routines"
+   [("A" "add a routine" cmacs-clawtilla-section-routine-add)
+    ("U" "change it" cmacs-clawtilla-section-routine-update)]]
+  ["Triggers"
+   [("T" "add a trigger" cmacs-clawtilla-section-trigger-add)
+    ("E" "change it" cmacs-clawtilla-section-trigger-update)
+    ("C" "capture the next" cmacs-clawtilla-section-trigger-capture)]
+   [("V" "deliveries" cmacs-clawtilla-section-trigger-deliveries)
+    ("P" "replay one" cmacs-clawtilla-section-trigger-replay)
+    ("O" "rotate the secret" cmacs-clawtilla-section-trigger-rotate)]]
+  ["Skills"
+   [("N" "create" cmacs-clawtilla-section-skill-create)
+    ("I" "import" cmacs-clawtilla-section-skill-import)
+    ("X" "expand" cmacs-clawtilla-section-skill-expand)]
+   [("M" "its commands" cmacs-clawtilla-section-skill-commands)
+    ("L" "reload from disk" cmacs-clawtilla-section-skill-reload)]
+   [("G" "give to an agent" cmacs-clawtilla-section-skill-assign)
+    ("K" "take it away" cmacs-clawtilla-section-skill-unassign)]])
 
 (defvar cmacs-clawtilla-section-mode-map
   (let ((map (make-sparse-keymap)))

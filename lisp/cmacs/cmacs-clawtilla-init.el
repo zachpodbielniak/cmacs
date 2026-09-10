@@ -40,6 +40,7 @@
 (require 'cmacs-clawtilla-computer)
 (require 'cmacs-clawtilla-section)
 (require 'cmacs-clawtilla-settings)
+(require 'cmacs-clawtilla-teach)
 
 ;;;###autoload
 (transient-define-prefix cmacs-clawtilla-menu ()
@@ -50,7 +51,8 @@
    [("w" "work: tasks, decisions, flow" cmacs-clawtilla-work)
     ("u" "automation: routines, triggers" cmacs-clawtilla-automation)
     ("l" "library: skills, memory" cmacs-clawtilla-library)]
-   [("," "settings" cmacs-clawtilla-settings)]]
+   [("y" "recordings" cmacs-clawtilla-teach)
+    ("," "settings" cmacs-clawtilla-settings)]]
   ["Connection"
    [("c" "connect" cmacs-clawtilla-connect)
     ("d" "disconnect" cmacs-clawtilla-disconnect)]

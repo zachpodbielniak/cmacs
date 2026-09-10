@@ -326,6 +326,86 @@ looks idle about is you."
     (cmacs-clawtilla-computer--lifecycle "computer.rebuild")))
 
 
+;;;; Watching, and driving.
+
+(defvar-local cmacs-clawtilla-computer--observing nil)
+
+(defun cmacs-clawtilla-computer-screen ()
+  "Ask for this computer's screen and show it."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "computer.screen"
+     (list (cons 'agent cmacs-clawtilla-computer--agent))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (let ((encoded (cmacs-clawtilla-get data 'image)))
+               (when encoded
+                 (setq cmacs-clawtilla-computer--frame
+                       (create-image (base64-decode-string encoded) nil t))))
+             (setq cmacs-clawtilla-computer--view "screen")
+             (cmacs-clawtilla-computer--draw))))))))
+
+(defun cmacs-clawtilla-computer-observe ()
+  "Start watching this computer's screen as it changes."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "computer.observe"
+     (list (cons 'agent cmacs-clawtilla-computer--agent))
+     (lambda (_data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (setq cmacs-clawtilla-computer--observing t)))
+         (message "clawtilla: watching; `O' stops"))))))
+
+(defun cmacs-clawtilla-computer-observe-stop ()
+  "Stop watching this computer's screen.
+
+Stopped explicitly rather than when the buffer goes away: the daemon is
+producing frames for somebody, and a client that only stopped asking
+would leave it doing that for the rest of the session."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "computer.observe_stop"
+     (list (cons 'agent cmacs-clawtilla-computer--agent))
+     (lambda (_data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (setq cmacs-clawtilla-computer--observing nil)))
+         (message "clawtilla: stopped watching"))))))
+
+(defun cmacs-clawtilla-computer-input (keys)
+  "Type KEYS into this computer.
+
+Only while the screen is taken over.  Sending input to a screen the
+agent is still driving means two things typing into one window, which
+is not shared control, it is a corrupted command line."
+  (interactive "sType: ")
+  (unless (alist-get 'takeover cmacs-clawtilla-computer--status)
+    (user-error "Take the screen over first (`t')"))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "computer.input"
+   (list (cons 'agent cmacs-clawtilla-computer--agent)
+         (cons 'text keys))
+   (lambda (_d e) (when e (message "clawtilla: %s" e)))))
+
+(defun cmacs-clawtilla-computer-control ()
+  "Hand this computer's desktop to the agent, or take it back."
+  (interactive)
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "computer.control"
+   (list (cons 'agent cmacs-clawtilla-computer--agent))
+   (lambda (_d e) (message "clawtilla: %s" (or e "control toggled")))))
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-computer-menu ()
@@ -335,9 +415,14 @@ looks idle about is you."
     ("g" "refresh" cmacs-clawtilla-refresh)]]
   ["Shell and screen"
    [("e" "run a command" cmacs-clawtilla-computer-exec)
-    ("f" "grab a frame" cmacs-clawtilla-computer-frame)]
+    ("f" "grab a frame" cmacs-clawtilla-computer-frame)
+    ("F" "the screen" cmacs-clawtilla-computer-screen)]
    [("t" "take the screen" cmacs-clawtilla-computer-takeover)
-    ("T" "hand it back" cmacs-clawtilla-computer-release)]]
+    ("T" "hand it back" cmacs-clawtilla-computer-release)
+    ("i" "type into it" cmacs-clawtilla-computer-input)]
+   [("o" "watch it" cmacs-clawtilla-computer-observe)
+    ("O" "stop watching" cmacs-clawtilla-computer-observe-stop)
+    ("D" "toggle desktop control" cmacs-clawtilla-computer-control)]]
   ["Files"
    [("m" "share a directory" cmacs-clawtilla-computer-mount-add)
     ("d" "stop sharing" cmacs-clawtilla-computer-mount-remove)]
@@ -359,6 +444,10 @@ looks idle about is you."
     (define-key map (kbd "m") #'cmacs-clawtilla-computer-mount-add)
     (define-key map (kbd "d") #'cmacs-clawtilla-computer-mount-remove)
     (define-key map (kbd "c") #'cmacs-clawtilla-computer-copy)
+    (define-key map (kbd "F") #'cmacs-clawtilla-computer-screen)
+    (define-key map (kbd "i") #'cmacs-clawtilla-computer-input)
+    (define-key map (kbd "o") #'cmacs-clawtilla-computer-observe)
+    (define-key map (kbd "O") #'cmacs-clawtilla-computer-observe-stop)
     (define-key map (kbd "?") #'cmacs-clawtilla-computer-menu)
     map)
   "Keymap for `cmacs-clawtilla-computer-mode'.")

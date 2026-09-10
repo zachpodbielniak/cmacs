@@ -321,6 +321,51 @@ makes an identity change take."
                                   (list (cons 'remove_files files)
                                         (cons 'remove_computer computer))))))
 
+(defun cmacs-clawtilla-fleet-move (direction)
+  "Move the agent at point up or down the fleet, per DIRECTION.
+
+Sent as `fleet.reorder' rather than `agent.reorder', because a reorder
+is a RENUMBERING of the whole list and the list holds rooms as well as
+agents.  A frame carrying only the agents would number them from ten
+while the rooms kept whatever they had, and the two scales would
+interleave in a way nobody asked for."
+  (let* ((agent (cmacs-clawtilla-value-at-point 'agent))
+         (id (and agent (alist-get 'id agent)))
+         (entries (append
+                   (mapcar (lambda (a) (format "a:%s" (alist-get 'id a)))
+                           cmacs-clawtilla-fleet--agents)
+                   (mapcar (lambda (r) (format "r:%s" (alist-get 'id r)))
+                           cmacs-clawtilla-fleet--rooms)))
+         (key (format "a:%s" id))
+         (position (seq-position entries key))
+         (buffer (current-buffer)))
+    (unless id (user-error "No agent at point"))
+    (unless position (user-error "That agent is not in the list"))
+    (let ((target (+ position direction)))
+      (when (and (>= target 0) (< target (length entries)))
+        (setq entries (delete key entries))
+        (setq entries (append (seq-take entries target)
+                              (list key)
+                              (seq-drop entries target)))
+        (cmacs-clawtilla-request
+         (cmacs-clawtilla-current) "fleet.reorder"
+         (list (cons 'entries (string-join entries ",")))
+         (lambda (_data err)
+           (if err
+               (message "clawtilla: %s" err)
+             (when (buffer-live-p buffer)
+               (cmacs-clawtilla-fleet--load buffer)))))))))
+
+(defun cmacs-clawtilla-fleet-move-up ()
+  "Move the agent at point earlier in the fleet."
+  (interactive)
+  (cmacs-clawtilla-fleet-move -1))
+
+(defun cmacs-clawtilla-fleet-move-down ()
+  "Move the agent at point later in the fleet."
+  (interactive)
+  (cmacs-clawtilla-fleet-move 1))
+
 (defun cmacs-clawtilla-fleet-visit ()
   "Open what is at point: an agent's chat, or a room."
   (interactive)
@@ -357,6 +402,8 @@ makes an identity change take."
     ("i" "import agent" cmacs-clawtilla-agent-import)]
    [("h" "hold fleet" cmacs-clawtilla-fleet-hold)
     ("H" "resume fleet" cmacs-clawtilla-fleet-resume)]
+   [("M-p" "move up" cmacs-clawtilla-fleet-move-up)
+    ("M-n" "move down" cmacs-clawtilla-fleet-move-down)]
    [("g" "refresh" cmacs-clawtilla-refresh)
     ("q" "quit" quit-window)]])
 
@@ -388,6 +435,8 @@ makes an identity change take."
     (define-key map (kbd "k") #'cmacs-clawtilla-fleet-interrupt)
     (define-key map (kbd "!") #'cmacs-clawtilla-fleet-reset)
     (define-key map (kbd "D") #'cmacs-clawtilla-fleet-remove)
+    (define-key map (kbd "M-p") #'cmacs-clawtilla-fleet-move-up)
+    (define-key map (kbd "M-n") #'cmacs-clawtilla-fleet-move-down)
     (define-key map (kbd "?") #'cmacs-clawtilla-fleet-menu)
     map)
   "Keymap for `cmacs-clawtilla-fleet-mode'.")

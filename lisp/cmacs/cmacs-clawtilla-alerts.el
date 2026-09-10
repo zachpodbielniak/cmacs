@@ -212,6 +212,37 @@ is untouched -- `event.list' still has all of it."
   (setq cmacs-clawtilla-alerts nil)
   (cmacs-clawtilla-alerts--draw))
 
+(defun cmacs-clawtilla-alerts-history ()
+  "Load the daemon's own event log into this buffer.
+
+This client only sees what happened while it was connected.  The log is
+the daemon's and goes back further, which is the difference between
+\"nothing happened\" and \"I was not here\"."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "event.list" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (dolist (event (reverse (cmacs-clawtilla-get data 'events)))
+           (let* ((kind (or (alist-get 'kind event) ""))
+                  (subject (alist-get 'subject event))
+                  (ts (or (alist-get 'ts event)
+                          (alist-get 'timestamp event) 0))
+                  (tier (cmacs-clawtilla--alert-tier kind subject ts)))
+             (unless (equal tier "skip")
+               ;; History arrives read.  It already happened, and a
+               ;; count for things from before you connected is one
+               ;; that reading cannot clear.
+               (push (make-cmacs-clawtilla-alert
+                      :kind kind :subject subject :tier tier :ts ts
+                      :read t)
+                     cmacs-clawtilla-alerts))))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (cmacs-clawtilla-alerts--draw))))))))
+
 (defun cmacs-clawtilla-alerts-visit ()
   "Open what the alert at point is about."
   (interactive)
@@ -232,7 +263,8 @@ is untouched -- `event.list' still has all of it."
    [("RET" "open what it is about" cmacs-clawtilla-alerts-visit)
     ("a" "show every tier" cmacs-clawtilla-alerts-toggle-filter)]
    [("m" "mark all read" cmacs-clawtilla-alerts-mark-all-read)
-    ("k" "forget them" cmacs-clawtilla-alerts-clear)]])
+    ("k" "forget them" cmacs-clawtilla-alerts-clear)
+    ("H" "load the daemon's log" cmacs-clawtilla-alerts-history)]])
 
 (defvar cmacs-clawtilla-alerts-mode-map
   (let ((map (make-sparse-keymap)))
@@ -241,6 +273,7 @@ is untouched -- `event.list' still has all of it."
     (define-key map (kbd "a") #'cmacs-clawtilla-alerts-toggle-filter)
     (define-key map (kbd "m") #'cmacs-clawtilla-alerts-mark-all-read)
     (define-key map (kbd "k") #'cmacs-clawtilla-alerts-clear)
+    (define-key map (kbd "H") #'cmacs-clawtilla-alerts-history)
     (define-key map (kbd "?") #'cmacs-clawtilla-alerts-menu)
     map)
   "Keymap for `cmacs-clawtilla-alerts-mode'.")
