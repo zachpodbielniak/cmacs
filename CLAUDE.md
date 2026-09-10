@@ -390,6 +390,15 @@ backtraces → static-lib duplicate symbols; GC crash → unprotected Lisp_Objec
 
 ## Agent/tooling gotcha
 
+**NEVER kill by pattern on a developer machine — `pkill -f`, `pkill`, `killall`.** This
+host builds immutablue / hyacinth-macaw / kuberblue images concurrently with cmacs, and
+their command lines contain `buildah build`, `Containerfile`, `--no-cache` and `:44` —
+every pattern specific enough to look safe for a cmacs build matches those too. Record
+the PID you started and signal that PID. When hunting a PID, print the candidates for a
+human to read before signalling anything. And note that **buildah ignores SIGTERM for a
+while**: a `/proc` check immediately after a signal showing `state=S` is NOT proof the
+process survived — it can die seconds later, so re-check before reporting.
+
 **`pkill`/`grep` exit-1 cancels the whole Bash tool batch** (set -e-like behavior): append
 `|| true`, end build/process scripts with `exit 0`, and run build/kill/verify as one Bash
 call per message so an exit-1 can't nuke sibling calls. Process-killing steps also need
