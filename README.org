@@ -505,6 +505,7 @@ cd cmacs
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
+  --with-cmacs-clawtilla \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -653,6 +654,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
+  --with-cmacs-clawtilla \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -718,6 +720,7 @@ Module flags:
 - =--with-cmacs-lsp= — In-binary *LSP language servers*: =emacs --cmacs-lsp LANG= runs a pure C/GLib JSON-RPC-over-stdio server compiled into the emacs binary itself (the =--bacon= never-return model — no editor, no Lisp VM), and clients spawn it as a subprocess call back to the same binary, so client and server always agree on what was compiled in.  =emacs --help= auto-lists the compiled-in servers.  First server: *gnucalc* for =.calc= calculator sheets (requires =--with-cmacs-calculator=) — completion/hover/signature-help over all 415 GNU Calc built-ins, every cmacs calculator, constants and units from a table generated out of [[file:doc_org/cmacs/calculator/builtins.org][the built-ins catalog]], plus lexical diagnostics, =:== symbols/definitions and semantic tokens.  Inside cmacs, =.calc= buffers auto-start eglot against it; external editors (nvim, …) point at the same command.  Part of the standard flag set.  See [[file:doc_org/cmacs/lsp.org][the LSP manual]].
 - =--with-cmacs-dbexplorer= — *Database explorer*: query, browse, edit and export databases in Emacs buffers, over [[https://git.podbielniak.com/zachpodbielniak/orm-glib][orm-glib]] (SQLite, PostgreSQL, MySQL/MariaDB — and whatever orm-glib gains later, since backends are looked up by URL scheme rather than compiled into a switch).  A connections list, a schema browser, a SQL editor and a results grid, plus row editing that stages your changes and applies them in one transaction so you get to read the generated SQL before it runs.  Saved connections carry no passwords — those come from =auth-source= at connect time — and any connection can be marked read-only, which the C layer enforces for every caller including agents.  Reachable from the AI context menu, ai-brigade tools, MCP, D-Bus and =emacsctl=.  Part of the standard flag set.  See [[file:doc_org/cmacs/dbexplorer.org][the database explorer manual]].
 
+- =--with-cmacs-clawtilla= — *Clawtilla fleet client*: drive a fleet of agents from Emacs — teams, conversations, each agent's computer, routines, triggers, tasks, decisions, skills, memory, alerts and settings. A client, not an embedded daemon: it connects to a =clawtillad= that is already running, locally over its socket or remotely over TCP, so the fleet outlives the editor. Shares clawtilla's own =connections.yaml=, and is held to the GTK client's feature set by =admin/cmacs-clawtilla-parity.sh=.
 - =--with-cmacs-ai-brigade= — The AI *fabric*: the layer other cmacs subsystems and your own config lay on top of to get AI capability, agent orchestration and memory.  Its primary deliverable is the *extension surface* — a single =cmacs-brigade-deftool= form in =init.el= publishes a capability to in-process HTTP agents, to CLI agents (=claude-code=, =opencode=) over an =emacs --mcp-relay= MCP bridge scoped by a freshly minted per-agent capability token, *and* to external MCP clients, all at once.  Public registries cover tools, agents, execution workers, isolation backends, memory sources, deliverables and dashboard panels; the shipped features consume exactly that API, with no private back doors.  Out of the box: a self-contained mmap'd fp16 memory index over your notes (runtime F16C dispatch with a scalar fallback, so one binary runs anywhere), an org-file-as-plan model where C owns runtime state and org owns intent, an agent dashboard that degrades cleanly to TUI and =--lrg=, GenMail, and deliverable generators.  Part of the standard flag set; *requires* =--with-cmacs-ai=, and =--with-cmacs-libreclaw= is optional.  See [[file:doc_org/cmacs/ai-brigade/index.org][the manual]] and [[file:doc_org/cmacs/ai-brigade/extending.org][the extension guide]].
 
 - =--with-cmacs-transcode= — Native batch video/audio *transcoder*, a

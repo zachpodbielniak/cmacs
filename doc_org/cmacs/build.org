@@ -119,6 +119,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-calculator=     | Calculator over GNU Calc: desktop/financial/physics/relativity/CAS, SVG + libregnum charts, =emacs --calc= REPL (libregnum optional) |
 | =--with-cmacs-lsp=            | In-binary LSP language servers (=emacs --cmacs-lsp LANG=); the gnucalc =.calc= server needs the calculator too |
 | =--with-cmacs-dbexplorer=    | Database explorer: query, browse, edit and export SQLite / PostgreSQL / MySQL in Emacs buffers (orm-glib) |
+| =--with-cmacs-clawtilla=     | Clawtilla fleet client: drive a running clawtillad, locally or over TCP, from Emacs buffers |
 | =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 | =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
@@ -167,6 +168,7 @@ Example with explicit flags:
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
+  --with-cmacs-clawtilla \
   --with-cmacs-ai-brigade \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection

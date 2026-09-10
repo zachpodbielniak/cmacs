@@ -79,6 +79,7 @@ interaction.
 * CMacs AI Brigade::            Multi-agent orchestration, memory, and the AI tool fabric.
 * Evil and Doom::               Single-key cmacs modes under Evil / Doom Emacs.
 * CMacs Dbexplorer::            Query, browse, edit and export databases in buffers.
+* CMacs Clawtilla::             Drive a fleet of agents from the editor.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -10949,6 +10950,144 @@ a new file that registers itself rather than an edit to the code that
 already works.  State keys on the connection name and the row primary key,
 never on a buffer, so two views can be open on one connection at once.
 
+@node CMacs Clawtilla
+@chapter CMacs Clawtilla: A Fleet of Agents
+
+@cindex clawtilla
+@cindex fleet
+@cindex agents
+
+Clawtilla runs a @emph{fleet} of agents rather than one: each with its
+own persona, model, credentials, integrations and computer, able to talk
+to each other and divide work among themselves.  The daemon owns the
+fleet, and everything else is a client of it.
+
+@code{--with-cmacs-clawtilla} makes cmacs one of those clients, held to
+the same feature set as clawtilla's GTK client.
+
+@menu
+* Clawtilla Client Not Daemon:: Why cmacs connects rather than embeds.
+* Clawtilla Getting There::     Opening it, and reaching another machine.
+* Clawtilla Buffers::           The fleet, a conversation, and the rest.
+* Clawtilla Parity::            How this client is kept honest.
+* Clawtilla Nothing Blocks::    Why there is no synchronous request.
+@end menu
+
+@node Clawtilla Client Not Daemon
+@section A client, not a daemon
+
+The normal use is a @command{clawtillad} that is already running: on this
+machine over its unix socket, or on another one over TCP.  cmacs links
+libclawt's @code{ClawtClient}; it does not embed @code{clawt_daemon_new()}.
+
+That is a deliberate departure from what clawtilla's own documentation
+suggests for an in-process host.  Embedding the daemon is possible and
+would be faster, but it ties the fleet's lifetime to the editor's ---
+quitting cmacs would stop every agent, and an agent's computer is a
+container or a virtual machine.  A daemon that outlives the editor is
+the arrangement that makes sense, and it is also what lets the GTK
+client and cmacs look at the same fleet at once.
+
+@kbd{M-x cmacs-clawtilla-start-daemon} exists for when there is no
+daemon.  It is a command you run, and not something connecting does for
+you: a fleet quietly starting because somebody opened a buffer is both
+surprising and expensive.
+
+@node Clawtilla Getting There
+@section Getting there
+
+@example
+M-x cmacs-clawtilla
+@end example
+
+With no connection open it offers the saved profiles from clawtilla's
+own @file{~/.config/clawtilla/connections.yaml} --- the same file the
+GTK client writes --- plus the local daemon.  @kbd{M-x
+cmacs-clawtilla-menu} is the transient that reaches everything else.
+
+@kbd{M-x cmacs-clawtilla-connect-remote} takes a host, port and token.  A
+TCP listener needs one; @command{clawtilla daemon token} prints it.  The
+token is read with @code{read-passwd} so it does not land in the
+minibuffer history, which is a file.  Accepting an unvalidated
+certificate trusts anything answering on that address, and is never the
+default.
+
+@node Clawtilla Buffers
+@section The buffers
+
+The fleet, one conversation per agent, an agent's own page, its
+computer, then Work, Automation, Library, Settings, Alerts and
+recordings.  Every buffer takes @kbd{?} for a transient of what it can
+do, @kbd{g} to refresh, @kbd{TAB} to fold or change page, and @kbd{n}
+and @kbd{p} to move between sections.
+
+Several behaviours are the library's rather than this client's, and are
+worth knowing because they are what makes three clients look like one
+product:
+
+@itemize @bullet
+@item
+The counts beside a team name come from @code{clawt_team_tally}.  Three
+clients counting the same thing is three chances to disagree about what
+``active'' means.
+
+@item
+Day dividers, message runs, timestamps and tool-run summaries are all
+the library's decisions, and markdown goes through its own cmark.
+
+@item
+Which events are worth interrupting you for is
+@code{clawt_alert_tier_for_event}, and whether a message raises an
+unread count is @code{clawt_unread_should_count} --- not your own
+message, not the room you are looking at, not older than the connection,
+and not a room with no row on screen.
+@end itemize
+
+Two transcript behaviours are easy to get subtly wrong and nobody
+reports them as bugs.  A refresh @emph{appends}, so a turn in progress
+does not lose your scroll position.  And it follows the live edge only
+when you are already at it: reading further up during a turn is the case
+that matters, and a transcript that scrolls away from you then is one
+you cannot read.
+
+A reset is not a restart.  A restart brings the same conversation back;
+a reset drops the session, and is what makes an identity change take.
+
+@node Clawtilla Parity
+@section Parity
+
+Clawtilla holds its GTK and web clients to the same feature set with
+@command{make parity}, which fails when a capability exists in only one
+of them.  Two clients drifting apart is invisible: nothing breaks,
+nothing warns, and somebody finds out by reaching for the half that was
+not built.
+
+@file{admin/cmacs-clawtilla-parity.sh} holds cmacs to the same rule,
+comparing this client against the GTK one across four layers: the IPC
+frame kinds each sends, the slash commands each answers, whether either
+spells out a value the library enumerates, and a table of declared
+interface affordances.
+
+It lives in cmacs rather than in clawtilla because clawtilla's script
+greps its own @file{clients/} and should not have to know where cmacs
+is.  It reads the same sources and applies the same rule.
+
+@node Clawtilla Nothing Blocks
+@section Nothing blocks
+
+There is no synchronous request primitive, deliberately.
+
+The library's blocking @code{clawt_client_request()} turns the caller's
+main context while it waits, and here that context is the editor's ---
+under @option{--gowl} it is also the compositor's.  Turning it from
+inside a primitive re-enters Lisp where Emacs does not expect it, and a
+remote daemon slow to answer would freeze the desktop for as long as DNS
+and a TLS handshake take.
+
+Connecting and subscribing are asynchronous for the same reason.  Both
+needed adding to clawtilla for this: @code{clawt_client_connect_async()}
+and @code{clawt_client_subscribe_async()}.
+
 @node Build Configuration
 @chapter Build Configuration
 
@@ -11092,6 +11231,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
+  --with-cmacs-clawtilla \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

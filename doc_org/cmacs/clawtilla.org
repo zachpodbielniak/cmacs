@@ -1,0 +1,273 @@
+#+title: clawtilla in cmacs
+#+description: Driving a fleet of agents from inside the editor
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+options: toc:2
+
+* clawtilla in cmacs
+
+[[file:../../deps/clawtilla/README.org][clawtilla]] runs a *fleet* of agents: each with its own persona, model,
+credentials, integrations and computer, able to talk to each other and
+to divide work among themselves.  The daemon owns the fleet; everything
+else is a client of it.
+
+cmacs is one of those clients, and it is held to the same feature set as
+the GTK one --- see [[*Parity][Parity]].
+
+** What this is, and is not
+
+*A client, not a daemon.*  The normal use is a =clawtillad= that is
+already running: on this machine over its unix socket, or on another one
+over TCP.  cmacs links libclawt's =ClawtClient= and the enumerations
+every client is required to walk; it does not embed =clawt_daemon_new()=.
+
+That is a deliberate departure from what clawtilla's own
+[[file:../../deps/clawtilla/docs/clients.org][docs/clients.org]] suggests for an in-process host.  Embedding the daemon
+is possible and would be faster, but it ties the fleet's lifetime to the
+editor's: quitting cmacs would stop every agent, and an agent's computer
+is a container or a VM.  A daemon that outlives the editor is the
+arrangement that makes sense, and it is also the one that lets the GTK
+client and cmacs look at the same fleet at the same time.
+
+=M-x cmacs-clawtilla-start-daemon= exists for when there is no daemon.
+It is a command you run and not something connecting does for you,
+because a fleet quietly starting because somebody opened a buffer is
+both surprising and expensive.
+
+** Getting there
+
+#+begin_src
+M-x cmacs-clawtilla
+#+end_src
+
+With no connection open it offers the saved profiles from clawtilla's
+own =~/.config/clawtilla/connections.yaml= --- the same file the GTK
+client writes, so a workstation you added there is simply here --- plus
+the local daemon.  With one open it shows the fleet.
+
+=M-x cmacs-clawtilla-menu= is the transient that reaches everything:
+the fleet, alerts, work, automation, library, recordings and settings.
+
+*** Connecting to another machine
+
+#+begin_src
+M-x cmacs-clawtilla-connect-remote
+#+end_src
+
+Host, port, token, and whether to use TLS.  A TCP listener needs a token;
+=clawtilla daemon token= prints the one the daemon generated.  The token
+is read with ~read-passwd~, so it does not land in the minibuffer
+history, which is a file.
+
+*Accepting an unvalidated certificate trusts anything answering on that
+address*, and is never the default.
+
+** The buffers
+
+| Buffer | What it is |
+|--------+------------|
+| =*clawtilla: NAME*= | the fleet: teams, agents, rooms |
+| =*clawtilla: AGENT*= | one conversation |
+| =*clawtilla agent: ID*= | Overview and Mailbox |
+| =*clawtilla computer: ID*= | Shell, Screen, Mounts, Exchange |
+| =*clawtilla work*= | Tasks, Decisions, Flow |
+| =*clawtilla automation*= | Routines, Triggers |
+| =*clawtilla library*= | Skills, Memory |
+| =*clawtilla settings*= | seven panels |
+| =*clawtilla alerts*= | what is worth interrupting you for |
+| =*clawtilla teach*= | recorded demonstrations |
+
+Every one of them takes =?= for a transient of what it can do, =g= to
+refresh, =TAB= to fold a section or move to the next page, and =n= / =p=
+to move between sections.
+
+*** The fleet
+
+Teams, with the agents in each, then the agents in no team, then rooms.
+Every team gets a heading including an empty one: a team somebody made
+and has not filled is exactly the team they are about to move somebody
+into.
+
+The counts beside a team name --- =2/3 up, 1 busy= --- come from
+=clawt_team_tally=, not from counting the rows on screen.  Three clients
+counting the same thing is three chances to disagree about what "active"
+means.
+
+=RET= opens an agent's conversation, =o= its page, =s= / =S= / =R= start,
+stop and restart it, =k= interrupts a running turn, =!= resets the
+session and =D= removes the agent.  =M-p= and =M-n= move it in the list.
+
+*A reset is not a restart.*  A restart brings the same conversation back;
+a reset drops the session, and is what makes an identity change take.
+
+*** A conversation
+
+A read-only transcript that appends, with composing as a separate act:
+=i= for a line, =c= for a compose buffer, =a= to attach a file.
+
+Two behaviours are worth knowing because they are the ones you would
+otherwise notice as the thing being unusable:
+
+- *A refresh appends.*  The transcript is never redrawn wholesale, so a
+  turn in progress does not lose your scroll position or a collapsed
+  tool run.
+- *It follows the live edge only when you are already at it.*  Reading
+  further up during a turn is the case that matters, and a transcript
+  that scrolls away from you then is one you cannot read.
+
+Markdown is rendered through the library's own cmark, so all three
+clients agree about what markdown means.  Day dividers, message runs and
+timestamps are the library's decisions too.
+
+*A message to a stopped agent says so.*  The mailbox accepting it is the
+point of having one, but nothing will read it until the agent starts.
+
+**** Slash commands
+
+The twenty the GTK client answers, and =/help= lists them:
+
+=/agents= =/attach= =/clear= =/compose= =/copy= =/edit= =/export=
+=/files= =/flow= =/help= =/interrupt= =/memory= =/new= =/recall=
+=/reset= =/restart= =/retry= =/start= =/stop= =/tasks=
+
+=/edit= opens the file in a buffer rather than in =$EDITOR=, which is
+the better answer when the client *is* the editor.
+
+*** A computer
+
+Shell, Screen, Mounts and Exchange --- four, in that order, because
+=clawt_computer_view_count()= says so and not because this client lists
+them.
+
+=e= runs a command.  =F= fetches the screen, =o= watches it and =O=
+stops; watching is stopped explicitly rather than when the buffer goes
+away, because the daemon is producing frames for somebody.
+
+=t= takes the screen over and =T= hands it back.  *Typing into a screen
+the agent is still driving is not shared control*, it is a corrupted
+command line, so =i= refuses unless you have taken it over.
+
+An agent with =computer: none= is told it has no machine rather than
+offered a shell into nothing --- which type has a machine is also the
+library's answer.
+
+*** Settings
+
+Appearance, Integrations, Connectors, Teams, Spending, Folders and Cloud
+images.  =TAB= moves between them.
+
+Appearance is the only panel that is not the daemon's, and even its
+values are the library's: the palettes and measure units come from
+libclawt, with each unit's own bounds, so this client cannot offer a
+width the library would refuse.
+
+*Connectors never show or accept a secret.*  A connected account keeps
+its credential in the daemon and hands only the tools to the agents;
+=c= begins a connection and gives you a URL to open.
+
+*** Alerts and unread
+
+Which events are worth interrupting you for is
+=clawt_alert_tier_for_event= --- four tiers, one of which is "skip", so
+a turn's constant step events do not become alerts.  =a= shows every
+tier rather than the filtered set; =H= loads the daemon's own event log,
+which goes back further than this client has been connected.
+
+An alert that lands while the buffer is in front of you *arrives already
+read*.  Marking it unread would leave a count that reading cannot clear.
+
+The unread counts beside each agent follow =clawt_unread_should_count=:
+not your own message, not the room you are looking at, not older than
+the connection, and not a room with no row on screen.
+
+*** Teaching by demonstration
+
+=M-x cmacs-clawtilla-teach=.  Record yourself doing something, and have
+the fleet turn it into a skill: =s= starts, =S= stops, =y= proposes a
+procedure and =c= adopts it.
+
+Four steps rather than two on purpose.  Synthesising is where a model
+reads the trace and proposes something; committing is what makes agents
+follow it.  A recording becoming behaviour without anybody reading it
+first is not a shortcut worth having.
+
+** Parity
+
+clawtilla holds its GTK and web clients to the same feature set with
+=make parity=, which fails when a capability exists in only one of them.
+Two clients drifting apart is invisible: nothing breaks, nothing warns,
+and somebody finds out by reaching for the half that was not built.
+
+cmacs is held to the same rule by =admin/cmacs-clawtilla-parity.sh=,
+which compares this client against the GTK one across four layers:
+
+1. *IPC frame kinds.*  A proxy for "feature", not a definition --- but
+   every real feature has to talk to the daemon, so a kind one client
+   sends and the other never mentions is a capability that exists in one
+   place only.
+2. *Slash commands.*  The frame-kind check misses these entirely:
+   =/files= and =/agents= are built out of frames both clients already
+   send.
+3. *Hardcoded vocabulary.*  A client naming a value the library
+   enumerates has a copy of the list, and a copy is what drifts.
+4. *Declared affordances.*  Capabilities that are pure interface and
+   touch no shared symbol.  This layer is honest about its limit: it
+   catches one half being removed or never written, and cannot catch a
+   feature nobody declared.
+
+The check lives here rather than in clawtilla because clawtilla's script
+greps its own =clients/= and should not have to know where cmacs is.  It
+reads the same sources --- =deps/clawtilla=' daemon files and GTK client
+--- and applies the same rule.
+
+Two kinds are declared as allowed absences with reasons:
+=agent.file_read= and =agent.file_write=, because =/edit= opens the file
+in a buffer.
+
+** Why the library answers so much
+
+Nearly every rule this client follows is asked of libclawt rather than
+implemented here: the activity sentence, the team tally, run and day
+boundaries, timestamps, alert tiers, the unread rule, tool-run grouping,
+markdown.
+
+That is not deference for its own sake.  The failures are on record in
+clawtilla's history: the CLI read =busy= and =peer= for as long as they
+existed and rendered neither, and the web client drew a bare "busy"
+badge that dropped =peer= on the floor.  A sentence assembled in three
+places is three sentences, and three clients that disagree about what a
+fleet is doing are not one product.
+
+** Building
+
+=--with-cmacs-clawtilla=, in the default flag set.  It requires
+=--with-cmacs-glib= (replies complete on the cmacs GMainContext) and
+=--with-cmacs-libreclaw= (libclawt is layered on liblc, and one binary
+must not hold two copies of it).
+
+=IS-CMACS-CLAWTILLA= says whether it was compiled in;
+=(cmacs-clawtilla-supported-p)= says its primitives are reachable.
+
+** Nothing blocks
+
+There is no synchronous request primitive, deliberately.
+
+The library's blocking =clawt_client_request()= turns the caller's main
+context while it waits, and here that context is the editor's --- under
+=--gowl= it is also the compositor's.  Turning it from inside a
+primitive re-enters Lisp where Emacs does not expect it, and a remote
+daemon slow to answer would freeze the desktop for as long as DNS and a
+TLS handshake take.
+
+Connecting and subscribing are asynchronous for the same reason.  Both
+needed adding to clawtilla for this: =clawt_client_connect_async()= and
+=clawt_client_subscribe_async()=.
+
+** Files
+
+| Path | What |
+|------+------|
+| =cmacs/clawtilla/= | the C half: transport, presentation helpers, primitives |
+| =lisp/cmacs/cmacs-clawtilla*.el= | the buffers |
+| =test/cmacs/cmacs-clawtilla-tests.el= | the suite |
+| =admin/cmacs-clawtilla-parity.sh= | the parity check |

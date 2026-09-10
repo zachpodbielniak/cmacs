@@ -115,6 +115,7 @@ configure_flags := """
     --with-cmacs-calculator
     --with-cmacs-lsp
     --with-cmacs-dbexplorer
+    --with-cmacs-clawtilla
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """
@@ -253,6 +254,12 @@ submodules:
 [group('build')]
 deps-audit:
     ./admin/cmacs-deps-audit.sh
+
+# Two clients drifting apart is invisible: nothing breaks, nothing warns,
+# and somebody finds out by reaching for the half that was not built.
+# Fail when the cmacs clawtilla client reaches less of the daemon than GTK
+clawtilla-parity:
+    ./admin/cmacs-clawtilla-parity.sh
 
 # Run autogen.sh.  Required after editing configure.ac.
 [group('build')]

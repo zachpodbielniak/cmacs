@@ -638,6 +638,7 @@ RUN ./autogen.sh \
         --with-cmacs-calculator \
         --with-cmacs-lsp \
         --with-cmacs-dbexplorer \
+        --with-cmacs-clawtilla \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"${CMACS_JOBS:-$(nproc)}" \
