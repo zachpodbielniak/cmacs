@@ -136,8 +136,9 @@ extern char *cmacs_clawt_step_tone (const char *step_json,
 extern bool cmacs_clawt_step_precedes (const char *step_json,
                                        const char *agent_id,
                                        int64_t message_ts);
-extern char *cmacs_clawt_steps_to_json (const char *steps_json,
-                                        const char *agent_id);
+extern char *cmacs_clawt_steps_split (const char *steps_json,
+                                      const char *agent_id,
+                                      int64_t message_ts);
 
 /* syms_of_/init_ for each translation unit.  */
 extern void syms_of_cmacs_clawtilla_defuns (void);

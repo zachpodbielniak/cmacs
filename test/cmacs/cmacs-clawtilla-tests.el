@@ -512,6 +512,91 @@ count that stays at zero is what a quiet fleet looks like."
                                       (cmacs-clawtilla--parse from-you))
     (should (= 1 (cmacs-clawtilla-unread-count "dm:scout:user")))))
 
+(ert-deftest cmacs-clawtilla-steps-never-travel-re-encoded ()
+  "A step goes back to C as the JSON that arrived, never re-encoded.
+
+`json-parse-string' maps JSON false to nil and `json-serialize' writes
+nil back as an empty object, so a step that has been through Lisp has
+its `failed: false' turned into `{}'.  The library reads that member
+with `json_object_get_boolean_member' behind a `has_member' check that
+an object passes -- one GLib CRITICAL per step, per redraw, which is
+why this arrived as a screenful of them on every tool call.
+
+Asserted by splitting the RAW text and checking the result is sane:
+under G_DEBUG=fatal-criticals a regression aborts, and without it the
+counts still come out right, so this also pins the summary."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let* ((raw "[{\"step_kind\":\"tool\",\"tool\":\"read\",\"text\":\"a\",\
+\"failed\":false,\"ts\":100000000},\
+{\"step_kind\":\"tool\",\"tool\":\"edit\",\"text\":\"b\",\
+\"failed\":false,\"ts\":900000000}]")
+         ;; A message at 500 seconds overtakes the first step only: the
+         ;; library divides a step stamp by a million before comparing,
+         ;; because steps are microseconds and messages are seconds.
+         (split (cmacs-clawtilla--parse
+                 (cmacs-clawtilla--steps raw "scout" 500))))
+    (should (= 1 (length (alist-get 'history split))))
+    (should (= 1 (length (alist-get 'live split))))
+    (should (equal "read" (alist-get 'tool (car (alist-get 'history split)))))
+    (should (equal "edit" (alist-get 'tool (car (alist-get 'live split)))))
+    ;; `failed' survives as a boolean rather than becoming an object.
+    (should (memq (alist-get 'failed (car (alist-get 'history split)))
+                  '(nil :false)))
+    ;; And the summary is built in C, so nothing had to be re-encoded.
+    (should (stringp (alist-get 'summary split)))
+    (should-not (string-empty-p (alist-get 'summary split)))))
+
+(ert-deftest cmacs-clawtilla-tool-calls-stay-in-the-transcript ()
+  "Tool calls remain readable after the answer arrives.
+
+They used to be drawn only as the live activity line, which is deleted
+and rewritten on every redraw -- so the record of what the agent
+actually DID vanished at the moment its answer appeared, which is when
+somebody wants to read it."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla-chat-mode)))
+  (with-temp-buffer
+    (cmacs-clawtilla-chat-mode)
+    (setq-local cmacs-clawtilla-chat--agent "scout")
+    (setq-local cmacs-clawtilla-chat--steps-json
+                "[{\"step_kind\":\"tool\",\"tool\":\"read\",\"text\":\"a.txt\",\
+\"failed\":false,\"ts\":100000000}]")
+    (cmacs-clawtilla-chat--append-messages
+     (cmacs-clawtilla--parse
+      "[{\"id\":\"m1\",\"sender\":\"scout\",\"body\":\"done\",\"ts\":500}]"))
+    (should (string-match-p "read a.txt" (buffer-string)))
+    ;; Still there after another redraw, which is the actual failure:
+    ;; the activity line is deleted on each one.
+    (cmacs-clawtilla-chat--appending
+      (cmacs-clawtilla-chat--clear-activity)
+      (cmacs-clawtilla-chat--draw-activity
+       (cmacs-clawtilla-chat--split-steps)))
+    (should (string-match-p "read a.txt" (buffer-string)))))
+
+(ert-deftest cmacs-clawtilla-composing-is-a-buffer ()
+  "A message is written in a buffer, with C-c C-c and C-c C-k.
+
+The minibuffer can hold a paragraph and is a bad place to write one:
+no newline without a prefix, no wrapping, and nothing you can leave and
+come back to."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla-chat-compose)))
+  (let (compose)
+    (unwind-protect
+        (with-temp-buffer
+          (cmacs-clawtilla-chat-mode)
+          (setq-local cmacs-clawtilla-chat--agent "scout")
+          (setq compose (cmacs-clawtilla-chat-compose "one\ntwo"))
+          (with-current-buffer compose
+            (should (derived-mode-p 'cmacs-clawtilla-chat-compose-mode))
+            (should (eq (key-binding (kbd "C-c C-c"))
+                        'cmacs-clawtilla-chat-compose-send))
+            (should (eq (key-binding (kbd "C-c C-k"))
+                        'cmacs-clawtilla-chat-compose-cancel))
+            ;; Multiple lines survive, which is the point of it.
+            (should (equal "one\ntwo" (buffer-string)))))
+      (when (buffer-live-p compose) (kill-buffer compose)))))
+
 ;;;; Source guards.
 
 (ert-deftest cmacs-clawtilla-answers-every-gtk-slash-command ()

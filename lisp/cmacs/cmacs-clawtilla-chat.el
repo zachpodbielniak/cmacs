@@ -82,9 +82,21 @@ a turn, which is the only time anybody watches one."
   "Ids of the messages already drawn, so a refresh appends.")
 (defvar-local cmacs-clawtilla-chat--last-sender nil)
 (defvar-local cmacs-clawtilla-chat--last-day nil)
-(defvar-local cmacs-clawtilla-chat--steps nil)
+(defvar-local cmacs-clawtilla-chat--steps-json nil
+  "The steps array exactly as the daemon sent it.
+
+Kept as text.  A step has to travel back to C as the JSON that arrived:
+re-encoding a parsed one turns a null `failed' into an empty object,
+which the library reads with a has_member() check that a null passes --
+one GLib CRITICAL per step, per redraw.")
+(defvar-local cmacs-clawtilla-chat--drawn-steps nil
+  "Identities of the steps already written into the transcript.")
 (defvar-local cmacs-clawtilla-chat--steps-start nil
   "Where the live activity line begins, or nil.")
+(defvar-local cmacs-clawtilla-chat--busy nil
+  "Non-nil while this agent is mid-turn.")
+(defvar-local cmacs-clawtilla-chat--peer nil
+  "The agent this one is working with, if any.")
 
 (defface cmacs-clawtilla-chat-self
   '((t :inherit font-lock-string-face))
@@ -173,19 +185,86 @@ notice."
     (setq cmacs-clawtilla-chat--last-sender sender)
     (setq cmacs-clawtilla-chat--last-day day)))
 
+(defun cmacs-clawtilla-chat--split-steps ()
+  "Return the split of the steps this room has seen.
+
+An alist of `history', `live' and `summary'.  The summary is computed
+in C from the step objects rather than here, because building it here
+would mean re-encoding a step -- and a step that has been through
+`json-parse-string' and back has its `failed: false' turned into an
+empty object, which the library then reads as a boolean."
+  (and cmacs-clawtilla-chat--steps-json
+       (cmacs-clawtilla--parse
+        (cmacs-clawtilla--steps
+         cmacs-clawtilla-chat--steps-json
+         cmacs-clawtilla-chat--agent
+         (cmacs-clawtilla-chat--newest-ts)))))
+
 (defun cmacs-clawtilla-chat--append-messages (messages)
-  "Append any of MESSAGES not already drawn."
+  "Append any of MESSAGES not already drawn, and refresh the status line."
   (cmacs-clawtilla-chat--appending
-    ;; The activity line lives at the very end, so it is taken down
-    ;; before messages are added and put back after: a turn's steps
-    ;; belong under the transcript, not buried in the middle of it.
+    ;; The status line lives at the very end, so it comes down before
+    ;; anything is added and goes back after.
     (cmacs-clawtilla-chat--clear-activity)
     (dolist (message messages)
       (let ((id (alist-get 'id message)))
         (unless (member id cmacs-clawtilla-chat--seen)
           (push id cmacs-clawtilla-chat--seen)
           (cmacs-clawtilla-chat--insert-message message))))
-    (cmacs-clawtilla-chat--draw-activity)))
+    (let ((split (cmacs-clawtilla-chat--split-steps)))
+      (cmacs-clawtilla-chat--append-history-steps
+       (alist-get 'history split))
+      (cmacs-clawtilla-chat--draw-activity split))))
+
+(defface cmacs-clawtilla-chat-step
+  '((t :inherit shadow))
+  "Face for a tool call in the transcript."
+  :group 'cmacs-clawtilla)
+
+(defface cmacs-clawtilla-chat-step-failed
+  '((t :inherit error))
+  "Face for a tool call that failed."
+  :group 'cmacs-clawtilla)
+
+(defun cmacs-clawtilla-chat--step-identity (step)
+  "Return a stable identity for STEP."
+  (format "%s/%s/%s"
+          (or (alist-get 'timestamp step) 0)
+          (or (alist-get 'tool step) "")
+          (or (alist-get 'text step) "")))
+
+(defun cmacs-clawtilla-chat--step-line (step)
+  "Return the one-line rendering of STEP."
+  (let ((tool (alist-get 'tool step))
+        (text (alist-get 'text step))
+        (failed (eq t (alist-get 'failed step))))
+    (concat "    "
+            (propertize
+             (concat (if failed "✗ " "· ")
+                     (if (and tool (not (string-empty-p tool)))
+                         (concat tool
+                                 (when (and text (not (string-empty-p text)))
+                                   (concat " " text)))
+                       (or text "")))
+             'face (if failed
+                       'cmacs-clawtilla-chat-step-failed
+                     'cmacs-clawtilla-chat-step)))))
+
+(defun cmacs-clawtilla-chat--append-history-steps (steps)
+  "Write any of STEPS not yet in the transcript into it.
+
+A turn's tool calls stay in the transcript once a message has
+overtaken them.  Dropping them with the activity line -- which is what
+happened before -- means the record of what the agent actually DID
+disappears at the exact moment its answer arrives, which is when
+somebody wants to read it."
+  (dolist (step steps)
+    (let ((identity (cmacs-clawtilla-chat--step-identity step)))
+      (unless (member identity cmacs-clawtilla-chat--drawn-steps)
+        (push identity cmacs-clawtilla-chat--drawn-steps)
+        (let ((start (point)))
+          (insert (cmacs-clawtilla-chat--step-line step) "\n")
+          (cmacs-clawtilla-chat--seal start (point)))))))
 
 (defun cmacs-clawtilla-chat--clear-activity ()
   "Remove the live activity line, if there is one."
@@ -211,29 +290,37 @@ notice."
           (setq limit (1+ limit)))))
     newest))
 
-(defun cmacs-clawtilla-chat--draw-activity ()
-  "Draw what the agent is doing right now, under the transcript."
-  (when cmacs-clawtilla-chat--steps
-    (setq cmacs-clawtilla-chat--steps-start (point-max))
-    (goto-char (point-max))
-    (let* ((newest (cmacs-clawtilla-chat--newest-ts))
-           ;; Steps that predate the last message have already been
-           ;; overtaken by it: they belong in the history above rather
-           ;; than in the live line below, which is how a finished
-           ;; turn's steps stop piling up under the transcript.
-           (live (seq-remove
-                  (lambda (step)
-                    (and (> newest 0)
-                         (cmacs-clawtilla--step-precedes
-                          (json-serialize step) newest
-                          cmacs-clawtilla-chat--agent)))
-                  cmacs-clawtilla-chat--steps))
-           (json (json-serialize (vconcat live)))
-           (summary (and live
-                         (cmacs-clawtilla--step-summary
-                          json cmacs-clawtilla-chat--agent))))
-      (when summary
-        (insert "\n" (cmacs-clawtilla-dim (concat "· " summary)) "\n")))))
+(defun cmacs-clawtilla-chat--draw-activity (split)
+  "Draw the status line from SPLIT: what the agent is doing.
+
+The sentence is `clawt_agent_activity_label', the same one the GTK
+client and the CLI say, and the tool summary beside it is
+`clawt_turn_step_run_summary' -- \"Read 3 files, Changed 2 files\"
+rather than every operation called a command."
+  (setq cmacs-clawtilla-chat--steps-start (point-max))
+  (goto-char (point-max))
+  (let* ((activity (and cmacs-clawtilla-chat--busy
+                        (cmacs-clawtilla--activity-label
+                         cmacs-clawtilla-chat--busy
+                         cmacs-clawtilla-chat--peer)))
+         (summary (let ((text (alist-get 'summary split)))
+                    (unless (or (null text) (string-empty-p text))
+                      text)))
+         (parts (delq nil (list activity summary))))
+    (when parts
+      (let ((start (point)))
+        ;; The marker says whether a turn is RUNNING, which the words
+        ;; alone do not: a summary of what was just done reads the same
+        ;; whether the agent is still doing it or has stopped, and only
+        ;; one of those is worth waiting for.
+        (insert "\n"
+                (propertize (concat (if cmacs-clawtilla-chat--busy "⟳ " "· ")
+                                    (string-join parts " — "))
+                            'face (if cmacs-clawtilla-chat--busy
+                                      'cmacs-clawtilla-busy
+                                    'cmacs-clawtilla-dim))
+                "\n")
+        (cmacs-clawtilla-chat--seal start (point))))))
 
 
 ;;;; Loading.
@@ -257,17 +344,40 @@ notice."
                    (or (cmacs-clawtilla-get data 'room) room))
              (cmacs-clawtilla-chat--append-messages
               (cmacs-clawtilla-get data 'messages)))))))
-    (cmacs-clawtilla-request
+    (cmacs-clawtilla-request-raw
      conn "room.steps" (list (cons 'room room) (cons 'as "user")
                              (cons 'live t))
-     (lambda (data err)
+     (lambda (json err)
        (when (and (buffer-live-p buffer) (not err))
          (with-current-buffer buffer
-           (setq cmacs-clawtilla-chat--steps
-                 (cmacs-clawtilla-get data 'steps))
+           ;; Kept as the text that arrived; see the variable.
+           (setq cmacs-clawtilla-chat--steps-json
+                 (cmacs-clawtilla-member-json json 'steps))
            (cmacs-clawtilla-chat--appending
              (cmacs-clawtilla-chat--clear-activity)
-             (cmacs-clawtilla-chat--draw-activity))))))))
+             (let ((split (cmacs-clawtilla-chat--split-steps)))
+               (cmacs-clawtilla-chat--append-history-steps
+                (alist-get 'history split))
+               (cmacs-clawtilla-chat--draw-activity split)))))))
+    ;; Whether the agent is mid-turn, and with whom.  Asked rather than
+    ;; inferred from the steps: a turn can be running with nothing to
+    ;; show for it yet, and that is exactly when somebody wants to know.
+    (when (buffer-local-value 'cmacs-clawtilla-chat--agent buffer)
+      (cmacs-clawtilla-request
+       conn "agent.show"
+       (list (cons 'agent (buffer-local-value 'cmacs-clawtilla-chat--agent
+                                              buffer)))
+       (lambda (data err)
+         (when (and (buffer-live-p buffer) (not err))
+           (with-current-buffer buffer
+             (let ((agent (or (cmacs-clawtilla-get data 'agent) data)))
+               (setq cmacs-clawtilla-chat--busy
+                     (eq t (alist-get 'busy agent)))
+               (setq cmacs-clawtilla-chat--peer (alist-get 'peer agent)))
+             (cmacs-clawtilla-chat--appending
+               (cmacs-clawtilla-chat--clear-activity)
+               (cmacs-clawtilla-chat--draw-activity
+                (cmacs-clawtilla-chat--split-steps))))))))))
 
 
 ;;;; Sending.
@@ -293,41 +403,94 @@ notice."
        (when (buffer-live-p buffer)
          (cmacs-clawtilla-chat--load buffer))))))
 
-(defun cmacs-clawtilla-chat-send (message)
-  "Send MESSAGE, or run it if it is a slash command."
-  (interactive (list (read-string "Message: ")))
-  (setq message (string-trim message))
-  (unless (string-empty-p message)
-    (if (string-prefix-p "/" message)
-        (cmacs-clawtilla-chat--slash message)
-      (cmacs-clawtilla-chat--send message))))
+(defvar-local cmacs-clawtilla-chat--parent nil
+  "The transcript a compose buffer belongs to.")
 
-(defun cmacs-clawtilla-chat-compose ()
-  "Compose a multi-line message in its own buffer."
+(defvar cmacs-clawtilla-chat-compose-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'cmacs-clawtilla-chat-compose-send)
+    (define-key map (kbd "C-c C-k") #'cmacs-clawtilla-chat-compose-cancel)
+    map)
+  "Keymap for `cmacs-clawtilla-chat-compose-mode'.")
+
+(define-derived-mode cmacs-clawtilla-chat-compose-mode text-mode
+  "Clawtilla-Compose"
+  "Major mode for writing a message to an agent.
+
+A real buffer rather than the minibuffer, because a message to an agent
+is usually not one line: it has a paragraph, a path, a snippet of code.
+The minibuffer can hold those and is a bad place to write them -- no
+newline without a prefix, no wrapping, and nothing you can leave and
+come back to."
+  :group 'cmacs-clawtilla
+  (setq-local header-line-format
+              (substitute-command-keys
+               "\\[cmacs-clawtilla-chat-compose-send] to send, \\[cmacs-clawtilla-chat-compose-cancel] to abandon"))
+  (visual-line-mode 1))
+
+(defcustom cmacs-clawtilla-chat-compose-height 10
+  "How many lines the compose buffer gets."
+  :type 'integer
+  :group 'cmacs-clawtilla)
+
+(defun cmacs-clawtilla-chat-send ()
+  "Write a message to this conversation.
+
+Opens a compose buffer under the transcript.  A slash command works
+there too: a buffer whose whole content begins with `/' is run as one
+rather than sent, so `/help' does not have to be typed somewhere else."
   (interactive)
-  (let ((parent (current-buffer))
-        (buffer (get-buffer-create "*clawtilla compose*")))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (text-mode)
-      (setq-local header-line-format
-                  "C-c C-c to send, C-c C-k to abandon")
-      (setq-local cmacs-clawtilla-chat--parent parent)
-      (local-set-key (kbd "C-c C-c") #'cmacs-clawtilla-chat-compose-send)
-      (local-set-key (kbd "C-c C-k") #'kill-buffer-and-window))
-    (cmacs-clawtilla-display buffer)))
+  (cmacs-clawtilla-chat-compose))
 
-(defvar-local cmacs-clawtilla-chat--parent nil)
+(defun cmacs-clawtilla-chat-compose (&optional initial)
+  "Compose a message, starting from INITIAL."
+  (interactive)
+  (let* ((parent (current-buffer))
+         (buffer (get-buffer-create
+                  (format "*clawtilla compose: %s*"
+                          (or cmacs-clawtilla-chat--agent
+                              cmacs-clawtilla-chat--room "message"))))
+         (window (display-buffer-below-selected
+                  buffer
+                  `((window-height . ,cmacs-clawtilla-chat-compose-height)))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'cmacs-clawtilla-chat-compose-mode)
+        (cmacs-clawtilla-chat-compose-mode))
+      (erase-buffer)
+      (when initial (insert initial))
+      (setq-local cmacs-clawtilla-chat--parent parent))
+    (when window (select-window window))
+    buffer))
 
 (defun cmacs-clawtilla-chat-compose-send ()
   "Send what is in the compose buffer."
   (interactive)
   (let ((body (string-trim (buffer-string)))
-        (parent cmacs-clawtilla-chat--parent))
-    (when (buffer-live-p parent)
+        (parent cmacs-clawtilla-chat--parent)
+        (window (get-buffer-window (current-buffer))))
+    (if (string-empty-p body)
+        (message "clawtilla: nothing to send")
+      (unless (buffer-live-p parent)
+        (user-error "That conversation is gone"))
       (with-current-buffer parent
-        (cmacs-clawtilla-chat--send body)))
-    (kill-buffer-and-window)))
+        (if (string-prefix-p "/" body)
+            (cmacs-clawtilla-chat--slash body)
+          (cmacs-clawtilla-chat--send body)))
+      (cmacs-clawtilla-chat--close-compose window))))
+
+(defun cmacs-clawtilla-chat-compose-cancel ()
+  "Abandon what is in the compose buffer."
+  (interactive)
+  (cmacs-clawtilla-chat--close-compose (get-buffer-window (current-buffer)))
+  (message "clawtilla: abandoned"))
+
+(defun cmacs-clawtilla-chat--close-compose (window)
+  "Close the compose buffer showing in WINDOW."
+  (let ((buffer (current-buffer)))
+    (when (and window (window-live-p window)
+               (not (eq window (frame-root-window window))))
+      (delete-window window))
+    (kill-buffer buffer)))
 
 
 ;;;; Slash commands.
@@ -781,9 +944,32 @@ doing."
     (cmacs-clawtilla-mark-read room-id)
     (cmacs-clawtilla-display buffer)))
 
+(defun cmacs-clawtilla-chat--note-turn (kind data)
+  "Move this buffer's busy state for an event of KIND carrying DATA.
+
+Tracked from events as well as asked for on reload, because a turn
+starts and ends between reloads: a status line that only moved when
+something else happened would say \"working\" after the answer had
+arrived, which is worse than saying nothing."
+  (cond
+   ((member kind '("agent.typing" "turn.step" "turn.started"))
+    (setq cmacs-clawtilla-chat--busy t)
+    (setq cmacs-clawtilla-chat--peer
+          (or (cmacs-clawtilla-event-detail data 'peer)
+              cmacs-clawtilla-chat--peer)))
+   ((member kind '("turn.finished" "turn.timed_out" "message.refused"))
+    (setq cmacs-clawtilla-chat--busy nil)
+    (setq cmacs-clawtilla-chat--peer nil))
+   ((and (equal kind "message")
+         ;; The agent answering ends its own turn.  Its own message is
+         ;; the end of the turn; yours is the start of the next one.
+         (not (equal (cmacs-clawtilla-event-detail data 'from) "user")))
+    (setq cmacs-clawtilla-chat--busy nil)
+    (setq cmacs-clawtilla-chat--peer nil))))
+
 (defun cmacs-clawtilla-chat--on-event (conn kind data)
   "Append to any transcript for CONN that KIND in DATA concerns."
-  (when (string-match-p (rx bos (or "message" "turn.")) kind)
+  (when (string-match-p (rx bos (or "message" "turn." "agent.typing")) kind)
     (let ((subject (cmacs-clawtilla-event-subject data)))
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
@@ -797,6 +983,7 @@ doing."
                      (or (null subject)
                          (equal subject cmacs-clawtilla-chat--room)
                          (equal subject cmacs-clawtilla-chat--agent)))
+            (cmacs-clawtilla-chat--note-turn kind data)
             (cmacs-clawtilla-chat--load buffer)))))))
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-chat--on-event)

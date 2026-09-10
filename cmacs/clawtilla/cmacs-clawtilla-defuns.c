@@ -754,18 +754,32 @@ distinct files.  */)
 }
 
 DEFUN ("cmacs-clawtilla--steps", Fcmacs_clawtilla__steps,
-       Scmacs_clawtilla__steps, 1, 2, 0,
-       doc: /* Return STEPS-JSON normalised through the library, as JSON.
+       Scmacs_clawtilla__steps, 1, 3, 0,
+       doc: /* Split STEPS-JSON into what history has overtaken and what is live.
 
-Each step gains its tone -- how it should read -- from
-`clawt_turn_step_tone', so a client is not deciding for itself whether
-a step is progress or a failure.  */)
-  (Lisp_Object steps_json, Lisp_Object agent)
+Returns JSON with `history' and `live'.  MESSAGE-TS is the newest
+message already on screen; steps older than it belong in the transcript
+above it rather than in the activity line -- which is how a turn's tool
+calls stay readable after the answer arrives instead of vanishing.
+
+STEPS-JSON must be the text the daemon sent.  Re-encoding a parsed step
+turns a null `failed' into an empty object, and the library reads that
+member with a has_member() check that a null passes -- one GLib
+CRITICAL per step, per redraw, and a `failed' that reads as true.  */)
+  (Lisp_Object steps_json, Lisp_Object agent, Lisp_Object message_ts)
 {
   char *c_steps = cmacs_clawt_dup (steps_json);
   char *c_agent = NILP (agent) ? NULL : cmacs_clawt_dup (agent);
-  char *json = cmacs_clawt_steps_to_json (c_steps, c_agent);
-  Lisp_Object result = cmacs_clawt_string (json);
+  char *json;
+  Lisp_Object result;
+
+  if (!NILP (message_ts))
+    CHECK_INTEGER (message_ts);
+
+  json = cmacs_clawt_steps_split (c_steps, c_agent,
+                                  NILP (message_ts) ? 0
+                                                    : XFIXNUM (message_ts));
+  result = cmacs_clawt_string (json);
 
   xfree (c_steps);
   xfree (c_agent);

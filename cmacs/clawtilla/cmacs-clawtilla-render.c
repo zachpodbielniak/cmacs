@@ -341,10 +341,38 @@ cmacs_clawt_step_precedes (const char *step_json, const char *agent_id,
   return clawt_turn_step_precedes (step, message_ts) ? true : false;
 }
 
-char *
-cmacs_clawt_steps_to_json (const char *steps_json, const char *agent_id)
+static void
+cmacs_clawt_step_to_json (JsonBuilder *builder, ClawtTurnStep *step)
 {
-  g_autoptr (GPtrArray) steps = cmacs_clawt_steps_from_json (steps_json, agent_id);
+  const gchar *tone = clawt_turn_step_tone (step);
+  const gchar *tool = clawt_turn_step_get_tool_name (step);
+  const gchar *text = clawt_turn_step_get_text (step);
+  const gchar *detail = clawt_turn_step_get_detail (step);
+
+  json_builder_begin_object (builder);
+  json_builder_set_member_name (builder, "tone");
+  json_builder_add_string_value (builder, tone != NULL ? tone : "");
+  json_builder_set_member_name (builder, "tool");
+  json_builder_add_string_value (builder, tool != NULL ? tool : "");
+  json_builder_set_member_name (builder, "text");
+  json_builder_add_string_value (builder, text != NULL ? text : "");
+  json_builder_set_member_name (builder, "detail");
+  json_builder_add_string_value (builder, detail != NULL ? detail : "");
+  json_builder_set_member_name (builder, "call");
+  json_builder_add_boolean_value (builder, clawt_turn_step_is_call (step));
+  json_builder_set_member_name (builder, "failed");
+  json_builder_add_boolean_value (builder, clawt_turn_step_get_failed (step));
+  json_builder_set_member_name (builder, "timestamp");
+  json_builder_add_int_value (builder, clawt_turn_step_get_timestamp (step));
+  json_builder_end_object (builder);
+}
+
+char *
+cmacs_clawt_steps_split (const char *steps_json, const char *agent_id,
+                         int64_t message_ts)
+{
+  g_autoptr (GPtrArray) steps = cmacs_clawt_steps_from_json (steps_json,
+                                                             agent_id);
   g_autoptr (JsonBuilder) builder = json_builder_new ();
   g_autoptr (JsonNode) root = NULL;
   guint i;
@@ -352,37 +380,79 @@ cmacs_clawt_steps_to_json (const char *steps_json, const char *agent_id)
   if (steps == NULL)
     return NULL;
 
+  /* Two arrays out of one, split by clawt_turn_step_precedes().
+     Everything happens here rather than in Lisp because a step has to
+     travel as the JSON the daemon SENT: re-encoding a parsed step turns
+     a null `failed' into an empty object, and the library reads that
+     member with json_object_get_boolean_member() behind a has_member()
+     check that a null passes -- one GLib CRITICAL per step, per redraw.
+
+     `history' is the half a message has already overtaken.  Those are
+     not finished with: they belong in the transcript above that
+     message, which is how a turn's tool calls stay readable after the
+     answer arrives instead of vanishing with the activity line.  */
+  json_builder_begin_object (builder);
+  json_builder_set_member_name (builder, "history");
   json_builder_begin_array (builder);
 
   for (i = 0; i < steps->len; i++)
     {
       ClawtTurnStep *step = g_ptr_array_index (steps, i);
-      const gchar *tone = clawt_turn_step_tone (step);
-      const gchar *tool = clawt_turn_step_get_tool_name (step);
-      const gchar *text = clawt_turn_step_get_text (step);
-      const gchar *detail = clawt_turn_step_get_detail (step);
 
-      json_builder_begin_object (builder);
-      json_builder_set_member_name (builder, "tone");
-      json_builder_add_string_value (builder, tone != NULL ? tone : "");
-      json_builder_set_member_name (builder, "tool");
-      json_builder_add_string_value (builder, tool != NULL ? tool : "");
-      json_builder_set_member_name (builder, "text");
-      json_builder_add_string_value (builder, text != NULL ? text : "");
-      json_builder_set_member_name (builder, "detail");
-      json_builder_add_string_value (builder, detail != NULL ? detail : "");
-      json_builder_set_member_name (builder, "call");
-      json_builder_add_boolean_value (builder, clawt_turn_step_is_call (step));
-      json_builder_set_member_name (builder, "failed");
-      json_builder_add_boolean_value (builder,
-                                      clawt_turn_step_get_failed (step));
-      json_builder_set_member_name (builder, "timestamp");
-      json_builder_add_int_value (builder,
-                                  clawt_turn_step_get_timestamp (step));
-      json_builder_end_object (builder);
+      if (message_ts > 0 && clawt_turn_step_precedes (step, message_ts))
+        cmacs_clawt_step_to_json (builder, step);
     }
 
   json_builder_end_array (builder);
+  json_builder_set_member_name (builder, "live");
+  json_builder_begin_array (builder);
+
+  for (i = 0; i < steps->len; i++)
+    {
+      ClawtTurnStep *step = g_ptr_array_index (steps, i);
+
+      if (!(message_ts > 0 && clawt_turn_step_precedes (step, message_ts)))
+        cmacs_clawt_step_to_json (builder, step);
+    }
+
+  json_builder_end_array (builder);
+
+  /* The summary of the live half, built HERE from the step objects.
+     Handing the normalised array back to Lisp and letting it re-encode
+     that for the summary is the same corruption one layer up: a
+     `failed: false' becomes nil on the way in and an empty object on
+     the way out, and the library reads it as a boolean.  Nothing
+     re-encodes a step now -- the raw JSON goes in, and text comes
+     out.  */
+  {
+    guint first_live = steps->len;
+
+    for (i = 0; i < steps->len; i++)
+      {
+        ClawtTurnStep *step = g_ptr_array_index (steps, i);
+
+        if (!(message_ts > 0 && clawt_turn_step_precedes (step, message_ts)))
+          {
+            first_live = i;
+            break;
+          }
+      }
+
+    json_builder_set_member_name (builder, "summary");
+
+    if (first_live < steps->len)
+      {
+        g_autofree gchar *summary =
+          clawt_turn_step_run_summary (steps, first_live, steps->len);
+
+        json_builder_add_string_value (builder,
+                                       summary != NULL ? summary : "");
+      }
+    else
+      json_builder_add_string_value (builder, "");
+  }
+
+  json_builder_end_object (builder);
   root = json_builder_get_root (builder);
 
   return cmacs_clawt_render_node_to_json (root);

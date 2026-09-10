@@ -121,8 +121,25 @@ a reset drops the session, and is what makes an identity change take.
 
 *** A conversation
 
-A read-only transcript that appends, with composing as a separate act:
-=i= for a line, =c= for a compose buffer, =a= to attach a file.
+A read-only transcript that appends, with composing as a separate act.
+=RET= or =i= opens a *compose buffer* under the transcript: =C-c C-c=
+sends it, =C-c C-k= abandons it.  A buffer rather than the minibuffer
+because a message to an agent is usually not one line --- it has a
+paragraph, a path, a snippet of code --- and the minibuffer is a bad
+place to write those.  A slash command works there too: content
+beginning with =/= is run rather than sent.
+
+*A turn in progress says so.*  A status line under the transcript reads
+=⟳ working for scribe — Read 3 files, Changed 2 files=, in the
+library's own words: the sentence is =clawt_agent_activity_label= and
+the tool summary is =clawt_turn_step_run_summary=, the same two the GTK
+client and the CLI use.  The marker distinguishes a turn that is
+running from one that has stopped, which the words alone do not.
+
+*Tool calls stay in the transcript.*  Once a message has overtaken
+them they are written into the history above it rather than dropped
+with the status line --- the record of what the agent actually did is
+most wanted at the moment its answer arrives.
 
 Two behaviours are worth knowing because they are the ones you would
 otherwise notice as the thing being unusable:
