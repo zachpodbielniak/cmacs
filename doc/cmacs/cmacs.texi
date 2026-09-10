@@ -11052,6 +11052,13 @@ in half a window is one nobody reads.
 @code{pop-to-buffer} for the split, or to @code{display-buffer} and use
 @code{display-buffer-alist} for different rules per buffer.
 
+In the fleet buffer the agents in no team are drawn @emph{above} the
+teams, which is not the order the daemon lists them in.  They are the
+agents with no lead to answer for them, so they are both the rows most
+likely to be wanted and the easiest to lose --- below every team is
+below the fold on a fleet of any size.  Set
+@code{cmacs-clawtilla-fleet-no-team-first} to nil for the daemon's order.
+
 Several behaviours are the library's rather than this client's, and are
 worth knowing because they are what makes three clients look like one
 product:

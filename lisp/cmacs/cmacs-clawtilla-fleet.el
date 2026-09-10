@@ -52,6 +52,16 @@
 (declare-function cmacs-clawtilla-chat "cmacs-clawtilla-chat")
 (declare-function cmacs-clawtilla-agent "cmacs-clawtilla-agent")
 
+(defcustom cmacs-clawtilla-fleet-no-team-first t
+  "Whether agents belonging to no team are drawn above the teams.
+
+The unfiled agents are the ones with no lead to answer for them, so
+they are the rows most likely to be wanted and the easiest to lose:
+they sit after every team, which on a fleet of any size means below
+the fold.  Nil restores the daemon's own order, teams first."
+  :type 'boolean
+  :group 'cmacs-clawtilla)
+
 (defcustom cmacs-clawtilla-fleet-show-descriptions t
   "Whether an agent's description is drawn under its name.
 
@@ -177,29 +187,38 @@ scroll rather than read."
                 "\n"))
       (insert "\n")
 
-      (dolist (team cmacs-clawtilla-fleet--teams)
-        (cmacs-clawtilla-insert-section
-         :type 'team :value team :level 0 :foldable t
-         :heading (cmacs-clawtilla-fleet--team-heading team)
-         :body (lambda ()
-                 (dolist (agent (cmacs-clawtilla-fleet--agents-in
-                                 (alist-get 'id team)))
-                   (cmacs-clawtilla-fleet--insert-agent agent 1))))
-        (insert "\n"))
-
-      (let ((loose (cmacs-clawtilla-fleet--agents-in nil)))
-        (when loose
-          (cmacs-clawtilla-insert-section
-           :type 'team :value "no-team" :level 0 :foldable t
-           :heading (concat (propertize "No team"
-                                        'face 'cmacs-clawtilla-team)
-                            "  "
-                            (cmacs-clawtilla-dim
-                             (format "%d" (length loose))))
-           :body (lambda ()
-                   (dolist (agent loose)
-                     (cmacs-clawtilla-fleet--insert-agent agent 1))))
-          (insert "\n")))
+      ;; Both groups are emitted the same way; only the order varies, so
+      ;; the two orders share one body rather than being written twice.
+      (cl-flet ((emit-teams
+                  ()
+                  (dolist (team cmacs-clawtilla-fleet--teams)
+                    (cmacs-clawtilla-insert-section
+                     :type 'team :value team :level 0 :foldable t
+                     :heading (cmacs-clawtilla-fleet--team-heading team)
+                     :body (lambda ()
+                             (dolist (agent (cmacs-clawtilla-fleet--agents-in
+                                             (alist-get 'id team)))
+                               (cmacs-clawtilla-fleet--insert-agent agent 1))))
+                    (insert "\n")))
+                (emit-loose
+                  ()
+                  (let ((loose (cmacs-clawtilla-fleet--agents-in nil)))
+                    (when loose
+                      (cmacs-clawtilla-insert-section
+                       :type 'team :value "no-team" :level 0 :foldable t
+                       :heading (concat (propertize "No team"
+                                                    'face 'cmacs-clawtilla-team)
+                                        "  "
+                                        (cmacs-clawtilla-dim
+                                         (format "%d" (length loose))))
+                       :body (lambda ()
+                               (dolist (agent loose)
+                                 (cmacs-clawtilla-fleet--insert-agent agent 1))))
+                      (insert "\n")))))
+        (if cmacs-clawtilla-fleet-no-team-first
+            (progn (emit-loose) (emit-teams))
+          (emit-teams)
+          (emit-loose)))
 
       (when cmacs-clawtilla-fleet--rooms
         (cmacs-clawtilla-insert-section

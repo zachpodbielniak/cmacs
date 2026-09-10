@@ -744,6 +744,54 @@ here too so it fails in the suite a developer already runs."
                       offenders)))))))
     (should (null offenders))))
 
+(ert-deftest cmacs-clawtilla-unfiled-agents-come-first ()
+  "Agents in no team are drawn above the teams, and the option flips it.
+
+They are the rows with no lead to answer for them, and they used to sit
+after every team -- which on a fleet of any size is below the fold.
+Checked by rendering, not by reading the option: the ordering lives in
+the draw function, so an option nothing consults would pass a test that
+only asked what the option was set to."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-fleet nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-fleet--draw))
+  (cl-flet
+      ((order
+         (first)
+         (with-temp-buffer
+           (cmacs-clawtilla-fleet-mode)
+           (setq-local cmacs-clawtilla-fleet-no-team-first first)
+           (setq-local cmacs-clawtilla-connection
+                       (cmacs-clawtilla--connection-create
+                        :name "test" :state 'connected))
+           (setq-local cmacs-clawtilla-fleet--teams
+                       '(((id . "forge") (name . "forge"))))
+           (setq-local cmacs-clawtilla-fleet--agents
+                       '(((id . "ox") (name . "ox") (team . "forge")
+                          (state . "running"))
+                         ((id . "jackal") (name . "jackal")
+                          (state . "running"))))
+           (let ((inhibit-read-only t))
+             (cmacs-clawtilla-fleet--draw))
+           (let ((text (buffer-string)))
+             (cons (string-match "No team" text)
+                   (string-match "forge" text))))))
+    (let ((on (order t))
+          (off (order nil)))
+      ;; Both groups must actually be on screen either way, or "first"
+      ;; would be satisfied by having dropped the other one.
+      (should (car on)) (should (cdr on))
+      (should (car off)) (should (cdr off))
+      (should (< (car on) (cdr on)))
+      (should (> (car off) (cdr off)))))
+  ;; And the DEFAULT is unfiled-first, which is the part that was
+  ;; actually asked for.  Read from `standard-value' rather than the
+  ;; variable, so a developer who has customised it does not silently
+  ;; pass a test about what ships.
+  (should (eval (car (get 'cmacs-clawtilla-fleet-no-team-first
+                          'standard-value))
+                t)))
+
 (provide 'cmacs-clawtilla-tests)
 
 ;;; cmacs-clawtilla-tests.el ends here

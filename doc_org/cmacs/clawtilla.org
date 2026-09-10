@@ -115,10 +115,16 @@ rules per buffer.
 
 *** The fleet
 
-Teams, with the agents in each, then the agents in no team, then rooms.
-Every team gets a heading including an empty one: a team somebody made
-and has not filled is exactly the team they are about to move somebody
-into.
+The agents in no team, then the teams with the agents in each, then
+rooms.  Every team gets a heading including an empty one: a team
+somebody made and has not filled is exactly the team they are about to
+move somebody into.
+
+*Unfiled agents come first*, which is not the order the daemon lists
+them in.  They are the agents with no lead to answer for them, so they
+are both the rows most likely to be wanted and the easiest to lose:
+below every team is below the fold on a fleet of any size.  Set
+=cmacs-clawtilla-fleet-no-team-first= to nil for the daemon's order.
 
 The counts beside a team name --- =2/3 up, 1 busy= --- come from
 =clawt_team_tally=, not from counting the rows on screen.  Three clients
