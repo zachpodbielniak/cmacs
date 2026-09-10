@@ -346,10 +346,15 @@ secret is shown here and none is accepted."
      (cmacs-clawtilla-current) "integration.health"
      (list (cons 'id id))
      (lambda (data err)
-       (message "clawtilla: %s" (or err
-                                    (cmacs-clawtilla-get data 'detail)
-                                    (cmacs-clawtilla-get data 'health)
-                                    "checked"))))))
+       (message "clawtilla: %s"
+                (or err
+                    (cmacs-clawtilla-get data 'detail)
+                    (cmacs-clawtilla-get data 'error)
+                    (let ((ok (cmacs-clawtilla-get data 'healthy)))
+                      (cond ((eq ok t) "healthy")
+                            ((eq ok nil) nil)))
+                    (format "%s" (or (cmacs-clawtilla-get data 'health)
+                                     "checked"))))))))
 
 
 ;;;; Integrations.
@@ -589,10 +594,12 @@ asking."
        (with-current-buffer (get-buffer-create "*clawtilla images*")
          (let ((inhibit-read-only t))
            (erase-buffer)
-           (dolist (image (cmacs-clawtilla-get data 'images))
-             (insert (format "%-30s %s\n"
+           (dolist (image (cmacs-clawtilla-get data 'sources))
+             (insert (format "%-24s %-12s %s\n"
                              (or (alist-get 'id image) "?")
-                             (or (alist-get 'description image) ""))))
+                             (or (alist-get 'group image) "")
+                             (or (alist-get 'note image)
+                                 (alist-get 'name image) ""))))
            (goto-char (point-min))
            (special-mode))
          (cmacs-clawtilla-display (current-buffer)))))))
@@ -632,29 +639,59 @@ asking."
 ;;;; Who the operator is.
 
 (defun cmacs-clawtilla-settings-operator ()
-  "Show and change what the fleet knows about you.
+  "Edit what the fleet knows about you.
 
-Agents read this, so it is worth being accurate: the name here is what
-they call you."
+Two halves, and only one of them is yours to write: `text' is
+OPERATOR.org, which you write, and `learned' is what the agents have
+concluded and filed themselves.  This edits the first and shows the
+second -- offering to edit what an agent learned would be offering to
+rewrite its notes."
   (interactive)
-  (cmacs-clawtilla-request
-   (cmacs-clawtilla-current) "operator.get" nil
-   (lambda (data err)
-     (if err
-         (message "clawtilla: %s" err)
-       (let* ((profile (or (cmacs-clawtilla-get data 'operator) data))
-              (field (completing-read
-                      "Change: "
-                      (mapcar (lambda (pair) (symbol-name (car pair)))
-                              profile)
-                      nil nil))
-              (current (alist-get (intern field) profile))
-              (value (read-string (format "%s: " field)
-                                  (and current (format "%s" current)))))
-         (cmacs-clawtilla-request
-          (cmacs-clawtilla-current) "operator.set"
-          (list (cons (intern field) value))
-          (lambda (_d e) (message "clawtilla: %s" (or e "saved")))))))))
+  (let ((conn (cmacs-clawtilla-current)))
+    (cmacs-clawtilla-request
+     conn "operator.get" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let ((buffer (get-buffer-create "*clawtilla operator*")))
+           (with-current-buffer buffer
+             (erase-buffer)
+             (insert (or (cmacs-clawtilla-get data 'text) ""))
+             (goto-char (point-min))
+             (when (fboundp 'org-mode) (org-mode))
+             (setq-local cmacs-clawtilla-connection conn)
+             (setq-local header-line-format
+                         (format "%s -- C-c C-c saves it back"
+                                 (or (cmacs-clawtilla-get data 'path)
+                                     "OPERATOR.org")))
+             (local-set-key (kbd "C-c C-c")
+                            #'cmacs-clawtilla-settings-operator-save)
+             (let ((learned (cmacs-clawtilla-get data 'learned)))
+               (when learned
+                 (message "clawtilla: %d thing%s the fleet worked out itself"
+                          (length learned)
+                          (if (= 1 (length learned)) "" "s")))))
+           (cmacs-clawtilla-display buffer)))))))
+
+(defun cmacs-clawtilla-settings-operator-save ()
+  "Save the operator profile back.
+
+The daemon may answer `refused', which is not the same as an error: it
+took the request and declined it, and saying which is the difference
+between trying again and not."
+  (interactive)
+  (let ((text (buffer-string)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "operator.set" (list (cons 'text text))
+     (lambda (data err)
+       (cond
+        (err (message "clawtilla: %s" err))
+        ((cmacs-clawtilla-get data 'refused)
+         (message "clawtilla: refused -- %s"
+                  (cmacs-clawtilla-get data 'refused)))
+        (t (message "clawtilla: saved to %s"
+                    (or (cmacs-clawtilla-get data 'path) "OPERATOR.org"))))))))
+
 
 ;;;; The mode.
 

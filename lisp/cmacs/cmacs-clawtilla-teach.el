@@ -163,7 +163,7 @@ be read first."
            (if err
                (message "clawtilla: %s" err)
              (setq cmacs-clawtilla-teach--traces
-                   (cmacs-clawtilla-get data 'traces))
+                   (cmacs-clawtilla-get data 'recordings))
              (cmacs-clawtilla-teach--draw))))))))
 
 (transient-define-prefix cmacs-clawtilla-teach-menu ()

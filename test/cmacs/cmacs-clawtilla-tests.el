@@ -453,6 +453,65 @@ inert under Doom, which is how this shipped the first time."
               (push (car entry) missing))))))
     (should (null missing))))
 
+(ert-deftest cmacs-clawtilla-event-timestamps-are-microseconds ()
+  "An event's stamp is in microseconds and is converted to seconds.
+
+Everything that reads one -- the alert tier, the unread rule, every
+label -- works in seconds, and feeding it microseconds does not fail.
+It produces a date about fifty thousand years from now, which reads as
+newer than everything and is wrong in no way anybody notices."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let ((event (cmacs-clawtilla--parse
+                "{\"ts\":1789071308517850,\"subject\":\"dm:a:user\"}")))
+    (should (= 1789071308 (cmacs-clawtilla-event-seconds event)))
+    ;; A stamp already in seconds is left alone, so history loaded from
+    ;; a different source is not divided twice.
+    (should (= 1789071308
+               (cmacs-clawtilla-event-seconds
+                (cmacs-clawtilla--parse "{\"ts\":1789071308}"))))))
+
+(ert-deftest cmacs-clawtilla-events-name-their-subject-and-detail ()
+  "An event's room is `subject' and its payload is inside `detail'.
+
+Not `room' and `sender', which is what the unread path read: both are
+absent, so it found nothing and counted nothing -- silently, because a
+count that stays at zero is what a quiet fleet looks like."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let ((event (cmacs-clawtilla--parse
+                "{\"kind\":\"message\",\"subject\":\"dm:scout:user\",\
+\"detail\":{\"from\":\"scout\",\"body\":\"hi\"}}")))
+    (should (equal "dm:scout:user" (cmacs-clawtilla-event-subject event)))
+    (should (equal "scout" (cmacs-clawtilla-event-detail event 'from)))
+    (should (null (cmacs-clawtilla-get event 'room)))
+    (should (null (cmacs-clawtilla-get event 'sender)))))
+
+(ert-deftest cmacs-clawtilla-unread-rises-only-for-somebody-else ()
+  "An agent's message raises a count; yours and the open room do not."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla-alerts--on-event)))
+  (let* ((conn (cmacs-clawtilla--connection-create
+                :handle 0 :name "t" :state 'connected :connected-at 1000))
+         (cmacs-clawtilla-known-rooms-function (lambda () '("dm:scout:user")))
+         (cmacs-clawtilla--viewing-room nil)
+         (cmacs-clawtilla-unread (make-hash-table :test 'equal))
+         (from-agent "{\"kind\":\"message\",\"subject\":\"dm:scout:user\",\
+\"ts\":2000000000,\"detail\":{\"from\":\"scout\"}}")
+         (from-you "{\"kind\":\"message\",\"subject\":\"dm:scout:user\",\
+\"ts\":2000000000,\"detail\":{\"from\":\"user\"}}"))
+    (cmacs-clawtilla-alerts--on-event conn "message"
+                                      (cmacs-clawtilla--parse from-agent))
+    (should (= 1 (cmacs-clawtilla-unread-count "dm:scout:user")))
+    ;; Looking at it means reading it.
+    (setq cmacs-clawtilla--viewing-room "dm:scout:user")
+    (cmacs-clawtilla-alerts--on-event conn "message"
+                                      (cmacs-clawtilla--parse from-agent))
+    (should (= 1 (cmacs-clawtilla-unread-count "dm:scout:user")))
+    ;; And your own message never counts.
+    (setq cmacs-clawtilla--viewing-room nil)
+    (cmacs-clawtilla-alerts--on-event conn "message"
+                                      (cmacs-clawtilla--parse from-you))
+    (should (= 1 (cmacs-clawtilla-unread-count "dm:scout:user")))))
+
 ;;;; Source guards.
 
 (ert-deftest cmacs-clawtilla-answers-every-gtk-slash-command ()

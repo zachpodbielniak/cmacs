@@ -533,7 +533,7 @@ losing a conversation."
   (let ((agent cmacs-clawtilla-chat--agent)
         (conn (cmacs-clawtilla-current)))
     (cmacs-clawtilla-request
-     conn "agent.file_read" (list (cons 'agent agent) (cons 'path path))
+     conn "agent.file_read" (list (cons 'agent agent) (cons 'name path))
      (lambda (data err)
        (if err
            (message "clawtilla: %s" err)
@@ -557,21 +557,33 @@ losing a conversation."
      (if err
          (message "clawtilla: %s" err)
        (cmacs-clawtilla-chat--show-list
-        "*clawtilla memory*" (cmacs-clawtilla-get data 'results)
-        (lambda (row) (or (alist-get 'text row) (format "%s" row))))))))
+        "*clawtilla memory*" (cmacs-clawtilla-get data 'memories)
+        ;; Each memory says which store it came out of.  A listing that
+        ;; mixed an agent's own conclusion with something the whole
+        ;; fleet believes would turn two different claims into one row.
+        (lambda (row) (format "%-6s %s"
+                              (or (alist-get 'scope row) "")
+                              (or (alist-get 'summary row)
+                                  (alist-get 'content row) ""))))))))
 
 (defun cmacs-clawtilla-chat-recall (query)
   "Find a past conversation matching QUERY."
   (interactive "sRecall which conversation? ")
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "memory.recall"
-   (list (cons 'query query) (cons 'room cmacs-clawtilla-chat--room))
+   ;; Recall searches the TRANSCRIPT rather than the memories, and is
+   ;; not room-filtered: a person can open any transcript already.
+   (list (cons 'query query) (cons 'agent cmacs-clawtilla-chat--agent))
    (lambda (data err)
      (if err
          (message "clawtilla: %s" err)
        (cmacs-clawtilla-chat--show-list
-        "*clawtilla recall*" (cmacs-clawtilla-get data 'results)
-        (lambda (row) (or (alist-get 'text row) (format "%s" row))))))))
+        "*clawtilla recall*" (cmacs-clawtilla-get data 'hits)
+        (lambda (row) (format "%-14s %-12s %s"
+                              (or (alist-get 'room row) "")
+                              (or (alist-get 'from_name row)
+                                  (alist-get 'from row) "")
+                              (or (alist-get 'body row) ""))))))))
 
 (defun cmacs-clawtilla-chat-flow ()
   "Show what the agents said to each other."
@@ -631,7 +643,7 @@ losing a conversation."
        (if err
            (message "clawtilla: %s" err)
          (let* ((name (or (cmacs-clawtilla-get data 'name) id))
-                (encoded (cmacs-clawtilla-get data 'data))
+                (encoded (cmacs-clawtilla-get data 'base64))
                 (file (expand-file-name name temporary-file-directory)))
            (when encoded
              (let ((coding-system-for-write 'binary))
@@ -649,8 +661,15 @@ losing a conversation."
     (unless id (user-error "No attachment on the message at point"))
     (when (yes-or-no-p "Remove that attachment? ")
       (cmacs-clawtilla-request
-       (cmacs-clawtilla-current) "attachment.remove" (list (cons 'id id))
-       (lambda (_d e) (message "clawtilla: %s" (or e "removed")))))))
+       (cmacs-clawtilla-current) "attachment.remove"
+       ;; Named by agent and file name, not by id: this deletes from an
+       ;; agent's drop-box, and it answers with the host path it
+       ;; unlinked.
+       (list (cons 'agent (or cmacs-clawtilla-chat--agent ""))
+             (cons 'name id))
+       (lambda (data e)
+         (message "clawtilla: %s"
+                  (or e (cmacs-clawtilla-get data 'removed) "removed")))))))
 
 (defun cmacs-clawtilla-chat-room-create (room name members)
   "Make a room called NAME with id ROOM holding MEMBERS.
@@ -764,13 +783,21 @@ doing."
 
 (defun cmacs-clawtilla-chat--on-event (conn kind data)
   "Append to any transcript for CONN that KIND in DATA concerns."
-  (when (member kind '("message" "message.sent" "turn.step" "turn.finished"))
-    (dolist (buffer (buffer-list))
-      (with-current-buffer buffer
-        (when (and (derived-mode-p 'cmacs-clawtilla-chat-mode)
-                   (eq cmacs-clawtilla-connection conn))
-          (cmacs-clawtilla-chat--load buffer)))))
-  (ignore data))
+  (when (string-match-p (rx bos (or "message" "turn.")) kind)
+    (let ((subject (cmacs-clawtilla-event-subject data)))
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when (and (derived-mode-p 'cmacs-clawtilla-chat-mode)
+                     (eq cmacs-clawtilla-connection conn)
+                     ;; Only the transcript this concerns.  Reloading
+                     ;; every open one meant a message in one room
+                     ;; refetched the history of all of them, which is a
+                     ;; request per buffer per message and gets worse the
+                     ;; more conversations somebody keeps open.
+                     (or (null subject)
+                         (equal subject cmacs-clawtilla-chat--room)
+                         (equal subject cmacs-clawtilla-chat--agent)))
+            (cmacs-clawtilla-chat--load buffer)))))))
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-chat--on-event)
 

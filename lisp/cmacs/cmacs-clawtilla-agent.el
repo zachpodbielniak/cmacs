@@ -43,6 +43,12 @@
 (require 'cmacs-clawtilla)
 (require 'cmacs-clawtilla-ui)
 
+(defvar cmacs-clawtilla-agent--draft nil
+  "The token `design.agent' last answered with.
+
+A design is a draft the daemon is holding, and committing names which
+one -- so this is remembered rather than assumed to be the only one.")
+
 (defvar-local cmacs-clawtilla-agent--id nil)
 (defvar-local cmacs-clawtilla-agent--data nil)
 (defvar-local cmacs-clawtilla-agent--mailbox nil)
@@ -324,7 +330,7 @@ somebody to wait for it too."
      (lambda (data err)
        (if err
            (message "clawtilla: %s" err)
-         (let ((encoded (cmacs-clawtilla-get data 'image)))
+         (let ((encoded (cmacs-clawtilla-get data 'base64)))
            (if (null encoded)
                (message "clawtilla: %s has no avatar" agent)
              (with-current-buffer (get-buffer-create
@@ -342,7 +348,7 @@ somebody to wait for it too."
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "agent.avatar_set"
    (list (cons 'agent cmacs-clawtilla-agent--id)
-         (cons 'image (base64-encode-string
+         (cons 'data (base64-encode-string
                        (with-temp-buffer
                          (set-buffer-multibyte nil)
                          (insert-file-contents-literally file)
@@ -372,12 +378,27 @@ error mentions the provider rather than the typo."
      (lambda (data err)
        (if err
            (message "clawtilla: %s" err)
-         (let* ((models (cmacs-clawtilla-get data 'models))
-                (names (mapcar (lambda (m)
-                                 (or (alist-get 'id m) (alist-get 'name m)
-                                     (format "%s" m)))
-                               models))
-                (choice (completing-read "Model: " names nil t)))
+         ;; The daemon answers `providers', each carrying its own
+         ;; models -- not a flat list.  Which provider a model belongs
+         ;; to is worth showing: two providers can offer the same name.
+         (let* ((providers (cmacs-clawtilla-get data 'providers))
+                (names
+                 (apply #'append
+                        (mapcar
+                         (lambda (provider)
+                           (let ((id (or (alist-get 'id provider)
+                                         (alist-get 'name provider) "")))
+                             (mapcar
+                              (lambda (m)
+                                (let ((model (if (stringp m)
+                                                 m
+                                               (or (alist-get 'id m)
+                                                   (alist-get 'name m) ""))))
+                                  (format "%s  (%s)" model id)))
+                              (alist-get 'models provider))))
+                         providers)))
+                (picked (completing-read "Model: " names nil t))
+                (choice (car (split-string picked "  " t))))
            (cmacs-clawtilla-request
             (cmacs-clawtilla-current) "agent.set"
             (list (cons 'agent agent) (cons 'model choice))
@@ -394,7 +415,7 @@ error mentions the provider rather than the typo."
    (lambda (data err)
      (if err
          (message "clawtilla: %s" err)
-       (let ((found (cmacs-clawtilla-get data 'agents)))
+       (let ((found (cmacs-clawtilla-get data 'found)))
          (if (null found)
              (message "clawtilla: nothing unmanaged found")
            (with-current-buffer (get-buffer-create "*clawtilla discover*")
@@ -428,17 +449,30 @@ makes it, and the two are separate because an agent is a machine as
 well as a config: committing one builds a container or boots a VM."
   (interactive "sWhat should this agent do? ")
   (cmacs-clawtilla-request
-   (cmacs-clawtilla-current) "design.agent" (list (cons 'brief brief))
+   (cmacs-clawtilla-current) "design.agent"
+   ;; `purpose' is the required half of the questionnaire; the rest --
+   ;; boundaries, needs, personality, projects, notes -- are optional
+   ;; and left to the daemon's defaults here.
+   (list (cons 'purpose brief))
    (lambda (data err)
      (if err
          (message "clawtilla: %s" err)
        (with-current-buffer (get-buffer-create "*clawtilla design*")
          (let ((inhibit-read-only t))
            (erase-buffer)
-           (dolist (pair (or (cmacs-clawtilla-get data 'agent) data))
-             (insert (propertize (format "%-18s " (car pair))
-                                 'face 'cmacs-clawtilla-heading)
-                     (format "%s" (cdr pair)) "\n"))
+           ;; The reply is a draft: a token, the YAML it proposes, the
+           ;; id, the org files the model wrote, and its notes.
+           (insert (propertize "id      " 'face 'cmacs-clawtilla-heading)
+                   (format "%s\n" (or (cmacs-clawtilla-get data 'id) "?")))
+           (when-let* ((notes (cmacs-clawtilla-get data 'notes)))
+             (insert (propertize "notes   " 'face 'cmacs-clawtilla-heading)
+                     (format "%s\n" notes)))
+           (dolist (file (cmacs-clawtilla-get data 'files))
+             (insert (propertize "file    " 'face 'cmacs-clawtilla-heading)
+                     (format "%s\n" (or (alist-get 'name file) file))))
+           (insert "\n" (or (cmacs-clawtilla-get data 'yaml) "") "\n")
+           (setq cmacs-clawtilla-agent--draft
+                 (cmacs-clawtilla-get data 'draft))
            (insert "\n" (cmacs-clawtilla-dim
                          "M-x cmacs-clawtilla-agent-design-commit to make it")
                    "\n")
@@ -449,9 +483,12 @@ well as a config: committing one builds a container or boots a VM."
 (defun cmacs-clawtilla-agent-design-commit (&optional start)
   "Create the agent that was designed, starting it unless START is nil."
   (interactive (list (y-or-n-p "Start it once made? ")))
+  (unless cmacs-clawtilla-agent--draft
+    (user-error "Nothing designed yet; M-x cmacs-clawtilla-agent-design"))
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "design.commit"
-   (list (cons 'start (if start t :false)))
+   (list (cons 'draft cmacs-clawtilla-agent--draft)
+         (cons 'start (if start t :false)))
    (lambda (data err)
      (cond
       (err (message "clawtilla: %s" err))
@@ -464,7 +501,9 @@ well as a config: committing one builds a container or boots a VM."
   "Throw away the design that has not been committed."
   (interactive)
   (cmacs-clawtilla-request
-   (cmacs-clawtilla-current) "design.discard" nil
+   (cmacs-clawtilla-current) "design.discard"
+   (when cmacs-clawtilla-agent--draft
+     (list (cons 'draft cmacs-clawtilla-agent--draft)))
    (lambda (_d e) (message "clawtilla: %s" (or e "discarded")))))
 
 ;;;; Creating and importing.

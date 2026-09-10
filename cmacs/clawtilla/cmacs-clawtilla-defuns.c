@@ -87,6 +87,35 @@ cmacs_clawt_deliver_reply (uint64_t cookie, const char *json,
   cmacs_dispatch_callback_drop (cookie);
 }
 
+/* Run a hook, rather than calling one.
+
+   These two used to hand the hook's VALUE to cmacs_dispatch_safe_callN
+   as the function to call.  A hook's value is a LIST of functions, and
+   funcalling a list is not running a hook -- it fails inside the
+   dispatch guard, where the error is swallowed by design because
+   signalling out of a GLib callback would abort Emacs rather than
+   unwind.  So every daemon event and every connection-state change was
+   delivered to nothing, in silence: no live redraws, no appended
+   messages, no alerts, and no error anywhere to say why.
+
+   `run-hook-with-args' takes the hook's SYMBOL, so that is what goes
+   through the guard now.  */
+static void
+cmacs_clawt_run_hook (Lisp_Object hook, ptrdiff_t nargs, Lisp_Object *args)
+{
+  Lisp_Object call[4];
+  ptrdiff_t i;
+
+  eassert (nargs <= 3);
+
+  call[0] = hook;
+
+  for (i = 0; i < nargs; i++)
+    call[i + 1] = args[i];
+
+  cmacs_dispatch_safe_callN (Qrun_hook_with_args, nargs + 1, call);
+}
+
 void
 cmacs_clawt_deliver_event (uint64_t handle, const char *kind,
                            const char *json)
@@ -97,7 +126,7 @@ cmacs_clawt_deliver_event (uint64_t handle, const char *kind,
   args[1] = cmacs_clawt_string (kind);
   args[2] = cmacs_clawt_string (json);
 
-  cmacs_dispatch_safe_callN (Vcmacs_clawtilla_event_functions, 3, args);
+  cmacs_clawt_run_hook (Qcmacs_clawtilla_event_functions, 3, args);
 }
 
 void
@@ -108,7 +137,7 @@ cmacs_clawt_deliver_state (uint64_t handle, const char *state)
   args[0] = make_uint (handle);
   args[1] = cmacs_clawt_string (state);
 
-  cmacs_dispatch_safe_callN (Vcmacs_clawtilla_state_functions, 2, args);
+  cmacs_clawt_run_hook (Qcmacs_clawtilla_state_functions, 2, args);
 }
 
 /* ------------------------------------------------------------------
@@ -767,6 +796,11 @@ it once the turn has finished.  */)
 void
 syms_of_cmacs_clawtilla_defuns (void)
 {
+  /* The hooks are run by symbol, so the symbols are interned here
+     rather than reached through the DEFVAR's value.  */
+  DEFSYM (Qcmacs_clawtilla_event_functions, "cmacs-clawtilla-event-functions");
+  DEFSYM (Qcmacs_clawtilla_state_functions, "cmacs-clawtilla-state-functions");
+
   DEFVAR_LISP ("cmacs-clawtilla-event-functions",
                Vcmacs_clawtilla_event_functions,
                doc: /* Functions called with (HANDLE KIND JSON) per daemon event.

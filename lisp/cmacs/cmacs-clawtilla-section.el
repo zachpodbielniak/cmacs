@@ -50,6 +50,17 @@
 (defvar-local cmacs-clawtilla-section--agent nil
   "The agent this section is scoped to, when it is scoped to one.")
 
+(defun cmacs-clawtilla-section--need-agent ()
+  "Return the agent this section is scoped to, asking if it is not.
+
+Some pages have no fleet-wide answer -- an agent's memories are its
+own, and which slash commands exist depends on which skills it has.
+Asking is better than sending the frame without one and reporting the
+daemon's \"which agent?\" back at somebody who never chose."
+  (or cmacs-clawtilla-section--agent
+      (setq cmacs-clawtilla-section--agent
+            (read-string "Which agent? "))))
+
 (defun cmacs-clawtilla-section--scope ()
   "Return the agent scope as a payload fragment, or nil."
   (when cmacs-clawtilla-section--agent
@@ -121,12 +132,18 @@
                      (cmacs-clawtilla-dim
                       (or (alist-get 'description row) "")))))
     ("memory"
-     :list "memory.list" :rows entries :type memory
+     :list "memory.list" :rows memories :type memory :needs-agent t
      :row ,(lambda (row)
-             (format "%-12s %s"
+             ;; The scope says which store it came out of -- the agent's
+             ;; own, its team's, or the fleet's.  A listing that mixed
+             ;; them without saying so would turn two different claims
+             ;; into the same row.
+             (format "%-7s %-10s %s"
                      (or (alist-get 'scope row) "")
+                     (or (alist-get 'category row) "")
                      (string-replace "\n" " "
-                                     (or (alist-get 'text row) ""))))))
+                                     (or (alist-get 'summary row)
+                                         (alist-get 'content row) ""))))))
   "How each page is fetched and drawn.
 
 Only the parts that are genuinely per-page.  Which pages exist, what
@@ -187,6 +204,14 @@ library.")
                            cmacs-clawtilla-section--page)
                    'face 'cmacs-clawtilla-error)
                   "\n"))
+         ((and (plist-get spec :needs-agent)
+               (not cmacs-clawtilla-section--agent))
+          ;; An empty page and a page that cannot be filled look the
+          ;; same, and only one of them is worth acting on.
+          (insert "  "
+                  (cmacs-clawtilla-dim
+                   "This page is per-agent; open it from an agent, or press a.")
+                  "\n"))
          ((null cmacs-clawtilla-section--rows)
           (insert "  " (cmacs-clawtilla-dim "nothing here") "\n"))
          (t
@@ -204,7 +229,10 @@ library.")
          (conn (buffer-local-value 'cmacs-clawtilla-connection buffer))
          (page (buffer-local-value 'cmacs-clawtilla-section--page buffer))
          (spec (cmacs-clawtilla-section--spec page)))
-    (if (null spec)
+    (if (or (null spec)
+            (and (plist-get spec :needs-agent)
+                 (not (buffer-local-value 'cmacs-clawtilla-section--agent
+                                          buffer))))
         (with-current-buffer buffer (cmacs-clawtilla-section--draw))
       (cmacs-clawtilla-request
        conn (plist-get spec :list)
@@ -281,14 +309,28 @@ library.")
                   "task.cancel" (list (cons 'id id))))
         (_ (user-error "Nothing to remove on this page"))))))
 
+(defun cmacs-clawtilla-section-scope-to-agent (agent)
+  "Scope this section to AGENT and reload."
+  (interactive "sWhich agent? ")
+  (setq cmacs-clawtilla-section--agent (and (not (string-empty-p agent))
+                                            agent))
+  (setq cmacs-clawtilla-section--rows nil)
+  (cmacs-clawtilla-section--load))
+
 (defun cmacs-clawtilla-section-answer (answer)
-  "Answer the decision at point with ANSWER."
-  (interactive "sAnswer: ")
-  (unless (equal cmacs-clawtilla-section--page "decisions")
-    (user-error "Not a decision"))
-  (cmacs-clawtilla-section--send
-   "decision.answer" (list (cons 'id (cmacs-clawtilla-section--row-id))
-                           (cons 'answer answer))))
+  "Answer the decision at point with ANSWER.
+
+On a page that is per-agent rather than per-row this picks the agent
+instead: `a' is the only spare key, and the two cases never apply at
+once -- decisions are fleet-wide and memory is somebody's own."
+  (interactive
+   (list (when (equal cmacs-clawtilla-section--page "decisions")
+           (read-string "Answer: "))))
+  (if (not (equal cmacs-clawtilla-section--page "decisions"))
+      (call-interactively #'cmacs-clawtilla-section-scope-to-agent)
+    (cmacs-clawtilla-section--send
+     "decision.answer" (list (cons 'id (cmacs-clawtilla-section--row-id))
+                             (cons 'answer answer)))))
 
 (defun cmacs-clawtilla-section-dismiss ()
   "Dismiss the decision at point."
@@ -483,7 +525,9 @@ read first."
   (interactive)
   (let ((id (cmacs-clawtilla-section--row-id)))
     (cmacs-clawtilla-request
-     (cmacs-clawtilla-current) "skill.expand" (list (cons 'id id))
+     (cmacs-clawtilla-current) "skill.expand"
+     (list (cons 'agent (cmacs-clawtilla-section--need-agent))
+           (cons 'name id))
      (lambda (data err)
        (if err
            (message "clawtilla: %s" err)
@@ -505,7 +549,9 @@ command whose name comes from a skill exists in no client's source."
   (interactive)
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "skill.commands"
-   (list (cons 'id (cmacs-clawtilla-section--row-id)))
+   ;; Per agent: which commands exist depends on which skills that agent
+   ;; has, so there is no fleet-wide answer to give.
+   (list (cons 'agent (cmacs-clawtilla-section--need-agent)))
    (lambda (data err)
      (if err
          (message "clawtilla: %s" err)

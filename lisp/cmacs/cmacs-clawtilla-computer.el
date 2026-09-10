@@ -48,6 +48,8 @@
 (defvar-local cmacs-clawtilla-computer--mounts nil)
 (defvar-local cmacs-clawtilla-computer--exchange nil)
 (defvar-local cmacs-clawtilla-computer--output nil)
+(defvar-local cmacs-clawtilla-computer--screen nil
+  "What `computer.screen' last said about the screen.")
 (defvar-local cmacs-clawtilla-computer--frame nil
   "The last screen frame, as an Emacs image, or nil.")
 
@@ -89,8 +91,8 @@
   ;; Taking over is a state worth naming rather than inferring from a
   ;; button's label: an agent whose screen somebody else is driving is
   ;; not one whose idleness means anything.
-  (when-let* ((held (alist-get 'takeover cmacs-clawtilla-computer--status)))
-    (insert "\n" (propertize (format "screen held by %s" held)
+  (when-let* ((holder (alist-get 'holder cmacs-clawtilla-computer--screen)))
+    (insert "\n" (propertize (format "screen held by %s" holder)
                              'face 'cmacs-clawtilla-busy) "\n")))
 
 (defun cmacs-clawtilla-computer--draw-mounts ()
@@ -123,7 +125,11 @@
   "Redraw the computer buffer."
   (cmacs-clawtilla-ui-preserving
     (let* ((status cmacs-clawtilla-computer--status)
-           (type (or (alist-get 'type status) "none"))
+           ;; The TYPE is the agent's, and computer.status does not
+           ;; answer it -- it answers `state' and `description'.  The
+           ;; screen reply is where the type appears.
+           (type (or (alist-get 'type cmacs-clawtilla-computer--screen)
+                     "none"))
            (info (cmacs-clawtilla-computer--type-info type)))
       (insert (propertize (format "%s's computer"
                                   cmacs-clawtilla-computer--agent)
@@ -135,6 +141,8 @@
                           'face (cmacs-clawtilla-state-face
                                  (alist-get 'state status)))
               "\n")
+      (when-let* ((description (alist-get 'description status)))
+        (insert "  " (cmacs-clawtilla-dim description) "\n"))
       (when (and info (not (eq t (alist-get 'machine info))))
         (insert (cmacs-clawtilla-dim
                  "This agent has no machine of its own.\n")))
@@ -178,12 +186,19 @@
                  (cmacs-clawtilla-get data 'mounts))
            (cmacs-clawtilla-computer--draw)))))
     (cmacs-clawtilla-request
+     conn "computer.screen" payload
+     (lambda (data err)
+       (when (and (buffer-live-p buffer) (not err))
+         (with-current-buffer buffer
+           (setq cmacs-clawtilla-computer--screen data)
+           (cmacs-clawtilla-computer--draw)))))
+    (cmacs-clawtilla-request
      conn "exchange.list" payload
      (lambda (data err)
        (when (and (buffer-live-p buffer) (not err))
          (with-current-buffer buffer
            (setq cmacs-clawtilla-computer--exchange
-                 (cmacs-clawtilla-get data 'files))
+                 (cmacs-clawtilla-get data 'entries))
            (cmacs-clawtilla-computer--draw)))))))
 
 
@@ -228,11 +243,17 @@
            (message "clawtilla: %s" err)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer
-             (let ((encoded (cmacs-clawtilla-get data 'image)))
-               (setq cmacs-clawtilla-computer--frame
-                     (and encoded
-                          (create-image (base64-decode-string encoded)
-                                        nil t))))
+             (if (eq t (cmacs-clawtilla-get data 'pending))
+                 ;; A stated absence, not a failure: nothing has been
+                 ;; captured yet, which is the first second of watching
+                 ;; and the whole time a VM takes to boot.
+                 (message "clawtilla: no picture yet (%s watching)"
+                          (or (cmacs-clawtilla-get data 'watchers) 0))
+               (let ((encoded (cmacs-clawtilla-get data 'base64)))
+                 (setq cmacs-clawtilla-computer--frame
+                       (and encoded
+                            (create-image (base64-decode-string encoded)
+                                          nil t)))))
              (setq cmacs-clawtilla-computer--view "screen")
              (cmacs-clawtilla-computer--draw))))))))
 
@@ -295,9 +316,11 @@ looks idle about is you."
   (interactive "fCopy in: ")
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "computer.copy"
-   (list (cons 'agent cmacs-clawtilla-computer--agent)
-         (cons 'source path)
-         (cons 'name (file-name-nondirectory path)))
+   ;; One side carries the agent: `src' and `dst', with `<agent>:<path>'
+   ;; naming the side that is inside the computer.
+   (list (cons 'src path)
+         (cons 'dst (format "%s:%s" cmacs-clawtilla-computer--agent
+                            (file-name-nondirectory path))))
    (lambda (_d e) (message "clawtilla: %s" (or e "copied")))))
 
 (defun cmacs-clawtilla-computer--lifecycle (kind)
@@ -342,12 +365,14 @@ looks idle about is you."
            (message "clawtilla: %s" err)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer
-             (let ((encoded (cmacs-clawtilla-get data 'image)))
-               (when encoded
-                 (setq cmacs-clawtilla-computer--frame
-                       (create-image (base64-decode-string encoded) nil t))))
+             ;; This verb answers everything needed to DRAW the tab --
+             ;; whether the type has a screen, who holds it, whether
+             ;; input is allowed -- and no bytes.  The picture comes
+             ;; from `computer.frame'.
+             (setq cmacs-clawtilla-computer--screen data)
              (setq cmacs-clawtilla-computer--view "screen")
-             (cmacs-clawtilla-computer--draw))))))))
+             (cmacs-clawtilla-computer--draw)
+             (cmacs-clawtilla-computer-frame))))))))
 
 (defun cmacs-clawtilla-computer-observe ()
   "Start watching this computer's screen as it changes."
@@ -390,7 +415,11 @@ Only while the screen is taken over.  Sending input to a screen the
 agent is still driving means two things typing into one window, which
 is not shared control, it is a corrupted command line."
   (interactive "sType: ")
-  (unless (alist-get 'takeover cmacs-clawtilla-computer--status)
+  ;; `can_input' is the daemon's answer to whether typing is possible at
+  ;; all, and `held' to whether this client is the one holding it.
+  ;; Sending input to a screen the agent is still driving is not shared
+  ;; control, it is a corrupted command line.
+  (unless (eq t (alist-get 'held cmacs-clawtilla-computer--screen))
     (user-error "Take the screen over first (`t')"))
   (cmacs-clawtilla-request
    (cmacs-clawtilla-current) "computer.input"

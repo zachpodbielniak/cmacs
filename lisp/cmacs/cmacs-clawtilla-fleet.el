@@ -469,8 +469,14 @@ interleave in a way nobody asked for."
 
 (defun cmacs-clawtilla-fleet--on-event (conn kind data)
   "Redraw any fleet buffer for CONN when KIND in DATA changes it."
+  ;; Matched against the kinds the daemon actually publishes, which are
+  ;; not all `family.verb': a message arrives as plain `message', and a
+  ;; mailbox change as `mailbox.queued'.  An agent's row shows its state,
+  ;; its activity AND its queue depth, so all three move it.
   (when (string-match-p
-         (rx bos (or "agent." "team." "room." "control." "fleet.")) kind)
+         (rx bos (or "agent" "team" "room" "control" "fleet" "message"
+                     "mailbox" "daemon" "turn"))
+         kind)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (and (derived-mode-p 'cmacs-clawtilla-fleet-mode)

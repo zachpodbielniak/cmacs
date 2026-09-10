@@ -99,12 +99,12 @@ answer to whatever was asked next."
 
 The default takes over the selected window, because these buffers are
 the thing you are doing rather than a reference you glance at: a fleet,
-a transcript and an agent\='s computer all want the whole window, and
-`pop-to-buffer\=' splitting one in two is how you end up reading a
+a transcript and an agent's computer all want the whole window, and
+`pop-to-buffer' splitting one in two is how you end up reading a
 transcript forty columns wide.
 
-Set it to `pop-to-buffer\=' for the split, or to any function of one
-buffer -- `display-buffer\=' with an entry in `display-buffer-alist\=' is
+Set it to `pop-to-buffer' for the split, or to any function of one
+buffer -- `display-buffer' with an entry in `display-buffer-alist' is
 the general answer if you want different rules per buffer."
   :type '(choice (const :tag "Take over the window" pop-to-buffer-same-window)
                  (const :tag "Split" pop-to-buffer)
@@ -539,6 +539,30 @@ string.")
 
 (defvar cmacs-clawtilla-state-hook nil
   "Functions called with (CONNECTION STATE) when a link changes.")
+
+(defun cmacs-clawtilla-event-seconds (event)
+  "Return EVENT's timestamp in Unix SECONDS.
+
+The daemon stamps events in MICROSECONDS.  Everything that reads one --
+the alert tier, the unread rule, every label -- works in seconds, and
+feeding it microseconds does not fail: it produces a date about fifty
+thousand years from now, which reads as \"newer than everything\" and is
+never wrong in a way anybody notices."
+  (let ((ts (or (alist-get 'ts event) (alist-get 'timestamp event) 0)))
+    (if (> ts 100000000000)             ;far beyond any plausible seconds
+        (/ ts 1000000)
+      ts)))
+
+(defun cmacs-clawtilla-event-subject (event)
+  "Return what EVENT is about: a room, an agent or a task.
+
+The member is `subject', not `room' -- one field naming whichever kind
+of thing the event concerns."
+  (alist-get 'subject event))
+
+(defun cmacs-clawtilla-event-detail (event key)
+  "Return KEY from EVENT's `detail', which is where its payload lives."
+  (alist-get key (alist-get 'detail event)))
 
 (defun cmacs-clawtilla--on-event (handle kind json)
   "Route a daemon event on HANDLE of KIND carrying JSON."

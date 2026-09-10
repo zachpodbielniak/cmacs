@@ -90,11 +90,8 @@ in front of you, which is a preference and not a rule."
 
 (defun cmacs-clawtilla-alerts--on-event (conn kind data)
   "Consider CONN's event of KIND carrying DATA for an alert."
-  (let* ((subject (or (cmacs-clawtilla-get data 'subject)
-                      (cmacs-clawtilla-get data 'agent)))
-         (ts (or (cmacs-clawtilla-get data 'ts)
-                 (cmacs-clawtilla-get data 'timestamp)
-                 (truncate (float-time))))
+  (let* ((subject (cmacs-clawtilla-event-subject data))
+         (ts (cmacs-clawtilla-event-seconds data))
          (tier (cmacs-clawtilla--alert-tier kind subject ts)))
     (unless (equal tier "skip")
       (let ((alert (make-cmacs-clawtilla-alert
@@ -109,8 +106,11 @@ in front of you, which is a preference and not a rule."
 (defun cmacs-clawtilla-alerts--count-unread (conn kind data ts)
   "Raise an unread count for CONN if KIND in DATA at TS earns one."
   (when (member kind '("message" "message.sent"))
-    (let* ((room (cmacs-clawtilla-get data 'room))
-           (from (cmacs-clawtilla-get data 'sender))
+    ;; The room is `subject' and the sender lives in `detail'.  Reading
+    ;; `room' and `sender' -- which is what this did -- found nothing
+    ;; and quietly counted nothing.
+    (let* ((room (cmacs-clawtilla-event-subject data))
+           (from (cmacs-clawtilla-event-detail data 'from))
            (connected-at (or (cmacs-clawtilla-connection-connected-at conn)
                              0)))
       (when (and room
