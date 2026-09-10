@@ -130,6 +130,7 @@ cmacs_clawt_json_to_node (const char *json)
 {
   g_autoptr (JsonParser) parser = NULL;
   g_autoptr (GError) error = NULL;
+  JsonNode *root;
 
   if (json == NULL || *json == '\0')
     return NULL;
@@ -139,38 +140,50 @@ cmacs_clawt_json_to_node (const char *json)
   if (!json_parser_load_from_data (parser, json, -1, &error))
     return NULL;
 
-  return json_node_copy (json_parser_get_root (parser));
+  /* A parser that read an empty document has a NULL root, and
+     json_node_copy() of that is a CRITICAL rather than NULL back.  The
+     empty payload is not exotic: it is what a caller sends for a frame
+     that takes none.  */
+  root = json_parser_get_root (parser);
+
+  return root != NULL ? json_node_copy (root) : NULL;
 }
 
 /* ------------------------------------------------------------------
    Events and connection state, pushed at Lisp.
    ------------------------------------------------------------------ */
 
+/* The `event' signal carries a ClawtEvent, not a JsonNode.
+
+   Getting that wrong is not a compile error -- a GObject signal
+   marshals through a pointer either way -- so the struct arrived and
+   was read as a node.  json-glib caught it (`JSON_NODE_IS_VALID'
+   checks the ref count, which on a foreign struct is whatever happened
+   to be at that offset) and every event logged two CRITICALs while the
+   transcript went on looking correct, because the JSON handed to Lisp
+   was built from the same wrong pointer and came out empty.
+
+   `clawt_event_to_json' is the conversion, and it is the daemon's own:
+   an event's shape is not something a client should be assembling from
+   accessors.  */
 static void
-cmacs_clawt_on_event (ClawtClient *client, JsonNode *event, gpointer data)
+cmacs_clawt_on_event (ClawtClient *client, ClawtEvent *event, gpointer data)
 {
   CmacsClawtConn *conn = data;
+  g_autoptr (JsonNode) node = NULL;
   g_autofree char *json = NULL;
-  const char *kind = "";
-  JsonObject *object;
+  const char *kind;
 
   (void) client;
 
-  json = cmacs_clawt_node_to_json (event);
+  if (event == NULL)
+    return;
 
-  if (event != NULL && JSON_NODE_HOLDS_OBJECT (event))
-    {
-      /* json_node_get_object() answers NULL for a node built as an
-         object and left empty, so the member is asked for only after
-         the object itself is known to be there -- the same trap the
-         daemon's empty replies set for every client.  */
-      object = json_node_get_object (event);
+  node = clawt_event_to_json (event);
+  json = cmacs_clawt_node_to_json (node);
+  kind = clawt_event_get_kind (event);
 
-      if (object != NULL && json_object_has_member (object, "kind"))
-        kind = json_object_get_string_member (object, "kind");
-    }
-
-  cmacs_clawt_deliver_event (conn->handle, kind, json);
+  cmacs_clawt_deliver_event (conn->handle, kind != NULL ? kind : "", json);
 }
 
 static void

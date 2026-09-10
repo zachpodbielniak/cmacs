@@ -66,11 +66,16 @@ static JsonNode *
 cmacs_clawt_render_parse (const char *json)
 {
   g_autoptr (JsonParser) parser = json_parser_new ();
+  JsonNode *root;
 
   if (json == NULL || !json_parser_load_from_data (parser, json, -1, NULL))
     return NULL;
 
-  return json_node_copy (json_parser_get_root (parser));
+  /* An empty document parses fine and leaves a NULL root, and
+     json_node_copy() of that is a CRITICAL rather than NULL back.  */
+  root = json_parser_get_root (parser);
+
+  return root != NULL ? json_node_copy (root) : NULL;
 }
 
 char *

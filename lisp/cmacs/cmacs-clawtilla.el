@@ -260,6 +260,51 @@ timeout."
           (funcall callback (or (cmacs-clawtilla-get data 'payload) data)
                    nil))))))
 
+(defun cmacs-clawtilla-request-raw (conn kind &optional payload callback)
+  "Send KIND on CONN and call CALLBACK with the reply as JSON text.
+
+For the one case that matters: anything handed back to C must be the
+text the daemon sent, never a re-encoding of the parsed form.  See
+`cmacs-clawtilla-member-json' for what goes wrong when it is not.
+
+CALLBACK receives (JSON ERROR)."
+  (let ((handle (cmacs-clawtilla-connection-handle conn)))
+    (unless (cmacs-clawtilla--connected-p handle)
+      (user-error "%s" (cmacs-clawtilla-link-notice conn)))
+    (cmacs-clawtilla--request
+     handle kind (cmacs-clawtilla--encode payload)
+     (lambda (json error) (when callback (funcall callback json error))))))
+
+(defun cmacs-clawtilla-member-json (json member)
+  "Return MEMBER of the JSON object text JSON, itself as JSON text.
+
+Parsed and re-encoded with the same null and false objects on both
+sides, and with arrays as vectors.  Both halves are load-bearing.
+
+The reader everything else uses maps JSON null to nil, and nil
+re-encodes as an empty object -- so cutting a member out with it turns
+an agent whose team is null into one whose team is an object.  The
+fleet tally read exactly that member, and json-glib logged a CRITICAL
+on every redraw while the counts on screen stayed right, because they
+came from the parsed copy rather than from what was sent back.
+
+Arrays come back as vectors rather than lists because a JSON array of
+objects parsed as a list is a list of conses, which `json-serialize'
+cannot tell from an alist.  It does not guess, it signals -- inside a
+reply callback, where the signal is swallowed and the caller simply
+sees nothing."
+  (when (stringp json)
+    (let* ((faithful (json-parse-string json
+                                        :object-type 'alist
+                                        :array-type 'array
+                                        :null-object :json-null
+                                        :false-object :json-false))
+           (value (alist-get member faithful)))
+      (when value
+        (json-serialize value
+                        :null-object :json-null
+                        :false-object :json-false)))))
+
 (defmacro cmacs-clawtilla-with-reply (spec &rest body)
   "Send a request and run BODY with the reply bound.
 
