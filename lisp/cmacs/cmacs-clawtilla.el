@@ -474,8 +474,15 @@ not validate, which trusts whatever answers on that address."
     conn))
 
 (defun cmacs-clawtilla-saved-profiles ()
-  "Return clawtilla's saved connection profiles as alists."
-  (or (cmacs-clawtilla--parse (cmacs-clawtilla--connections)) nil))
+  "Return clawtilla's saved connection profiles as alists.
+
+`cmacs-clawtilla--saved-connections' reads the file every clawtilla
+client shares; `cmacs-clawtilla--connections' is the list of links THIS
+process has open, and is empty before you have connected to anything.
+The two names are one word apart and the wrong one fails silently --
+an empty list is exactly what somebody with no saved profiles would
+see -- so it read as \"cmacs cannot see my machines\"."
+  (or (cmacs-clawtilla--parse (cmacs-clawtilla--saved-connections)) nil))
 
 (defun cmacs-clawtilla-link-notice (conn)
   "Return what to tell someone about CONN's link."

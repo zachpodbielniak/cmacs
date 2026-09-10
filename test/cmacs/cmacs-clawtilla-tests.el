@@ -365,6 +365,39 @@ at: a transcript in half a window is one nobody reads."
       (should (equal "*clawtilla display test*" (buffer-name)))))
   (kill-buffer "*clawtilla display test*"))
 
+(ert-deftest cmacs-clawtilla-saved-profiles-read-the-shared-file ()
+  "Saved profiles come from clawtilla's file, not this session's links.
+
+`cmacs-clawtilla--saved-connections' reads the connections file every
+clawtilla client shares.  `cmacs-clawtilla--connections' is the list of
+links THIS process has open.  The names are one word apart, and calling
+the wrong one fails in the worst possible way: it answers an empty
+list, which is exactly what somebody with no saved profiles would see.
+It read as cmacs being unable to see machines the GTK client offers.
+
+Asserted on the primitives rather than on the file's contents, because
+a machine with no profiles saved must still pass -- what is being
+pinned is which question gets asked."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  ;; The two answer different questions, and the saved one is a file.
+  (should (stringp (cmacs-clawtilla--connections-path)))
+  (let ((saved (cmacs-clawtilla--saved-connections))
+        (open (cmacs-clawtilla--connections)))
+    ;; Nothing is connected in a batch run, so the open list is empty
+    ;; and any saved profile would be visible only through the other.
+    (should (equal "[]" open))
+    (when (and saved (not (equal saved "[]")))
+      (should (cmacs-clawtilla-saved-profiles))
+      (should (= (length (cmacs-clawtilla-saved-profiles))
+                 (length (cmacs-clawtilla--parse saved))))
+      (dolist (profile (cmacs-clawtilla-saved-profiles))
+        (should (stringp (alist-get 'name profile)))
+        ;; The description is the library's, and it is what hides the
+        ;; token.  A profile that carried one into Lisp would be one
+        ;; keystroke from a buffer.
+        (should (stringp (alist-get 'describe profile)))
+        (should-not (alist-get 'token profile))))))
+
 ;;;; Source guards.
 
 (ert-deftest cmacs-clawtilla-answers-every-gtk-slash-command ()
