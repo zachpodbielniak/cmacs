@@ -136,10 +136,25 @@ the tool summary is =clawt_turn_step_run_summary=, the same two the GTK
 client and the CLI use.  The marker distinguishes a turn that is
 running from one that has stopped, which the words alone do not.
 
-*Tool calls stay in the transcript.*  Once a message has overtaken
-them they are written into the history above it rather than dropped
-with the status line --- the record of what the agent actually did is
-most wanted at the moment its answer arrives.
+*Tool calls stay in the transcript, above the answer they produced.*
+A turn's calls are written in before the message that overtook them ---
+they happened first, and a transcript that appends them afterwards
+reads backwards.  They arrive as one collapsed run headed by the
+library's summary, and =TAB= opens it:
+
+#+begin_example
+user         17:38
+    hey gnuis, whats crackin?
+    ▸ Ran 1 command, Searched 1 query, Used 3 tools
+gnuisaince   17:38
+    Not much happening.  The fleet is up and idle.
+#+end_example
+
+Collapsed because a turn can be twenty calls long and what somebody
+reads is the answer.  =cmacs-clawtilla-chat-fold-tool-runs= nil starts
+them open.  The fold is an overlay rather than a redraw: this
+transcript appends and is never rebuilt, so there is nothing to
+re-render a fold into.
 
 Two behaviours are worth knowing because they are the ones you would
 otherwise notice as the thing being unusable:

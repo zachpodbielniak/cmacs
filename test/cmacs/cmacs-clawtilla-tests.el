@@ -546,32 +546,69 @@ counts still come out right, so this also pins the summary."
     (should (stringp (alist-get 'summary split)))
     (should-not (string-empty-p (alist-get 'summary split)))))
 
-(ert-deftest cmacs-clawtilla-tool-calls-stay-in-the-transcript ()
-  "Tool calls remain readable after the answer arrives.
+(defun cmacs-clawtilla-tests--steps-json (&rest stamps)
+  "Return a raw steps array stamped at STAMPS microseconds."
+  (json-serialize
+   (vconcat (mapcar (lambda (ts)
+                      `((step_kind . "tool") (tool . "read")
+                        (text . "f") (failed . :false) (ts . ,ts)))
+                    stamps))))
 
-They used to be drawn only as the live activity line, which is deleted
-and rewritten on every redraw -- so the record of what the agent
-actually DID vanished at the moment its answer appeared, which is when
-somebody wants to read it."
+(ert-deftest cmacs-clawtilla-tool-calls-come-before-the-answer ()
+  "A turn's tool calls sit above the message they produced.
+
+They happened first.  Appending them after the message -- which is what
+this did -- puts a turn's work below the answer it produced, so the
+transcript reads backwards: you scroll past the reply to find out how
+it was reached."
   (skip-unless (and (cmacs-clawtilla-tests--available-p)
                     (fboundp 'cmacs-clawtilla-chat-mode)))
   (with-temp-buffer
     (cmacs-clawtilla-chat-mode)
     (setq-local cmacs-clawtilla-chat--agent "scout")
     (setq-local cmacs-clawtilla-chat--steps-json
-                "[{\"step_kind\":\"tool\",\"tool\":\"read\",\"text\":\"a.txt\",\
-\"failed\":false,\"ts\":100000000}]")
+                (cmacs-clawtilla-tests--steps-json 100000000 110000000))
     (cmacs-clawtilla-chat--append-messages
      (cmacs-clawtilla--parse
-      "[{\"id\":\"m1\",\"sender\":\"scout\",\"body\":\"done\",\"ts\":500}]"))
-    (should (string-match-p "read a.txt" (buffer-string)))
-    ;; Still there after another redraw, which is the actual failure:
-    ;; the activity line is deleted on each one.
-    (cmacs-clawtilla-chat--appending
-      (cmacs-clawtilla-chat--clear-activity)
-      (cmacs-clawtilla-chat--draw-activity
-       (cmacs-clawtilla-chat--split-steps)))
-    (should (string-match-p "read a.txt" (buffer-string)))))
+      "[{\"id\":\"m1\",\"sender\":\"user\",\"body\":\"ask\",\"ts\":90},
+        {\"id\":\"m2\",\"sender\":\"scout\",\"body\":\"answer\",\"ts\":500}]"))
+    (let ((text (buffer-string)))
+      (should (string-match-p "read" text))
+      ;; The run is between the question and the answer, not after it.
+      (should (< (string-match "ask" text) (string-match "read" text)))
+      (should (< (string-match "read" text) (string-match "answer" text))))))
+
+(ert-deftest cmacs-clawtilla-tool-runs-fold ()
+  "A run of tool calls starts collapsed and TAB opens it.
+
+Collapsed because a turn can be twenty calls long and what somebody
+reads is the answer.  Folded with an overlay rather than by redrawing:
+this transcript appends and is never rebuilt, so there is nothing to
+re-render a fold into."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla-chat-toggle-step-run)))
+  (with-temp-buffer
+    (cmacs-clawtilla-chat-mode)
+    (setq-local cmacs-clawtilla-chat--agent "scout")
+    (setq-local cmacs-clawtilla-chat--steps-json
+                (cmacs-clawtilla-tests--steps-json 100000000 110000000))
+    (cmacs-clawtilla-chat--append-messages
+     (cmacs-clawtilla--parse
+      "[{\"id\":\"m2\",\"sender\":\"scout\",\"body\":\"answer\",\"ts\":500}]"))
+    (let ((body (seq-find (lambda (o)
+                            (overlay-get o 'cmacs-clawtilla-step-body))
+                          (overlays-in (point-min) (point-max)))))
+      (should body)
+      (should (overlay-get body 'invisible))
+      ;; The heading is what carries the toggle, and it is visible.
+      (goto-char (point-min))
+      (should (re-search-forward "\u25b8" nil t))
+      (goto-char (match-beginning 0))
+      (cmacs-clawtilla-chat-toggle-step-run)
+      (should-not (overlay-get body 'invisible))
+      ;; And the marker follows the state, so the buffer does not lie.
+      (goto-char (point-min))
+      (should (re-search-forward "\u25be" nil t)))))
 
 (ert-deftest cmacs-clawtilla-composing-is-a-buffer ()
   "A message is written in a buffer, with C-c C-c and C-c C-k.

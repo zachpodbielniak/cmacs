@@ -71,6 +71,15 @@ a turn, which is the only time anybody watches one."
   :type 'boolean
   :group 'cmacs-clawtilla)
 
+(defcustom cmacs-clawtilla-chat-fold-tool-runs t
+  "Whether a run of tool calls starts collapsed.
+
+Collapsed by default: a turn can be twenty calls long, and what somebody
+reads is the answer.  The summary line says what was done, and TAB opens
+it when that is not enough."
+  :type 'boolean
+  :group 'cmacs-clawtilla)
+
 (defcustom cmacs-clawtilla-chat-sender-width 12
   "Columns reserved for a sender's name."
   :type 'integer
@@ -89,8 +98,13 @@ Kept as text.  A step has to travel back to C as the JSON that arrived:
 re-encoding a parsed one turns a null `failed' into an empty object,
 which the library reads with a has_member() check that a null passes --
 one GLib CRITICAL per step, per redraw.")
-(defvar-local cmacs-clawtilla-chat--drawn-steps nil
-  "Identities of the steps already written into the transcript.")
+(defvar-local cmacs-clawtilla-chat--drawn-steps 0
+  "How many steps of the raw array are already in the transcript.
+
+An index rather than a set of identities, because a step run is a
+CONTIGUOUS range of that array and the library summarises a range by
+its bounds.  Steps are only ever appended, so an index that has been
+drawn stays drawn.")
 (defvar-local cmacs-clawtilla-chat--steps-start nil
   "Where the live activity line begins, or nil.")
 (defvar-local cmacs-clawtilla-chat--busy nil
@@ -210,11 +224,14 @@ empty object, which the library then reads as a boolean."
       (let ((id (alist-get 'id message)))
         (unless (member id cmacs-clawtilla-chat--seen)
           (push id cmacs-clawtilla-chat--seen)
+          ;; Whatever this message overtook goes in FIRST: the calls
+          ;; happened before the answer, and a transcript that puts them
+          ;; after it reads backwards.
+          (cmacs-clawtilla-chat--append-steps-before
+           (or (alist-get 'ts message) 0))
           (cmacs-clawtilla-chat--insert-message message))))
-    (let ((split (cmacs-clawtilla-chat--split-steps)))
-      (cmacs-clawtilla-chat--append-history-steps
-       (alist-get 'history split))
-      (cmacs-clawtilla-chat--draw-activity split))))
+    (cmacs-clawtilla-chat--draw-activity
+     (cmacs-clawtilla-chat--split-steps))))
 
 (defface cmacs-clawtilla-chat-step
   '((t :inherit shadow))
@@ -250,21 +267,76 @@ empty object, which the library then reads as a boolean."
                        'cmacs-clawtilla-chat-step-failed
                      'cmacs-clawtilla-chat-step)))))
 
-(defun cmacs-clawtilla-chat--append-history-steps (steps)
-  "Write any of STEPS not yet in the transcript into it.
+(defun cmacs-clawtilla-chat--insert-step-run (steps summary)
+  "Insert STEPS as one collapsible run headed by SUMMARY.
 
-A turn's tool calls stay in the transcript once a message has
-overtaken them.  Dropping them with the activity line -- which is what
-happened before -- means the record of what the agent actually DID
-disappears at the exact moment its answer arrives, which is when
-somebody wants to read it."
-  (dolist (step steps)
-    (let ((identity (cmacs-clawtilla-chat--step-identity step)))
-      (unless (member identity cmacs-clawtilla-chat--drawn-steps)
-        (push identity cmacs-clawtilla-chat--drawn-steps)
-        (let ((start (point)))
-          (insert (cmacs-clawtilla-chat--step-line step) "\n")
-          (cmacs-clawtilla-chat--seal start (point)))))))
+Folded with an overlay rather than by redrawing.  This transcript
+APPENDS -- it is never rebuilt -- so there is nothing to re-render a
+fold into; an overlay toggles in place and survives everything that
+arrives after it."
+  (let ((start (point))
+        (heading-end nil)
+        (body-start nil))
+    (insert "    "
+            (propertize (concat (if cmacs-clawtilla-chat-fold-tool-runs
+                                    "\u25b8 " "\u25be ")
+                                (or summary
+                                    (format "%d tool call%s" (length steps)
+                                            (if (= 1 (length steps)) "" "s"))))
+                        'face 'cmacs-clawtilla-chat-step)
+            "\n")
+    (setq heading-end (point))
+    (setq body-start (point))
+    (dolist (step steps)
+      (insert (cmacs-clawtilla-chat--step-line step) "\n"))
+    (let ((overlay (make-overlay body-start (point) nil t nil)))
+      (overlay-put overlay 'cmacs-clawtilla-step-body t)
+      (overlay-put overlay 'invisible cmacs-clawtilla-chat-fold-tool-runs)
+      (put-text-property start heading-end 'cmacs-clawtilla-step-run overlay))
+    (cmacs-clawtilla-chat--seal start (point))))
+
+(defun cmacs-clawtilla-chat-toggle-step-run ()
+  "Open or close the run of tool calls at point.
+
+Falls through to the ordinary section fold when point is not on one, so
+TAB means the same thing everywhere."
+  (interactive)
+  (let ((overlay (get-text-property (point) 'cmacs-clawtilla-step-run)))
+    (if (not (overlayp overlay))
+        (if (cmacs-clawtilla-section-at-point)
+            (cmacs-clawtilla-toggle-fold)
+          (user-error "Nothing to fold here"))
+      (let ((closed (overlay-get overlay 'invisible))
+            (inhibit-read-only t))
+        (overlay-put overlay 'invisible (not closed))
+        (save-excursion
+          (goto-char (line-beginning-position))
+          (when (re-search-forward "[\u25b8\u25be]" (line-end-position) t)
+            (replace-match (if closed "\u25be" "\u25b8"))))))))
+
+(defun cmacs-clawtilla-chat--append-steps-before (message-ts)
+  "Write the steps MESSAGE-TS has overtaken, as one collapsible run.
+
+Before the message rather than after it, which is where they happened.
+Appending them afterwards -- which is what this did -- puts a turn's
+tool calls below the answer they produced, so the transcript reads
+backwards."
+  (let* ((raw cmacs-clawtilla-chat--steps-json)
+         (split (and raw (cmacs-clawtilla--parse
+                          (cmacs-clawtilla--steps
+                           raw cmacs-clawtilla-chat--agent message-ts))))
+         (history (alist-get 'history split))
+         (upto (length history))
+         (from cmacs-clawtilla-chat--drawn-steps))
+    (when (> upto from)
+      (let ((steps (seq-subseq history from upto))
+            ;; Summarised from the RAW array by its bounds, which is
+            ;; what the library takes -- and means no step is re-encoded
+            ;; to ask the question.
+            (summary (cmacs-clawtilla--step-summary
+                      raw cmacs-clawtilla-chat--agent from upto)))
+        (cmacs-clawtilla-chat--insert-step-run steps summary))
+      (setq cmacs-clawtilla-chat--drawn-steps upto))))
 
 (defun cmacs-clawtilla-chat--clear-activity ()
   "Remove the live activity line, if there is one."
@@ -355,10 +427,12 @@ rather than every operation called a command."
                  (cmacs-clawtilla-member-json json 'steps))
            (cmacs-clawtilla-chat--appending
              (cmacs-clawtilla-chat--clear-activity)
-             (let ((split (cmacs-clawtilla-chat--split-steps)))
-               (cmacs-clawtilla-chat--append-history-steps
-                (alist-get 'history split))
-               (cmacs-clawtilla-chat--draw-activity split)))))))
+             ;; Steps the newest message already overtook, in case they
+             ;; arrived after it did.
+             (cmacs-clawtilla-chat--append-steps-before
+              (cmacs-clawtilla-chat--newest-ts))
+             (cmacs-clawtilla-chat--draw-activity
+              (cmacs-clawtilla-chat--split-steps)))))))
     ;; Whether the agent is mid-turn, and with whom.  Asked rather than
     ;; inferred from the steps: a turn can be running with nothing to
     ;; show for it yet, and that is exactly when somebody wants to know.
@@ -589,6 +663,7 @@ losing a conversation."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (setq cmacs-clawtilla-chat--seen nil)
+    (setq cmacs-clawtilla-chat--drawn-steps 0)
     (setq cmacs-clawtilla-chat--last-sender nil)
     (setq cmacs-clawtilla-chat--last-day nil)
     (setq cmacs-clawtilla-chat--steps-start nil)))
@@ -901,6 +976,7 @@ doing."
 (defvar cmacs-clawtilla-chat-mode-map
   (let ((map (make-sparse-keymap)))
     (cmacs-clawtilla-define-common-keys map)
+    (define-key map (kbd "TAB") #'cmacs-clawtilla-chat-toggle-step-run)
     (define-key map (kbd "RET") #'cmacs-clawtilla-chat-send)
     (define-key map (kbd "i") #'cmacs-clawtilla-chat-send)
     (define-key map (kbd "c") #'cmacs-clawtilla-chat-compose)
@@ -918,6 +994,7 @@ doing."
   (setq-local cmacs-clawtilla-refresh-function
               (lambda () (cmacs-clawtilla-chat--load (current-buffer))))
   (setq-local cmacs-clawtilla-chat--seen nil)
+  (setq-local cmacs-clawtilla-chat--drawn-steps 0)
   (visual-line-mode 1))
 
 ;;;###autoload

@@ -11069,8 +11069,9 @@ you cannot read.
 sends, @kbd{C-c C-k} abandons.  A buffer rather than the minibuffer,
 because a message to an agent usually is not one line.  A turn in
 progress shows a status line in the library's own words, and a turn's
-tool calls are written into the transcript once a message has overtaken
-them rather than dropped with that line.
+tool calls are written into the transcript above the answer they
+produced --- they happened first --- as one collapsed run headed by the
+library's summary, which @kbd{TAB} opens.
 
 A reset is not a restart.  A restart brings the same conversation back;
 a reset drops the session, and is what makes an identity change take.
