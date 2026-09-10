@@ -475,7 +475,7 @@ is not shared control, it is a corrupted command line."
       (setq-local cmacs-clawtilla-computer--view
                   (alist-get 'nick (car (cmacs-clawtilla-computer--views))))
       (cmacs-clawtilla-computer--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (provide 'cmacs-clawtilla-computer)
 

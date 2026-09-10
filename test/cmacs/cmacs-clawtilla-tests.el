@@ -321,6 +321,50 @@ actually looking at it."
       (should (equal "scribe" (cmacs-clawtilla-value-at-point 'agent))))))
 
 
+(ert-deftest cmacs-clawtilla-a-child-section-outranks-its-parent ()
+  "Point inside a nested section reports the innermost one.
+
+A parent is written after its body, so applying its text property over
+the whole range overwrites every section nested inside it.  In the
+fleet buffer that meant point on an agent reported the TEAM it was in:
+RET said there was nothing to open while sitting on the thing to open,
+and nothing anywhere said why.
+
+Nothing about the buffer looked wrong -- the agent was drawn, the
+badges were right, the fold worked -- which is why this is a test and
+not a thing to remember."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (with-temp-buffer
+    (cmacs-clawtilla-insert-section
+     :type 'team :value "research" :foldable t :heading "Research"
+     :body (lambda ()
+             (cmacs-clawtilla-insert-section
+              :type 'agent :value '((id . "scout")) :level 1
+              :heading "  scout")))
+    (goto-char (point-min))
+    (should (equal 'team (plist-get (cmacs-clawtilla-section-at-point) :type)))
+    (search-forward "scout")
+    (goto-char (match-beginning 0))
+    (let ((section (cmacs-clawtilla-section-at-point)))
+      (should (eq 'agent (plist-get section :type)))
+      (should (equal "scout" (alist-get 'id (plist-get section :value)))))))
+
+(ert-deftest cmacs-clawtilla-buffers-take-over-the-window ()
+  "A clawtilla buffer takes the window rather than splitting it.
+
+These buffers are the thing you are doing, not a reference you glance
+at: a transcript in half a window is one nobody reads."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (should (eq cmacs-clawtilla-display-buffer-function
+              #'pop-to-buffer-same-window))
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((before (length (window-list))))
+      (cmacs-clawtilla-display (get-buffer-create "*clawtilla display test*"))
+      (should (= before (length (window-list))))
+      (should (equal "*clawtilla display test*" (buffer-name)))))
+  (kill-buffer "*clawtilla display test*"))
+
 ;;;; Source guards.
 
 (ert-deftest cmacs-clawtilla-answers-every-gtk-slash-command ()

@@ -111,6 +111,26 @@ one that is."
                  (or (alist-get 'id value) (alist-get 'name value) ""))
                 (t (format "%s" value)))))
 
+(defun cmacs-clawtilla-ui--claim (start end props)
+  "Mark START to END as a section with PROPS, without taking a child's.
+
+A parent is written after its body, so a plain `put-text-property\=' over
+its whole range overwrites every section nested inside it -- and the
+innermost one is the answer every command wants.  In the fleet buffer
+that meant point on an agent reported the TEAM it was in, so RET said
+there was nothing to open while sitting on the thing to open.
+
+So only the gaps are filled: whatever a child already claimed stays
+claimed."
+  (let ((pos start))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change
+                        pos 'cmacs-clawtilla-section nil end)
+                       end)))
+        (unless (get-text-property pos 'cmacs-clawtilla-section)
+          (put-text-property pos next 'cmacs-clawtilla-section props))
+        (setq pos next)))))
+
 (cl-defun cmacs-clawtilla-insert-section
     (&key type value heading (level 0) foldable body)
   "Insert a section of TYPE holding VALUE.
@@ -131,9 +151,10 @@ lets TAB collapse it."
     (let ((body-start (point)))
       (when (and body (not folded))
         (funcall body))
-      (put-text-property start (point) 'cmacs-clawtilla-section
-                         (list :type type :value value :identity identity
-                               :level level :foldable foldable))
+      (cmacs-clawtilla-ui--claim
+       start (point)
+       (list :type type :value value :identity identity
+             :level level :foldable foldable))
       ;; The heading keeps its own property so point on a heading finds
       ;; the section it heads rather than whatever is nested inside it.
       (when heading

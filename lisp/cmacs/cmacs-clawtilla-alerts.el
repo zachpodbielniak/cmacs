@@ -322,7 +322,7 @@ the daemon's and goes back further, which is the difference between
         (cmacs-clawtilla-alerts-mode))
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-alerts--draw))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-alerts--on-event)
 

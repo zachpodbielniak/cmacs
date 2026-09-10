@@ -302,7 +302,7 @@ somebody to wait for it too."
                                    (or (alist-get 'body item) ""))))))
              (goto-char (point-min))
              (special-mode))
-           (display-buffer (current-buffer))))))))
+           (cmacs-clawtilla-display (current-buffer))))))))
 
 (defun cmacs-clawtilla-agent-purge ()
   "Throw away everything waiting in this agent's mailbox."
@@ -334,7 +334,7 @@ somebody to wait for it too."
                  (insert-image
                   (create-image (base64-decode-string encoded) nil t))
                  (special-mode))
-               (display-buffer (current-buffer))))))))))
+               (cmacs-clawtilla-display (current-buffer))))))))))
 
 (defun cmacs-clawtilla-agent-avatar-set (file)
   "Give this agent the picture in FILE."
@@ -406,7 +406,7 @@ error mentions the provider rather than the typo."
                                  (or (alist-get 'path entry) ""))))
                (goto-char (point-min))
                (special-mode))
-             (display-buffer (current-buffer)))))))))
+             (cmacs-clawtilla-display (current-buffer)))))))))
 
 (defun cmacs-clawtilla-agent-forget ()
   "Stop managing this agent, leaving what it made alone."
@@ -444,7 +444,7 @@ well as a config: committing one builds a container or boots a VM."
                    "\n")
            (goto-char (point-min))
            (special-mode))
-         (display-buffer (current-buffer)))))))
+         (cmacs-clawtilla-display (current-buffer)))))))
 
 (defun cmacs-clawtilla-agent-design-commit (&optional start)
   "Create the agent that was designed, starting it unless START is nil."
@@ -585,7 +585,7 @@ take a URL rather than a path is the library's answer too."
       (setq-local cmacs-clawtilla-agent--id id)
       (setq-local cmacs-clawtilla-agent--data (and (consp agent) agent))
       (cmacs-clawtilla-agent--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (provide 'cmacs-clawtilla-agent)
 

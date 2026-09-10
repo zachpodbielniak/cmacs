@@ -315,7 +315,7 @@ notice."
       (setq-local cmacs-clawtilla-chat--parent parent)
       (local-set-key (kbd "C-c C-c") #'cmacs-clawtilla-chat-compose-send)
       (local-set-key (kbd "C-c C-k") #'kill-buffer-and-window))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (defvar-local cmacs-clawtilla-chat--parent nil)
 
@@ -404,7 +404,7 @@ reaches for the half that was not built.")
                 (cdr entry) "\n"))
       (goto-char (point-min))
       (special-mode))
-    (display-buffer (current-buffer))))
+    (cmacs-clawtilla-display (current-buffer))))
 
 (defun cmacs-clawtilla-chat--agent-frame (kind)
   "Send KIND for this conversation's agent."
@@ -525,7 +525,7 @@ losing a conversation."
              (insert (format "%s\n" (or (alist-get 'path file) file))))
            (goto-char (point-min))
            (special-mode))
-         (display-buffer (current-buffer)))))))
+         (cmacs-clawtilla-display (current-buffer)))))))
 
 (defun cmacs-clawtilla-chat-edit (path)
   "Open PATH, one of this agent's files, in a buffer."
@@ -545,7 +545,7 @@ losing a conversation."
              (goto-char (point-min))
              (setq-local cmacs-clawtilla-connection conn)
              (setq-local cmacs-clawtilla-chat--agent agent))
-           (pop-to-buffer buffer)))))))
+           (cmacs-clawtilla-display buffer)))))))
 
 (defun cmacs-clawtilla-chat-memory (query)
   "Search what this fleet remembers for QUERY."
@@ -613,7 +613,7 @@ losing a conversation."
           (insert (funcall format-row row) "\n")))
       (goto-char (point-min))
       (special-mode))
-    (display-buffer (current-buffer))))
+    (cmacs-clawtilla-display (current-buffer))))
 
 
 ;;;; Attachments already sent, and rooms.
@@ -760,7 +760,7 @@ doing."
     ;; being raised again while it is in front of you.
     (setq cmacs-clawtilla--viewing-room room-id)
     (cmacs-clawtilla-mark-read room-id)
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (defun cmacs-clawtilla-chat--on-event (conn kind data)
   "Append to any transcript for CONN that KIND in DATA concerns."

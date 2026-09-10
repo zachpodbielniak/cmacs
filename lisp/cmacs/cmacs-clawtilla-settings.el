@@ -459,7 +459,7 @@ is a file."
                              (or (alist-get 'name room) ""))))
            (goto-char (point-min))
            (special-mode))
-         (display-buffer (current-buffer)))))))
+         (cmacs-clawtilla-display (current-buffer)))))))
 
 
 ;;;; Connectors.
@@ -595,7 +595,7 @@ asking."
                              (or (alist-get 'description image) ""))))
            (goto-char (point-min))
            (special-mode))
-         (display-buffer (current-buffer)))))))
+         (cmacs-clawtilla-display (current-buffer)))))))
 
 (defun cmacs-clawtilla-settings-image-download (id)
   "Start downloading cloud image ID."
@@ -725,7 +725,7 @@ they call you."
         (cmacs-clawtilla-settings-mode))
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-settings--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (provide 'cmacs-clawtilla-settings)
 

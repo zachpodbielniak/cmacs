@@ -81,6 +81,13 @@ Every one of them takes =?= for a transient of what it can do, =g= to
 refresh, =TAB= to fold a section or move to the next page, and =n= / =p=
 to move between sections.
 
+*They take over the window rather than splitting it.*  These buffers are
+the thing you are doing and not a reference you glance at: a transcript
+in half a window is one nobody reads.  =cmacs-clawtilla-display-buffer-function=
+is the knob --- set it to =pop-to-buffer= for the split, or to
+=display-buffer= and use =display-buffer-alist= if you want different
+rules per buffer.
+
 *** The fleet
 
 Teams, with the agents in each, then the agents in no team, then rooms.

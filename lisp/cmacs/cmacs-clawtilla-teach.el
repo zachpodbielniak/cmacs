@@ -94,7 +94,7 @@
                                           (format "%s" step)))))
              (goto-char (point-min))
              (special-mode))
-           (display-buffer (current-buffer))))))))
+           (cmacs-clawtilla-display (current-buffer))))))))
 
 (defun cmacs-clawtilla-teach-synthesize ()
   "Have the fleet read the recording at point and propose a skill.
@@ -116,7 +116,7 @@ be read first."
                  "\n")
          (goto-char (point-min))
          (special-mode))
-       (display-buffer (current-buffer))))))
+       (cmacs-clawtilla-display (current-buffer))))))
 
 (defun cmacs-clawtilla-teach-commit ()
   "Adopt the skill synthesized from the recording at point."
@@ -208,7 +208,7 @@ be read first."
         (cmacs-clawtilla-teach-mode))
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-teach--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (provide 'cmacs-clawtilla-teach)
 

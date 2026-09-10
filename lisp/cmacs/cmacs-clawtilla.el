@@ -93,11 +93,39 @@ answer to whatever was asked next."
   :type 'integer
   :group 'cmacs-clawtilla)
 
+(defcustom cmacs-clawtilla-display-buffer-function
+  #'pop-to-buffer-same-window
+  "How a clawtilla buffer is shown.
+
+The default takes over the selected window, because these buffers are
+the thing you are doing rather than a reference you glance at: a fleet,
+a transcript and an agent\='s computer all want the whole window, and
+`pop-to-buffer\=' splitting one in two is how you end up reading a
+transcript forty columns wide.
+
+Set it to `pop-to-buffer\=' for the split, or to any function of one
+buffer -- `display-buffer\=' with an entry in `display-buffer-alist\=' is
+the general answer if you want different rules per buffer."
+  :type '(choice (const :tag "Take over the window" pop-to-buffer-same-window)
+                 (const :tag "Split" pop-to-buffer)
+                 (const :tag "Follow display-buffer-alist" display-buffer)
+                 function)
+  :group 'cmacs-clawtilla)
+
 (defcustom cmacs-clawtilla-connect-hook nil
   "Functions called with one connection once its link comes up."
   :type 'hook
   :group 'cmacs-clawtilla)
 
+
+(defun cmacs-clawtilla-display (buffer)
+  "Show BUFFER the way `cmacs-clawtilla-display-buffer-function' says.
+
+Every clawtilla buffer goes through here so there is one knob rather
+than one per buffer, and so a buffer added later behaves like the rest
+without anybody remembering to make it."
+  (funcall cmacs-clawtilla-display-buffer-function buffer)
+  buffer)
 
 ;;;; The connection object.
 

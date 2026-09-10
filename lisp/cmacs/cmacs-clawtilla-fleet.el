@@ -117,11 +117,11 @@ scroll rather than read."
               (cmacs-clawtilla-dim description) "\n")
       ;; The description belongs to its agent, so a command run with
       ;; point on it acts on the agent rather than on nothing.
-      (put-text-property start (point) 'cmacs-clawtilla-section
-                         (list :type 'agent :value agent
-                               :identity (cmacs-clawtilla-ui--identity
-                                          'agent agent)
-                               :level level :foldable nil)))))
+      (cmacs-clawtilla-ui--claim
+       start (point)
+       (list :type 'agent :value agent
+             :identity (cmacs-clawtilla-ui--identity 'agent agent)
+             :level level :foldable nil)))))
 
 (defun cmacs-clawtilla-fleet--team-heading (team)
   "Return the heading line for TEAM."
@@ -465,7 +465,7 @@ interleave in a way nobody asked for."
         (cmacs-clawtilla-fleet-mode))
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-fleet--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 (defun cmacs-clawtilla-fleet--on-event (conn kind data)
   "Redraw any fleet buffer for CONN when KIND in DATA changes it."

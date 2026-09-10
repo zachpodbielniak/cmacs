@@ -11021,6 +11021,13 @@ recordings.  Every buffer takes @kbd{?} for a transient of what it can
 do, @kbd{g} to refresh, @kbd{TAB} to fold or change page, and @kbd{n}
 and @kbd{p} to move between sections.
 
+They take over the window rather than splitting it.  These buffers are
+the thing you are doing and not a reference you glance at: a transcript
+in half a window is one nobody reads.
+@code{cmacs-clawtilla-display-buffer-function} is the knob --- set it to
+@code{pop-to-buffer} for the split, or to @code{display-buffer} and use
+@code{display-buffer-alist} for different rules per buffer.
+
 Several behaviours are the library's rather than this client's, and are
 worth knowing because they are what makes three clients look like one
 product:

@@ -313,7 +313,7 @@ library.")
                   (format "%s" (cdr pair)) "\n"))
         (goto-char (point-min))
         (special-mode)))
-    (display-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 
 ;;;; Routines.
@@ -415,7 +415,7 @@ the sixth."
              (goto-char (point-min))
              (special-mode)
              (setq-local cmacs-clawtilla-section--nick id))
-           (display-buffer (current-buffer))))))))
+           (cmacs-clawtilla-display (current-buffer))))))))
 
 (defun cmacs-clawtilla-section-trigger-replay (receipt run)
   "Replay delivery RECEIPT of the trigger at point, running it if RUN.
@@ -495,7 +495,7 @@ read first."
                          (cmacs-clawtilla-get data 'content) ""))
              (goto-char (point-min))
              (special-mode))
-           (display-buffer (current-buffer))))))))
+           (cmacs-clawtilla-display (current-buffer))))))))
 
 (defun cmacs-clawtilla-section-skill-commands ()
   "Show the slash commands the skill at point adds.
@@ -612,7 +612,7 @@ command whose name comes from a skill exists in no client's source."
                                   (cmacs-clawtilla-enum "section")))
                       (alist-get 'nick (car pages))))
       (cmacs-clawtilla-section--load buffer))
-    (pop-to-buffer buffer)))
+    (cmacs-clawtilla-display buffer)))
 
 ;;;###autoload
 (defun cmacs-clawtilla-work (&optional conn)
