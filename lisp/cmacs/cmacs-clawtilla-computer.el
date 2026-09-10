@@ -435,7 +435,7 @@ is not shared control, it is a corrupted command line."
 
 (defvar cmacs-clawtilla-computer-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-computer-next-view)
     (define-key map (kbd "e") #'cmacs-clawtilla-computer-exec)
     (define-key map (kbd "f") #'cmacs-clawtilla-computer-frame)
@@ -476,6 +476,12 @@ is not shared control, it is a corrupted command line."
                   (alist-get 'nick (car (cmacs-clawtilla-computer--views))))
       (cmacs-clawtilla-computer--load buffer))
     (cmacs-clawtilla-display buffer)))
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-computer-mode-map 'cmacs-clawtilla-computer-mode)
 
 (provide 'cmacs-clawtilla-computer)
 

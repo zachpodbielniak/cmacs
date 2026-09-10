@@ -179,7 +179,7 @@ be read first."
 
 (defvar cmacs-clawtilla-teach-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "s") #'cmacs-clawtilla-teach-start)
     (define-key map (kbd "S") #'cmacs-clawtilla-teach-stop)
     (define-key map (kbd "RET") #'cmacs-clawtilla-teach-show)
@@ -209,6 +209,12 @@ be read first."
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-teach--load buffer))
     (cmacs-clawtilla-display buffer)))
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-teach-mode-map 'cmacs-clawtilla-teach-mode)
 
 (provide 'cmacs-clawtilla-teach)
 

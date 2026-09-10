@@ -11021,6 +11021,14 @@ recordings.  Every buffer takes @kbd{?} for a transient of what it can
 do, @kbd{g} to refresh, @kbd{TAB} to fold or change page, and @kbd{n}
 and @kbd{p} to move between sections.
 
+Under Doom and Evil the keys are yours.  Every clawtilla buffer starts
+in Evil's @code{motion} state and its keymap is installed as an Evil
+@emph{intercept} map, so the mode's keys answer before Evil's --- without
+that @kbd{RET} is @code{evil-ret}, @kbd{g} opens Evil's prefix, @kbd{n}
+searches, and @kbd{?} is @code{evil-search-backward}, so even the
+transient listing the keys cannot be reached.  Only keys a buffer binds
+itself are promoted, so @kbd{SPC} and the Doom leader are untouched.
+
 They take over the window rather than splitting it.  These buffers are
 the thing you are doing and not a reference you glance at: a transcript
 in half a window is one nobody reads.

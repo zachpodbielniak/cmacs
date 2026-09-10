@@ -718,7 +718,7 @@ doing."
 
 (defvar cmacs-clawtilla-chat-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-chat-send)
     (define-key map (kbd "i") #'cmacs-clawtilla-chat-send)
     (define-key map (kbd "c") #'cmacs-clawtilla-chat-compose)
@@ -773,6 +773,12 @@ doing."
   (ignore data))
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-chat--on-event)
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-chat-mode-map 'cmacs-clawtilla-chat-mode)
 
 (provide 'cmacs-clawtilla-chat)
 

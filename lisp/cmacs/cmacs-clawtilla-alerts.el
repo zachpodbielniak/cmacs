@@ -293,7 +293,7 @@ the daemon's and goes back further, which is the difference between
 
 (defvar cmacs-clawtilla-alerts-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-alerts-visit)
     (define-key map (kbd "a") #'cmacs-clawtilla-alerts-toggle-filter)
     (define-key map (kbd "m") #'cmacs-clawtilla-alerts-mark-all-read)
@@ -325,6 +325,12 @@ the daemon's and goes back further, which is the difference between
     (cmacs-clawtilla-display buffer)))
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-alerts--on-event)
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-alerts-mode-map 'cmacs-clawtilla-alerts-mode)
 
 (provide 'cmacs-clawtilla-alerts)
 

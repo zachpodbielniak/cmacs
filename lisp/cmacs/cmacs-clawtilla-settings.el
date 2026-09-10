@@ -696,7 +696,7 @@ they call you."
 
 (defvar cmacs-clawtilla-settings-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-settings-next-panel)
     (define-key map (kbd "RET") #'cmacs-clawtilla-settings-set)
     (define-key map (kbd "c") #'cmacs-clawtilla-settings-connect-account)
@@ -726,6 +726,12 @@ they call you."
       (setq-local cmacs-clawtilla-connection conn)
       (cmacs-clawtilla-settings--load buffer))
     (cmacs-clawtilla-display buffer)))
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-settings-mode-map 'cmacs-clawtilla-settings-mode)
 
 (provide 'cmacs-clawtilla-settings)
 

@@ -552,7 +552,7 @@ take a URL rather than a path is the library's answer too."
 
 (defvar cmacs-clawtilla-agent-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-agent-set)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-agent-next-page)
     (define-key map (kbd "k") #'cmacs-clawtilla-agent-ack)
@@ -586,6 +586,12 @@ take a URL rather than a path is the library's answer too."
       (setq-local cmacs-clawtilla-agent--data (and (consp agent) agent))
       (cmacs-clawtilla-agent--load buffer))
     (cmacs-clawtilla-display buffer)))
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-agent-mode-map 'cmacs-clawtilla-agent-mode)
 
 (provide 'cmacs-clawtilla-agent)
 

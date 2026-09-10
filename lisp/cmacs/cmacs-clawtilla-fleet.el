@@ -426,7 +426,7 @@ interleave in a way nobody asked for."
 
 (defvar cmacs-clawtilla-fleet-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "RET") #'cmacs-clawtilla-fleet-visit)
     (define-key map (kbd "o") #'cmacs-clawtilla-fleet-describe)
     (define-key map (kbd "s") #'cmacs-clawtilla-fleet-start)
@@ -503,6 +503,12 @@ agents, and an agent's row is where its unread count appears."
       #'cmacs-clawtilla-fleet--known-rooms)
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-fleet--on-event)
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-fleet-mode-map 'cmacs-clawtilla-fleet-mode)
 
 (provide 'cmacs-clawtilla-fleet)
 

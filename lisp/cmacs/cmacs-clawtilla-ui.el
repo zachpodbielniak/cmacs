@@ -41,6 +41,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'cmacs-evil)
 
 (defface cmacs-clawtilla-heading
   '((t :inherit font-lock-keyword-face :weight bold))
@@ -114,7 +115,7 @@ one that is."
 (defun cmacs-clawtilla-ui--claim (start end props)
   "Mark START to END as a section with PROPS, without taking a child's.
 
-A parent is written after its body, so a plain `put-text-property\=' over
+A parent is written after its body, so a plain `put-text-property' over
 its whole range overwrites every section nested inside it -- and the
 innermost one is the answer every command wants.  In the fleet buffer
 that meant point on an agent reported the TEAM it was in, so RET said
@@ -252,15 +253,39 @@ somewhere else and look like the buffer jumped on its own."
 
 ;;;; Shared keymap.
 
-(defvar cmacs-clawtilla-common-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "TAB") #'cmacs-clawtilla-toggle-fold)
-    (define-key map (kbd "n") #'cmacs-clawtilla-next-section)
-    (define-key map (kbd "p") #'cmacs-clawtilla-previous-section)
-    (define-key map (kbd "g") #'cmacs-clawtilla-refresh)
-    (define-key map (kbd "q") #'quit-window)
-    map)
-  "Keys every clawtilla list buffer has.")
+(defun cmacs-clawtilla-define-common-keys (map)
+  "Define the keys every clawtilla buffer shares into MAP.
+
+Defined INTO each mode's own map rather than inherited from a shared
+parent, and that is not a style choice.  `cmacs-evil-setup-mode-map'
+promotes a map's OWN bindings and deliberately skips inherited ones --
+promoting what a `special-mode' keymap inherits would put SPC, the Doom
+leader, above Evil.  So a shared parent means these five keys are never
+promoted, and under Doom `g', `n' and TAB stay Evil's while the rest of
+the mode works: a buffer half of whose keys respond."
+  (define-key map (kbd "TAB") #'cmacs-clawtilla-toggle-fold)
+  (define-key map (kbd "n") #'cmacs-clawtilla-next-section)
+  (define-key map (kbd "p") #'cmacs-clawtilla-previous-section)
+  (define-key map (kbd "g") #'cmacs-clawtilla-refresh)
+  (define-key map (kbd "q") #'quit-window)
+  map)
+
+(defun cmacs-clawtilla-setup-evil (map mode)
+  "Make MAP's keys win under Evil, and so under Doom, for MODE.
+
+Mandatory for every clawtilla buffer.  Without it Evil's motion state
+answers first and the buffer is largely inert: RET is `evil-ret', `g'
+opens Evil's prefix, `n' searches, TAB jumps the jump list -- and `?'
+is `evil-search-backward', so even the transient that lists the keys
+cannot be reached.
+
+The buffers start in motion state because they are read-only: motion is
+the state that means \"navigate this\", and it is what every other
+read-only cmacs mode uses."
+  (with-eval-after-load 'evil
+    (when (fboundp 'evil-set-initial-state)
+      (evil-set-initial-state mode 'motion)))
+  (cmacs-evil-setup-mode-map map mode))
 
 
 ;;;; Small renderers.

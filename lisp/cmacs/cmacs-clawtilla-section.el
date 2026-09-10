@@ -570,7 +570,7 @@ command whose name comes from a skill exists in no client's source."
 
 (defvar cmacs-clawtilla-section-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map cmacs-clawtilla-common-map)
+    (cmacs-clawtilla-define-common-keys map)
     (define-key map (kbd "TAB") #'cmacs-clawtilla-section-next-page)
     (define-key map (kbd "RET") #'cmacs-clawtilla-section-show)
     (define-key map (kbd "r") #'cmacs-clawtilla-section-run)
@@ -631,6 +631,12 @@ command whose name comes from a skill exists in no client's source."
   "Show skills and memory."
   (interactive)
   (cmacs-clawtilla-section (or conn (cmacs-clawtilla-current)) "library"))
+
+
+;; Mandatory for any single-key cmacs mode: without it Evil answers
+;; first and the buffer is largely inert -- RET, `g', `n', TAB and
+;; even `?' are Evil's in motion state.
+(cmacs-clawtilla-setup-evil cmacs-clawtilla-section-mode-map 'cmacs-clawtilla-section-mode)
 
 (provide 'cmacs-clawtilla-section)
 

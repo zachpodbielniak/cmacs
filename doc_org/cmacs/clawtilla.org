@@ -81,6 +81,18 @@ Every one of them takes =?= for a transient of what it can do, =g= to
 refresh, =TAB= to fold a section or move to the next page, and =n= / =p=
 to move between sections.
 
+*Under Doom and Evil the keys are yours.*  Every clawtilla buffer starts
+in Evil's =motion= state and its keymap is installed as an Evil
+/intercept/ map, so the mode's keys answer before Evil's --- without
+that, =RET= is =evil-ret=, =g= opens Evil's prefix, =n= searches, =TAB=
+jumps the jump list, and =?= is =evil-search-backward=, which means even
+the transient listing the keys cannot be reached.
+
+Only keys a buffer binds itself are promoted.  =SPC= is not one of them,
+so the Doom leader still works --- verified against Doom's actual
+mechanism, an emulation map, rather than assumed.  evil-snipe is turned
+off in these buffers, which is what lets =s= and =S= be start and stop.
+
 *They take over the window rather than splitting it.*  These buffers are
 the thing you are doing and not a reference you glance at: a transcript
 in half a window is one nobody reads.  =cmacs-clawtilla-display-buffer-function=

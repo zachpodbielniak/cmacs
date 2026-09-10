@@ -398,6 +398,61 @@ pinned is which question gets asked."
         (should (stringp (alist-get 'describe profile)))
         (should-not (alist-get 'token profile))))))
 
+(defconst cmacs-clawtilla-tests--modes
+  '((cmacs-clawtilla-fleet-mode     . cmacs-clawtilla-fleet)
+    (cmacs-clawtilla-agent-mode     . cmacs-clawtilla-agent)
+    (cmacs-clawtilla-chat-mode      . cmacs-clawtilla-chat)
+    (cmacs-clawtilla-computer-mode  . cmacs-clawtilla-computer)
+    (cmacs-clawtilla-section-mode   . cmacs-clawtilla-section)
+    (cmacs-clawtilla-settings-mode  . cmacs-clawtilla-settings)
+    (cmacs-clawtilla-alerts-mode    . cmacs-clawtilla-alerts)
+    (cmacs-clawtilla-teach-mode     . cmacs-clawtilla-teach))
+  "Every clawtilla major mode, and the feature that defines it.")
+
+(ert-deftest cmacs-clawtilla-modes-own-their-shared-keys ()
+  "Each mode map binds the shared keys itself rather than inheriting them.
+
+This is what makes them work under Doom, and it is not obvious.
+`cmacs-evil-setup-mode-map' promotes a map's OWN bindings and skips
+inherited ones on purpose -- promoting what a `special-mode' keymap
+inherits would put SPC, the Doom leader, above Evil.  So a shared
+parent map means those keys are never promoted: under Evil `g', `n' and
+TAB stay Evil's while the rest of the mode responds, which is a buffer
+half of whose keys work and no error anywhere."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (dolist (entry cmacs-clawtilla-tests--modes)
+    (require (cdr entry) nil t)
+    (let ((map (symbol-value (intern (format "%s-map" (car entry))))))
+      (dolist (key '("TAB" "n" "p" "g" "q"))
+        ;; Looked up with the parent detached: inheriting it is exactly
+        ;; the failure being ruled out, so a plain lookup would pass.
+        (let ((own (copy-keymap map)))
+          (set-keymap-parent own nil)
+          (should (lookup-key own (kbd key))))))))
+
+(ert-deftest cmacs-clawtilla-every-mode-registers-with-evil ()
+  "Every clawtilla mode calls `cmacs-clawtilla-setup-evil'.
+
+Checked in the source rather than by behaviour because Evil is not
+loaded in a batch test run, and the failure being prevented is an
+absent call: a mode that forgets it looks perfect in `emacs -Q' and is
+inert under Doom, which is how this shipped the first time."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let ((dir (file-name-directory (locate-library "cmacs-clawtilla")))
+        (missing nil))
+    (dolist (entry cmacs-clawtilla-tests--modes)
+      (let* ((feature (symbol-name (cdr entry)))
+             (file (expand-file-name (concat feature ".el") dir)))
+        (when (file-exists-p file)
+          (with-temp-buffer
+            (insert-file-contents file)
+            (goto-char (point-min))
+            (unless (search-forward
+                     (format "(cmacs-clawtilla-setup-evil %s-map" (car entry))
+                     nil t)
+              (push (car entry) missing))))))
+    (should (null missing))))
+
 ;;;; Source guards.
 
 (ert-deftest cmacs-clawtilla-answers-every-gtk-slash-command ()
