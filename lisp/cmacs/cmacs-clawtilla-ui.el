@@ -273,6 +273,69 @@ message from last week reads as one from this morning."
           (format-time-string "%H:%M" then)
         (format-time-string "%b %-d %H:%M" then)))))
 
+
+;;;; Markdown, rendered through the library.
+
+(defface cmacs-clawtilla-code
+  '((t :inherit fixed-pitch :background unspecified))
+  "Face for inline code and code blocks."
+  :group 'cmacs-clawtilla)
+
+(defface cmacs-clawtilla-link
+  '((t :inherit link))
+  "Face for a link."
+  :group 'cmacs-clawtilla)
+
+(defvar cmacs-clawtilla--markup-faces
+  '(("b" . bold) ("i" . italic) ("u" . underline)
+    ("s" . (:strike-through t))
+    ("tt" . cmacs-clawtilla-code) ("code" . cmacs-clawtilla-code)
+    ("big" . (:height 1.1)) ("small" . (:height 0.9)))
+  "Pango tags and the Emacs faces they become.")
+
+(defun cmacs-clawtilla--markup-node (node)
+  "Insert NODE, a parsed Pango markup tree, with faces."
+  (cond
+   ((stringp node) (insert node))
+   ((null node) nil)
+   (t
+    (let* ((tag (symbol-name (car node)))
+           (face (cdr (assoc tag cmacs-clawtilla--markup-faces)))
+           (start (point)))
+      (dolist (child (cddr node))
+        (cmacs-clawtilla--markup-node child))
+      (when face
+        (add-face-text-property start (point) face))))))
+
+(defun cmacs-clawtilla-render-markup (markup)
+  "Return Pango MARKUP as a propertised string.
+
+The markup is what `cmacs-clawtilla--markdown' returns, which is the
+library's own cmark output -- so the parse is shared with both
+graphical clients and only the presentation is ours.
+
+Parsed with libxml rather than by regexp.  Pango markup is XML, agents
+emit arbitrary text, and a regexp that is nearly right about nesting is
+one that mangles somebody's message about HTML."
+  (if (not (fboundp 'libxml-parse-xml-region))
+      ;; No libxml: show the text rather than the tags.  Losing emphasis
+      ;; is a much smaller failure than printing `<b>' at somebody.
+      (replace-regexp-in-string "<[^>]*>" "" (or markup ""))
+    (with-temp-buffer
+      (insert "<span>" (or markup "") "</span>")
+      (let ((tree (libxml-parse-xml-region (point-min) (point-max))))
+        (erase-buffer)
+        (if (null tree)
+            (insert (replace-regexp-in-string "<[^>]*>" "" (or markup "")))
+          (cmacs-clawtilla--markup-node tree))
+        (buffer-string)))))
+
+(defun cmacs-clawtilla-render-markdown (text)
+  "Return TEXT, markdown, as a propertised string."
+  (cmacs-clawtilla-render-markup (cmacs-clawtilla--markdown (or text ""))))
+
+(declare-function cmacs-clawtilla--markdown "cmacs-clawtilla-defuns.c")
+
 (provide 'cmacs-clawtilla-ui)
 
 ;;; cmacs-clawtilla-ui.el ends here
