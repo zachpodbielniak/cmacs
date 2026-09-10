@@ -97,7 +97,7 @@ default is 1 job × 4 threads.
 | =P=       | =cmacs-transcribe-set-parallel=       | Set the number of concurrent jobs            |
 | =w=       | =cmacs-transcribe-set-threads=        | Set whisper CPU cores (0 = all)              |
 | =c=       | =cmacs-transcribe-set-model=          | Choose the whisper model                     |
-| =n=       | =cmacs-transcribe-set-language=       | Set the language code (empty = default)      |
+| =i=       | =cmacs-transcribe-set-language=       | Set the language code (empty = default)      |
 | =s=       | =cmacs-transcribe-toggle-summarize=   | Toggle AI summarisation                      |
 | =S=       | =cmacs-transcribe-set-summary-type=   | Choose the summary content-type template     |
 | =f=       | =cmacs-transcribe-cycle-formats=      | Cycle extra outputs none/srt/+vtt/+ts/all    |

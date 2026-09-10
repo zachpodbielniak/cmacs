@@ -1487,7 +1487,7 @@ keeps the expensive reindex + list paint off the hot path."
     (define-key map (kbd "s")   #'cmacs-gnuseye-search)
     (define-key map (kbd "f")   #'cmacs-gnuseye-filter-kinds)
     (define-key map (kbd "c")   #'cmacs-gnuseye-filter-clear)
-    (define-key map (kbd "g")   #'cmacs-gnuseye-list-refresh)
+    (define-key map (kbd "g r") #'cmacs-gnuseye-list-refresh)
     (define-key map (kbd "q")   #'quit-window)
     (define-key map [mouse-1]   #'cmacs-gnuseye-list-select)
     map)
@@ -1673,7 +1673,7 @@ by default and categories start collapsed."
     (define-key map (kbd "RET") #'cmacs-gnuseye-layers-toggle)
     (define-key map (kbd "SPC") #'cmacs-gnuseye-layers-toggle)
     (define-key map (kbd "t")   #'cmacs-gnuseye-layers-toggle)
-    (define-key map (kbd "g")   #'cmacs-gnuseye-layers-refresh)
+    (define-key map (kbd "g r") #'cmacs-gnuseye-layers-refresh)
     (define-key map (kbd "q")   #'quit-window)
     (define-key map [mouse-1]   #'cmacs-gnuseye-layers-toggle)
     map)
@@ -1786,7 +1786,7 @@ it).  Layers needing an API key that is unset cannot be enabled."
     (define-key map (kbd "s") #'cmacs-gnuseye-search)
     (define-key map (kbd "F") #'cmacs-gnuseye-filter-kinds)
     (define-key map (kbd "c") #'cmacs-gnuseye-filter-clear)
-    (define-key map (kbd "g") #'cmacs-gnuseye-refresh-all)
+    (define-key map (kbd "g r") #'cmacs-gnuseye-refresh-all)
     (define-key map (kbd "f") #'cmacs-gnuseye-fly-to-place)
     (define-key map (kbd "?") #'cmacs-gnuseye-legend)
     (define-key map (kbd "2") #'cmacs-gnuseye-view-2d)
@@ -2357,13 +2357,13 @@ just the globe viewport."
       "s" #'cmacs-gnuseye-search
       "f" #'cmacs-gnuseye-filter-kinds
       "c" #'cmacs-gnuseye-filter-clear
-      "g" #'cmacs-gnuseye-list-refresh
+      (kbd "g r") #'cmacs-gnuseye-list-refresh
       "q" #'quit-window)
     (evil-define-key* 'motion cmacs-gnuseye-layers-mode-map
       (kbd "RET") #'cmacs-gnuseye-layers-toggle
       (kbd "SPC") #'cmacs-gnuseye-layers-toggle
       "t" #'cmacs-gnuseye-layers-toggle
-      "g" #'cmacs-gnuseye-layers-refresh
+      (kbd "g r") #'cmacs-gnuseye-layers-refresh
       "q" #'quit-window)
     ;; Inspector: Normal state shadows the major-mode map (a = evil-append,
     ;; q = record macro...), so bind the built-in actions in-state; feature

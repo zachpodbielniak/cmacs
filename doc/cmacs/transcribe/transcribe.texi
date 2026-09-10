@@ -115,7 +115,7 @@ default is 1 job x 4 threads.
 @item @kbd{P} @tab @code{cmacs-transcribe-set-parallel} @tab Set concurrent jobs
 @item @kbd{w} @tab @code{cmacs-transcribe-set-threads} @tab Set whisper cores (0 = all)
 @item @kbd{c} @tab @code{cmacs-transcribe-set-model} @tab Choose the whisper model
-@item @kbd{n} @tab @code{cmacs-transcribe-set-language} @tab Set the language code
+@item @kbd{i} @tab @code{cmacs-transcribe-set-language} @tab Set the language code
 @item @kbd{s} @tab @code{cmacs-transcribe-toggle-summarize} @tab Toggle AI summaries
 @item @kbd{S} @tab @code{cmacs-transcribe-set-summary-type} @tab Choose the summary template
 @item @kbd{f} @tab @code{cmacs-transcribe-cycle-formats} @tab Cycle srt/vtt/timestamped outputs

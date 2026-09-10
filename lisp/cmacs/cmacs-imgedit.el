@@ -1639,7 +1639,7 @@ Press a key to run its command, or q / C-g to dismiss."
     ("t" "Text" cmacs-imgedit-use-text)
     ("k" "Bucket" cmacs-imgedit-use-bucket)
     ("e" "Eyedropper" cmacs-imgedit-use-eyedropper)
-    ("G" "Flood fill…" cmacs-imgedit-flood-fill-at)]
+    ("B" "Flood fill…" cmacs-imgedit-flood-fill-at)]
    ["Brush / colour"
     ("C" "Foreground colour…" cmacs-imgedit-set-foreground-color)
     ("A" "Alpha…" cmacs-imgedit-set-alpha)
@@ -1682,7 +1682,7 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "E") #'cmacs-imgedit-use-ellipse)
     (define-key map (kbd "t") #'cmacs-imgedit-use-text)
     (define-key map (kbd "T") #'cmacs-imgedit-set-text-size)
-    (define-key map (kbd "k") #'cmacs-imgedit-use-bucket)
+    (define-key map (kbd "F") #'cmacs-imgedit-use-bucket)
     (define-key map (kbd "e") #'cmacs-imgedit-use-eyedropper)
     (define-key map (kbd "x") #'cmacs-imgedit-toggle-shape-fill)
     (define-key map (kbd "C") #'cmacs-imgedit-set-foreground-color)
@@ -1690,7 +1690,7 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "z") #'cmacs-imgedit-set-brush-size)
     (define-key map (kbd "f") #'cmacs-imgedit-fill-layer)
     (define-key map (kbd "p") #'cmacs-imgedit-pencil)
-    (define-key map (kbd "G") #'cmacs-imgedit-flood-fill-at)
+    (define-key map (kbd "B") #'cmacs-imgedit-flood-fill-at)
     (define-key map (kbd "L") #'cmacs-imgedit-add-layer-cmd)
     (define-key map (kbd "K") #'cmacs-imgedit-remove-active-layer)
     (define-key map (kbd "a") #'cmacs-imgedit-set-active-layer-cmd)

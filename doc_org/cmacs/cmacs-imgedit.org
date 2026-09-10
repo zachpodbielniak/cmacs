@@ -173,11 +173,11 @@ the in-engine libregnum menu under ~--lrg~).
 |-----------+-----------------------------------------------------|
 | ~mouse-1~ | Use the active tool on the canvas                   |
 | ~mouse-3~ | Context menu                                        |
-| ~b l > r c E t k e~ | Select tool: brush / line / arrow / rect / circle / ellipse / text / bucket / pick |
+| ~b l > r c E t F e~ | Select tool: brush / line / arrow / rect / circle / ellipse / text / bucket / pick |
 | ~x~       | Toggle filled vs outline for rect/circle/ellipse    |
 | ~C~ / ~A~ / ~z~ / ~T~ | Foreground colour / alpha / brush size / text size |
 | ~f~       | Fill the active layer with the foreground colour    |
-| ~p~ / ~G~ | Pencil at coords / flood-fill at coords (keyboard)  |
+| ~p~ / ~B~ | Pencil at coords / flood-fill at coords (keyboard)  |
 | ~L~ / ~K~ / ~a~ / ~v~ / ~o~ / ~?~ | Layer: add / remove / select / toggle / opacity / list |
 | ~u~ / ~U~ | Undo / redo                                         |
 | ~s~       | Save (PNG/JPG/BMP by extension)                     |

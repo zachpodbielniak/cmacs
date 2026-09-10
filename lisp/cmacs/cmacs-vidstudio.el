@@ -1472,7 +1472,7 @@ Press a key to run its command, or q / C-g to dismiss."
    ["Project"
     ("w" "Save  (C-x C-s)" cmacs-vidstudio-save)
     ("E" "Export video…" cmacs-vidstudio-export-video-cmd)
-    ("G" "Export GIF…" cmacs-vidstudio-export-gif-cmd)]
+    ("X" "Export GIF…" cmacs-vidstudio-export-gif-cmd)]
    ["View"
     ("L" "Clip list panel" cmacs-vidstudio-toggle-clips-panel)]])
 
@@ -1485,12 +1485,12 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "o") #'cmacs-vidstudio-add-video-overlay)
     (define-key map (kbd "C") #'cmacs-vidstudio-add-color)
     (define-key map (kbd "T") #'cmacs-vidstudio-add-title)
-    (define-key map (kbd "n") #'cmacs-vidstudio-add-track-cmd)
+    (define-key map (kbd "r") #'cmacs-vidstudio-add-track-cmd)
     (define-key map (kbd "a") #'cmacs-vidstudio-set-active-track)
     (define-key map (kbd "t") #'cmacs-vidstudio-add-transition-cmd)
     (define-key map (kbd "e") #'cmacs-vidstudio-add-effect-cmd)
     (define-key map (kbd "s") #'cmacs-vidstudio-split-at-playhead)
-    (define-key map (kbd "g") #'cmacs-vidstudio-set-playhead-cmd)
+    (define-key map (kbd ".") #'cmacs-vidstudio-set-playhead-cmd)
     ;; `p' is the primary play toggle: under Doom, SPC is the leader key
     ;; (a general.el override map that outranks even an evil-overriding
     ;; mode map), so SPC only works in vanilla Emacs.
@@ -1499,11 +1499,11 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "<right>") #'cmacs-vidstudio-step-forward)
     (define-key map (kbd "<left>") #'cmacs-vidstudio-step-back)
     (define-key map (kbd "C-x C-s") #'cmacs-vidstudio-save)
-    (define-key map (kbd "k") #'cmacs-vidstudio-add-keyframe-cmd)
+    (define-key map (kbd "f") #'cmacs-vidstudio-add-keyframe-cmd)
     (define-key map (kbd "A") #'cmacs-vidstudio-add-audio)
     (define-key map (kbd "V") #'cmacs-vidstudio-set-audio-gain)
     (define-key map (kbd "E") #'cmacs-vidstudio-export-video-cmd)
-    (define-key map (kbd "G") #'cmacs-vidstudio-export-gif-cmd)
+    (define-key map (kbd "X") #'cmacs-vidstudio-export-gif-cmd)
     (define-key map (kbd "L") #'cmacs-vidstudio-toggle-clips-panel)
     (define-key map (kbd "?") #'cmacs-vidstudio-help)
     (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))

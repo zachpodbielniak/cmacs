@@ -433,12 +433,12 @@ a to pick another\n"
   ;; A key that is bound but absent from here may as well not exist: the
   ;; conversation keys shipped working and unfindable because this string
   ;; was not part of adding them.
-  (concat " n new (describe it)   V new (say it)   C clone   x compose\n"
+  (concat " w new (describe it)   V new (say it)   C clone   x compose\n"
           " s start   K cancel  d delete   o log       RET plan\n"
           " i say more   I queued   X end conversation   (* open, ✉N waiting)\n"
           " a agent   m model   b budget   t tools      c new plan\n"
-          " N new agent  T tool list  A reload agents   p open plan\n"
-          " g refresh M memory  ? keys     q quit"))
+          " + new agent  T tool list  A reload agents   p open plan\n"
+          " gr refresh M memory  ? keys    q quit"))
 
 (defun cmacs-brigade-dashboard--record-at-point ()
   (get-text-property (line-beginning-position) 'cmacs-brigade-record))
@@ -802,11 +802,11 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "i") #'cmacs-brigade-dashboard-send)
     (define-key map (kbd "I") #'cmacs-brigade-dashboard-inbox)
     (define-key map (kbd "X") #'cmacs-brigade-dashboard-close)
-    (define-key map (kbd "g") #'cmacs-brigade-dashboard-refresh)
+    (define-key map (kbd "g r") #'cmacs-brigade-dashboard-refresh)
     (define-key map (kbd "M") #'cmacs-brigade-memory-find)
     ;; Getting a task without having to know that a plan is an org file,
     ;; where plans live, or how :MODEL: is spelled.
-    (define-key map (kbd "n") #'cmacs-brigade-compose-quick)
+    (define-key map (kbd "w") #'cmacs-brigade-compose-quick)
     (define-key map (kbd "V") #'cmacs-brigade-compose-voice)
     (define-key map (kbd "C") #'cmacs-brigade-dashboard-clone)
     (define-key map (kbd "x") #'cmacs-brigade-dashboard-compose)
@@ -820,7 +820,7 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
     (define-key map (kbd "t") #'cmacs-brigade-dashboard-set-tools)
     (define-key map (kbd "A") #'cmacs-brigade-dashboard-reload-agents)
     (define-key map (kbd "d") #'cmacs-brigade-dashboard-delete)
-    (define-key map (kbd "N") #'cmacs-brigade-dashboard-new-agent)
+    (define-key map (kbd "+") #'cmacs-brigade-dashboard-new-agent)
     (define-key map (kbd "T") #'cmacs-brigade-dashboard-list-tools)
     (define-key map (kbd "?") #'cmacs-brigade-dashboard-help)
     (define-key map (kbd "q") #'cmacs-brigade-dashboard-quit)

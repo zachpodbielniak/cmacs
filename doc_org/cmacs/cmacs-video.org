@@ -181,7 +181,7 @@ Both pop a buffer named =*cmacs-video: <basename>*= in
 
 | Key       | Command                                  |
 |-----------+------------------------------------------|
-| =SPC=     | toggle play / pause                      |
+| =t= / =SPC= | toggle play / pause (=SPC= is the Doom leader; =t= always works) |
 | =q=       | kill buffer (and stop the stream)        |
 | =s=       | prompt for seek (seconds)                |
 | =f= / =b= | step ±1 frame                            |

@@ -289,7 +289,7 @@ demand so the AI stack stays optional.)
 tree of the live page (the walk stamps a =data-cmacs-node-id= on each
 element so Emacs can address it).  On a node: =h=/=RET= outline it in the
 page and scroll it into view, =c= shows its computed style in =*gsurf-css*=,
-=g= re-walks.  Depth is =cmacs-gsurf-inspector-depth=.
+=gr= re-walks.  Depth is =cmacs-gsurf-inspector-depth=.
 
 =cmacs-gsurf-console= (=C-c C-l=) opens =*gsurf-console*=: it installs a
 capture user-script that streams =console.log/info/warn/error= into the
@@ -396,7 +396,7 @@ with =shr=; links navigate the *hidden* view in place (not
 | Key       | Command                            | Action               |
 |-----------+------------------------------------+----------------------|
 | =RET=     | =cmacs-gsurf-lite-follow=          | Follow link at point |
-| =g= / =r= | =cmacs-gsurf-lite-reload=          | Reload               |
+| =gr= / =r= | =cmacs-gsurf-lite-reload=         | Reload               |
 | =B= / =F= | back / forward                     | Hidden-view history  |
 | =o=       | =cmacs-gsurf-lite-open=            | Open a URL           |
 | =RET=     | =cmacs-gsurf-lite-follow=          | Activate field / link |
@@ -437,7 +437,7 @@ set =<input type=file>=.)
 pages render their real content only after the load-finished event.
 gsurf-lite re-extracts the DOM at each delay in
 =cmacs-gsurf-lite-resettle-times= (default 0.6/1.6/3.0 s) so that content
-appears; raise those values for very slow pages, or just =g= (reload) /
+appears; raise those values for very slow pages, or just =r= (reload) /
 =&= (hand off) if a page is still blank.
 
 Clicking a button or submitting -- e.g. *Log In* -- often kicks off work

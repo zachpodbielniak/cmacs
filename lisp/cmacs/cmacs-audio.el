@@ -169,6 +169,13 @@ for music capture if you do not need transcription."
                 (pcase (cmacs-audio-state cmacs-audio-mode--handle)
                   ('playing (cmacs-audio-pause cmacs-audio-mode--handle))
                   (_        (cmacs-audio-start cmacs-audio-mode--handle))))))
+(define-key cmacs-audio-mode-map (kbd "p")
+            (lambda ()
+              (interactive)
+              (when cmacs-audio-mode--handle
+                (pcase (cmacs-audio-state cmacs-audio-mode--handle)
+                  ('playing (cmacs-audio-pause cmacs-audio-mode--handle))
+                  (_        (cmacs-audio-start cmacs-audio-mode--handle))))))
 (define-key cmacs-audio-mode-map (kbd "q")
             (lambda () (interactive)
               (when cmacs-audio-mode--handle

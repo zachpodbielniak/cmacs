@@ -1137,7 +1137,7 @@ cannot match against the one an agent printed is not an id."
 (ert-deftest cmacs-brigade-dashboard-binds-delete-and-new-agent ()
   (skip-unless (featurep 'cmacs-brigade-dashboard))
   (dolist (cell '(("d" . cmacs-brigade-dashboard-delete)
-                  ("N" . cmacs-brigade-dashboard-new-agent)
+                  ("+" . cmacs-brigade-dashboard-new-agent)
                   ("T" . cmacs-brigade-dashboard-list-tools)))
     (should (eq (cdr cell)
                 (lookup-key cmacs-brigade-dashboard-mode-map

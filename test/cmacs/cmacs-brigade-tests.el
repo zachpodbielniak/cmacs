@@ -472,7 +472,7 @@ exactly like having forgotten to set one."
 (ert-deftest cmacs-brigade-dashboard-binds-what-it-advertises ()
   "Every key the hint line names is actually bound."
   (skip-unless (featurep 'cmacs-brigade-dashboard))
-  (dolist (key '("s" "K" "RET" "c" "p" "a" "m" "b" "t" "A" "g" "M" "?" "q"))
+  (dolist (key '("s" "K" "RET" "c" "p" "a" "m" "b" "t" "A" "g r" "M" "?" "q"))
     (should (commandp (lookup-key cmacs-brigade-dashboard-mode-map
                                   (kbd key))))))
 

@@ -433,13 +433,11 @@ on `commandp' so both work."
 ;; leave a half-populated map behind.
 (let ((map cmacs-calculator-menu-mode-map))
   (define-key map (kbd "RET") #'cmacs-calculator-menu-open)
-  (define-key map (kbd "n") #'cmacs-calculator-menu-next)
-  (define-key map (kbd "p") #'cmacs-calculator-menu-previous)
   (define-key map (kbd "j") #'cmacs-calculator-menu-next)
   (define-key map (kbd "k") #'cmacs-calculator-menu-previous)
   (define-key map (kbd "/") #'cmacs-calculator-menu-filter)
   (define-key map (kbd "s") #'cmacs-calculator-menu-filter)
-  (define-key map (kbd "g") #'cmacs-calculator-menu-refresh)
+  (define-key map (kbd "g r") #'cmacs-calculator-menu-refresh)
   (define-key map (kbd "q") #'quit-window))
 
 (define-derived-mode cmacs-calculator-menu-mode special-mode "Calc-Menu"

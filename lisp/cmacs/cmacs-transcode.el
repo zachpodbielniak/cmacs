@@ -1317,7 +1317,7 @@ runs on the job's execution host (remote via TRAMP when the job is remote)."
   (define-key map (kbd "M") #'cmacs-transcode-set-kind)
   (define-key map (kbd "E") #'cmacs-transcode-cycle-execution)
   (define-key map (kbd "L") #'cmacs-transcode-show-log)
-  (define-key map (kbd "g") #'cmacs-transcode-refresh)
+  (define-key map (kbd "g r") #'cmacs-transcode-refresh)
   (define-key map (kbd "q") #'quit-window)
   (define-key map (kbd "?") #'cmacs-transcode-help))
 

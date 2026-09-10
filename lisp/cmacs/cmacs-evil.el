@@ -90,6 +90,18 @@ live object, not a snapshot."
      copy)
     (nreverse result)))
 
+(defvar cmacs-evil-promoted-maps nil
+  "Alist of (KEYMAP . MODE) for every map handed to this file.
+
+Recorded so the rule that keeps these maps usable can be CHECKED rather
+than remembered.  A promoted map is an Evil intercept map: whatever it
+binds, Evil cannot get back, so a mode that puts a command on `k' has
+not added a key, it has removed the one that moves the cursor up.  The
+test that enforces this walks this list, which means a mode written
+tomorrow is covered without anybody adding it anywhere.
+
+MODE is nil for a map registered without one.")
+
 (defun cmacs-evil--install (map states copy)
   "Give MAP precedence over Evil in each state in STATES.
 When COPY is non-nil the map's own bindings are copied into each state's
@@ -167,6 +179,10 @@ the two together just makes the intent obvious."
 The work is deferred with `with-eval-after-load' when Evil has not
 loaded yet, which is the normal case at file-load time."
   (let ((states (or states cmacs-evil-intercept-states)))
+    ;; Recorded before the Evil work, which may be deferred: the map is
+    ;; promoted either way, so the guard must see it either way.
+    (unless (assq map cmacs-evil-promoted-maps)
+      (push (cons map mode) cmacs-evil-promoted-maps))
     (if (featurep 'evil)
         (cmacs-evil--install map states copy)
       (with-eval-after-load 'evil

@@ -362,7 +362,7 @@ so the override never fails the kernel's bounds check."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'cmacs-cad-feature-tree-visit)
     (define-key map [mouse-1]   #'cmacs-cad-feature-tree-visit)
-    (define-key map (kbd "g")   #'cmacs-cad-feature-tree-refresh)
+    (define-key map (kbd "g r") #'cmacs-cad-feature-tree-refresh)
     map)
   "Keymap for `cmacs-cad-feature-tree-mode'.")
 

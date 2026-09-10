@@ -312,7 +312,7 @@ it in auth-source, which is what `p' opts out of."
     (define-key map "r" #'cmacs-dbexplorer-connections-toggle-read-only)
     (define-key map "s" #'cmacs-dbexplorer-connections-sql)
     (define-key map "t" #'cmacs-dbexplorer-connections-tables)
-    (define-key map "g" #'cmacs-dbexplorer-connections-refresh)
+    (define-key map (kbd "g r") #'cmacs-dbexplorer-connections-refresh)
     (define-key map "q" #'cmacs-dbexplorer-quit)
     map)
   "Keymap for `cmacs-dbexplorer-connections-mode'.")
@@ -375,7 +375,7 @@ have to be undone before it could be placed."
       ;; promotion below is what makes this one win.
       "s" #'cmacs-dbexplorer-connections-sql
       "t" #'cmacs-dbexplorer-connections-tables
-      "g" #'cmacs-dbexplorer-connections-refresh
+      (kbd "g r") #'cmacs-dbexplorer-connections-refresh
       "q" #'cmacs-dbexplorer-quit)))
 
 ;; Intercept rather than setup: this is a tabulated-list derivative, and

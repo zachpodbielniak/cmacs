@@ -310,10 +310,17 @@
 ;;; ---------------------------------------------------------------------
 
 (ert-deftest cmacs-transcribe-test-keymap-commands-bound ()
-  "Every key in the queue map is bound to a real interactive command."
+  "Every key in the queue map is a real command, or a prefix holding them.
+
+`g' is deliberately a prefix (`g r' refreshes) rather than a command:
+a bare `g' in a map promoted to Evil intercept precedence takes the
+whole `g' prefix, `gg' included."
   (cmacs-transcribe-tests--skip-unless-loaded)
   (dolist (binding (cmacs-evil--own-bindings cmacs-transcribe-mode-map))
-    (should (commandp (cdr binding)))))
+    (if (keymapp (cdr binding))
+        (map-keymap (lambda (_event def) (should (commandp def)))
+                    (cdr binding))
+      (should (commandp (cdr binding))))))
 
 (ert-deftest cmacs-transcribe-test-keymap-wins-under-evil ()
   "Under Evil every queue key resolves to its own command.

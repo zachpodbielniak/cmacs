@@ -271,6 +271,7 @@ if any, else prompt from the live list."
 (defvar cmacs-video-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "SPC")  #'cmacs-video-toggle-play)
+    (define-key m (kbd "t")    #'cmacs-video-toggle-play)
     (define-key m (kbd "q")    #'kill-current-buffer)
     (define-key m (kbd "s")    #'cmacs-video-seek-interactive)
     (define-key m (kbd "f")    #'cmacs-video-step-forward-frame)

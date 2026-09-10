@@ -61,16 +61,16 @@ textual timeline is shown in the native path meanwhile.
 | ~i~       | ~cmacs-vidstudio-import~             | Import an image/video clip   |
 | ~C~       | ~cmacs-vidstudio-add-color~          | Add a solid colour clip      |
 | ~T~       | ~cmacs-vidstudio-add-title~          | Add a text/title clip        |
-| ~n~       | ~cmacs-vidstudio-add-track-cmd~      | Add a track                  |
+| ~r~       | ~cmacs-vidstudio-add-track-cmd~      | Add a track (a timeline row) |
 | ~a~       | ~cmacs-vidstudio-set-active-track~   | Select the active track      |
 | ~t~       | ~cmacs-vidstudio-add-transition-cmd~ | Add a transition to a clip   |
 | ~e~       | ~cmacs-vidstudio-add-effect-cmd~     | Add an effect to a clip      |
 | ~s~       | ~cmacs-vidstudio-split-at-playhead~  | Split a clip at the playhead |
-| ~g~       | ~cmacs-vidstudio-set-playhead-cmd~   | Jump the playhead            |
+| ~.~       | ~cmacs-vidstudio-set-playhead-cmd~   | Jump the playhead            |
 | ~p~ / ~SPC~ | ~cmacs-vidstudio-play~             | Play / pause (~p~ under Doom — SPC is the leader there) |
 | ~←~ / ~→~ | ~cmacs-vidstudio-step-back/forward~  | Step one frame               |
 | ~E~       | ~cmacs-vidstudio-export-video-cmd~   | Export MP4 (H.264)           |
-| ~G~       | ~cmacs-vidstudio-export-gif-cmd~     | Export animated GIF          |
+| ~X~       | ~cmacs-vidstudio-export-gif-cmd~     | Export animated GIF          |
 
 ~mouse-3~ pops the editor context menu.  Like imgedit, the rendered buffer
 carries a =keymap= text property and the mode map is installed as an Evil
@@ -183,7 +183,7 @@ setters just before compositing (so it works in preview, playback, and export
 - ~(cmacs-vidstudio-add-keyframe HANDLE CLIP-ID PARAM FRAME VALUE &optional EASING EFFECT-INDEX PROP)~
   — PARAM 0 opacity, 1 x, 2 y, 3 scale, 4 rotation, 5 effect-param (with
   EFFECT-INDEX + PROP); EASING is an =LrgEasingType= (0 linear .. 30, 31
-  curves).  Key ~k~ adds a keyframe for the clip under the playhead at the
+  curves).  Key ~f~ adds a keyframe for the clip under the playhead at the
   current playhead (relative to the clip start) --- a *Ken Burns* move is just
   x/y/scale keyframes.
 - ~(cmacs-vidstudio-clear-keyframes HANDLE CLIP-ID &optional PARAM)~ (PARAM nil

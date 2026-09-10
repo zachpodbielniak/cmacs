@@ -281,8 +281,8 @@ half-answer runs something other than what was asked for."
 The recurring failure in this subsystem is a key wired to a function
 nothing ever loaded; the halves each work and the whole is void."
   (skip-unless (featurep 'cmacs-brigade-dashboard))
-  (dolist (key '("n" "V" "C" "x" "s" "K" "d" "o" "g" "c" "p" "a" "m" "b"
-                 "t" "A" "N" "T" "?" "q"))
+  (dolist (key '("w" "V" "C" "x" "s" "K" "d" "o" "g r" "c" "p" "a" "m" "b"
+                 "t" "A" "+" "T" "?" "q"))
     (let ((cmd (lookup-key cmacs-brigade-dashboard-mode-map (kbd key))))
       (should cmd)
       (should (commandp cmd)))))

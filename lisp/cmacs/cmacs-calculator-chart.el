@@ -515,7 +515,7 @@ the shared libregnum view, which owns the backend difference."
 
 (defvar cmacs-calculator-chart-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") #'cmacs-calculator-chart-redraw)
+    (define-key map (kbd "g r") #'cmacs-calculator-chart-redraw)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `cmacs-calculator-chart-mode'.")

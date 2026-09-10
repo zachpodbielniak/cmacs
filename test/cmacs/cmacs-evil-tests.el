@@ -267,5 +267,144 @@ skipped, not failed."
     (cmacs-evil-setup-mode-map (cmacs-evil-tests--map) 'cmacs-evil-test-mode)
     (should (memq 'cmacs-evil-test-mode evil-snipe-disabled-modes))))
 
+;;;; The motion-key rule.
+;;
+;; The mirror image of everything above.  A promoted map is an Evil
+;; INTERCEPT map, so the precedence that makes `s' and `S' work also
+;; means Evil can never get a key back.  A mode that puts a command on
+;; `k' has not added a key, it has taken away the one that moves the
+;; cursor up -- reported as "`k' says No agent at point instead of
+;; moving up".
+
+(defconst cmacs-evil-tests--protected-keys
+  '("j" "k" "n" "N" "/" ";" "G" "$" "0" "g" "SPC" "," "M-SPC")
+  "Keys a promoted cmacs map must leave to Evil.
+
+Deliberately NOT every key Evil binds.  The line is drawn where
+`evil-collection' draws it for Magit, which is the read-only
+single-key buffer every Doom user already has: Magit itself takes
+`h', `l', `w', `b', `e', `W', `B', `E', `H', `M', `L', `f', `F',
+`t', `T', `^' and `%', and `evil-collection-magit' leaves them
+taken -- a read-only buffer has nothing to word-motion through.
+What it protects, and what is listed here, is vertical motion
+(`j'/`k'), search (`n'/`N'//), find-char repeat (`;'), the ends
+(`G'/`$'/`0'), and the `g' prefix.
+
+`g' is checked as a PREFIX: `gj', `gk' and `gr' are the section and
+refresh convention `evil-collection-magit' uses, and binding part of
+a prefix shadows only what it completes -- `gg' still falls through.
+So `g' may be a keymap here, never a command.
+
+The three leader keys are Doom's.  general.el's override wins over
+even an intercept map, so binding one is not destructive, merely
+dead under Doom -- which is why a buffer whose only play key was
+SPC had no play key at all there.")
+
+(defconst cmacs-evil-tests--motion-exemptions
+  ;; (MAP-SYMBOL KEY . REASON).  A protected key may be bound when the
+  ;; binding IS that motion in the buffer's own terms -- the rule is
+  ;; "Evil's motion still happens", not "the key is untouched".
+  '((cmacs-brigade-dashboard-mode-map  "j" . "next-line")
+    (cmacs-brigade-dashboard-mode-map  "k" . "previous-line")
+    (cmacs-brigade-output-mode-map     "j" . "next-line")
+    (cmacs-brigade-output-mode-map     "k" . "previous-line")
+    (cmacs-transcode-mode-map          "j" . "next-line")
+    (cmacs-transcode-mode-map          "k" . "previous-line")
+    (cmacs-transcribe-mode-map         "j" . "next-line")
+    (cmacs-transcribe-mode-map         "k" . "previous-line")
+    (cmacs-dbexplorer-review-mode-map  "j" . "next-line")
+    (cmacs-dbexplorer-schema-mode-map  "j" . "next-line")
+    (cmacs-dbexplorer-schema-mode-map  "k" . "previous-line")
+    (cmacs-dbexplorer-grid-mode-map    "j" . "next row -- the grid's line")
+    (cmacs-dbexplorer-grid-mode-map    "k" . "previous row")
+    (cmacs-calculator-menu-mode-map    "j" . "next entry -- the menu's line")
+    (cmacs-calculator-menu-mode-map    "k" . "previous entry")
+    (cmacs-calculator-menu-mode-map    "/" . "filters the menu, i.e. searches it")
+    (cmacs-gsurf-bookmarks-mode-map    "/" . "filters, i.e. searches")
+    (cmacs-gsurf-mode-map              "j" . "scrolls the page down")
+    (cmacs-gsurf-mode-map              "k" . "scrolls the page up")
+    (cmacs-gsurf-mode-map              "/" . "find-in-page")
+    (cmacs-gsurf-mode-map              "G" . "scrolls to the bottom")
+    (cmacs-gsurf-mode-map              "0" . "resets zoom; a page has no lines to start")
+    (cmacs-video-mode-map              "0" . "seeks to the start")
+    (cmacs-video-mode-map              "," . "seek back; Doom's localleader shadows it, `<' also seeks")
+    (cmacs-video-mode-map            "SPC" . "play; Doom's leader shadows it, `t' also toggles")
+    (cmacs-audio-mode-map            "SPC" . "play; Doom's leader shadows it, `p' also toggles")
+    (cmacs-vidstudio-mode-map        "SPC" . "play; Doom's leader shadows it, `p' also plays")
+    (cmacs-gnuseye-layers-mode-map   "SPC" . "toggle; Doom's leader shadows it, `t' also toggles"))
+  "Protected keys a map may bind anyway, each with the reason.
+
+An exemption is a claim that the key still does what an Evil user
+means by it.  Anything not listed is a defect, so a new one has to be
+argued for here rather than appearing silently in a keymap.")
+
+(defun cmacs-evil-tests--load-promoting-features ()
+  "Load every cmacs feature that opts into `cmacs-evil'.
+Found by scanning the sources, so a mode added later is covered with
+no edit here."
+  (let ((dir (file-name-directory (locate-library "cmacs-evil"))))
+    (dolist (file (directory-files dir t "\\`cmacs-.*\\.el\\'"))
+      (unless (string-match-p "cmacs-evil\\.el\\'" file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (when (re-search-forward "cmacs-evil-\\(setup\\|intercept\\)-mode-map"
+                                   nil t)
+            (ignore-errors
+              (require (intern (file-name-base file)) nil t))))))))
+
+(ert-deftest cmacs-evil-test-no-promoted-map-steals-a-motion-key ()
+  "No cmacs map promoted to intercept precedence takes a motion key.
+
+Driven off `cmacs-evil-promoted-maps', which the library fills in as
+it promotes, so this covers every mode that uses `cmacs-evil' --
+including ones written after this test.  Exemptions are listed, with
+reasons, in `cmacs-evil-tests--motion-exemptions'.
+
+Deliberately does NOT skip when Evil is absent, unlike its neighbours.
+Every other test here asks what Evil resolves a key to and so needs
+Evil installed; this one asks only what the mode map BINDS, which is
+the same question in any build.  Skipping it without Evil would make
+the guard inert in exactly the batch runs that are supposed to catch
+the regression."
+  (cmacs-evil-tests--load-promoting-features)
+  (skip-unless cmacs-evil-promoted-maps)
+  (let ((offenders nil)
+        (checked 0))
+    (dolist (cell cmacs-evil-promoted-maps)
+      (let* ((map (car cell))
+             (sym (cmacs-evil-tests--map-symbol map))
+             ;; The parent is not promoted, so an inherited binding is
+             ;; not this rule's business.
+             (own (copy-keymap map)))
+        (set-keymap-parent own nil)
+        (dolist (key cmacs-evil-tests--protected-keys)
+          (setq checked (1+ checked))
+          (let ((def (lookup-key own (kbd key))))
+            ;; `commandp', so a `g' holding gj/gk/gr passes and a `g'
+            ;; bound to refresh does not.
+            (when (and (commandp def)
+                       (not (assoc (cons sym key)
+                                   (mapcar (lambda (e)
+                                             (cons (cons (nth 0 e) (nth 1 e))
+                                                   (cddr e)))
+                                           cmacs-evil-tests--motion-exemptions))))
+              (push (format "%s binds %s to %s" (or sym map) key def)
+                    offenders))))))
+    (should (> checked 0))
+    (should (null offenders))))
+
+(defun cmacs-evil-tests--map-symbol (map)
+  "Return the symbol whose value is MAP, or nil."
+  (let (found)
+    (mapatoms (lambda (s)
+                (when (and (not found)
+                           (boundp s)
+                           (string-prefix-p "cmacs-" (symbol-name s))
+                           (string-suffix-p "-mode-map" (symbol-name s))
+                           (eq (symbol-value s) map))
+                  (setq found s))))
+    found))
+
 (provide 'cmacs-evil-tests)
 ;;; cmacs-evil-tests.el ends here

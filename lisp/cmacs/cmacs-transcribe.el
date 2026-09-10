@@ -1402,7 +1402,7 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
   (define-key map (kbd "P") #'cmacs-transcribe-set-parallel)
   (define-key map (kbd "w") #'cmacs-transcribe-set-threads)
   (define-key map (kbd "c") #'cmacs-transcribe-set-model)
-  (define-key map (kbd "n") #'cmacs-transcribe-set-language)
+  (define-key map (kbd "i") #'cmacs-transcribe-set-language)
   (define-key map (kbd "s") #'cmacs-transcribe-toggle-summarize)
   (define-key map (kbd "S") #'cmacs-transcribe-set-summary-type)
   (define-key map (kbd "f") #'cmacs-transcribe-cycle-formats)
@@ -1414,7 +1414,7 @@ STANDALONE is forwarded to `cmacs-transcribe--finish-summary'."
   (define-key map (kbd "m") #'cmacs-transcribe-toggle-missing)
   (define-key map (kbd "x") #'cmacs-transcribe-toggle-existing)
   (define-key map (kbd "L") #'cmacs-transcribe-show-log)
-  (define-key map (kbd "g") #'cmacs-transcribe-refresh)
+  (define-key map (kbd "g r") #'cmacs-transcribe-refresh)
   (define-key map (kbd "q") #'quit-window)
   (define-key map (kbd "?") #'cmacs-transcribe-help))
 

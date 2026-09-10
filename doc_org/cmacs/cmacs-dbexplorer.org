@@ -134,7 +134,7 @@ to keep the tree fully closed on open, at the price of one keystroke.
 | =s=       | Open a SQL editor on this connection            |
 | =y=       | Copy this name, quoted for the dialect          |
 | =^=       | Go to the parent node                           |
-| =n= / =p= | Next / previous sibling                         |
+| =gj= / =gk= | Next / previous sibling                       |
 | =g=       | Refresh, discarding the cache                   |
 | =q=       | Quit, restoring the previous window layout      |
 
@@ -175,7 +175,6 @@ unordered query the grid says so once.
 
 | Key           | Effect                                     |
 |---------------+--------------------------------------------|
-| =n= / =p=     | Next / previous row                        |
 | =j= / =k=     | Next / previous row (Evil)                 |
 | =h= / =l=     | Previous / next cell (Evil)                |
 | =TAB= / =S-TAB= | Next / previous cell                     |

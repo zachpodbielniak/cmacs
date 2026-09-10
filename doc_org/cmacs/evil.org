@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs
 #+created: 2026-07-28
-#+updated: 2026-07-28
-#+version: 1
+#+updated: 2026-09-10
+#+version: 2
 
 * Why this exists
 
@@ -90,6 +90,35 @@ Three groups are deliberately *not* intercepted:
 
 Modes derived from =tabulated-list-mode= are immune to evil-snipe on their own (snipe ships =tabulated-list-mode= in its default =evil-snipe-disabled-modes=) but are still shadowed by Evil's *state* maps, which is why the gsurf bookmark and download lists are in the table above.
 
+* What a promoted map must not bind
+:PROPERTIES:
+:CUSTOM_ID: motion-keys
+:END:
+
+Promotion cuts both ways, and this is the half that is easy to miss. An intercept map wins over *everything*, which means whatever it binds, Evil can never get back. A mode that puts a command on =k= has not added a key — it has taken away the one that moves the cursor up. The bug reads as ~k says "No agent at point" instead of moving~, and it is reported as "your buffer is broken", not as "your keybinding is unusual".
+
+So a promoted map leaves these to Evil:
+
+| Key           | Why                                              |
+|---------------+--------------------------------------------------|
+| =j= =k=       | vertical motion — the whole complaint            |
+| =n= =N= =/=   | search and repeat                                |
+| =;=           | repeat find-char                                 |
+| =G= =$= =0=   | the ends                                         |
+| =g=           | the *prefix*: =gg=, =ge=, =g;= …                 |
+| =SPC= =,= =M-SPC= | Doom's leader, localleader and alt leader    |
+
+Everything else is fair game, and that is not a guess. =evil-collection= is the reference, because Magit is the read-only single-key buffer every Doom user already has: Magit binds =h= (dispatch), =l= (log), =w=, =b=, =e=, =W=, =B=, =E=, =H=, =M=, =L=, =f=, =F=, =t=, =T=, =^= and =%=, and =evil-collection-magit= leaves every one of them taken. What it *does* do is move Magit's own =n= / =p= off search and onto =C-j= / =C-k= and =gj= / =gk=. A read-only buffer has nothing to word-motion through; it very much still has lines to move between.
+
+Hence the two conventions to reach for:
+
+- *Refresh is =gr=*, never a bare =g=. Binding part of a prefix is safe — =gj= shadows only =gj=, and =gg= still falls through to =evil-goto-first-line=.
+- *Section or sibling motion is =C-j= / =C-k=, or =gj= / =gk=*, which is exactly where =evil-collection-magit= puts it.
+
+A key may appear in that table anyway when the binding *is* that motion in the buffer's own terms — =j= bound to =next-line=, =/= bound to a filter, =G= scrolling a web page to the bottom. Those are listed as explicit exemptions, each with its reason, in =cmacs-evil-tests--motion-exemptions=; anything not listed there fails the build.
+
+The three leader keys are a special case. general.el's override map beats even an intercept map, so binding =SPC= is not destructive — it is merely *dead* under Doom. That is its own trap: the audio player's only play key was =SPC=, which meant it had no play key at all under Doom while looking perfectly fine in vanilla Emacs. Give such a buffer a second, ordinary key.
+
 * Adding a new mode
 :PROPERTIES:
 :CUSTOM_ID: adding-a-new-mode
@@ -115,7 +144,9 @@ Both take an optional third argument, the list of states (default =normal= and =
 
 * Verifying
 
-=test/cmacs/cmacs-evil-tests.el= holds the regression tests. The pure ones (which bindings get collected, what is excluded) run everywhere; the precedence ones need the real Evil, so they skip unless it is on =load-path=. To run the whole suite against a Doom install — including the sweep that walks every covered mode map with evil-snipe forced on:
+=test/cmacs/cmacs-evil-tests.el= holds the regression tests. The pure ones (which bindings get collected, what is excluded, and the motion-key rule above) run everywhere; the precedence ones need the real Evil, so they skip unless it is on =load-path=.
+
+The motion-key guard deliberately does *not* skip without Evil: it asks only what a mode map *binds*, which is the same question in any build, and skipping it would leave it inert in exactly the batch runs meant to catch the regression. It walks =cmacs-evil-promoted-maps=, which =cmacs-evil.el= fills in as it promotes — so a mode written tomorrow is covered without anybody adding it to a list. To run the whole suite against a Doom install — including the sweep that walks every covered mode map with evil-snipe forced on:
 
 #+begin_src bash
 src/emacs -Q --batch \

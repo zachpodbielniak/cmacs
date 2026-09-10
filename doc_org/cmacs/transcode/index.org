@@ -87,7 +87,7 @@ drains.
 | =M=   | =cmacs-transcode-set-kind=         | Switch the session between video and audio      |
 | =E=   | =cmacs-transcode-cycle-execution=  | Cycle execution: auto → local → remote          |
 | =L=      | =cmacs-transcode-show-log=         | Show =*cmacs-transcode-log*= (full ffmpeg out)  |
-| =g=      | =cmacs-transcode-refresh=          | Redraw the buffer                               |
+| =gr=     | =cmacs-transcode-refresh=          | Redraw the buffer                               |
 | =q=      | =quit-window=                      | Quit the queue buffer                           |
 | =?=      | =cmacs-transcode-help=             | Echo the key hints                              |
 

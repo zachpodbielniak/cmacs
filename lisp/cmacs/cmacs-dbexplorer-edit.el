@@ -685,9 +685,9 @@ that a change landed on the table you did not mean."
 (defvar cmacs-dbexplorer-review-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "j" #'next-line)
-    (define-key map "k" #'cmacs-dbexplorer-review-drop)
+    (define-key map "d" #'cmacs-dbexplorer-review-drop)
     (define-key map "c" #'cmacs-dbexplorer-review-apply)
-    (define-key map "g" #'cmacs-dbexplorer-review-refresh)
+    (define-key map (kbd "g r") #'cmacs-dbexplorer-review-refresh)
     (define-key map "q" #'quit-window)
     map)
   "Keymap for `cmacs-dbexplorer-review-mode'.")

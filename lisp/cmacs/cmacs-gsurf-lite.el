@@ -827,7 +827,6 @@ if(!e)return 'nofound';e.click();return 'clicked';})();"
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "RET")      #'cmacs-gsurf-lite-follow)
     (define-key m (kbd "<mouse-2>") #'cmacs-gsurf-lite-follow)
-    (define-key m "g"              #'cmacs-gsurf-lite-reload)
     (define-key m "r"              #'cmacs-gsurf-lite-reload)
     (define-key m "B"              #'cmacs-gsurf-lite-back)
     (define-key m "F"              #'cmacs-gsurf-lite-forward)
@@ -923,7 +922,7 @@ Interactively, prompt for a URL or search query."
   (when (fboundp 'evil-define-key*)
     (evil-define-key* '(normal motion) cmacs-gsurf-lite-mode-map
       (kbd "RET") #'cmacs-gsurf-lite-follow
-      "g"  #'cmacs-gsurf-lite-reload
+      (kbd "g r") #'cmacs-gsurf-lite-reload
       "B"  #'cmacs-gsurf-lite-back
       "F"  #'cmacs-gsurf-lite-forward
       "o"  #'cmacs-gsurf-lite-open

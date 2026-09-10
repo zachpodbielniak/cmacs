@@ -28,7 +28,7 @@ ST  ID         AGENT        TASK                       TURNS   TOKENS      COST
 
 | Key   | Does                                            |
 |-------+-------------------------------------------------|
-| =n=     | describe a task in plain English; one is drafted |
+| =w=     | describe a task in plain English; one is drafted |
 | =V=     | say it instead                                  |
 | =C=     | clone the task on this line                     |
 | =x=     | compose one field by field                      |
@@ -42,7 +42,7 @@ ST  ID         AGENT        TASK                       TURNS   TOKENS      COST
 | =X=     | close the conversation, releasing its session   |
 | =a= =m= =b= =t= | set its agent / model / budget / tools   |
 | =c= =p= | create or open a plan file                      |
-| =N= =T= =A= | write an agent / list tools / reload agents |
+| =+= =T= =A= | write an agent / list tools / reload agents |
 | =g=     | redraw now                                      |
 | =M=     | search the memory index                         |
 | =j= =k= | move                                            |
@@ -56,7 +56,7 @@ live, which properties mean what, and that =:MODEL:= is spelled
 something. Four keys skip all of it, and every one of them ends in the same
 transient so you get a look at the task before it exists.
 
-** =n= — describe it
+** =w= — describe it
 
 Opens a small window at the bottom of the frame. Write what you want done, in
 as many lines as it takes, then =C-c C-c=. What you wrote goes to a model
@@ -466,7 +466,7 @@ None of the three ever creates a window. =display-buffer-alist= still applies if
 | =b= | set the spend ceiling |
 | =t= | set the tool allowlist |
 | =d= | delete the task, from the runtime and its plan |
-| =N= | write a new agent definition |
+| =+= | write a new agent definition |
 | =T= | list the tools an agent can be given |
 | =A= | re-read agent definitions from disk |
 | =g= | refresh |

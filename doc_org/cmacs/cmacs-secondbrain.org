@@ -600,7 +600,7 @@ File names are the title's slug (=cmacs-secondbrain-ingest-filename-style= adds 
 ** Driving it
 
 - =M-x cmacs-secondbrain-ingest= — a file, directory or URL, with a PARA prompt. =cmacs-secondbrain-ingest-region=, =-buffer=, =-clipboard= (the =clip2brain= port), =-dired= (marked files), =-record= (record, stop, transcribe, ingest — the =record_audio_and_ingest= port).
-- =M-x cmacs-secondbrain-ingest-queue= — the queue: =a= add file, =u= add URL, =p= clipboard, =RET= visit the note, =l= log, =k= cancel, =r= retry, =s= toggle summaries, =P= toggle placement, =!= doctor.
+- =M-x cmacs-secondbrain-ingest-queue= — the queue: =a= add file, =u= add URL, =p= clipboard, =RET= visit the note, =l= log, =c= cancel, =r= retry, =s= toggle summaries, =P= toggle placement, =!= doctor.
 - =emacsctl sb ingest [FLAGS] URL|FILE|-= — from a shell; =-w= waits for the notes. =second-brain= and =secondbrain= are aliases of =sb=. See the emacsctl manual.
 - =secondbrain_ingest= — the MCP tool; an agent polls =secondbrain_ingest_status=. Also =secondbrain_tree=, =secondbrain_find= and =secondbrain_doctor=.
 - =org.cmacs.Editor1.SecondBrain= — the D-Bus interface behind both.

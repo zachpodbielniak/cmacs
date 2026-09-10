@@ -121,7 +121,7 @@ one named `cmacs-roamgraph-buffer-name'."
     (define-key m "O" #'cmacs-roamgraph-inspector-visit-other-window)
     (define-key m "f" #'cmacs-roamgraph-inspector-fly)
     (define-key m "y" #'cmacs-roamgraph-inspector-copy-link)
-    (define-key m "g" #'cmacs-roamgraph-inspector-refresh)
+    (define-key m (kbd "g r") #'cmacs-roamgraph-inspector-refresh)
     (define-key m "q" #'quit-window)
     m)
   "Keymap for `cmacs-roamgraph-inspector-mode'.")
@@ -373,7 +373,7 @@ navigation key must not mean reading forty files."
     (define-key m "s" #'cmacs-roamgraph-jump)
     (define-key m "f" #'cmacs-roamgraph-filter-tag)
     (define-key m "c" #'cmacs-roamgraph-filter-clear)
-    (define-key m "g" #'cmacs-roamgraph-list-refresh)
+    (define-key m (kbd "g r") #'cmacs-roamgraph-list-refresh)
     (define-key m "q" #'quit-window)
     m)
   "Keymap for `cmacs-roamgraph-list-mode'.")
@@ -501,7 +501,7 @@ navigation key must not mean reading forty files."
     ;; NOT SPC: in a pane under Evil that is the Doom leader key.
     (define-key m "x" #'cmacs-roamgraph-tags-toggle)
     (define-key m "c" #'cmacs-roamgraph-filter-clear)
-    (define-key m "g" #'cmacs-roamgraph-tags-refresh)
+    (define-key m (kbd "g r") #'cmacs-roamgraph-tags-refresh)
     (define-key m "q" #'quit-window)
     m)
   "Keymap for `cmacs-roamgraph-tags-mode'.")
@@ -625,20 +625,20 @@ navigation key must not mean reading forty files."
       "s" #'cmacs-roamgraph-jump         ; else evil-snipe-s
       "f" #'cmacs-roamgraph-filter-tag   ; else evil-snipe-f
       "c" #'cmacs-roamgraph-filter-clear
-      "g" #'cmacs-roamgraph-list-refresh
+      (kbd "g r") #'cmacs-roamgraph-list-refresh
       "q" #'quit-window)
     (evil-define-key* 'motion cmacs-roamgraph-tags-mode-map
       (kbd "RET") #'cmacs-roamgraph-tags-toggle
       "x" #'cmacs-roamgraph-tags-toggle
       "c" #'cmacs-roamgraph-filter-clear
-      "g" #'cmacs-roamgraph-tags-refresh
+      (kbd "g r") #'cmacs-roamgraph-tags-refresh
       "q" #'quit-window)
     (evil-define-key* '(normal motion) cmacs-roamgraph-inspector-mode-map
       (kbd "RET") #'cmacs-roamgraph-inspector-visit
       "O" #'cmacs-roamgraph-inspector-visit-other-window
       "f" #'cmacs-roamgraph-inspector-fly
       "y" #'cmacs-roamgraph-inspector-copy-link
-      "g" #'cmacs-roamgraph-inspector-refresh
+      (kbd "g r") #'cmacs-roamgraph-inspector-refresh
       "q" #'quit-window)))
 
 ;; Promote the auxiliary maps so evil-snipe's minor-mode bindings stop

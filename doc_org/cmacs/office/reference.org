@@ -324,7 +324,7 @@ the buffer closes the handle.
 
 ** =cmacs-office-mode=
 
-Derived from =org-mode=, read-only. Keys: =g= refreshes from disk, =C-c C-e=
+Derived from =org-mode=, read-only. Keys: =gr= refreshes from disk, =C-c C-e=
 writes the projection to a file, =C-c C-f= opens the source directory, =q=
 buries the buffer.
 

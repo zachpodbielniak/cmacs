@@ -116,7 +116,7 @@ same text twice costs a file write nobody notices."
 (defvar cmacs-brigade-output-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") #'quit-window)
-    (define-key map (kbd "g") #'cmacs-brigade-output-revert)
+    (define-key map (kbd "g r") #'cmacs-brigade-output-revert)
     (define-key map (kbd "w") #'cmacs-brigade-output-copy)
     ;; Reply from where you read.  Having to go back to the dashboard to
     ;; answer something you are looking at is the wrong shape.

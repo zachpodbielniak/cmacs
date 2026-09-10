@@ -99,7 +99,7 @@ side, plus
 
 - a *feature tree* panel (=*cmacs-cad tree*=) — the live CSG hierarchy;
   =RET= jumps to and pulses the source span that built that feature,
-  =g= refreshes;
+  =gr= refreshes;
 - an interactive *CAD Parameters* section in the editor inspector: each
   =defparam= gets a field plus =-=/=+= nudge buttons.  Editing one sets
   a =cad:<param>= *override* on the node and re-bakes live — parameters
@@ -240,7 +240,7 @@ it is not an editable widget form.)
 
 | Key         | Action                                          |
 |-------------+-------------------------------------------------|
-| =G=         | export to G-code and open the toolpath viewer   |
+| =E=         | export to G-code and open the toolpath viewer   |
 | =S=         | edit slicer settings in the minibuffer          |
 | =i=         | insert another model file                       |
 | =x= / =DEL= | delete the selected part                        |
@@ -400,7 +400,7 @@ reported through the assembly state (=under-constrained= /
 
 =cmacs-cad-slice-part= exports the current part to STL and slices it to
 G-code with an external slicer; with a prefix arg it opens the result in
-the [[*G-code viewer][toolpath viewer]].  (From the mesh viewer, =G= /
+the [[*G-code viewer][toolpath viewer]].  (From the mesh viewer, =E= /
 =cmacs-cad-model-export-gcode= does the same for the viewed file.)
 =cmacs-cad-slicer-settings= edits the common parameters in the
 minibuffer; the mesh viewer's settings panel edits the same defcustoms.

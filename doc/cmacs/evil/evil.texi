@@ -26,6 +26,7 @@ affected mode is a one-line call into it.
 * Evil Precedence::             Why an overriding map is not enough.
 * Evil Shim::                   What cmacs-evil.el does, and its boundaries.
 * Evil Covered Modes::          Which modes are intercepted, and which are not.
+* Evil Motion Keys::            What a promoted map must never bind.
 * Evil New Modes::              Adding a new single-key mode.
 @end menu
 
@@ -183,6 +184,78 @@ on their own (snipe ships @code{tabulated-list-mode} in its default
 @code{evil-snipe-disabled-modes}) but are still shadowed by Evil's
 @emph{state} maps, which is why the gsurf bookmark and download lists
 are in the table above.
+
+@node Evil Motion Keys
+@section What a Promoted Map Must Not Bind
+@cindex motion keys
+@cindex evil-collection-magit
+
+Promotion cuts both ways, and this is the half that is easy to miss.
+An intercept map wins over @emph{everything}, so whatever it binds,
+Evil can never get back.  A mode that puts a command on @kbd{k} has not
+added a key --- it has taken away the one that moves the cursor up.
+The bug reads as @samp{k says No agent at point instead of moving},
+and it is reported as ``your buffer is broken''.
+
+A promoted map leaves these to Evil:
+
+@multitable @columnfractions .30 .70
+@headitem Key @tab Why
+@item @kbd{j} @kbd{k}
+@tab vertical motion --- the whole complaint
+@item @kbd{n} @kbd{N} @kbd{/}
+@tab search and repeat
+@item @kbd{;}
+@tab repeat find-char
+@item @kbd{G} @kbd{$} @kbd{0}
+@tab the ends
+@item @kbd{g}
+@tab the @emph{prefix}: @kbd{g g}, @kbd{g e}, @kbd{g ;} and the rest
+@item @kbd{SPC} @kbd{,} @kbd{M-SPC}
+@tab Doom's leader, localleader and alternate leader
+@end multitable
+
+Everything else is fair game, and that is not a guess.
+@code{evil-collection} is the reference, because Magit is the read-only
+single-key buffer every Doom user already has: Magit binds @kbd{h}
+(dispatch), @kbd{l} (log), @kbd{w}, @kbd{b}, @kbd{e}, @kbd{W}, @kbd{B},
+@kbd{E}, @kbd{H}, @kbd{M}, @kbd{L}, @kbd{f}, @kbd{F}, @kbd{t}, @kbd{T},
+@kbd{^} and @kbd{%}, and @code{evil-collection-magit} leaves every one
+of them taken.  What it @emph{does} do is move Magit's own @kbd{n} and
+@kbd{p} off search and onto @kbd{C-j}/@kbd{C-k} and @kbd{g j}/@kbd{g k}.
+A read-only buffer has nothing to word-motion through; it very much
+still has lines to move between.
+
+Hence the two conventions to reach for:
+
+@itemize @bullet
+@item
+@strong{Refresh is @kbd{g r}}, never a bare @kbd{g}.  Binding part of a
+prefix is safe --- @kbd{g j} shadows only @kbd{g j}, and @kbd{g g} still
+falls through to @code{evil-goto-first-line}.
+@item
+@strong{Section or sibling motion is @kbd{C-j}/@kbd{C-k}, or
+@kbd{g j}/@kbd{g k}}, which is where @code{evil-collection-magit} puts it.
+@end itemize
+
+A key may appear in that table anyway when the binding @emph{is} that
+motion in the buffer's own terms --- @kbd{j} bound to @code{next-line},
+@kbd{/} bound to a filter, @kbd{G} scrolling a web page to the bottom.
+Those are listed as explicit exemptions, each with its reason, in
+@code{cmacs-evil-tests--motion-exemptions}; anything not listed fails.
+
+The three leader keys are a special case.  general.el's override map
+beats even an intercept map, so binding @kbd{SPC} is not destructive ---
+it is merely @emph{dead} under Doom.  That is its own trap: the audio
+player's only play key was @kbd{SPC}, so it had no play key at all under
+Doom while looking perfectly fine in vanilla Emacs.  Give such a buffer
+a second, ordinary key.
+
+The rule is enforced by a test that walks @code{cmacs-evil-promoted-maps},
+which @file{cmacs-evil.el} fills in as it promotes --- so a mode written
+tomorrow is covered without being added to any list.  That test
+deliberately does not skip when Evil is absent: it asks only what a map
+@emph{binds}, which is the same question in any build.
 
 @node Evil New Modes
 @section Adding a New Single-Key Mode

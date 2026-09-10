@@ -199,7 +199,7 @@ external editors can point at the same command.  See
 
 =M-x cmacs-calculator= renders =*cmacs-calculator*=: every registered calculator
 grouped by category, with =RET= opening a sheet pre-filled with a runnable call.
-=/= or =s= filters, =n=/=p= (or =j=/=k=) move, =g= refreshes.
+=/= or =s= filters, =j=/=k= move, =gr= refreshes.
 
 The listing is *generated from the registry at render time* — a family added
 tomorrow appears with no edit, and an entry for something that no longer exists

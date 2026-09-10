@@ -437,7 +437,7 @@ function sharing a DEFUN's name would silently replace it."
 
 (defvar cmacs-office-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") #'cmacs-office-refresh)
+    (define-key map (kbd "g r") #'cmacs-office-refresh)
     (define-key map (kbd "e") #'cmacs-office-edit-cell)
     (define-key map (kbd "RET") #'cmacs-office-edit-cell)
     (define-key map (kbd "=") #'cmacs-office-cell-info)

@@ -167,7 +167,7 @@ return JSON.stringify(o);})(%d)" id)
 
 (defvar cmacs-gsurf-dom-mode-map
   (let ((m (make-sparse-keymap)))
-    (define-key m (kbd "g")   #'cmacs-gsurf-inspector-refresh)
+    (define-key m (kbd "g r") #'cmacs-gsurf-inspector-refresh)
     (define-key m (kbd "h")   #'cmacs-gsurf-inspector-highlight)
     (define-key m (kbd "RET") #'cmacs-gsurf-inspector-highlight)
     (define-key m (kbd "c")   #'cmacs-gsurf-inspector-show-css)
@@ -256,7 +256,6 @@ catch(e){return String(x);}});window.cmacs&&window.cmacs.send('console',\
 (defvar cmacs-gsurf-console-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "e") #'cmacs-gsurf-console-eval)
-    (define-key m (kbd "g") #'ignore)
     m)
   "Keymap for the gsurf console buffer.")
 

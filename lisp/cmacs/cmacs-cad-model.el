@@ -145,8 +145,8 @@ so inserted parts line up in a row beside the model rather than overlap.")
 (defvar cmacs-cad-model--viewport-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "e") #'cmacs-cad-toggle-edges)
-    (define-key map (kbd "g") #'cmacs-cad-model--viewer-revert)
-    (define-key map (kbd "G") #'cmacs-cad-model-export-gcode)
+    (define-key map (kbd "g r") #'cmacs-cad-model--viewer-revert)
+    (define-key map (kbd "E") #'cmacs-cad-model-export-gcode)
     (define-key map (kbd "S") #'cmacs-cad-slicer-settings)
     (define-key map (kbd "b") #'cmacs-cad-model-set-bed-size)
     (define-key map (kbd "B") #'cmacs-cad-model-toggle-bed)
@@ -792,9 +792,9 @@ this redundant file buffer; otherwise set up a fresh viewer."
 
 (defvar cmacs-cad-model-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") #'cmacs-cad-model-revert)
+    (define-key map (kbd "g r") #'cmacs-cad-model-revert)
     (define-key map (kbd "e") #'cmacs-cad-toggle-edges)
-    (define-key map (kbd "G") #'cmacs-cad-model-export-gcode)
+    (define-key map (kbd "E") #'cmacs-cad-model-export-gcode)
     (define-key map (kbd "S") #'cmacs-cad-slicer-settings)
     (define-key map (kbd "b") #'cmacs-cad-model-set-bed-size)
     (define-key map (kbd "B") #'cmacs-cad-model-toggle-bed)

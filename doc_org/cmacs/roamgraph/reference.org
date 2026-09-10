@@ -160,9 +160,9 @@ Node list and tags are =motion= state under Evil; the inspector is =normal=. All
 
 | Pane      | Keys                                                    |
 |-----------+---------------------------------------------------------|
-| nodes     | =RET= select, =TAB= peek, =o= other window, =/= =s= =f= =c= =g= =q=   |
-| tags      | =RET= or =x= toggle the filter, =c= clear, =g= =q=            |
-| inspector | =RET= =O= =f= =y= =g= =q=, plus =1=–=9= / =a=–=z= live link keys  |
+| nodes     | =RET= select, =TAB= peek, =o= other window, =/= =s= =f= =c= =gr= =q=   |
+| tags      | =RET= or =x= toggle the filter, =c= clear, =gr= =q=            |
+| inspector | =RET= =O= =f= =y= =gr= =q=, plus =1=–=9= / =a=–=z= live link keys  |
 
 * Defcustoms
 

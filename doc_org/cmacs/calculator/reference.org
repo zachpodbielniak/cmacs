@@ -177,8 +177,8 @@ results are appended as =⇒ VALUE= and are idempotent; a failing line annotates
 | Key       | Command                          | Action                          |
 |-----------+----------------------------------+---------------------------------|
 | =RET=     | =cmacs-calculator-menu-open=     | Open a sheet with a runnable call |
-| =n= / =j= | =cmacs-calculator-menu-next=     | Next entry                      |
-| =p= / =k= | =cmacs-calculator-menu-previous= | Previous entry                  |
+| =j=       | =cmacs-calculator-menu-next=     | Next entry                      |
+| =k=       | =cmacs-calculator-menu-previous= | Previous entry                  |
 | =/= / =s= | =cmacs-calculator-menu-filter=   | Filter the listing              |
 | =g=       | =cmacs-calculator-menu-refresh=  | Redraw                          |
 | =q=       | =quit-window=                    | Quit                            |
