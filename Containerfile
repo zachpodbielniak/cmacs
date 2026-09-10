@@ -68,6 +68,53 @@ ARG PIPER_VOICE_DIR=en/en_US/amy/low
 ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main
 
 # ---------------------------------------------------------------------
+# Package-manager download tuning.
+#
+# Its own layer, ahead of every install, because the follow-up calls
+# need it too: Ubuntu installs again for the from-source Wayland stack
+# and Arch installs again for wlroots, and a --setopt on one command
+# line would miss both.
+#
+# Fedora is where the win is.  dnf ships max_parallel_downloads=3 and
+# documents 20 as the ceiling.  Measured on this image's own 84-package
+# list, download-only, cold container, alternating to rule out CDN
+# warming: 61-99s at 3 against a repeatable 35s at 20.  Appending to
+# dnf.conf is safe because the shipped file is a single [main] section.
+#
+# Arch is NOT a win and the number here is not doing the work.  pacman
+# has shipped ParallelDownloads = 5 uncommented since 6.x, so it already
+# parallelises; the same 84-package measurement gave 33s and 50s at 5
+# against 38s and 28s at 10, i.e. the run-to-run variance is bigger than
+# the setting.  The line stays only so the build does not inherit
+# whatever a future base image happens to default to.
+#
+# Debian/Ubuntu get nothing here because apt HAS no equivalent knob: it
+# queues per host, not per package, so concurrency is however many
+# distinct mirror hosts the sources list names, and Queue-Mode can only
+# make that worse.  The two settings that would have helped are already
+# on in the official images -- docker-no-languages sets
+# Acquire::Languages "none" and docker-gzip-indexes keeps the indices
+# compressed -- so anything added here would be cargo cult.
+# ---------------------------------------------------------------------
+RUN set -eux; \
+    case "${CMACS_DISTRO}" in \
+    fedora) \
+        echo 'max_parallel_downloads=20' >> /etc/dnf/dnf.conf; \
+        ;; \
+    arch) \
+        if grep -qE '^[[:space:]]*#?[[:space:]]*ParallelDownloads' \
+                /etc/pacman.conf; then \
+            sed -i -E 's|^[[:space:]]*#?[[:space:]]*ParallelDownloads[[:space:]]*=.*|ParallelDownloads = 10|' \
+                /etc/pacman.conf; \
+        else \
+            sed -i '0,/^\[options\]/s//[options]\nParallelDownloads = 10/' \
+                /etc/pacman.conf; \
+        fi; \
+        grep -nE '^ParallelDownloads' /etc/pacman.conf; \
+        ;; \
+    esac
+
+# ---------------------------------------------------------------------
 # System build dependencies.
 #
 # Spelled out per distro rather than deferred to ./install-deps: a
