@@ -2974,6 +2974,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_DBEXPLORER
       syms_of_cmacs_dbexplorer ();	/* CMACS: database explorer */
 #endif
+#ifdef HAVE_CMACS_CLAWTILLA
+      syms_of_cmacs_clawtilla ();	/* CMACS: clawtilla fleet client */
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
       syms_of_cmacs_lrgscript ();	/* CMACS: elisp scripting for libregnum */
 #endif
@@ -3133,6 +3136,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_DBEXPLORER
   init_cmacs_dbexplorer ();	/* CMACS: database explorer */
+#endif
+#ifdef HAVE_CMACS_CLAWTILLA
+  init_cmacs_clawtilla ();	/* CMACS: clawtilla fleet client */
 #endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   init_cmacs_lrgscript ();	/* CMACS: register elisp backend with libregnum */

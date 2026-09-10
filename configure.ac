@@ -671,6 +671,7 @@ OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/phys
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.pptx + .odt/.ods/.odp) over libzip + libxml2])
 OPTION_DEFAULT_OFF([cmacs-dbexplorer], [CMacs database explorer (query/browse/edit/export SQLite, PostgreSQL and MySQL through orm-glib)])
+OPTION_DEFAULT_OFF([cmacs-clawtilla], [CMacs clawtilla client (drive a local or remote agent fleet from Emacs)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-secondbrain], [CMacs ARMS second-brain visualiser, 2D + 3D (requires libregnum)])
@@ -932,6 +933,52 @@ if test "$with_cmacs_libreclaw" != "no"; then
     cmacs-libreclaw-hatch.o cmacs-libreclaw-cmacs-channel.o \
     cmacs-libreclaw-remote.o \
     pod-cmacs-libreclaw-module.o"
+fi
+if test "$with_cmacs_clawtilla" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-clawtilla requires --with-cmacs-glib (replies complete on the cmacs GMainContext)])
+  fi
+  if test "$with_cmacs_libreclaw" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-clawtilla requires --with-cmacs-libreclaw (libclawt is built on liblc, and one binary must not hold two copies of it)])
+  fi
+  # clawtilla is a client here, not a daemon.
+  #
+  # The normal use is a daemon that is already running -- on this machine
+  # over its unix socket, or on another one over TCP -- so what cmacs
+  # links is libclawt's ClawtClient and the enumerations every client is
+  # required to walk rather than copy.  Embedding clawt_daemon_new() in
+  # the editor is possible and is deliberately not what this builds.
+  #
+  # libclawt is layered directly on liblc, whose archive, dep set and
+  # include paths --with-cmacs-libreclaw has already computed.  Those are
+  # reused verbatim instead of recomputed: two blocks deriving the same
+  # paths is how one of them ends up a version behind.
+  cmacs_clawtilla_dir="\$(srcdir)/../deps/clawtilla"
+  cmacs_clawtilla_abs="\$(abs_top_srcdir)/deps/clawtilla"
+  CMACS_CLAWTILLA_CFLAGS="-I$cmacs_clawtilla_dir/src \
+    -I$cmacs_clawtilla_dir/build/$cmacs_dep_buildtype \
+    -DCLAWT_COMPILATION \
+    $CMACS_LIBRECLAW_CFLAGS"
+  # Ahead of liblc on the line, because libclawt calls into it and not
+  # the other way round.
+  CMACS_CLAWTILLA_LIBS="$cmacs_clawtilla_dir/build/$cmacs_dep_buildtype/libclawt-1.0.a \
+    $CMACS_LIBRECLAW_LIBS"
+  # Handed to clawtilla's sub-make in src/Makefile.in.  clawtilla derives
+  # its LR_* paths from its own deps/libreclaw, which reaches for the
+  # nested copies of crispy, yaml-glib, mcp-glib and podomation that
+  # admin/cmacs-submodules.sh deliberately does not clone -- so they are
+  # redirected at the canonical checkouts, the same one-copy rule applied
+  # one level further down.
+  CMACS_CLAWTILLA_DEP_DIRS="LIBRECLAW_DIR=\$(abs_top_srcdir)/deps/clawtilla/deps/libreclaw \
+    LR_AI_GLIB_DIR=\$(abs_top_srcdir)/deps/ai-glib \
+    LR_YAML_GLIB_DIR=\$(abs_top_srcdir)/deps/yaml-glib \
+    LR_MCP_GLIB_DIR=\$(abs_top_srcdir)/deps/mcp-glib \
+    LR_PODOMATION_DIR=\$(abs_top_srcdir)/deps/podomation"
+  AC_DEFINE([HAVE_CMACS_CLAWTILLA], 1,
+            [CMacs clawtilla fleet client subsystem])
+  CMACS_CLAWTILLA_OBJ="cmacs-clawtilla-init.o cmacs-clawtilla-defuns.o \
+    cmacs-clawtilla-client.o"
+  CMACS_CLAWTILLA_BUNDLED=yes
 fi
 if test "$with_cmacs_ai" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
@@ -1977,6 +2024,11 @@ AC_SUBST(CMACS_DBEXPLORER_OBJ)
 AC_SUBST(CMACS_DBEXPLORER_CFLAGS)
 AC_SUBST(CMACS_DBEXPLORER_LIBS)
 AC_SUBST(CMACS_DBEXPLORER_ORM_FLAGS)
+AC_SUBST(CMACS_CLAWTILLA_OBJ)
+AC_SUBST(CMACS_CLAWTILLA_CFLAGS)
+AC_SUBST(CMACS_CLAWTILLA_LIBS)
+AC_SUBST(CMACS_CLAWTILLA_DEP_DIRS)
+AC_SUBST(CMACS_CLAWTILLA_BUNDLED)
 AC_SUBST(CMACS_LRGSCRIPT_OBJ)
 AC_SUBST(CMACS_LRGSCRIPT_CFLAGS)
 AC_SUBST(CMACS_LRGSCRIPT_LIBS)
@@ -9298,6 +9350,7 @@ for cmacs_isystem_var in \
   CMACS_AI_BRIGADE_CFLAGS CMACS_AI_CFLAGS CMACS_AUDIO_CFLAGS \
   CMACS_BACON_CFLAGS CMACS_CAD_CFLAGS CMACS_CALCULATOR_CFLAGS \
   CMACS_CINTROSPECT_CFLAGS CMACS_CRISPY_CFLAGS CMACS_DBEXPLORER_CFLAGS \
+  CMACS_CLAWTILLA_CFLAGS \
   CMACS_GI_CFLAGS CMACS_GLIB_CFLAGS CMACS_GNUSEYE_CFLAGS \
   CMACS_GOWL_CFLAGS CMACS_GSURF_CFLAGS CMACS_IMGEDIT_CFLAGS \
   CMACS_LIBRECLAW_CFLAGS CMACS_LIBREGNUM_CFLAGS CMACS_LRGSCRIPT_CFLAGS \

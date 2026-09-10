@@ -5600,6 +5600,8 @@ extern void init_cmacs_office (void);
 #ifdef HAVE_CMACS_DBEXPLORER
 extern void syms_of_cmacs_dbexplorer (void);
 extern void init_cmacs_dbexplorer (void);
+extern void syms_of_cmacs_clawtilla (void);
+extern void init_cmacs_clawtilla (void);
 #endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);
