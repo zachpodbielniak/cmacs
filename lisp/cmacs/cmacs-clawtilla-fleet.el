@@ -45,6 +45,7 @@
 (require 'transient)
 (require 'cmacs-clawtilla)
 (require 'cmacs-clawtilla-ui)
+(require 'cmacs-clawtilla-alerts)
 
 (declare-function cmacs-clawtilla--activity-label "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--team-tally "cmacs-clawtilla-defuns.c")
@@ -66,8 +67,6 @@ scroll rather than read."
 (defvar-local cmacs-clawtilla-fleet--teams nil)
 (defvar-local cmacs-clawtilla-fleet--rooms nil)
 (defvar-local cmacs-clawtilla-fleet--warnings nil)
-(defvar-local cmacs-clawtilla-fleet--unread nil
-  "Hash of room id to unread count.")
 
 
 ;;;; Drawing.
@@ -80,8 +79,7 @@ scroll rather than read."
          (peer (alist-get 'peer agent))
          (room (alist-get 'dm_room agent))
          (depth (or (alist-get 'mailbox_depth agent) 0))
-         (unread (and cmacs-clawtilla-fleet--unread room
-                      (gethash room cmacs-clawtilla-fleet--unread)))
+         (unread (and room (cmacs-clawtilla-unread-count room)))
          (activity (cmacs-clawtilla--activity-label busy peer))
          (parts nil))
     (when (eq t (alist-get 'chief_of_staff agent))
@@ -399,7 +397,6 @@ makes an identity change take."
   :group 'cmacs-clawtilla
   (setq-local cmacs-clawtilla-refresh-function
               (lambda () (cmacs-clawtilla-fleet--load (current-buffer))))
-  (setq-local cmacs-clawtilla-fleet--unread (make-hash-table :test 'equal))
   (setq-local truncate-lines t))
 
 ;;;###autoload

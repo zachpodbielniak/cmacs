@@ -117,6 +117,10 @@ answer to whatever was asked next."
   ;; machine -- so the answer is remembered here.
   (ever-connected nil)
   (cursor 0)
+  ;; When this link came up.  The unread rule needs it: without it,
+  ;; connecting to a fleet marks its whole history unread and the count
+  ;; can never be cleared by reading.
+  (connected-at 0)
   ;; Caches, refilled from the daemon rather than derived from events.
   (agents nil)
   (teams nil)
@@ -342,6 +346,8 @@ one of them ends up ignoring the error argument."
         (message "clawtilla: %s" error))
     (setf (cmacs-clawtilla-connection-state conn) 'connected)
     (setf (cmacs-clawtilla-connection-ever-connected conn) t)
+    (setf (cmacs-clawtilla-connection-connected-at conn)
+          (truncate (float-time)))
     ;; Subscribing from 0 asks for everything the daemon still has.  A
     ;; client that has been away does not know what it missed, and the
     ;; daemon answering `resumed: false' is how it finds out.

@@ -50,6 +50,7 @@
 (require 'transient)
 (require 'cmacs-clawtilla)
 (require 'cmacs-clawtilla-ui)
+(require 'cmacs-clawtilla-alerts)
 
 (declare-function cmacs-clawtilla--run-is-start "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--time-label "cmacs-clawtilla-defuns.c")
@@ -651,6 +652,10 @@ losing a conversation."
       (setq-local cmacs-clawtilla-chat--agent agent-id)
       (setq-local cmacs-clawtilla-chat--room room-id)
       (cmacs-clawtilla-chat--load buffer))
+    ;; Opening it is reading it, and saying so is what stops the count
+    ;; being raised again while it is in front of you.
+    (setq cmacs-clawtilla--viewing-room room-id)
+    (cmacs-clawtilla-mark-read room-id)
     (pop-to-buffer buffer)))
 
 (defun cmacs-clawtilla-chat--on-event (conn kind data)
