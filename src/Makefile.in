@@ -1193,13 +1193,35 @@ ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)
 ## is consumed instead -- the same one-copy rule, one level down.
 CMACS_LIBRECLAW_DIR = $(srcdir)/../deps/clawtilla/deps/libreclaw
 CMACS_LIBRECLAW_STATIC_LIB = $(CMACS_LIBRECLAW_DIR)/build/$(CMACS_DEP_BUILDTYPE)/liblc-1.0.a
-$(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB) | cmacs-canonical-deps
+
+## PODOMATION_DIR is overridden for the same one-copy reason as the four
+## below, and it is the one that was missing: libreclaw went on building
+## its OWN deps/podomation checkout -- the library and all forty of its
+## modules -- a second time, in every build and in every container image.
+##
+## Two builders of one tree is the `ar' race cmacs-canonical-deps exists
+## to prevent, so the ordering is spelled out rather than left to luck.
+## cmacs-podomation-modules is the other builder (it is a prerequisite of
+## `all'), and it is taken ORDER-ONLY: libreclaw must wait for it, but a
+## phony counted as a normal prerequisite would relink libreclaw on every
+## make.  With --enable-cmacs-deps-debug the two do not even want the
+## same directory -- cmacs builds build/debug and libreclaw hardcodes
+## build/release -- but a release build puts both in build/release, which
+## is exactly where the race would have been.
+ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
+CMACS_LIBRECLAW_POD_DIR = PODOMATION_DIR=$(abs_top_srcdir)/deps/podomation
+CMACS_LIBRECLAW_POD_ORDER = cmacs-podomation-modules
+endif
+
+$(CMACS_LIBRECLAW_STATIC_LIB): $(CMACS_AI_GLIB_STATIC_LIB) \
+  | cmacs-canonical-deps $(CMACS_LIBRECLAW_POD_ORDER)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(CMACS_LIBRECLAW_DIR) \
 	  AI_GLIB_DIR=$(abs_top_srcdir)/deps/ai-glib \
 	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
 	  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
 	  BACON_DIR=$(abs_top_srcdir)/deps/bacon \
+	  $(CMACS_LIBRECLAW_POD_DIR) \
 	  static gir
 
 $(CMACS_LIBRECLAW_OBJ): $(CMACS_LIBRECLAW_STATIC_LIB)
