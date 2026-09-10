@@ -899,12 +899,12 @@ if test "$with_cmacs_libreclaw" != "no"; then
       -I$cmacs_libreclaw_dir/build/$cmacs_dep_buildtype \
       -I\$(abs_top_srcdir)/deps/ai-glib/src \
       -I\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype \
-      -I$cmacs_libreclaw_dir/deps/yaml-glib/src \
-      -I$cmacs_libreclaw_dir/deps/podomation/src \
-      -I$cmacs_libreclaw_dir/deps/podomation/src/module \
-      -I$cmacs_libreclaw_dir/deps/podomation/src/interfaces \
-      -I$cmacs_libreclaw_dir/deps/podomation/src/core \
-      -I$cmacs_libreclaw_dir/deps/podomation/build/release \
+      -I\$(abs_top_srcdir)/deps/yaml-glib/src \
+      -I\$(abs_top_srcdir)/deps/podomation/src \
+      -I\$(abs_top_srcdir)/deps/podomation/src/module \
+      -I\$(abs_top_srcdir)/deps/podomation/src/interfaces \
+      -I\$(abs_top_srcdir)/deps/podomation/src/core \
+      -I\$(abs_top_srcdir)/deps/podomation/build/release \
       -DLC_COMPILATION \
       -DCMACS_LIBRECLAW_GIR_DIR=\\\"$cmacs_libreclaw_abs/build/$cmacs_dep_buildtype\\\" \
       $CMACS_LIBRECLAW_DEPS_CFLAGS"
@@ -977,7 +977,7 @@ if test "$with_cmacs_clawtilla" != "no"; then
   AC_DEFINE([HAVE_CMACS_CLAWTILLA], 1,
             [CMacs clawtilla fleet client subsystem])
   CMACS_CLAWTILLA_OBJ="cmacs-clawtilla-init.o cmacs-clawtilla-defuns.o \
-    cmacs-clawtilla-client.o"
+    cmacs-clawtilla-client.o cmacs-clawtilla-render.o"
   CMACS_CLAWTILLA_BUNDLED=yes
 fi
 if test "$with_cmacs_ai" != "no"; then

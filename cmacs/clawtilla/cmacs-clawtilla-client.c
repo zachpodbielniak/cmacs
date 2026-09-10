@@ -766,4 +766,179 @@ cmacs_clawt_enum_json (const char *family)
   return cmacs_clawt_node_to_json (root);
 }
 
+
+/* ------------------------------------------------------------------
+   Saved connections.
+
+   clawtilla keeps these in ~/.config/clawtilla/connections.yaml and
+   every one of its clients reads that file.  cmacs reads the same one
+   through the same functions rather than parsing the YAML itself: a
+   profile added in the GTK client is then simply there, and the advice
+   shown when a daemon cannot be reached is the identical sentence in
+   all three clients rather than three that drifted.
+   ------------------------------------------------------------------ */
+
+static void
+cmacs_clawt_connection_to_json (JsonBuilder *builder, ClawtConnection *conn)
+{
+  gboolean local = clawt_connection_is_local (conn);
+  g_autofree gchar *described = clawt_connection_describe (conn);
+
+  json_builder_begin_object (builder);
+  json_builder_set_member_name (builder, "name");
+  json_builder_add_string_value (builder, clawt_connection_get_name (conn));
+  json_builder_set_member_name (builder, "local");
+  json_builder_add_boolean_value (builder, local);
+
+  /* The description is asked for, not assembled here: it is what hides
+     the token, and a second version of that logic is a second chance to
+     print one.  */
+  json_builder_set_member_name (builder, "describe");
+  json_builder_add_string_value (builder, described);
+
+  if (local)
+    {
+      json_builder_set_member_name (builder, "socket");
+      json_builder_add_string_value (builder,
+                                     clawt_connection_get_socket_path (conn));
+    }
+  else
+    {
+      json_builder_set_member_name (builder, "host");
+      json_builder_add_string_value (builder,
+                                     clawt_connection_get_host (conn));
+      json_builder_set_member_name (builder, "port");
+      json_builder_add_int_value (builder, clawt_connection_get_port (conn));
+      json_builder_set_member_name (builder, "tls");
+      json_builder_add_boolean_value (builder,
+                                      clawt_connection_get_tls (conn));
+      json_builder_set_member_name (builder, "insecure");
+      json_builder_add_boolean_value (
+        builder, clawt_connection_get_accept_unknown_certificate (conn));
+    }
+
+  json_builder_end_object (builder);
+}
+
+char *
+cmacs_clawt_connections_path (void)
+{
+  return clawt_connection_list_default_path ();
+}
+
+char *
+cmacs_clawt_connections_json (const char *path, char **error)
+{
+  g_autofree gchar *resolved = NULL;
+  g_autoptr (GPtrArray) list = NULL;
+  g_autoptr (JsonBuilder) builder = json_builder_new ();
+  g_autoptr (JsonNode) root = NULL;
+  g_autoptr (GError) local_error = NULL;
+  guint i;
+
+  if (path == NULL || *path == '\0')
+    {
+      resolved = clawt_connection_list_default_path ();
+      path = resolved;
+    }
+
+  list = clawt_connection_list_load (path, &local_error);
+
+  if (list == NULL)
+    {
+      /* A missing file is an empty list, not a failure: nobody has
+         saved a profile yet, which is the ordinary first run.  */
+      if (local_error != NULL && error != NULL)
+        *error = g_strdup (local_error->message);
+
+      return NULL;
+    }
+
+  json_builder_begin_array (builder);
+
+  for (i = 0; i < list->len; i++)
+    cmacs_clawt_connection_to_json (builder,
+                                    g_ptr_array_index (list, i));
+
+  json_builder_end_array (builder);
+  root = json_builder_get_root (builder);
+
+  return cmacs_clawt_node_to_json (root);
+}
+
+uint64_t
+cmacs_clawt_connect_profile (const char *path, const char *name,
+                             uint64_t cookie, char **error)
+{
+  g_autofree gchar *resolved = NULL;
+  g_autoptr (GPtrArray) list = NULL;
+  g_autoptr (GError) local_error = NULL;
+  ClawtConnection *found;
+  ClawtClient *client;
+
+  if (path == NULL || *path == '\0')
+    {
+      resolved = clawt_connection_list_default_path ();
+      path = resolved;
+    }
+
+  list = clawt_connection_list_load (path, &local_error);
+
+  if (list == NULL)
+    {
+      if (error != NULL)
+        *error = g_strdup (local_error != NULL ? local_error->message
+                                               : "no saved connections");
+      return 0;
+    }
+
+  found = clawt_connection_list_find (list, name);
+
+  if (found == NULL)
+    {
+      if (error != NULL)
+        *error = g_strdup_printf ("there is no saved connection called '%s'",
+                                  name);
+      return 0;
+    }
+
+  /* create_client() is what turns a profile into the right kind of
+     client -- unix or TCP, with the token and the TLS decision already
+     applied.  Rebuilding that here would be a second place for the two
+     to disagree about what a profile means.  */
+  client = clawt_connection_create_client (found);
+
+  if (client == NULL)
+    {
+      if (error != NULL)
+        *error = g_strdup ("that connection could not be opened");
+      return 0;
+    }
+
+  return cmacs_clawt_adopt (client, cookie);
+}
+
+char *
+cmacs_clawt_link_notice (uint64_t handle, const char *name,
+                         bool ever_connected)
+{
+  g_autofree gchar *path = clawt_connection_list_default_path ();
+  g_autoptr (GPtrArray) list = NULL;
+  ClawtConnection *found = NULL;
+  ClawtClient *client = cmacs_clawt_client (handle);
+  ClawtDaemonLink link;
+
+  list = clawt_connection_list_load (path, NULL);
+
+  if (list != NULL && name != NULL)
+    found = clawt_connection_list_find (list, name);
+
+  /* `ever_connected' is the whole discriminator between NEVER and LOST,
+     and it is the caller's to remember: the client object cannot tell
+     them apart after it has been disconnected.  */
+  link = clawt_daemon_link_state (client, ever_connected ? TRUE : FALSE);
+
+  return clawt_connection_notice_text (link, found, NULL, NULL);
+}
+
 #endif /* HAVE_CMACS_CLAWTILLA */
