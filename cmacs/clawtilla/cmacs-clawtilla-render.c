@@ -109,15 +109,36 @@ cmacs_clawt_team_tally_json (const char *agents_json, const char *team_id)
 bool
 cmacs_clawt_unread_should_count (const char *room_id, const char *viewing,
                                  const char *from, int64_t event_ts,
-                                 int64_t connected_at)
+                                 int64_t connected_at, const char *rooms_json)
 {
-  /* The `rows' hash is the caller's dedup table; cmacs keeps that in
-     Lisp, so NULL here means "no duplicate suppression at this layer"
-     rather than "no rule".  The rule -- which room, whose message,
-     whether it predates the connection -- is the library's.  */
-  return clawt_unread_should_count (room_id, viewing, from,
-                                    event_ts,
-                                    connected_at, NULL)
+  g_autoptr (JsonNode) node = cmacs_clawt_render_parse (rooms_json);
+  g_autoptr (GHashTable) rows = NULL;
+  JsonArray *array;
+  guint i;
+
+  /* `rows' is NOT an optional dedup table, which is what the first cut
+     of this wrapper assumed: the library answers FALSE outright when it
+     is NULL, so passing NULL made an unread count impossible and
+     nothing said so.  It is the set of rooms this client actually has a
+     row for -- an event about a room with no row cannot raise a count
+     on it, because there is nothing there to show the count.  */
+  rows = g_hash_table_new (g_str_hash, g_str_equal);
+
+  if (node != NULL && JSON_NODE_HOLDS_ARRAY (node))
+    {
+      array = json_node_get_array (node);
+
+      for (i = 0; i < json_array_get_length (array); i++)
+        {
+          const gchar *id = json_array_get_string_element (array, i);
+
+          if (id != NULL)
+            g_hash_table_add (rows, (gpointer) id);
+        }
+    }
+
+  return clawt_unread_should_count (room_id, viewing, from, event_ts,
+                                    connected_at, rows)
          ? true : false;
 }
 

@@ -559,20 +559,29 @@ disagree about what "active" means.  */)
 
 DEFUN ("cmacs-clawtilla--unread-should-count",
        Fcmacs_clawtilla__unread_should_count,
-       Scmacs_clawtilla__unread_should_count, 5, 5, 0,
+       Scmacs_clawtilla__unread_should_count, 5, 6, 0,
        doc: /* Return non-nil if an event should raise an unread count.
 
 ROOM-ID is where it happened, VIEWING the room on screen, FROM who sent
-it, EVENT-TS when, CONNECTED-AT when this link came up.  The rule --
-not your own room, not your own message, not older than the
-connection -- is the library's, and it is the rule both other clients
-use.  */)
+it, EVENT-TS when, CONNECTED-AT when this link came up, and ROOMS a
+JSON array of the rooms this client has a row for.
+
+The rule is the library's, and every clause of it earns its place: not
+your own message, not the room you are looking at, not older than the
+connection, and not a room with no row -- there is nothing there to
+show a count on.
+
+ROOMS is not optional in the way it looks.  The library answers nil
+when it is empty, so omitting it makes an unread count impossible; the
+first cut of this primitive passed nothing and no count could ever
+rise.  */)
   (Lisp_Object room_id, Lisp_Object viewing, Lisp_Object from,
-   Lisp_Object event_ts, Lisp_Object connected_at)
+   Lisp_Object event_ts, Lisp_Object connected_at, Lisp_Object rooms)
 {
   char *c_room = NILP (room_id) ? NULL : cmacs_clawt_dup (room_id);
   char *c_viewing = NILP (viewing) ? NULL : cmacs_clawt_dup (viewing);
   char *c_from = NILP (from) ? NULL : cmacs_clawt_dup (from);
+  char *c_rooms = NILP (rooms) ? NULL : cmacs_clawt_dup (rooms);
   bool counts;
 
   CHECK_INTEGER (event_ts);
@@ -580,10 +589,11 @@ use.  */)
 
   counts = cmacs_clawt_unread_should_count (c_room, c_viewing, c_from,
                                             XFIXNUM (event_ts),
-                                            XFIXNUM (connected_at));
+                                            XFIXNUM (connected_at), c_rooms);
   xfree (c_room);
   xfree (c_viewing);
   xfree (c_from);
+  xfree (c_rooms);
   return counts ? Qt : Qnil;
 }
 

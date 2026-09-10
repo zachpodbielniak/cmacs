@@ -116,7 +116,8 @@ extern bool cmacs_clawt_unread_should_count (const char *room_id,
                                              const char *viewing,
                                              const char *from,
                                              int64_t event_ts,
-                                             int64_t connected_at);
+                                             int64_t connected_at,
+                                             const char *rooms_json);
 extern char *cmacs_clawt_run_is_start (const char *previous_sender,
                                        const char *previous_day,
                                        const char *sender, const char *day);

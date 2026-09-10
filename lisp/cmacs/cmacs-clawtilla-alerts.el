@@ -115,9 +115,34 @@ in front of you, which is a preference and not a rule."
                              0)))
       (when (and room
                  (cmacs-clawtilla--unread-should-count
-                  room cmacs-clawtilla--viewing-room from ts connected-at))
+                  room cmacs-clawtilla--viewing-room from ts connected-at
+                  (json-serialize
+                   (vconcat (cmacs-clawtilla-known-rooms)))))
         (puthash room (1+ (gethash room cmacs-clawtilla-unread 0))
                  cmacs-clawtilla-unread)))))
+
+(defvar cmacs-clawtilla-known-rooms-function nil
+  "Function returning the rooms this client has a row for.
+
+The unread rule needs it: an event about a room with no row cannot
+raise a count on it, because there is nothing there to show one.")
+
+(defun cmacs-clawtilla-known-rooms ()
+  "Return the rooms this client has a row for."
+  (if cmacs-clawtilla-known-rooms-function
+      (funcall cmacs-clawtilla-known-rooms-function)
+    ;; Every transcript that is open, at minimum: a room somebody is
+    ;; looking at is one they can see a count on.
+    (delq nil
+          (mapcar (lambda (buffer)
+                    (buffer-local-value 'cmacs-clawtilla-chat--room buffer))
+                  (seq-filter
+                   (lambda (buffer)
+                     (with-current-buffer buffer
+                       (derived-mode-p 'cmacs-clawtilla-chat-mode)))
+                   (buffer-list))))))
+
+(defvar-local cmacs-clawtilla-chat--room nil)
 
 (defun cmacs-clawtilla-mark-read (room)
   "Clear ROOM's unread count."

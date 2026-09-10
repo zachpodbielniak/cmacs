@@ -482,6 +482,26 @@ interleave in a way nobody asked for."
           (cmacs-clawtilla-fleet--load buffer)))))
   (ignore data))
 
+(defun cmacs-clawtilla-fleet--known-rooms ()
+  "Return every room the fleet buffer draws a row for.
+
+Both the group rooms and each agent's direct room: the fleet lists
+agents, and an agent's row is where its unread count appears."
+  (let (rooms)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (derived-mode-p 'cmacs-clawtilla-fleet-mode)
+          (dolist (agent cmacs-clawtilla-fleet--agents)
+            (when-let* ((room (alist-get 'dm_room agent)))
+              (push room rooms)))
+          (dolist (room cmacs-clawtilla-fleet--rooms)
+            (when-let* ((id (alist-get 'id room)))
+              (push id rooms))))))
+    (delete-dups (append rooms (cmacs-clawtilla-known-rooms)))))
+
+(setq cmacs-clawtilla-known-rooms-function
+      #'cmacs-clawtilla-fleet--known-rooms)
+
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-fleet--on-event)
 
 (provide 'cmacs-clawtilla-fleet)
