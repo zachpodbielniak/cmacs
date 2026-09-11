@@ -193,6 +193,7 @@ extern GowlConfig     *gowl_config;
 extern void cmacs_gowl_start_thread (void);
 extern void cmacs_gowl_install_close_protection (GowlCompositor *);
 extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
+extern void cmacs_gowl_hand_over_config_and_modules (GowlCompositor *);
 extern void cmacs_gowl_inhibit_parent_shortcuts (GowlCompositor *comp);
 extern gboolean cmacs_gowl_detect_nested (void);
 #endif
@@ -1677,6 +1678,11 @@ android_emacs_init (int argc, char **argv, char *dump_file)
 
             mgr = gowl_module_manager_new ();
             gowl_compositor_set_module_manager (comp, mgr);
+
+            /* CMACS: the compositor only borrows the config and the
+               module manager; hand it cmacs's references, so both go
+               with it in gowl's own teardown order.  cmacs-gowl.c.  */
+            cmacs_gowl_hand_over_config_and_modules (comp);
 
             if (!cmacs_gowl_load_default_modules (comp, &err))
               {

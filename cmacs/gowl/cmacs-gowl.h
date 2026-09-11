@@ -21,6 +21,10 @@ extern void cmacs_gowl_start_thread (void);
 /* Install before mapping host windows, including early --gowl startup. */
 extern void cmacs_gowl_install_close_protection (GowlCompositor *);
 extern gboolean cmacs_gowl_load_default_modules (GowlCompositor *, GError **);
+/* Hand cmacs's references to the compositor's config and module
+   manager over to the compositor, so both go when it does, after its
+   own teardown.  Both launch paths call it once both are set. */
+extern void cmacs_gowl_hand_over_config_and_modules (GowlCompositor *);
 
 /* Launch COMMAND (a shell-style command line, parsed with
  * g_shell_parse_argv -- no shell is involved) as a client of the running

@@ -56,6 +56,138 @@
   (skip-unless (not (gowl-running-p)))
   (should-not (gowl-stop)))
 
+;;; A real compositor, started and stopped in a second cmacs
+
+(defun cmacs-gowl-tests--runtime-parent ()
+  "The runtime directory a test's private one is made in, or nil."
+  (let ((dir (getenv "XDG_RUNTIME_DIR")))
+    (and dir (file-directory-p dir) dir)))
+
+(defun cmacs-gowl-tests--run-headless (form &optional extra-env)
+  "Evaluate FORM in a second cmacs, against gowl's headless backend.
+Return (STATUS . OUTPUT).  The child gets a runtime directory of its
+own inside $XDG_RUNTIME_DIR (a socket path has 108 bytes), systemd off,
+no parent display, the pixman renderer and fatal GLib criticals, and
+its state directory inside that runtime directory, because the
+clipboard module makes a store there at startup.  EXTRA-ENV entries
+come first, so they win.  A compositor started in the test process
+itself would outlive the test, and nothing would fail on a critical."
+  (let* ((runtime (make-temp-file
+                   (expand-file-name "cmacs-gowl-test-"
+                                     (cmacs-gowl-tests--runtime-parent))
+                   t))
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (timeout (executable-find "timeout"))
+         (process-environment
+          (append extra-env
+                  (list "WAYLAND_DISPLAY" "WAYLAND_SOCKET" "DISPLAY"
+                        "GOWL_DISABLE_SYSTEMD=1"
+                        (concat "XDG_RUNTIME_DIR=" runtime)
+                        (concat "XDG_STATE_HOME="
+                                (expand-file-name "state" runtime))
+                        "WLR_BACKENDS=headless"
+                        "WLR_HEADLESS_OUTPUTS=1"
+                        "WLR_RENDERER=pixman"
+                        "G_DEBUG=fatal-criticals")
+                  process-environment)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((status (apply #'call-process (or timeout emacs) nil t nil
+                               (append (and timeout (list "120" emacs))
+                                       ;; The error, not the whole form
+                                       ;; printed again at every frame.
+                                       (list "--batch" "-Q" "--eval"
+                                             "(setq backtrace-on-error-noninteractive nil)"
+                                             "--eval" (prin1-to-string form))))))
+            (cons status (buffer-string))))
+      (delete-directory runtime t))))
+
+(defconst cmacs-gowl-tests--start-stop-form
+  '(let ((runtime (getenv "XDG_RUNTIME_DIR")))
+     (dotimes (cycle 2)
+       (gowl-start)
+       (unless (gowl-running-p)
+         (error "Cycle %d: not running after `gowl-start'" cycle))
+       (unless (directory-files runtime nil "\\`wayland-[0-9]+\\'")
+         (error "Cycle %d: the compositor has no socket" cycle))
+       (unless (gowl-clipboard-watch)
+         (error "Cycle %d: `gowl-clipboard-watch' connected nothing" cycle))
+       (gowl-stop)
+       (when (gowl-running-p)
+         (error "Cycle %d: still running after `gowl-stop'" cycle))
+       (when (directory-files runtime nil "\\`wayland-[0-9]+\\'")
+         (error "Cycle %d: `gowl-stop' left the compositor alive" cycle)))
+     ;; A wrapper keeps the compositor alive past `gowl-stop'.  It goes,
+     ;; with the module manager and config it owns, when the wrapper is
+     ;; collected.
+     (gowl-start)
+     (let ((held (gowl-compositor)))
+       (gowl-stop)
+       (ignore held))
+     (when (directory-files runtime nil "\\`wayland-[0-9]+\\'")
+       (dotimes (_ 5)
+         (garbage-collect))
+       (when (directory-files runtime nil "\\`wayland-[0-9]+\\'")
+         (message "The compositor the wrapper held was never collected")
+         (kill-emacs 77)))
+     (princ "cmacs-gowl-start-stop: ok\n"))
+  "What `cmacs-gowl-test-start-stop-headless' runs in the second cmacs.")
+
+(defconst cmacs-gowl-tests--failed-start-form
+  '(progn
+     (condition-case nil
+         (progn
+           (gowl-start)
+           (error "`gowl-start' succeeded on a backend wlroots lacks"))
+       (gowl-error nil))
+     (when (gowl-running-p)
+       (error "A failed `gowl-start' left a compositor behind"))
+     ;; Nothing to stop, and saying so must not touch what is gone.
+     (gowl-stop)
+     (princ "cmacs-gowl-failed-start: ok\n"))
+  "What `cmacs-gowl-test-failed-start-headless' runs in the second cmacs.")
+
+(ert-deftest cmacs-gowl-test-start-stop-headless ()
+  "`gowl-start' and `gowl-stop' really bring a compositor up and down.
+Each of two cycles checks that `gowl-stop' finalizes the compositor --
+its socket goes -- and that the next start finds clean state:
+`gowl-clipboard-watch' used to report the first compositor's handlers
+and connect nothing.  Then a `gowl-compositor' wrapper keeps one alive
+past `gowl-stop', and collecting the wrapper finalizes it with the
+module manager and config it owns.  Releasing those in `gowl-stop'
+itself would leave that compositor to be finalized against freed
+memory.  GLib criticals are fatal throughout, so the module teardown
+`gowl-stop' runs -- shutdown hooks while the compositor lives, every
+module deactivated after it -- has to be clean too."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--start-stop-form))
+         (status (car result))
+         (output (cdr result)))
+    (when (eql status 77)
+      (ert-skip "the compositor a wrapper held was never garbage-collected"))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-search "cmacs-gowl-start-stop: ok" output)))))
+
+(ert-deftest cmacs-gowl-test-failed-start-headless ()
+  "A `gowl-start' that fails leaves nothing running and nothing half-built.
+By the time wlroots refuses the backend, the compositor owns its config
+and a module manager with every default module loaded; all of it goes
+on the way out, and with GLib criticals fatal, taking down a compositor
+that never started has to be clean."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--failed-start-form
+                  '("WLR_BACKENDS=cmacs-test-no-such-backend")))
+         (status (car result))
+         (output (cdr result)))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-search "cmacs-gowl-failed-start: ok" output)))))
+
 ;;; Client list tests
 
 (ert-deftest cmacs-gowl-test-list-clients-returns-list ()

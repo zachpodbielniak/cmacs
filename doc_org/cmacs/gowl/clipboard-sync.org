@@ -34,6 +34,8 @@ Or add to your =--gowl= startup config:
 
 The mode lighter is =GowlClip= in the mode line.
 
+The watch belongs to one compositor.  =gowl-stop= takes it off that compositor's seat, and a later =gowl-start= does not put it back by itself: turn the mode off and on again (or call =gowl-clipboard-watch=) once the compositor is up.  Before =gowl-stop= reset it, =gowl-clipboard-watch= answered "already watching" after a restart and connected nothing, and turning the mode off first tried to disconnect handlers the old seat had taken with it.
+
 * How It Works
 
 ** Wayland to Emacs (client copy -> kill-ring)

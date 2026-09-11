@@ -2835,7 +2835,11 @@ Core compositor control:
 @item gowl-start
 Start the compositor.
 @item gowl-stop
-Stop the compositor.
+Stop the compositor.  Every module's shutdown hook runs while the
+compositor is still alive; then the compositor is released, taking its
+module manager and config with it.  A Lisp wrapper of the compositor
+that has not been collected yet (@code{gowl-compositor}) keeps all
+three alive until it is.
 @item gowl-running-p
 Check if compositor is running.
 @item gowl-spawn COMMAND

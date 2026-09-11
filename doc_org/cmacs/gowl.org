@@ -26,6 +26,16 @@ Inside Emacs, the compositor is controlled via =cmacs-gowl-mode=:
 M-x cmacs-gowl-mode           ;; toggle (usually auto-enabled by --gowl)
 #+end_example
 
+** Stopping the compositor
+
+=gowl-stop= (which turning =cmacs-gowl-mode= off calls) tears the compositor down in the order standalone gowl's =main()= does: every module's shutdown hook runs while the compositor is still alive, then the compositor is released and takes its module manager (whose dispose deactivates every module) and its config with it.  gowl's compositor only borrows those two, so cmacs hands its references to the compositor as object data when it makes them, on both launch paths; GObject releases object data at the very end of the compositor's finalization, after its own teardown, which still uses both.  Until this, =gowl-stop= released neither, and the next =gowl-start= made a second set of modules beside the first.
+
+What =gowl-compositor= returns holds a strong reference, so a wrapper that has not been garbage-collected yet keeps the compositor alive past =gowl-stop= -- and its module manager and config with it -- until it is.  That is why =gowl-stop= does not release those two itself: a compositor finalized later would reach them after they were freed.
+
+cmacs's own per-compositor state -- the clipboard watch, the focus-redirect token, pending embeds -- is reset on the way out, so the next =gowl-start= begins clean.  (=gowl-clipboard-watch= used to answer "already watching" after a restart and connect nothing.)  A =gowl-start= that fails, because a module will not load or wlroots will not start, leaves nothing behind either: before, a module that failed to load left a half-built compositor that =gowl-running-p= reported as running.
+
+=test/cmacs/cmacs-gowl-tests.el= starts and stops a real headless compositor in a second cmacs, twice, plus a start that fails, with GLib criticals fatal.
+
 ** Desktop launchers and =emacsclient --gowl=
 
 =make install= (and the container build) install two application launchers

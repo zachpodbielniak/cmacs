@@ -1628,6 +1628,100 @@ cmacs_gowl_install_close_protection (GowlCompositor *compositor)
                     G_CALLBACK (cmacs_gowl_protect_session_close), NULL);
 }
 
+/* ── What the compositor takes with it ───────────────────────────────
+ *
+ * gowl's compositor only borrows its config and its module manager:
+ * gowl_compositor_set_config and gowl_compositor_set_module_manager
+ * take no reference.  Standalone gowl's main() owns both and releases
+ * them after the compositor, which still uses them while it is
+ * finalized -- a monitor's teardown reaches the wallpaper module
+ * through the manager, and the recording keys' notify handler comes
+ * off the config.  Until this, cmacs released neither: every
+ * `gowl-stop' leaked both, and the next `gowl-start' made a second set
+ * of modules beside the first.
+ *
+ * cmacs hands its references to the compositor instead, as object
+ * data.  GObject releases object data at the very end of finalization,
+ * after the compositor's own teardown, so the order is main()'s --
+ * compositor, module manager (whose dispose deactivates every module),
+ * config -- and it holds whenever the compositor goes.  That is not
+ * always inside `gowl-stop': `gowl-compositor' gives Lisp a strong
+ * reference, and a wrapper that has not been collected yet keeps the
+ * compositor alive until the next garbage collection.  Releasing the
+ * manager and the config in `gowl-stop' regardless would leave that
+ * compositor to be finalized against freed memory.  */
+
+#define CMACS_GOWL_OWNED_KEY "cmacs-gowl-owned"
+
+struct cmacs_gowl_owned
+{
+  GowlModuleManager *manager;
+  GowlConfig *config;
+};
+
+static void
+cmacs_gowl_owned_free (gpointer data)
+{
+  struct cmacs_gowl_owned *owned = data;
+
+  /* The manager before the config, in main()'s order.  */
+  g_clear_object (&owned->manager);
+  g_clear_object (&owned->config);
+  g_free (owned);
+}
+
+/* Hand cmacs's references to COMP's config and module manager over to
+   COMP, once both are set.  Both launch paths call this: `gowl-start',
+   and the --gowl branch of main() in emacs.c.  A second call does
+   nothing.  */
+void
+cmacs_gowl_hand_over_config_and_modules (GowlCompositor *comp)
+{
+  struct cmacs_gowl_owned *owned;
+
+  if (g_object_get_data (G_OBJECT (comp), CMACS_GOWL_OWNED_KEY) != NULL)
+    return;
+
+  owned = g_new0 (struct cmacs_gowl_owned, 1);
+  owned->manager = gowl_compositor_get_module_manager (comp);
+  owned->config = gowl_compositor_get_config (comp);
+  g_object_set_data_full (G_OBJECT (comp), CMACS_GOWL_OWNED_KEY, owned,
+                          cmacs_gowl_owned_free);
+}
+
+/* cmacs's own state that belongs to one compositor.  None of it may
+   outlive `gowl-stop', because the next `gowl-start' makes another
+   compositor: stale clipboard handler ids made `gowl-clipboard-watch'
+   report "already watching" and connect nothing, and the focus token
+   names a redirect on a seat that goes with the compositor.  Called
+   while the compositor is still alive, so the clipboard handlers come
+   off its seat instead of being left to die with it.  */
+static void
+cmacs_gowl_forget_compositor_state (void)
+{
+  GowlSeat *seat;
+
+  seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
+  if (seat != NULL)
+    {
+      if (cmacs_clipboard_handler_id != 0)
+        g_signal_handler_disconnect (seat, cmacs_clipboard_handler_id);
+      if (cmacs_psel_handler_id != 0)
+        g_signal_handler_disconnect (seat, cmacs_psel_handler_id);
+    }
+  cmacs_clipboard_handler_id = 0;
+  cmacs_psel_handler_id = 0;
+
+  cmacs_gowl_active_focus_token = NULL;
+  cmacs_gowl_redirect_is_sticky = FALSE;
+  cmacs_embed_pending_count = 0;
+
+  /* What a compiled C config resolves against this process names the
+     running compositor, and there is about to be none.  */
+  gowl_compositor = NULL;
+  gowl_config = NULL;
+}
+
 /* ── Is another compositor already running? ──────────────────────────
  *
  * The answer picks the wlroots backend: a live parent Wayland session
@@ -1767,8 +1861,9 @@ the event loop source and returns. */)
      sane defaults; adjust at runtime with (gobject-set (gowl-config-object) ...)
      or (gowl-reload-config "/path/to/config.yaml").
 
-     Do NOT unref — the compositor stores a borrowed reference, so
-     cmacs owns the lifetime.  Released in gowl-stop via g_clear_object. */
+     The compositor only borrows it.  cmacs's reference is handed to the
+     compositor below, with the module manager's, so both go when it
+     does (cmacs_gowl_hand_over_config_and_modules).  */
   {
     GowlConfig *config = gowl_config_new ();
     gowl_compositor_set_config (cmacs_gowl_compositor, config);
@@ -1793,11 +1888,19 @@ the event loop source and returns. */)
     gowl_module_manager_activate_all (mgr);
     gowl_compositor_set_module_manager (cmacs_gowl_compositor, mgr);
   }
+  cmacs_gowl_hand_over_config_and_modules (cmacs_gowl_compositor);
 
+  /* On either failure below, the compositor goes and takes its config
+     and module manager with it; startup was never dispatched, so there
+     is nothing to shut down.  Clearing it matters to the next
+     `gowl-start' as well: a compositor left behind after a module
+     failed to load passed for the --gowl early start, and
+     `gowl-running-p' said t.  */
   if (!cmacs_gowl_load_default_modules (cmacs_gowl_compositor, &err))
     {
       Lisp_Object msg = build_string (err->message);
       g_error_free (err);
+      g_clear_object (&cmacs_gowl_compositor);
       xsignal1 (Qgowl_error, msg);
     }
 
@@ -1838,13 +1941,32 @@ the event loop source and returns. */)
 }
 
 DEFUN ("gowl-stop", Fgowl_stop, Sgowl_stop, 0, 0, 0,
-       doc: /* Shut down the gowl compositor. */)
+       doc: /* Shut down the gowl compositor.
+Every module's shutdown hook runs while the compositor is still alive;
+then the compositor is released, and it takes its module manager and
+config with it.  A Lisp wrapper of the compositor that has not been
+collected yet (see `gowl-compositor') keeps all three alive until it
+is.  */)
   (void)
 {
   if (cmacs_gowl_compositor != NULL)
     {
+      GowlModuleManager *mgr;
+
       cmacs_gowl_stop_thread ();
       gowl_compositor_quit (cmacs_gowl_compositor);
+
+      /* The last point at which a module can let go of the compositor
+         cleanly.  gowl's own main() dispatches this before it finalizes
+         one; cmacs never did.  */
+      mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+      if (mgr != NULL)
+        gowl_module_manager_dispatch_shutdown (mgr, cmacs_gowl_compositor);
+
+      cmacs_gowl_forget_compositor_state ();
+
+      /* Takes the module manager and the config with it (see
+         cmacs_gowl_hand_over_config_and_modules).  */
       g_clear_object (&cmacs_gowl_compositor);
     }
   return Qnil;
