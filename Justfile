@@ -22,6 +22,13 @@ jobs        := `nproc`
 # needed (and the JSC_SIGNAL_FOR_GC env var is avoided on purpose: JSC's
 # option parser rejects it with "ERROR: invalid option").
 gowl_dir    := "deps/gowl"
+# gowl takes its vendored deps as build arguments (gowl 9501840) and
+# records which copy it last built from, wiping those objects when the
+# path changes -- so these must be the very paths src/Makefile.in
+# passes ($(abs_top_srcdir)/deps/...), or `just' and `make' take turns
+# rebuilding them.  Without them gowl looks for its own deps/yaml-glib,
+# which no longer exists, and any gowl rebuild dies on yaml-glib.h.
+gowl_deps   := "YAMLGLIB_DIR=" + justfile_directory() + "/deps/yaml-glib CRISPY_DIR=" + justfile_directory() + "/deps/crispy"
 
 # In-house dep build type that the dev build produces.  The bootstrap flag set
 # enables --enable-cmacs-deps-debug, so the dev artifacts land under
@@ -304,12 +311,12 @@ build-serial:
 # Build the gowl submodule only (release).
 [group('build')]
 build-gowl:
-    make -C {{ gowl_dir }} -j{{ jobs }}
+    make -C {{ gowl_dir }} -j{{ jobs }} {{ gowl_deps }}
 
 # Build the gowl submodule with debug symbols + ASan (slow but tracks crashes).
 [group('build')]
 build-gowl-debug:
-    make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 ASAN=1
+    make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 ASAN=1 {{ gowl_deps }}
 
 # Force-relink temacs (sometimes Make's deps don't notice an .o changed).
 [group('build')]
@@ -476,7 +483,7 @@ gowl *ARGS: gowl-modules
 gowl-modules:
     #!/usr/bin/env bash
     set -euo pipefail
-    make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 modules
+    make -C {{ gowl_dir }} -j{{ jobs }} DEBUG=1 modules {{ gowl_deps }}
     # A module and the compositor inside src/emacs must agree on the
     # SHAPE of GowlClient.  Modules include core-private.h and read
     # c->scene, c->mon and friends directly, so a field added to that
@@ -547,7 +554,7 @@ test:
 # Run gowl's GTest suite.
 [group('test')]
 test-gowl:
-    make -C {{ gowl_dir }} test
+    make -C {{ gowl_dir }} test {{ gowl_deps }}
 
 # Pure C over glib -- no Emacs, no GL, no display -- so it runs headless
 # and needs no built emacs.
