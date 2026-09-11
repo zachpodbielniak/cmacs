@@ -46,6 +46,13 @@ SKIP=(
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/yaml-glib"
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/mcp-glib"
 	"deps/clawtilla/deps/libreclaw/deps/ai-glib=deps/yaml-glib"
+	# ai-glib vendors mcp-glib since 278cfa4 (its MCP control servers).
+	# src/Makefile.in hands the one ai-glib it builds MCP_GLIB_DIR, and
+	# none of the nested ai-glib copies is built at all.
+	"deps/ai-glib=deps/mcp-glib"
+	"deps/podomation/deps/ai-glib=deps/mcp-glib"
+	"deps/clawtilla/deps/libreclaw/deps/ai-glib=deps/mcp-glib"
+	"deps/clawtilla/deps/libreclaw/deps/podomation/deps/ai-glib=deps/mcp-glib"
 	# gowl, gsurf and bacon compile crispy's and yaml-glib's SOURCES into
 	# their own archives.  They now take CRISPY_DIR / YAMLGLIB_DIR /
 	# MCP_GLIB_DIR as build arguments and src/Makefile.in points every one

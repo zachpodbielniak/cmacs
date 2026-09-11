@@ -1178,9 +1178,18 @@ endif
 ## actually changed (same pattern as the org-ex hook below).
 CMACS_AI_GLIB_STATIC_LIB = $(srcdir)/../deps/ai-glib/build/$(CMACS_DEP_BUILDTYPE)/libai-glib-1.0.a
 ifneq ($(CMACS_AI_OBJ)$(CMACS_LIBRECLAW_OBJ),)
+## MCP_GLIB_DIR since ai-glib 278cfa4, which vendors mcp-glib for its
+## MCP control servers: every library object now depends on
+## $(MCP_GLIB_DIR)/build/libmcp-glib-1.0.a, and the default names
+## ai-glib's own deps/mcp-glib -- a checkout admin/cmacs-submodules.sh
+## skips, so without this the sub-make runs `make -C' in an empty
+## directory.  The canonical archive is at exactly that relative path,
+## so unlike yaml-glib no *_STATIC override is needed.  mcp-glib is
+## linked into ai-glib's binaries and .so, never added to the .a.
 $(CMACS_AI_GLIB_STATIC_LIB): FORCE | cmacs-canonical-deps
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/ai-glib GIR=1 \
-	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) all
+	  YAML_GLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
+	  MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) all
 endif
 
 ifeq ($(CMACS_LIBRECLAW_BUNDLED),yes)

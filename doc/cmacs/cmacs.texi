@@ -11431,6 +11431,16 @@ Together these take a fresh checkout from about 8 GB to under 4 GB, and
 leave exactly one @emph{build} of crispy, yaml-glib and mcp-glib where
 there were five, six and four.
 
+A dep can grow a new bundled copy in any pull.  ai-glib did in September
+2026 (@code{278cfa4}, for its MCP control servers): every ai-glib object
+now depends on @file{$(MCP_GLIB_DIR)/build/libmcp-glib-1.0.a}, so
+@file{src/Makefile.in} hands its build @code{MCP_GLIB_DIR}, and each of
+the four places ai-glib appears in the tree skips that copy.  Without
+the first the build runs @command{make -C} in an empty directory;
+without the second the next sync clones mcp-glib four more times.  The
+tell is a change to @file{.gitmodules} in the incoming commits---look
+for it before moving a dep, not after the build fails.
+
 @subsection Deps that vendor sources
 
 @command{gowl}, @command{gsurf} and @command{bacon} do not link crispy's
