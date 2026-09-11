@@ -103,10 +103,21 @@ while [ ${#queue[@]} -gt 0 ]; do
 		name=${entry#*=}
 		if [ "$parent" = "$repo" ]; then
 			git -C "$dir" config "submodule.$name.update" none
+			# `update none' does not stop FETCH recursion.  git fetches any
+			# submodule whose pointer an incoming commit moves, as long as its
+			# gitdir is present in .git/modules -- and a copy cloned before its
+			# skip keeps that gitdir.  Where the leftover has submodules of its
+			# own, their worktrees are gone too, and the fetch dies on `cannot
+			# chdir'.  This makes a plain `git pull' safe once the script ran.
+			git -C "$dir" config "submodule.$name.fetchRecurseSubmodules" false
 		fi
 	done
 
-	git -C "$dir" submodule update --init
+	# No recursion on the fetch this update runs inside each child: it
+	# reaches the child's skipped copies before the loop above has
+	# configured that child, which on a tree predating a skip is the
+	# first run.  -c travels to the child processes.
+	git -C "$dir" -c fetch.recurseSubmodules=false submodule update --init
 
 	# Descend into the ones that are now checked out.  A skipped
 	# submodule has no .git and is simply not followed.

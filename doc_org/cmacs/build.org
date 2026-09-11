@@ -433,6 +433,18 @@ than a flag, because =git submodule update --recursive= cannot exclude a
 path below the top level --- and =sync= goes through the recipe for the
 same reason, since a bare =--recursive= would undo it.
 
+A skip is two settings, not one.  =update none= keeps a copy from being
+checked out, but fetch recursion ignores it: git fetches any submodule
+whose pointer an incoming commit moves, as long as its gitdir is present
+in =.git/modules=, and a copy cloned before its skip keeps that gitdir.
+Where the leftover has submodules of its own their worktrees are gone
+too, and the recursing fetch dies on =cannot chdir= --- which is how a
+pin bump in podomation broke =git fetch= there.  So each skip also sets
+=fetchRecurseSubmodules false=, which makes a plain =git pull= safe once
+the script has run, and =sync= and the script run their own pull and
+updates without recursion, because on a tree that predates a skip the
+first fetch happens before the script has configured it.
+
 Together these take a fresh checkout from about 8 GB to under 4 GB, and
 leave exactly one *build* of crispy, yaml-glib and mcp-glib where there
 were five, six and four.

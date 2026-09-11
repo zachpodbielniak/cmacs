@@ -753,7 +753,10 @@ alias pull := sync
 sync:
     #!/usr/bin/env bash
     set -euo pipefail
-    git pull --rebase origin master
+    # --no-recurse-submodules: submodules are the recipe below's job, and a
+    # recursing fetch walks into skipped copies' leftover gitdirs, which
+    # fails outright where those have submodules of their own.
+    git pull --rebase --no-recurse-submodules origin master
     # Via the recipe, not a bare `--recursive': that would re-clone the
     # nested copies admin/cmacs-submodules.sh exists to keep out, and miss
     # the URL sync a moved submodule needs.
