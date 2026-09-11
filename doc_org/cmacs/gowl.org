@@ -676,7 +676,7 @@ holds focus.
 | =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
-| =Super+Ctrl+Shift+s=    | Scratchpad: bring the focused window back |
+| =Super+Ctrl+s=          | Scratchpad: bring the focused window back |
 | =Super+Tab=             | Next layout (=Super+Shift+Tab= previous)|
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
@@ -2761,15 +2761,18 @@ it, tiled side by side in columns. It covers the same space as the quake
 shell (the whole usable width, two thirds of the height), floats over
 whatever tag is in view without disturbing its tiles, and rolls away the
 moment focus goes to a window outside it. While it is up its windows
-have the keyboard and every keybind; =Super+j= / =Super+k= cycle among
-them rather than stepping down onto the tiles, which would roll it away.
+have the keyboard and every keybind; =Super+j= / =Super+k= step across
+its columns in the order they are drawn, and =Super+h= / =Super+l= move
+left and right, rather than stepping down onto the tiles, which would
+roll it away.
 It is gowl's =scratchpad= module, which CMacs loads by default.
 
 | Key                  | Action                                              |
 |----------------------+-----------------------------------------------------|
 | =Super+s=            | Slide the scratchpad up, or roll it away            |
 | =Super+Alt+s=        | Send the focused window to the scratchpad           |
-| =Super+Ctrl+Shift+s= | Bring the focused window back onto the tags in view |
+| =Super+Ctrl+s=       | Bring the focused window back onto the tags in view |
+| =Super+Ctrl+Shift+s= | The same, with Shift                                |
 
 - *Sending a window* takes it out of the layout, and its tag re-tiles
   without it. It is the window focused the next time the scratchpad

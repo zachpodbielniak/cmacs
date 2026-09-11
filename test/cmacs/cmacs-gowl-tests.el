@@ -1091,8 +1091,10 @@ from a session without the module.  BODY sees the lines it sent in
        ,@body)))
 
 (ert-deftest cmacs-gowl-test-scratchpad-keybinds ()
-  "Super+s toggles the scratchpad, Super+Alt+s and Super+Ctrl+Shift+s
-send a window and bring it back.  The screenshot keeps Super+Shift+s,
+  "Super+s toggles the scratchpad, Super+Alt+s and Super+Ctrl+s (or
+Super+Ctrl+Shift+s) send a window and bring it back.  Super+Ctrl+s must
+be bound: unbound, a terminal takes it as Ctrl+S (XOFF) and freezes.
+The screenshot keeps Super+Shift+s,
 Super+s no longer selects the scrolling layout, and that layout stays
 reachable by cycling."
   (skip-unless (cmacs-feature-p 'gowl))
@@ -1106,6 +1108,8 @@ reachable by cycling."
       (cmacs-gowl--install-default-keybinds))
     (should (member '("Super+s" ipc-command "scratchpad-toggle") captured))
     (should (member '("Super+Alt+s" ipc-command "scratchpad-add") captured))
+    (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove")
+                    captured))
     (should (member '("Super+Ctrl+Shift+s" ipc-command "scratchpad-remove")
                     captured))
     (should (member '("Super+Shift+s" ipc-command "screenshot-area")

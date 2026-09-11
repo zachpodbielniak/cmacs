@@ -236,7 +236,7 @@ standalone gowl ships with (see
   Super+Shift+space   toggle fullscreen
   Super+s             scratchpad: slide it up / roll it away
   Super+Alt+s         scratchpad: send the focused window to it
-  Super+Ctrl+Shift+s  scratchpad: bring the focused window back
+  Super+Ctrl+s        scratchpad: bring the focused window back
   Super+0             view all tags
   Super+Shift+0       tag focused client to all tags
   Super+1..9          view tag N
@@ -655,10 +655,15 @@ authoritative and keeps re-runs idempotent."
         ;; bottom of the focused output, the dropdown's twin.  Reached by
         ;; NAME like the screenshots, so inert (not broken) in a session
         ;; without the module.  Super+Shift+s stays the screenshot.
+        ;; Super+Ctrl+s must be bound: unbound, it falls through to the
+        ;; focused window, and a terminal takes it as Ctrl+S -- XOFF --
+        ;; and stops echoing, which looks like the window died.
         (bind "Super+s" 'ipc-command "scratchpad-toggle"
               "Scratchpad: show / hide")
         (bind "Super+Alt+s" 'ipc-command "scratchpad-add"
               "Scratchpad: send the focused window")
+        (bind "Super+Ctrl+s" 'ipc-command "scratchpad-remove"
+              "Scratchpad: bring the focused window back")
         (bind "Super+Ctrl+Shift+s" 'ipc-command "scratchpad-remove"
               "Scratchpad: bring the focused window back")
         ;; Session.
@@ -2492,7 +2497,7 @@ asks.  With ID nil, send the focused window."
   "Bring the window with client ID back from the gowl scratchpad.
 It returns onto the tags the focused output is showing -- tiled if it
 was tiled, floating where it floated -- and takes the keyboard.
-Interactively, pick it from the scratchpad's windows; Super+Ctrl+Shift+s
+Interactively, pick it from the scratchpad's windows; Super+Ctrl+s
 brings back whichever of them has the keyboard.  With ID nil, bring back
 the focused window."
   (interactive

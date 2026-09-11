@@ -2362,7 +2362,7 @@ Toggle floating; @kbd{Super+Shift+space} toggles fullscreen.
 @item Super+s
 Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and
-@kbd{Super+Ctrl+Shift+s} brings the focused window back onto the tags
+@kbd{Super+Ctrl+s} brings the focused window back onto the tags
 in view.
 @item Super+1..9
 View tag N; add @kbd{Shift} to move the focused client to it, @kbd{Ctrl}
@@ -4820,10 +4820,10 @@ Slide the scratchpad up, or roll it away.
 Send the focused window to the scratchpad.  It leaves the layout, and
 its tag re-tiles without it; it is the window focused the next time the
 scratchpad comes up.
-@item Super+Ctrl+Shift+s
+@item Super+Ctrl+s
 Bring the focused window back onto the tags in view --- tiled if it was
 tiled, floating where it floated --- and focus it.  The rest of the
-scratchpad rolls away first.
+scratchpad rolls away first.  @kbd{Super+Ctrl+Shift+s} does the same.
 @end table
 
 Windows sit in columns in the order they were sent.  A window that

@@ -1550,7 +1550,7 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                            /* The dropdown's twin from the bottom edge: a
                               panel of windows that slides up over any
                               tag.  Super+s, Super+Alt+s and
-                              Super+Ctrl+Shift+s reach it by name through
+                              Super+Ctrl+s reach it by name through
                               ipc_command, so without it those three keys
                               do nothing at all. */
                            "scratchpad",
