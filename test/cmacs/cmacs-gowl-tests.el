@@ -67,15 +67,18 @@
   "Evaluate FORM in a second cmacs, against gowl's headless backend.
 Return (STATUS . OUTPUT).  The child gets a runtime directory of its
 own inside $XDG_RUNTIME_DIR (a socket path has 108 bytes), systemd off,
-no parent display, the pixman renderer and fatal GLib criticals, and
-its state directory inside that runtime directory, because the
-clipboard module makes a store there at startup.  EXTRA-ENV entries
-come first, so they win.  A compositor started in the test process
-itself would outlive the test, and nothing would fail on a critical."
+no parent display, the pixman renderer and fatal GLib criticals.  It
+runs in that directory, with its state and config directories inside
+it: the clipboard module makes a store under the state directory at
+startup, and a gowl config reload finds data/config.yaml relative to
+where it runs before it looks at the user's.  EXTRA-ENV entries come
+first, so they win.  A compositor started in the test process itself
+would outlive the test, and nothing would fail on a critical."
   (let* ((runtime (make-temp-file
                    (expand-file-name "cmacs-gowl-test-"
                                      (cmacs-gowl-tests--runtime-parent))
                    t))
+         (default-directory (file-name-as-directory runtime))
          (emacs (expand-file-name invocation-name invocation-directory))
          (timeout (executable-find "timeout"))
          (process-environment
@@ -83,6 +86,7 @@ itself would outlive the test, and nothing would fail on a critical."
                   (list "WAYLAND_DISPLAY" "WAYLAND_SOCKET" "DISPLAY"
                         "GOWL_DISABLE_SYSTEMD=1"
                         (concat "XDG_RUNTIME_DIR=" runtime)
+                        (concat "XDG_CONFIG_HOME=" runtime)
                         (concat "XDG_STATE_HOME="
                                 (expand-file-name "state" runtime))
                         "WLR_BACKENDS=headless"
@@ -187,6 +191,71 @@ that never started has to be clean."
     (ert-info (output :prefix "child output: ")
       (should (eql status 0))
       (should (string-search "cmacs-gowl-failed-start: ok" output)))))
+
+(defconst cmacs-gowl-tests--reset-config-form
+  '(let ((rss (lambda ()
+                (with-temp-buffer
+                  (insert-file-contents "/proc/self/status")
+                  (re-search-forward "^VmRSS:[ \t]*\\([0-9]+\\)")
+                  (string-to-number (match-string 1))))))
+     (gowl-start)
+     ;; gowl's own reload first: it reads data/config.yaml, here, into a
+     ;; config the compositor makes and releases itself.  It used to
+     ;; release the config cmacs gave it instead -- freed memory at
+     ;; once, and cmacs released it again at the reset or the stop
+     ;; below.  Values are read with `gowl-config-get', never through a
+     ;; `gowl-config-object' wrapper, whose reference would keep that
+     ;; config alive and hide the bug.
+     (make-directory "data" t)
+     (with-temp-file "data/config.yaml"
+       (insert "border-width: 9\n"))
+     (let ((default (gowl-config-get "border-width")))
+       (gowl-add-keybind "Super+Shift+r" 'reload-config)
+       (unless (gowl-run-keybind "Super+Shift+r")
+         (error "The reload bind did not run"))
+       (unless (eql (gowl-config-get "border-width") 9)
+         (error "The reload bind did not load data/config.yaml"))
+       ;; The reset is real: the value comes back to its default.
+       (gowl-reload-config)
+       (unless (eql (gowl-config-get "border-width") default)
+         (error "`gowl-reload-config' did not reset border-width")))
+     ;; And the config each reset replaces goes.  Warm up first, so that
+     ;; what is measured is steady state rather than the allocator
+     ;; settling.
+     (dotimes (_ 200)
+       (gowl-reload-config))
+     (garbage-collect)
+     (let ((before (funcall rss)))
+       (dotimes (_ 2000)
+         (gowl-reload-config))
+       (garbage-collect)
+       (princ (format "cmacs-gowl-reset-config: grew %d kB\n"
+                      (- (funcall rss) before))))
+     (gowl-stop))
+  "What `cmacs-gowl-test-reset-config-frees-the-old-one' runs.")
+
+(ert-deftest cmacs-gowl-test-reset-config-frees-the-old-one ()
+  "`gowl-reload-config' with no file resets the config and frees the old one.
+The reset makes a new config object, and the one it replaced used to
+be kept forever: about 4 kB a call, 8 MB over the 2000 resets here.
+Growing by less than a kilobyte a reset leaves room for the allocator
+and nothing for a leaked config.  gowl's own reload keybind runs
+first, because it used to release the config cmacs owns: a
+use-after-free at once, and a second release at the reset or the
+stop."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--reset-config-form))
+         (status (car result))
+         (output (cdr result))
+         (grown (and (string-match "cmacs-gowl-reset-config: grew \\(-?[0-9]+\\) kB"
+                                   output)
+                     (string-to-number (match-string 1 output)))))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should grown)
+      (should (< grown 2000)))))
 
 ;;; Client list tests
 

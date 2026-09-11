@@ -1689,6 +1689,39 @@ cmacs_gowl_hand_over_config_and_modules (GowlCompositor *comp)
                           cmacs_gowl_owned_free);
 }
 
+/* Give COMP CONFIG in place of the config it has, and release the one
+   cmacs gave it before.  That is usually the same config; after gowl's
+   own reload keybind, the compositor is using one it made itself,
+   which it releases itself.  The compositor moves its notify handler
+   to CONFIG, and every other reader, in gowl and in cmacs, asks the
+   compositor for its config each time instead of keeping the pointer;
+   a Lisp wrapper of the old one holds a reference of its own.  So once
+   the swap is done, nothing reaches the released config through the
+   compositor.  The swap runs under the gowl lock, which the dispatch
+   thread holds while it dispatches, so no compositor callback is half
+   way through reading it.  Until this, every reset leaked a whole
+   config, about 4 kB.  */
+static void
+cmacs_gowl_replace_config (GowlCompositor *comp, GowlConfig *config)
+{
+  struct cmacs_gowl_owned *owned;
+  GowlConfig *old;
+
+  cmacs_gowl_hand_over_config_and_modules (comp);
+  owned = g_object_get_data (G_OBJECT (comp), CMACS_GOWL_OWNED_KEY);
+
+  cmacs_gowl_lock ();
+  old = owned->config;
+  gowl_compositor_set_config (comp, config);
+  owned->config = config;
+  /* A compiled C config resolves `gowl_config' against this process. */
+  if (gowl_config == old)
+    gowl_config = config;
+  cmacs_gowl_unlock ();
+
+  g_clear_object (&old);
+}
+
 /* cmacs's own state that belongs to one compositor.  None of it may
    outlive `gowl-stop', because the next `gowl-start' makes another
    compositor: stale clipboard handler ids made `gowl-clipboard-watch'
@@ -5228,7 +5261,10 @@ DEFUN ("gowl-reload-config", Fgowl_reload_config, Sgowl_reload_config,
        doc: /* Reload gowl config from PATH, a YAML file.
 If PATH is nil, reset the config to built-in defaults without
 loading any file.  This never searches the user's config directory;
-all configuration when embedded is explicit. */)
+all configuration when embedded is explicit.
+
+The reset replaces the config object, so a `gowl-config-object'
+taken before it still names the old one; take it again after.  */)
   (Lisp_Object path)
 {
   GowlConfig *config;
@@ -5237,9 +5273,9 @@ all configuration when embedded is explicit. */)
 
   if (NILP (path))
     {
-      /* Reset to fresh defaults. */
-      config = gowl_config_new ();
-      gowl_compositor_set_config (cmacs_gowl_compositor, config);
+      /* Reset to fresh defaults: a new config in place of the old one,
+         which goes (cmacs_gowl_replace_config).  */
+      cmacs_gowl_replace_config (cmacs_gowl_compositor, gowl_config_new ());
     }
   else
     {

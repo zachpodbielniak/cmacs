@@ -34,7 +34,9 @@ What =gowl-compositor= returns holds a strong reference, so a wrapper that has n
 
 cmacs's own per-compositor state -- the clipboard watch, the focus-redirect token, pending embeds -- is reset on the way out, so the next =gowl-start= begins clean.  (=gowl-clipboard-watch= used to answer "already watching" after a restart and connect nothing.)  A =gowl-start= that fails, because a module will not load or wlroots will not start, leaves nothing behind either: before, a module that failed to load left a half-built compositor that =gowl-running-p= reported as running.
 
-=test/cmacs/cmacs-gowl-tests.el= starts and stops a real headless compositor in a second cmacs, twice, plus a start that fails, with GLib criticals fatal.
+The config is handled the same way when it is replaced.  =gowl-reload-config= with no file makes a new config object and releases the one it replaced, which used to be kept forever, about 4 kB a call; a =gowl-config-object= taken before the reset still names the old one, so take it again.  gowl's own =reload_config= keybind makes configs the compositor releases itself, and never releases the one cmacs gave it.
+
+=test/cmacs/cmacs-gowl-tests.el= starts and stops a real headless compositor in a second cmacs, twice, plus a start that fails and a config reset -- through the keybind reload first -- with GLib criticals fatal.
 
 ** Desktop launchers and =emacsclient --gowl=
 
