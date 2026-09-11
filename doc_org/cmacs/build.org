@@ -437,6 +437,15 @@ Together these take a fresh checkout from about 8 GB to under 4 GB, and
 leave exactly one *build* of crispy, yaml-glib and mcp-glib where there
 were five, six and four.
 
+The rule has a compile-line half too.  cmacs's own objects name the
+canonical header directories --- =deps/crispy/src= and
+=deps/yaml-glib/src= --- in the bacon, podomation and libregnum CFLAGS,
+never the bundled copies those deps would otherwise use.  Naming a
+skipped copy is harmless while it is absent and wrong anywhere it is
+not: a header from one commit, compiled against an archive built from
+another.  Each such path also costs every object that uses it a
+=-Wmissing-include-dirs= warning, which is how the last ones were found.
+
 A dep can grow a new bundled copy in any pull.  ai-glib did in September
 2026 (=278cfa4=, for its MCP control servers): every ai-glib object now
 depends on =$(MCP_GLIB_DIR)/build/libmcp-glib-1.0.a=, so

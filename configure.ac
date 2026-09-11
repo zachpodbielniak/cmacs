@@ -754,12 +754,18 @@ if test "$with_cmacs_bacon" != "no"; then
     # Use system-installed bacon (for distro packaging)
     PKG_CHECK_MODULES([CMACS_BACON], [bacon-1.0])
   else
-    # Build libbacon from deps/bacon/ (default)
+    # Build libbacon from deps/bacon/ (default).  crispy and yaml-glib
+    # headers come from the canonical checkouts, the ones src/Makefile.in
+    # builds bacon's archive against (CRISPY_DIR / YAMLGLIB_DIR): bacon's
+    # own deps/crispy and deps/yaml-glib are skipped by
+    # admin/cmacs-submodules.sh.  Naming those was harmless while they
+    # were absent and wrong anywhere they were not -- a header from a
+    # second commit, compiled against an archive built from the first.
     PKG_CHECK_MODULES([CMACS_BACON_DEPS],
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0 json-glib-1.0 yaml-0.1 readline])
     CMACS_BACON_CFLAGS="-I\$(srcdir)/../deps/bacon -I\$(srcdir)/../deps/bacon/src \
-      -I\$(srcdir)/../deps/bacon/deps/crispy/src \
-      -I\$(srcdir)/../deps/bacon/deps/yaml-glib/src \
+      -I\$(srcdir)/../deps/crispy/src \
+      -I\$(srcdir)/../deps/yaml-glib/src \
       -DBACON_COMPILATION \
       -DBACON_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/bacon/build/$cmacs_dep_buildtype/modules\\\" \
       -DBACON_MODULEDIR=\\\"$libdir/bacon/modules\\\" \
@@ -846,14 +852,16 @@ if test "$with_cmacs_podomation" != "no"; then
     # Use system-installed podomation (for distro packaging)
     PKG_CHECK_MODULES([CMACS_PODOMATION], [podomation-1.0])
   else
-    # Build libpodomation from deps/podomation/ (default)
+    # Build libpodomation from deps/podomation/ (default).  crispy and
+    # yaml-glib headers from the canonical checkouts, for the reason
+    # given at bacon above: podomation's own copies are skipped.
     PKG_CHECK_MODULES([CMACS_PODOMATION_DEPS],
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0
        libsoup-3.0 json-glib-1.0 libetpan yaml-0.1])
     CMACS_PODOMATION_CFLAGS="-I\$(srcdir)/../deps/podomation/src \
       -I\$(srcdir)/../deps/podomation/build/$cmacs_dep_buildtype \
-      -I\$(srcdir)/../deps/podomation/deps/crispy/src \
-      -I\$(srcdir)/../deps/podomation/deps/yaml-glib/src \
+      -I\$(srcdir)/../deps/crispy/src \
+      -I\$(srcdir)/../deps/yaml-glib/src \
       -DPOD_COMPILATION \
       -DCMACS_PODOMATION_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/podomation/build/$cmacs_dep_buildtype/modules\\\" \
       -DPODOMATION_MODULEDIR=\\\"$libdir/podomation/modules\\\" \
@@ -1087,7 +1095,7 @@ if test "$with_cmacs_libregnum" != "no"; then
     -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
-    -I\$(abs_top_srcdir)/deps/libregnum/deps/yaml-glib/src \
+    -I\$(abs_top_srcdir)/deps/yaml-glib/src \
     -DLIBREGNUM_COMPILATION \
     $CMACS_LIBREGNUM_DEPS_CFLAGS"
   # libregnum's static archive carries the raymath helpers in
@@ -1563,9 +1571,10 @@ dnl configure check only gates the build and surfaces missing deps
 dnl early.  The sub-Makefile self-probes optional readline.
 CMACS_EMACSCTL_BIN=
 if test "$with_cmacs_emacsctl" != "no"; then
-  dnl yaml-glib is statically vendored from deps/bacon/deps/yaml-glib
-  dnl (the same sources the bacon archive compiles into src/emacs), so
-  dnl only libyaml (yaml-0.1) is required from the system.
+  dnl yaml-glib is statically vendored from the canonical deps/yaml-glib
+  dnl (cmacs/emacsctl/Makefile's YAMLGLIB_DIR -- the one checkout every
+  dnl consumer builds against), so only libyaml (yaml-0.1) is required
+  dnl from the system.
   PKG_CHECK_MODULES([CMACS_EMACSCTL],
     [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-0.1],
     [],
