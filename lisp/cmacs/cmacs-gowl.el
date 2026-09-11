@@ -229,12 +229,14 @@ standalone gowl ships with (see
   Super+i / Super+d   increment / decrement master count
   Super+Shift+Return  zoom (promote to master)
   Super+t / f / m     tile / float / monocle layout
-  Super+s             scrolling layout (niri-style columns)
-  Super+< / Super+>   previous / next layout on this tag
+  Super+< / Super+>   previous / next layout on this tag (scrolling too)
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
   Super+space         toggle floating
   Super+Shift+space   toggle fullscreen
+  Super+s             scratchpad: slide it up / roll it away
+  Super+Alt+s         scratchpad: send the focused window to it
+  Super+Ctrl+Shift+s  scratchpad: bring the focused window back
   Super+0             view all tags
   Super+Shift+0       tag focused client to all tags
   Super+1..9          view tag N
@@ -368,6 +370,41 @@ window's visibility without destroying it, and re-compute its
 position for the currently focused output so the dropdown
 always appears on the user's active monitor."
   :type '(repeat plist)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-scratchpad-width-pct 1.0
+  "Width of the gowl scratchpad, as a fraction of the usable width.
+The scratchpad is the panel of windows that slides up from the bottom
+of the focused output (Super+s).  Its size settings are the dropdown's,
+so the defaults give the dropdown terminal's rectangle from the other
+edge.  A number greater than 0 and at most 1.  Applied when
+`cmacs-gowl-mode' starts, or by `cmacs-gowl-reapply-scratchpad'."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-scratchpad-height-pct 0.666667
+  "Height of the gowl scratchpad, as a fraction of the usable height.
+Two thirds by default, the dropdown's height.  A number greater than 0
+and at most 1."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-scratchpad-width 0
+  "Width of the gowl scratchpad in pixels, or 0 to use the fraction.
+When not 0 it wins over `cmacs-gowl-scratchpad-width-pct'."
+  :type 'natnum
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-scratchpad-height 0
+  "Height of the gowl scratchpad in pixels, or 0 to use the fraction.
+When not 0 it wins over `cmacs-gowl-scratchpad-height-pct'."
+  :type 'natnum
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-scratchpad-gap 0
+  "Pixels between the columns the gowl scratchpad tiles its windows in.
+From 0 to 512."
+  :type 'natnum
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-default-layout "tile"
@@ -547,7 +584,8 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+t" 'set-layout "tile" "Tile layout")
         (bind "Super+f" 'set-layout "float" "Float layout")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
-        (bind "Super+s" 'set-layout "scrolling" "Scrolling layout")
+        ;; Super+s is the scratchpad (below).  The scrolling layout is
+        ;; reached by cycling, like every other layout.
         (bind "Super+Shift+comma" 'cycle-layout "-1" "Previous layout on this tag")
         (bind "Super+Shift+period" 'cycle-layout "+1" "Next layout on this tag")
         (bind "Super+Tab" 'cycle-layout nil "Next layout")
@@ -613,6 +651,16 @@ authoritative and keeps re-runs idempotent."
               "Screenshot: focused window")
         (bind "Print" 'ipc-command "screenshot-screen"
               "Screenshot: whole screen")
+        ;; The scratchpad: a panel of windows that slides up from the
+        ;; bottom of the focused output, the dropdown's twin.  Reached by
+        ;; NAME like the screenshots, so inert (not broken) in a session
+        ;; without the module.  Super+Shift+s stays the screenshot.
+        (bind "Super+s" 'ipc-command "scratchpad-toggle"
+              "Scratchpad: show / hide")
+        (bind "Super+Alt+s" 'ipc-command "scratchpad-add"
+              "Scratchpad: send the focused window")
+        (bind "Super+Ctrl+Shift+s" 'ipc-command "scratchpad-remove"
+              "Scratchpad: bring the focused window back")
         ;; Session.
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
@@ -792,6 +840,8 @@ thread is running and applies configuration."
   ;; modules/dropdown/dd_adopt_config_entry().
   (cmacs-gowl--apply-float-rules)
   (cmacs-gowl--apply-dropdowns)
+  ;; The scratchpad's size, from the `cmacs-gowl-scratchpad-*' options.
+  (cmacs-gowl--apply-scratchpad)
   ;; Tell the dropdown module to adopt any newly-added config
   ;; entries so per-entry keybinds work for defcustom-driven
   ;; dropdowns after module startup.  The DEFUN is a no-op if
@@ -2324,6 +2374,146 @@ entries without a mode cycle."
   (when (fboundp 'gowl-dropdown-refresh)
     (ignore-errors (gowl-dropdown-refresh)))
   (message "Applied %d dropdowns" (length cmacs-gowl-dropdowns)))
+
+;;; Scratchpad
+
+(defun cmacs-gowl--scratchpad-settings ()
+  "Return the scratchpad options as the alist gowl's module reads.
+Keys and values are strings, the shape `gowl-configure-module' hands to
+the module's configure method."
+  (list (cons "width-pct" (number-to-string cmacs-gowl-scratchpad-width-pct))
+        (cons "height-pct"
+              (number-to-string cmacs-gowl-scratchpad-height-pct))
+        (cons "width" (number-to-string cmacs-gowl-scratchpad-width))
+        (cons "height" (number-to-string cmacs-gowl-scratchpad-height))
+        (cons "gap" (number-to-string cmacs-gowl-scratchpad-gap))))
+
+(defun cmacs-gowl--apply-scratchpad ()
+  "Push the `cmacs-gowl-scratchpad-*' options into gowl's scratchpad.
+A no-op when gowl is not running.  A failure is reported and swallowed,
+so it cannot stop `cmacs-gowl-mode' from starting.  The module refuses
+a bad value with a warning in the log and keeps the one it had."
+  (when (gowl-running-p)
+    (condition-case err
+        (gowl-configure-module "scratchpad" (cmacs-gowl--scratchpad-settings))
+      (error
+       (message "cmacs-gowl: scratchpad settings failed: %s"
+                (error-message-string err))))))
+
+(defun cmacs-gowl--scratchpad-command (line)
+  "Run scratchpad command LINE in the compositor and return its reply.
+LINE is a `scratchpad-' command, such as \"scratchpad-add 12\".  An
+\"ERROR ...\" reply becomes a `user-error' carrying the module's own
+explanation, and no reply at all means the module is not loaded."
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((reply (gowl-run-command line)))
+    (cond ((null reply)
+           (user-error "The gowl scratchpad module is not loaded"))
+          ((string-prefix-p "ERROR " reply)
+           (user-error "Scratchpad: %s" (substring reply 6)))
+          (t reply))))
+
+(defun cmacs-gowl--scratchpad-report (reply)
+  "Turn a scratchpad \"OK ...\" REPLY into a sentence for the echo area."
+  (pcase (split-string reply)
+    (`("OK" "shown" ,n)
+     (format "Scratchpad up, %s window%s" n (if (equal n "1") "" "s")))
+    (`("OK" "hidden") "Scratchpad rolled away")
+    (`("OK" "added" ,n)
+     (format "Sent to the scratchpad (%s window%s in it)"
+             n (if (equal n "1") "" "s")))
+    (`("OK" "removed" ,n)
+     (format "Back from the scratchpad (%s left in it)" n))
+    (_ reply)))
+
+(defun cmacs-gowl--scratchpad-members ()
+  "Return the client ids in the scratchpad, as numbers, left to right."
+  (let ((status (cmacs-gowl--scratchpad-command "scratchpad-status")))
+    (when (string-match " members=\\([0-9,]*\\)" status)
+      (mapcar #'string-to-number
+              (split-string (match-string 1 status) "," t)))))
+
+(defun cmacs-gowl--scratchpad-candidates (pred)
+  "Return (LABEL . ID) for each gowl window whose info satisfies PRED.
+PRED gets the `gowl-client-info' alist.  LABEL is the usual window
+label plus the id, so two windows with one title stay apart."
+  (let (candidates)
+    (dolist (client (gowl-list-clients))
+      (let* ((info (gowl-client-info client))
+             (id (cdr (assq 'id info))))
+        (when (and id (funcall pred info))
+          (push (cons (format "%s  #%d" (cmacs-gowl--client-label info) id)
+                      id)
+                candidates))))
+    (nreverse candidates)))
+
+(defun cmacs-gowl--scratchpad-read (prompt pred empty)
+  "Read a window with PROMPT among those whose info satisfies PRED.
+Signal a `user-error' saying EMPTY when there are none.  Return its id."
+  (let ((candidates (cmacs-gowl--scratchpad-candidates pred)))
+    (unless candidates
+      (user-error "%s" empty))
+    (cdr (assoc (completing-read prompt candidates nil t) candidates))))
+
+;;;###autoload
+(defun cmacs-gowl-scratchpad-toggle ()
+  "Slide the gowl scratchpad up, or roll it away.
+The scratchpad is a panel of windows along the bottom of the focused
+output, the dropdown terminal's twin from the other edge.  While it is
+up its windows have the keyboard; focusing anything else rolls it away.
+Bound to Super+s."
+  (interactive)
+  (message "%s" (cmacs-gowl--scratchpad-report
+                 (cmacs-gowl--scratchpad-command "scratchpad-toggle"))))
+
+;;;###autoload
+(defun cmacs-gowl-scratchpad-add (id)
+  "Send the gowl window with client ID to the scratchpad.
+Interactively, pick it from the windows not already there.  Super+Alt+s
+sends whichever window has the keyboard instead; a command run from
+Emacs would find the Emacs frame itself there, which is why this one
+asks.  With ID nil, send the focused window."
+  (interactive
+   (let ((members (cmacs-gowl--scratchpad-members)))
+     (list (cmacs-gowl--scratchpad-read
+            "Send to the scratchpad: "
+            (lambda (info)
+              (not (or (cdr (assq 'embedded info))
+                       (memql (cdr (assq 'id info)) members))))
+            "No window to send to the scratchpad"))))
+  (message "%s" (cmacs-gowl--scratchpad-report
+                 (cmacs-gowl--scratchpad-command
+                  (if id (format "scratchpad-add %d" id)
+                    "scratchpad-add")))))
+
+;;;###autoload
+(defun cmacs-gowl-scratchpad-remove (id)
+  "Bring the window with client ID back from the gowl scratchpad.
+It returns onto the tags the focused output is showing -- tiled if it
+was tiled, floating where it floated -- and takes the keyboard.
+Interactively, pick it from the scratchpad's windows; Super+Ctrl+Shift+s
+brings back whichever of them has the keyboard.  With ID nil, bring back
+the focused window."
+  (interactive
+   (let ((members (cmacs-gowl--scratchpad-members)))
+     (list (cmacs-gowl--scratchpad-read
+            "Bring back from the scratchpad: "
+            (lambda (info) (memql (cdr (assq 'id info)) members))
+            "The scratchpad is empty"))))
+  (message "%s" (cmacs-gowl--scratchpad-report
+                 (cmacs-gowl--scratchpad-command
+                  (if id (format "scratchpad-remove %d" id)
+                    "scratchpad-remove")))))
+
+(defun cmacs-gowl-reapply-scratchpad ()
+  "Push the `cmacs-gowl-scratchpad-*' options into the running scratchpad.
+Use after changing one at runtime; a shown scratchpad resizes at once."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (cmacs-gowl--apply-scratchpad)
+  (message "Applied the scratchpad settings"))
 
 ;;; Bar plugins, panels and toasts
 

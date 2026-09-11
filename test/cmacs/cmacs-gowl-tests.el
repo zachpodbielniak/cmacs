@@ -102,11 +102,13 @@
     (skip-unless clients)
     (let ((info (gowl-client-info (car clients))))
       (should (listp info))
-      (should (assoc "title" info))
-      (should (assoc "app-id" info))
-      (should (assoc "tags" info))
-      (should (assoc "floating" info))
-      (should (assoc "geometry" info)))))
+      ;; The keys are symbols: `assoc' on strings never matched them.
+      (should (natnump (cdr (assq 'id info))))
+      (should (assq 'title info))
+      (should (assq 'app-id info))
+      (should (assq 'tags info))
+      (should (assq 'floating info))
+      (should (assq 'geometry info)))))
 
 ;;; Focus tests
 
@@ -1063,6 +1065,200 @@ found.  It now calls `cmacs_gowl_detect_nested', which probes."
     (skip-unless src)
     (should (string-match-p "cmacs_gowl_detect_nested" src))
     (should-not (string-match-p "wayland-%d" src))))
+
+;;; Scratchpad
+;;
+;; gowl's scratchpad module: a panel of windows that slides up from the
+;; bottom of the focused output.  The module itself is tested in gowl
+;; (tests/test-scratchpad-module.c, test-overlay-adopt.c); what can go
+;; wrong here is the keys, the commands' handling of the module's
+;; replies, and whether cmacs loads and configures the module at all.
+
+(require 'cl-lib)
+
+(defmacro cmacs-gowl-tests--with-scratchpad (replies &rest body)
+  "Run BODY with gowl stubbed to answer scratchpad commands from REPLIES.
+REPLIES is an alist of (LINE . REPLY); a line not in it gets nil, as
+from a session without the module.  BODY sees the lines it sent in
+`sent', newest first."
+  (declare (indent 1))
+  `(let ((sent nil))
+     (cl-letf (((symbol-function 'gowl-running-p) (lambda (&rest _) t))
+               ((symbol-function 'gowl-run-command)
+                (lambda (line &rest _)
+                  (push line sent)
+                  (cdr (assoc line ,replies)))))
+       ,@body)))
+
+(ert-deftest cmacs-gowl-test-scratchpad-keybinds ()
+  "Super+s toggles the scratchpad, Super+Alt+s and Super+Ctrl+Shift+s
+send a window and bring it back.  The screenshot keeps Super+Shift+s,
+Super+s no longer selects the scrolling layout, and that layout stays
+reachable by cycling."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((captured nil)
+        (cmacs-gowl--keybinds-installed nil))
+    (cl-letf (((symbol-function 'gowl-add-keybind)
+               (lambda (key action &optional arg &rest _)
+                 (push (list key action arg) captured)))
+              ((symbol-function 'gowl-remove-keybind) #'ignore))
+      (cmacs-gowl--install-default-keybinds))
+    (should (member '("Super+s" ipc-command "scratchpad-toggle") captured))
+    (should (member '("Super+Alt+s" ipc-command "scratchpad-add") captured))
+    (should (member '("Super+Ctrl+Shift+s" ipc-command "scratchpad-remove")
+                    captured))
+    (should (member '("Super+Shift+s" ipc-command "screenshot-area")
+                    captured))
+    ;; gowl dispatches the first bind that matches, so a second Super+s
+    ;; would decide by table order which one the key does.
+    (should (= 1 (cl-count "Super+s" captured :key #'car :test #'equal)))
+    (should-not (member '("Super+s" set-layout "scrolling") captured))
+    (should (cl-find 'cycle-layout captured :key #'cadr))))
+
+(ert-deftest cmacs-gowl-test-scratchpad-report ()
+  "The module's replies become sentences; anything else passes through."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (equal (cmacs-gowl--scratchpad-report "OK shown 1")
+                 "Scratchpad up, 1 window"))
+  (should (equal (cmacs-gowl--scratchpad-report "OK shown 3")
+                 "Scratchpad up, 3 windows"))
+  (should (equal (cmacs-gowl--scratchpad-report "OK hidden")
+                 "Scratchpad rolled away"))
+  (should (equal (cmacs-gowl--scratchpad-report "OK added 2")
+                 "Sent to the scratchpad (2 windows in it)"))
+  (should (equal (cmacs-gowl--scratchpad-report "OK removed 0")
+                 "Back from the scratchpad (0 left in it)"))
+  (should (equal (cmacs-gowl--scratchpad-report "OK something new")
+                 "OK something new")))
+
+(ert-deftest cmacs-gowl-test-scratchpad-toggle-sends-its-word ()
+  "The toggle command sends `scratchpad-toggle' and says what happened."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (cmacs-gowl-tests--with-scratchpad '(("scratchpad-toggle" . "OK shown 2"))
+    (should (equal (cmacs-gowl-scratchpad-toggle) "Scratchpad up, 2 windows"))
+    (should (equal sent '("scratchpad-toggle")))))
+
+(ert-deftest cmacs-gowl-test-scratchpad-errors-are-user-errors ()
+  "An ERROR reply is a `user-error' carrying the module's reason, no
+reply means the module is not loaded, and no compositor is refused."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (cmacs-gowl-tests--with-scratchpad
+      '(("scratchpad-toggle"
+         . "ERROR the scratchpad is empty; add a window with scratchpad-add"))
+    (let ((err (should-error (cmacs-gowl-scratchpad-toggle)
+                             :type 'user-error)))
+      (should (string-match-p "the scratchpad is empty" (cadr err)))))
+  (cmacs-gowl-tests--with-scratchpad nil
+    (let ((err (should-error (cmacs-gowl-scratchpad-toggle)
+                             :type 'user-error)))
+      (should (string-match-p "not loaded" (cadr err)))))
+  (cl-letf (((symbol-function 'gowl-running-p) (lambda (&rest _) nil)))
+    (should-error (cmacs-gowl-scratchpad-toggle) :type 'user-error)))
+
+(ert-deftest cmacs-gowl-test-scratchpad-add-remove-by-id ()
+  "With an id the commands name the window; with nil they act on the
+focused one, as the keys do."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (cmacs-gowl-tests--with-scratchpad '(("scratchpad-add 12" . "OK added 1")
+                                       ("scratchpad-add" . "OK added 2")
+                                       ("scratchpad-remove 12" . "OK removed 1")
+                                       ("scratchpad-remove" . "OK removed 0"))
+    (should (equal (cmacs-gowl-scratchpad-add 12)
+                   "Sent to the scratchpad (1 window in it)"))
+    (cmacs-gowl-scratchpad-add nil)
+    (cmacs-gowl-scratchpad-remove 12)
+    (cmacs-gowl-scratchpad-remove nil)
+    (should (equal (reverse sent)
+                   '("scratchpad-add 12" "scratchpad-add"
+                     "scratchpad-remove 12" "scratchpad-remove")))))
+
+(ert-deftest cmacs-gowl-test-scratchpad-pickers ()
+  "Adding offers the windows not in the scratchpad, never an embedded
+one; removing offers only its members, read from `scratchpad-status'."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((infos '(((id . 4) (title . "Music") (app-id . "player") (tags . 0))
+                 ((id . 7) (title . "Editor") (app-id . "cmacs") (tags . 1))
+                 ((id . 9) (title . "Chat") (app-id . "chat") (tags . 0))
+                 ((id . 11) (title . "Frame") (app-id . "web") (tags . 1)
+                  (embedded . t))))
+        (offered nil))
+    (cmacs-gowl-tests--with-scratchpad
+        '(("scratchpad-status"
+           . "OK visible=0 count=2 members=4,9 width-pct=1 height-pct=0.666667 width=0 height=0 gap=0")
+          ("scratchpad-add 7" . "OK added 3")
+          ("scratchpad-remove 9" . "OK removed 1"))
+      (cl-letf (((symbol-function 'gowl-list-clients) (lambda (&rest _) infos))
+                ((symbol-function 'gowl-client-info) (lambda (info &rest _) info))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt collection &rest _)
+                   (setq offered (mapcar #'cdr collection))
+                   (car (car (last collection))))))
+        (call-interactively #'cmacs-gowl-scratchpad-add)
+        (should (equal offered '(7)))
+        (call-interactively #'cmacs-gowl-scratchpad-remove)
+        (should (equal offered '(4 9)))
+        (should (member "scratchpad-add 7" sent))
+        (should (member "scratchpad-remove 9" sent))))))
+
+(ert-deftest cmacs-gowl-test-scratchpad-settings-pushed ()
+  "The options reach the module as the string alist it parses, and
+nothing is pushed without a compositor.  The defaults are the
+dropdown's size."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (equal (default-toplevel-value 'cmacs-gowl-scratchpad-width-pct) 1.0))
+  (should (equal (default-toplevel-value 'cmacs-gowl-scratchpad-height-pct)
+                 0.666667))
+  (let ((cmacs-gowl-scratchpad-width-pct 0.5)
+        (cmacs-gowl-scratchpad-height-pct 0.4)
+        (cmacs-gowl-scratchpad-width 0)
+        (cmacs-gowl-scratchpad-height 300)
+        (cmacs-gowl-scratchpad-gap 8)
+        (pushed nil))
+    (should (equal (cmacs-gowl--scratchpad-settings)
+                   '(("width-pct" . "0.5") ("height-pct" . "0.4")
+                     ("width" . "0") ("height" . "300") ("gap" . "8"))))
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda (&rest _) t))
+              ((symbol-function 'gowl-configure-module)
+               (lambda (name alist &rest _) (push (cons name alist) pushed))))
+      (cmacs-gowl--apply-scratchpad))
+    (should (equal (caar pushed) "scratchpad"))
+    (should (equal (cdar pushed) (cmacs-gowl--scratchpad-settings)))
+    (setq pushed nil)
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-configure-module)
+               (lambda (&rest args) (push args pushed))))
+      (cmacs-gowl--apply-scratchpad))
+    (should-not pushed)))
+
+(ert-deftest cmacs-gowl-test-scratchpad-loaded-by-default ()
+  "cmacs --gowl loads gowl's scratchpad module with its other defaults.
+The three scratchpad keys reach it by name, so without it they would do
+nothing at all."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (goto-char (point-min))
+      (should (re-search-forward
+               "const gchar \\*names\\[\\] = {[^}]*\"scratchpad\"" nil t)))))
+
+(ert-deftest cmacs-gowl-test-scratchpad-toggle-takes-the-lock ()
+  "`gowl-scratchpad-toggle' presents windows and moves focus from the
+Emacs thread, so it must hold the compositor lock while it does."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (let ((bodies (cmacs-gowl-tests--defun-bodies
+                   source "gowl_scratchpad_handler_toggle_scratchpad")))
+      (should (= (length bodies) 1))
+      (should (string-match-p "cmacs_gowl_lock ()" (car bodies))))))
 
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

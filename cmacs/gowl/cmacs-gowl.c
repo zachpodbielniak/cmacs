@@ -1547,6 +1547,13 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               wholesale. */
                            "alpha", "vanitygaps", "roundcorners",
                            "windowrules", "dropdown",
+                           /* The dropdown's twin from the bottom edge: a
+                              panel of windows that slides up over any
+                              tag.  Super+s, Super+Alt+s and
+                              Super+Ctrl+Shift+s reach it by name through
+                              ipc_command, so without it those three keys
+                              do nothing at all. */
+                           "scratchpad",
                            /* The screenshot provider.  Without it the
                               bar's screenshot button falls back to grim
                               and slurp, which means no window capture
@@ -2512,7 +2519,10 @@ DEFUN ("gowl-close-client", Fgowl_close_client, Sgowl_close_client,
 DEFUN ("gowl-client-info", Fgowl_client_info, Sgowl_client_info,
        1, 1, 0,
        doc: /* Return an alist of info about CLIENT.
-Keys: title, app-id, tags, floating, embedded, geometry. */)
+Keys: id, title, app-id, tags, floating, embedded, geometry.  ID is the
+client's unique number, the one gowl commands such as "scratchpad-add ID"
+take.  TAGS is 0 for a window on no tag: a hidden overlay, such as a
+window in the rolled-away scratchpad. */)
   (Lisp_Object client)
 {
   GowlClient *c;
@@ -2522,6 +2532,8 @@ Keys: title, app-id, tags, floating, embedded, geometry. */)
   gowl_client_get_geometry (c, &x, &y, &w, &h);
 
   return CALLN (Flist,
+    Fcons (intern_c_string ("id"),
+           make_fixnum ((EMACS_INT) gowl_client_get_id (c))),
     Fcons (intern_c_string ("title"),
            build_string (gowl_client_get_title (c) ? : "")),
     Fcons (intern_c_string ("app-id"),
@@ -6230,9 +6242,16 @@ ALIST is an alist of string key-value pairs.  Supported keys:
 
 DEFUN ("gowl-scratchpad-toggle", Fgowl_scratchpad_toggle,
        Sgowl_scratchpad_toggle, 1, 1, 0,
-       doc: /* Toggle a named scratchpad window.
-NAME is a string identifying the scratchpad.
-Returns t if the scratchpad module handled the request. */)
+       doc: /* Show the scratchpad if it is hidden, hide it if it is shown.
+The scratchpad is the panel of windows that slides up from the bottom of
+the focused output: gowl's `scratchpad' module, the dropdown's twin from
+the other edge.  NAME is ignored -- there is one scratchpad -- and is kept
+for compatibility with named scratchpads.  Returns t if the module handled
+the request, nil if it is not loaded.
+
+`cmacs-gowl-scratchpad-toggle' is the command.  Windows join and leave
+with `cmacs-gowl-scratchpad-add' and `cmacs-gowl-scratchpad-remove', and
+`gowl-run-command' reaches every scratchpad command by name. */)
   (Lisp_Object name)
 {
   GowlModuleManager *mgr;
@@ -6251,8 +6270,12 @@ Returns t if the scratchpad module handled the request. */)
       || !gowl_module_get_is_active (mod))
     return Qnil;
 
+  /* Toggling presents windows and moves keyboard focus -- compositor
+     state -- so it runs under the lock, like every call that changes it. */
+  cmacs_gowl_lock ();
   gowl_scratchpad_handler_toggle_scratchpad (
     GOWL_SCRATCHPAD_HANDLER (mod), SSDATA (name));
+  cmacs_gowl_unlock ();
   return Qt;
 }
 

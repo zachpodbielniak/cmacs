@@ -2359,6 +2359,11 @@ Vsplit on: master row on top, stack row on the bottom.
 Vsplit off: restore the normal left/right split.
 @item Super+space
 Toggle floating; @kbd{Super+Shift+space} toggles fullscreen.
+@item Super+s
+Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
+@kbd{Super+Alt+s} sends the focused window to it, and
+@kbd{Super+Ctrl+Shift+s} brings the focused window back onto the tags
+in view.
 @item Super+1..9
 View tag N; add @kbd{Shift} to move the focused client to it, @kbd{Ctrl}
 to toggle its visibility, @kbd{Shift+Ctrl} to toggle it on the client.
@@ -3004,7 +3009,8 @@ on landscape and square monitors too.
 The scrolling layout is a niri-style strip: full-height columns laid left
 to right on landscape and square monitors, or full-width rows running top
 to bottom on portrait monitors. The viewport scrolls along them instead
-of squeezing windows to fit.  @kbd{Super+s} selects it,
+of squeezing windows to fit.  Cycling layouts (@kbd{Super+<} /
+@kbd{Super+>}) reaches it --- @kbd{Super+s} is the scratchpad --- and
 @kbd{Super+[} and @kbd{Super+]} scroll.  Its column width is gowl's
 @code{scroll-column-width}, named after Hyprland's
 @code{scrolling.column_width} so a config translates. This setting is a
@@ -4790,6 +4796,78 @@ Push @code{cmacs-gowl-float-rules} into the running config.
 Push @code{cmacs-gowl-dropdowns} into the running config and
 refresh the dropdown module.
 @end table
+
+@subsection Scratchpad
+@anchor{Gowl Scratchpad}
+@cindex scratchpad, gowl
+@cindex quake shell, from the bottom
+
+The dropdown terminal's twin from the other edge: a panel that slides
+up from the bottom of the focused output, holding any windows you send
+to it, tiled side by side in columns.  It covers the same space as the
+dropdown (the whole usable width, two thirds of the height), floats
+over whatever tag is in view without disturbing its tiles, and rolls
+away the moment focus goes to a window outside it.  While it is up its
+windows have the keyboard and every keybind; @kbd{Super+j} and
+@kbd{Super+k} cycle among them rather than stepping down onto the
+tiles, which would roll it away.  It is gowl's @code{scratchpad}
+module, which CMacs loads by default.
+
+@table @kbd
+@item Super+s
+Slide the scratchpad up, or roll it away.
+@item Super+Alt+s
+Send the focused window to the scratchpad.  It leaves the layout, and
+its tag re-tiles without it; it is the window focused the next time the
+scratchpad comes up.
+@item Super+Ctrl+Shift+s
+Bring the focused window back onto the tags in view --- tiled if it was
+tiled, floating where it floated --- and focus it.  The rest of the
+scratchpad rolls away first.
+@end table
+
+Windows sit in columns in the order they were sent.  A window that
+closes simply leaves and the others close the gap; one that hides
+itself (an application minimising to its tray) leaves too, and comes
+back as an ordinary window.  Disabling the module brings every window
+back.  With the @code{animation} module the scratchpad slides like the
+dropdown.  The dropdown and the scratchpad are exclusive: focusing
+either rolls the other away.  A window in the rolled-away scratchpad is
+on no tag, so jumping to it with @code{cmacs-gowl-focus-window} does
+nothing; roll the scratchpad up with @kbd{Super+s}.
+
+The keys reach the module by name, through gowl's @code{ipc_command}
+action, so the same words work from Elisp:
+
+@example
+(gowl-run-command "scratchpad-toggle")  ; => "OK shown 2" or "OK hidden"
+(gowl-run-command "scratchpad-add 12")  ; window 12, its gowl-client-info id
+(gowl-run-command "scratchpad-status")
+@end example
+
+Interactive commands:
+
+@table @code
+@item cmacs-gowl-scratchpad-toggle
+Slide the scratchpad up, or roll it away.
+@item cmacs-gowl-scratchpad-add
+Pick a window and send it to the scratchpad.  It asks because the
+focused window of a command run from Emacs is the Emacs frame itself.
+@item cmacs-gowl-scratchpad-remove
+Pick one of the scratchpad's windows and bring it back.
+@item cmacs-gowl-reapply-scratchpad
+Push the @code{cmacs-gowl-scratchpad-*} options into the running
+scratchpad; a shown one resizes at once.
+@end table
+
+Its size is the dropdown's: @code{cmacs-gowl-scratchpad-width-pct}
+(default 1.0) and @code{cmacs-gowl-scratchpad-height-pct} (default
+0.666667) are fractions of the output's usable area, and
+@code{cmacs-gowl-scratchpad-width} and @code{cmacs-gowl-scratchpad-height}
+are pixels, which win when not 0.  @code{cmacs-gowl-scratchpad-gap} is
+the space between its columns.  They are pushed into the module when
+@code{cmacs-gowl-mode} starts.  @kbd{Super+s} used to select the
+scrolling layout, which is now reached by cycling layouts.
 
 @section Elisp Convenience Layer
 

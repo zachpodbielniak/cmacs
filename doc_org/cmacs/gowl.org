@@ -674,7 +674,9 @@ holds focus.
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
-| =Super+s=               | Scrolling layout (niri-style columns)   |
+| =Super+s=               | Scratchpad: slide it up / roll it away  |
+| =Super+Alt+s=           | Scratchpad: send the focused window     |
+| =Super+Ctrl+Shift+s=    | Scratchpad: bring the focused window back |
 | =Super+Tab=             | Next layout (=Super+Shift+Tab= previous)|
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
@@ -754,8 +756,9 @@ its =modules= config. Additional layout plugins join the same list.
 
 =Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
 forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
-aliases. =Super+t= selects tile, =Super+s= scrolling, =Super+m= monocle,
-and =Super+f= float. Layout selection and scroll offset belong to the
+aliases. =Super+t= selects tile, =Super+m= monocle and =Super+f= float; the
+scrolling layout is reached by cycling, since =Super+s= is the scratchpad
+(see [[#gowl-scratchpad][Scratchpad]]). Layout selection and scroll offset belong to the
 current tag view on the current monitor; changing one does not change
 another tag. A combined tag view keeps its own selection.
 
@@ -791,7 +794,7 @@ on landscape and square monitors too.
 A niri-style strip: full-height columns laid left to right on landscape
 and square monitors, or full-width rows running top to bottom on portrait
 monitors. The viewport scrolls along them instead of squeezing windows to
-fit. =Super+s= selects it; =Super+[= and =Super+]= scroll.
+fit. =Super+<= / =Super+>= cycle to it; =Super+[= and =Super+]= scroll.
 
 Window size along the scrolling axis is gowl's =scroll-column-width=
 (default 0.5, so two columns or rows are visible at a time; 1.0 gives one).
@@ -2748,13 +2751,82 @@ host Emacs frame is not a gowl client, so test the locker in a real
 gowl session (or the standalone =gowl= binary) for the full effect.
 
 ** Scratchpad
+:PROPERTIES:
+:CUSTOM_ID: gowl-scratchpad
+:END:
 
-Named scratchpad windows that toggle visibility.
+The dropdown terminal's twin from the other edge: a panel that slides up
+from the bottom of the focused output, holding any windows you send to
+it, tiled side by side in columns. It covers the same space as the quake
+shell (the whole usable width, two thirds of the height), floats over
+whatever tag is in view without disturbing its tiles, and rolls away the
+moment focus goes to a window outside it. While it is up its windows
+have the keyboard and every keybind; =Super+j= / =Super+k= cycle among
+them rather than stepping down onto the tiles, which would roll it away.
+It is gowl's =scratchpad= module, which CMacs loads by default.
+
+| Key                  | Action                                              |
+|----------------------+-----------------------------------------------------|
+| =Super+s=            | Slide the scratchpad up, or roll it away            |
+| =Super+Alt+s=        | Send the focused window to the scratchpad           |
+| =Super+Ctrl+Shift+s= | Bring the focused window back onto the tags in view |
+
+- *Sending a window* takes it out of the layout, and its tag re-tiles
+  without it. It is the window focused the next time the scratchpad
+  comes up. Windows sit in columns in the order they were sent.
+- *Bringing one back* puts it on the tags the focused output is showing
+  --- tiled if it was tiled, floating where it floated --- and focuses
+  it. The rest of the scratchpad rolls away first.
+- A window that closes simply leaves, and the others close the gap. One
+  that hides itself (an application minimising to its tray) leaves too,
+  and comes back as an ordinary window. Disabling the module brings
+  every window back, so none is ever stranded.
+- With the =animation= module it slides like the dropdown; without it,
+  it appears and disappears at once.
+- The dropdown and the scratchpad are exclusive: focusing either rolls
+  the other away.
+- A window in the rolled-away scratchpad is on no tag, so its tag in
+  =cmacs-gowl-switch-to-app= and friends reads "—", and jumping to it
+  with =cmacs-gowl-focus-window= does nothing; roll the scratchpad up
+  with =Super+s=.
+
+The keys reach the module by name, through gowl's =ipc_command= action,
+so the same words work from Elisp:
 
 #+begin_src emacs-lisp
-(gowl-enable-module "scratchpad")
-(gowl-scratchpad-toggle "terminal")
+(gowl-run-command "scratchpad-toggle")  ; => "OK shown 2" or "OK hidden"
+(gowl-run-command "scratchpad-add 12")  ; window 12, its gowl-client-info id
+(gowl-run-command "scratchpad-status")
+;; => "OK visible=0 count=2 members=4,9 width-pct=1 height-pct=0.666667
+;;     width=0 height=0 gap=0"
 #+end_src
+
+| Command                             | Description                                        |
+|-------------------------------------+----------------------------------------------------|
+| =M-x cmacs-gowl-scratchpad-toggle=  | Slide the scratchpad up, or roll it away           |
+| =M-x cmacs-gowl-scratchpad-add=     | Pick a window and send it to the scratchpad        |
+| =M-x cmacs-gowl-scratchpad-remove=  | Pick one of its windows and bring it back          |
+| =M-x cmacs-gowl-reapply-scratchpad= | Push the =cmacs-gowl-scratchpad-*= options into it |
+
+The two picking commands ask, because the "focused window" of a command
+run from Emacs is the Emacs frame itself; from a key they act on
+whichever window has the keyboard. =gowl-scratchpad-toggle= is the same
+toggle as a DEFUN; its NAME argument is ignored.
+
+| Option                             | Default    | Meaning                                        |
+|------------------------------------+------------+------------------------------------------------|
+| =cmacs-gowl-scratchpad-width-pct=  | =1.0=      | Fraction of the usable width                   |
+| =cmacs-gowl-scratchpad-height-pct= | =0.666667= | Fraction of the usable height (the dropdown's) |
+| =cmacs-gowl-scratchpad-width=      | =0=        | Pixels; when not 0 it wins over the fraction   |
+| =cmacs-gowl-scratchpad-height=     | =0=        | Pixels; when not 0 it wins over the fraction   |
+| =cmacs-gowl-scratchpad-gap=        | =0=        | Pixels between the columns                     |
+
+The options are pushed into the module when =cmacs-gowl-mode= starts;
+after changing one at runtime, =M-x cmacs-gowl-reapply-scratchpad=
+applies it, and a shown scratchpad resizes at once. =Super+s= used to
+select the scrolling layout, which is now reached with =Super+<= /
+=Super+>= or =Super+Tab=. The module itself is documented in gowl's
+=docs/modules.org=, under /Scratchpad/.
 
 ** Available Modules
 
@@ -2765,7 +2837,7 @@ Named scratchpad windows that toggle visibility.
 | vanitygaps      | Configurable tiling gaps                       | off     |
 | pertag          | Per-tag layout/mfact/nmaster                   | off     |
 | copyhighlight   | Sync primary selection to clipboard            | off     |
-| scratchpad      | Named scratchpad windows                       | off     |
+| scratchpad      | Slide-up panel of windows (Super+s)            | on      |
 | screenlock      | PAM-based screen locking                       | off     |
 | swallow         | Terminal window swallowing                     | off     |
 | autostart       | Run commands on startup                        | off     |
