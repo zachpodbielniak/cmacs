@@ -126,6 +126,8 @@ static const gchar *iface_xml =
   "    <arg type='s' name='output'/><arg type='b' name='on'/></signal>"
   "  <signal name='OutputProfileChanged'>"
   "    <arg type='s' name='profile'/></signal>"
+  "  <signal name='MonitorHdrChanged'>"
+  "    <arg type='s' name='output'/><arg type='b' name='on'/></signal>"
   "  <signal name='ClientTitleChanged'>"
   "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
   "  <method name='ReloadConfig'>"

@@ -1626,14 +1626,20 @@ added the lock."
      ;; proves a separate process can drive the session -- and over the
      ;; socket directly otherwise, so the test still runs in a tree
      ;; where gowl's tools were not built.
-     (defun cmacs-gowl-tests--ask (socket cmd)
+     (defun cmacs-gowl-tests--ask (socket cmd &optional allow-error)
+       ;; ALLOW-ERROR: gowl-msg exits non-zero on an ERROR reply, which
+       ;; for some commands is the answer being tested rather than a
+       ;; failure -- asking an SDR output for HDR, say.
        (let ((msg (getenv "CMACS_TEST_GOWL_MSG")))
          (if (and msg (file-executable-p msg))
              (with-temp-buffer
-               (unless (eql 0 (apply #'call-process msg nil t nil
-                                     "--socket" socket
-                                     (split-string cmd " " t)))
-                 (error "gowl-msg %s failed: %s" cmd (buffer-string)))
+               ;; stderr into the same buffer: an ERROR reply is
+               ;; printed there, and it is the answer being checked.
+               (let ((rc (apply #'call-process msg nil (list t t) nil
+                                "--socket" socket
+                                (split-string cmd " " t))))
+                 (unless (or allow-error (eql 0 rc))
+                   (error "gowl-msg %s failed: %s" cmd (buffer-string))))
                (buffer-string))
            (let* ((proc (make-network-process
                          :name "gowl-ipc-test" :family 'local
@@ -1701,6 +1707,25 @@ added the lock."
        (error "`gowl-remove-output-profile' found nothing"))
      (when (gowl-output-profile)
        (error "A profile still in force: %S" (gowl-output-profile)))
+
+     ;; HDR.  A headless output advertises neither BT.2020 nor PQ, so
+     ;; the assertions are the refusals -- which is the path every
+     ;; machine without an HDR display takes.
+     (when (gowl-monitor-hdr-capable-p)
+       (error "A headless output claims it can do HDR"))
+     (when (gowl-monitor-hdr-p)
+       (error "A headless output claims it is in HDR"))
+     (when (gowl-set-monitor-hdr t)
+       (error "`gowl-set-monitor-hdr' claimed success on an SDR output"))
+     ;; Asking for the state it is already in is not a failure.
+     (unless (gowl-set-monitor-hdr nil)
+       (error "Turning HDR off on an SDR output reported failure"))
+     (let ((reply (cmacs-gowl-tests--ask socket "monitors")))
+       (unless (string-search "\"hdr_capable\":false" reply)
+         (error "The socket does not report HDR capability: %s" reply)))
+     (let ((reply (cmacs-gowl-tests--ask socket "hdr on" t)))
+       (unless (string-prefix-p "ERROR" reply)
+         (error "`hdr on' should have been refused: %s" reply)))
 
      ;; Config problems are readable from Lisp, the way --check-config
      ;; reports them to a shell.

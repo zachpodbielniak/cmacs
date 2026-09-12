@@ -8725,6 +8725,8 @@ cmacs_gowl_parse_monitor_config (Lisp_Object alist, GowlMonitorConfig *mc)
      Fassq rather than read through Fcdr.  */
   v = Fassq (intern_c_string ("enabled"), alist);
   if (!NILP (v)) mc->enabled = NILP (Fcdr (v)) ? 0 : 1;
+  v = Fassq (intern_c_string ("hdr"), alist);
+  if (!NILP (v)) mc->hdr = NILP (Fcdr (v)) ? 0 : 1;
   v = Fassq (intern_c_string ("vrr"), alist);
   if (!NILP (v))
     {
@@ -8735,6 +8737,79 @@ cmacs_gowl_parse_monitor_config (Lisp_Object alist, GowlMonitorConfig *mc)
       else
         mc->vrr = NILP (x) ? 0 : 1;
     }
+}
+
+DEFUN ("gowl-monitor-hdr-capable-p", Fgowl_monitor_hdr_capable_p,
+       Sgowl_monitor_hdr_capable_p, 0, 1, 0,
+       doc: /* Return t if MONITOR can be driven as HDR.
+An output qualifies only when it advertises BT.2020 primaries AND the
+ST.2084 PQ transfer function; a display that claims one without the
+other cannot show HDR.  MONITOR is a monitor object or nil for the
+focused one.
+
+This is usually a property of the whole chain rather than the panel: an
+HDR monitor on a cable or port that cannot carry 10-bit at the current
+refresh rate reports nil.  */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean capable;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  mon = gowl_resolve_monitor (monitor);
+  capable = mon != NULL && gowl_monitor_supports_hdr (mon);
+  return unbind_to (count, capable ? Qt : Qnil);
+}
+
+DEFUN ("gowl-monitor-hdr-p", Fgowl_monitor_hdr_p, Sgowl_monitor_hdr_p,
+       0, 1, 0,
+       doc: /* Return t if MONITOR is currently in HDR.
+MONITOR is a monitor object or nil for the focused one.  */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean on;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  mon = gowl_resolve_monitor (monitor);
+  on = mon != NULL && gowl_monitor_get_hdr (mon);
+  return unbind_to (count, on ? Qt : Qnil);
+}
+
+DEFUN ("gowl-set-monitor-hdr", Fgowl_set_monitor_hdr, Sgowl_set_monitor_hdr,
+       1, 2, 0,
+       doc: /* Drive MONITOR in HDR when ENABLE, in sRGB otherwise.
+MONITOR is a monitor object or nil for the focused one.  Returns t when
+the output is now in the requested state, nil when it refused or cannot
+do HDR at all (see `gowl-monitor-hdr-capable-p').
+
+HDR here means BT.2020 primaries, the ST.2084 PQ transfer function and
+ten bits per channel, committed together -- a PQ signal at eight bits
+bands visibly in dark gradients.
+
+It does not tone-map.  SDR content is passed through, which on most
+panels looks flat until an application declares its surface HDR through
+wp-color-management-v1, so this belongs on a key or the bar's display
+panel rather than on by default.
+`cmacs-gowl-monitor-hdr-changed-functions' runs on every change,
+wherever it came from.  */)
+  (Lisp_Object enable, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean ok;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  mon = gowl_resolve_monitor (monitor);
+  if (mon == NULL)
+    return unbind_to (count, Qnil);
+  ok = gowl_monitor_set_hdr (mon, !NILP (enable));
+  return unbind_to (count, ok ? Qt : Qnil);
 }
 
 DEFUN ("gowl-set-monitor-config", Fgowl_set_monitor_config,
@@ -8749,8 +8824,9 @@ SETTINGS is an alist; every key is optional and what is absent is left
 alone: `width' and `height' (a mode, together), `refresh' (Hz), `x' and
 `y' (layout position), `scale', `transform' (0-7 or a symbol, as
 `gowl-set-monitor-transform' takes), `enabled' (nil disables the
-output) and `vrr' (t, nil, or `on-demand' for adaptive sync only while
-a fullscreen window says it is a game or a video).
+output), `vrr' (t, nil, or `on-demand' for adaptive sync only while a
+fullscreen window says it is a game or a video) and `hdr' (t drives the
+output in BT.2020 + PQ at 10 bits, where it can).
 
 SETTINGS nil removes the entry.  This is the YAML `monitors:' section,
 which an embedded session has no file to write.  Settings apply when
@@ -9738,6 +9814,17 @@ cmacs_gowl_on_layout_switched_dbus (GowlCompositor *comp, const gchar *name,
 }
 
 static void
+cmacs_gowl_on_monitor_hdr_dbus (GowlCompositor *comp, GowlMonitor *m,
+                                gboolean on, gpointer data)
+{
+  const gchar *name = m != NULL ? gowl_monitor_get_name (m) : NULL;
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "MonitorHdrChanged",
+                          g_variant_new ("(sb)", name != NULL ? name : "", on));
+}
+
+static void
 cmacs_gowl_on_output_profile_dbus (GowlCompositor *comp, const gchar *name,
                                    gpointer data)
 {
@@ -9790,6 +9877,8 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
                     G_CALLBACK (cmacs_gowl_on_output_power_dbus), NULL);
   g_signal_connect (comp, "output-profile-changed",
                     G_CALLBACK (cmacs_gowl_on_output_profile_dbus), NULL);
+  g_signal_connect (comp, "monitor-hdr-changed",
+                    G_CALLBACK (cmacs_gowl_on_monitor_hdr_dbus), NULL);
   g_signal_connect (comp, "client-title-changed",
                     G_CALLBACK (cmacs_gowl_on_title_changed_dbus), NULL);
 }
@@ -9995,6 +10084,9 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_add_output_profile);
   defsubr (&Sgowl_remove_output_profile);
   defsubr (&Sgowl_set_monitor_config);
+  defsubr (&Sgowl_monitor_hdr_capable_p);
+  defsubr (&Sgowl_monitor_hdr_p);
+  defsubr (&Sgowl_set_monitor_hdr);
   defsubr (&Sgowl_apply_monitor_configs);
   defsubr (&Sgowl_config_problems);
   defsubr (&Sgowl_start_ipc);

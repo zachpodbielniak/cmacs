@@ -785,6 +785,7 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 | =cmacs-gowl-client-title-changed-functions=   | client           | a window's title or app id changed     |
 | =cmacs-gowl-monitor-added-functions=          | monitor          | an output was plugged in, configured and in the layout |
 | =cmacs-gowl-monitor-removed-functions=        | monitor          | an output was unplugged (readable only during the hook) |
+| =cmacs-gowl-monitor-hdr-changed-functions=    | monitor, on      | an output switched between HDR and SDR  |
 | =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
 | =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
 
@@ -1831,6 +1832,21 @@ gowl-msg -s                      # subscribe: one line per event
 It is on by default; =cmacs-gowl-ipc= turns it off (nil) or moves it (a path string), and =gowl-start-ipc=, =gowl-stop-ipc= and =gowl-ipc-socket= drive it by hand. =gowl-stop= closes it.
 
 Commands run on the compositor's dispatch thread, inside the lock a keybind runs under, and do only what the compositor can already be asked to do — this is not =emacsctl='s eval, and nothing arriving here evaluates Lisp. That said, anyone who can open the socket can drive your desktop, which is why it lives in your runtime directory. See =deps/gowl/docs/ipc.org= for the full command and event list.
+
+** HDR
+
+=M-x cmacs-gowl-toggle-hdr= switches the focused output between HDR and SDR, and the bar's *display* panel carries the same toggle --- shown only where the output can do it, and replaced by a line saying so where it cannot.  =Super+Shift+h= is bound to it in standalone gowl's shipped config.
+
+HDR here is three things committed together: BT.2020 primaries, the ST.2084 PQ transfer function, and ten bits per channel.  They belong in one commit because a PQ signal at eight bits bands visibly in every dark gradient, and a commit the backend refuses leaves the output exactly as it was.
+
+An output qualifies only when it advertises *both* BT.2020 and PQ, which is a property of the whole chain rather than the panel: an HDR monitor on a cable or port that cannot carry ten bits at the current refresh rate reports neither.  =gowl-monitor-hdr-capable-p= is the check, =gowl-monitor-hdr-p= the state, =gowl-set-monitor-hdr= the setter, and =cmacs-gowl-monitor-hdr-changed-functions= runs on every change wherever it came from.
+
+*It does not tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application declares its surface HDR.  That is what =wp-color-management-v1= is for, and gowl advertises it, so a colour-managed player describes its content and the scene graph converts it.  This is why HDR is a command rather than something to leave on --- and why =cmacs-gowl-monitor-configs= takes =hdr= for the displays where it is worth it:
+
+#+begin_src elisp
+(setq cmacs-gowl-monitor-configs
+      '(("Dell Inc. U2720Q" . ((hdr . t)))))
+#+end_src
 
 ** Enable / Disable
 

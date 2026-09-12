@@ -1488,6 +1488,31 @@ module added at runtime is offered straight away."
     (user-error "Gowl compositor is not running"))
   (gowl-set-layout layout))
 
+(defun cmacs-gowl-toggle-hdr (&optional monitor)
+  "Switch MONITOR between HDR and SDR, the focused output by default.
+
+HDR drives the output in BT.2020 with the ST.2084 PQ transfer function
+at ten bits per channel.  It is not tone mapping: SDR content is passed
+through and usually looks flat until an application declares its
+surface HDR, which is why this is a command rather than a default.
+
+Reports what happened, including the common case of an output that
+cannot do it -- often the cable or the refresh rate rather than the
+panel."
+  (interactive)
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((name (ignore-errors
+                (cdr (assq 'name (gowl-monitor-info
+                                  (or monitor (gowl-focused-monitor))))))))
+    (cond
+     ((not (gowl-monitor-hdr-capable-p monitor))
+      (message "%s does not offer BT.2020 and PQ" (or name "This output")))
+     ((gowl-set-monitor-hdr (not (gowl-monitor-hdr-p monitor)) monitor)
+      (message "%s: HDR %s" (or name "Output")
+               (if (gowl-monitor-hdr-p monitor) "on" "off")))
+     (t (message "%s refused the change" (or name "The output"))))))
+
 (defun cmacs-gowl-toggle-vsplit ()
   "Toggle the vsplit tile orientation on the focused monitor.
 With vsplit on, the master row is on top and the stack row on the
@@ -2212,6 +2237,11 @@ It is already configured and in the layout when this runs.")
 The monitor is still readable while the hook runs and is released
 immediately afterwards, so keep its name, not the object.")
 
+(defvar cmacs-gowl-monitor-hdr-changed-functions nil
+  "Functions run with a monitor and t/nil when it switches HDR on or off.
+Fires wherever the change came from: a keybind, the IPC socket, the
+bar's display panel, `gowl-set-monitor-hdr', or a config reload.")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -2265,7 +2295,9 @@ this runs from `cmacs-gowl-monitor-added-functions' as well."
                       ("monitor-added"
                        . cmacs-gowl-monitor-added-functions)
                       ("monitor-removed"
-                       . cmacs-gowl-monitor-removed-functions)))
+                       . cmacs-gowl-monitor-removed-functions)
+                      ("monitor-hdr-changed"
+                       . cmacs-gowl-monitor-hdr-changed-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))
