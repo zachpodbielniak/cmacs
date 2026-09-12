@@ -782,6 +782,13 @@ window, pinning, screens-off, and a resize key mode registered through
     (should (member '("Super+Ctrl+Tab" focus-last nil) captured))
     (should (member '("Super+Shift+t" toggle-sticky nil) captured))
     (should (member '("Super+Shift+m" set-layout "tabbed") captured))
+    ;; Super+f is the WINDOW, not the layout.  It used to switch the
+    ;; whole tag to the float layout, which is a mode change made by
+    ;; accident while reaching for fullscreen -- the more expensive of
+    ;; the two mistakes.  The float layout kept a key of its own.
+    (should (member '("Super+f" toggle-fullscreen nil) captured))
+    (should (member '("Super+Shift+f" set-layout "float") captured))
+    (should-not (member '("Super+f" set-layout "float") captured))
     (should (member '("Super+Ctrl+o" output-power "off") captured))
     (should (member '("Super+r" mode "resize") captured))
     ;; The mode's binds carry the mode name, and both exits are bound.

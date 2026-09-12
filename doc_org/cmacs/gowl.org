@@ -687,7 +687,9 @@ holds focus.
 | =Super+h= / =Super+l=   | Shrink / grow the master area           |
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
-| =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
+| =Super+f=               | Fullscreen the focused window           |
+| =Super+t= / =m=         | Tile / monocle layout                   |
+| =Super+Shift+f=         | Float layout                            |
 | =Super+Shift+m=         | Tabbed layout                           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
@@ -874,7 +876,7 @@ per window on the tag, clickable; =Super+Shift+m= selects it.
 
 =Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
 forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
-aliases. =Super+t= selects tile, =Super+m= monocle and =Super+f= float; the
+aliases. =Super+t= selects tile, =Super+m= monocle and =Super+Shift+f= float --- =Super+f= fullscreens the focused *window* rather than changing the tag's layout; the
 scrolling layout is reached by cycling, since =Super+s= is the scratchpad
 (see [[#gowl-scratchpad][Scratchpad]]). Layout selection and scroll offset belong to the
 current tag view on the current monitor; changing one does not change

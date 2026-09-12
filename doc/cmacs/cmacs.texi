@@ -2351,14 +2351,19 @@ Shrink / grow the master area.
 Increment / decrement the master count.
 @item Super+Shift+Return
 Zoom (promote to master).
-@item Super+t / f / m
-Tile / float / monocle layout.
+@item Super+f
+Fullscreen the focused window.
+@item Super+t / m
+Tile / monocle layout.
+@item Super+Shift+f
+Float layout.
 @item Super+v
 Vsplit on: master row on top, stack row on the bottom.
 @item Super+Shift+v
 Vsplit off: restore the normal left/right split.
 @item Super+space
-Toggle floating; @kbd{Super+Shift+space} toggles fullscreen.
+Toggle floating; @kbd{Super+f} and @kbd{Super+Shift+space} both toggle
+fullscreen.
 @item Super+s
 Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and

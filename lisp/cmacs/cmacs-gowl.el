@@ -662,7 +662,12 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+Return" 'zoom nil "Promote to master")
         ;; Layouts.
         (bind "Super+t" 'set-layout "tile" "Tile layout")
-        (bind "Super+f" 'set-layout "float" "Float layout")
+        ;; Super+f is the window, not the layout: fullscreen is what
+        ;; you reach for mid-task, and switching the whole tag's layout
+        ;; by accident while looking for it is the more expensive
+        ;; mistake.  The float LAYOUT is on Super+Shift+f.
+        (bind "Super+f" 'toggle-fullscreen nil "Fullscreen this window")
+        (bind "Super+Shift+f" 'set-layout "float" "Float layout")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
         (bind "Super+Shift+m" 'set-layout "tabbed" "Tabbed layout")
         ;; Super+s is the scratchpad (below).  The scrolling layout is
