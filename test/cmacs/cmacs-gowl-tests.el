@@ -1465,5 +1465,76 @@ Emacs thread, so it must hold the compositor lock while it does."
       (should (= (length bodies) 1))
       (should (string-match-p "cmacs_gowl_lock ()" (car bodies))))))
 
+(ert-deftest cmacs-gowl-test-config-defuns-take-the-lock ()
+  "Every Emacs-thread path to the compositor's config holds the gowl lock.
+
+The dispatch thread holds `cmacs_gowl_mutex' for the length of each
+`wl_event_loop_dispatch', and the config object is not merely mutated
+but replaced outright -- by `gowl-reload-config' with no file, and by
+gowl's own reload keybind.  A DEFUN that reads it without the lock can
+be reading a config that is being released underneath it.  Running a
+keybind counts too: that is a whole compositor action, the same one
+the dispatch thread runs for a real key press."
+  (dolist (relative '("cmacs/gowl/cmacs-gowl.c"
+                      "cmacs/glib/cmacs-eval-dispatch.c"))
+    (let ((source (cmacs-gowl-tests--source-file relative)))
+      (skip-unless source)
+      (dolist (symbol '("gowl_compositor_get_config"
+                        "gowl_compositor_dispatch_keybind"))
+        (let ((bodies (cmacs-gowl-tests--defun-bodies source symbol)))
+          (dolist (body bodies)
+            (ert-info ((format "%s: a body reaching %s" relative symbol))
+              (should (string-match-p
+                       (rx (or "cmacs_gowl_lock_scoped ()"
+                               "cmacs_gowl_lock ()"
+                               "pthread_mutex_lock (&cmacs_gowl_mutex)"))
+                       body)))))))))
+
+(ert-deftest cmacs-gowl-test-scoped-lock-releases-through-specpdl ()
+  "The scoped gowl lock releases via the specpdl, not a written unlock.
+These DEFUNs signal after taking the lock -- no config loaded, a key
+that will not parse, an unknown property -- and `error' longjmps past
+any unlock placed after the body.  The mutex would stay held and the
+dispatch thread would wedge on its next pass: a frozen desktop, which
+is worse than the race the lock is there to close."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (goto-char (point-min))
+      (should (re-search-forward
+               "record_unwind_protect_void (cmacs_gowl_unlock)" nil t)))))
+
+(ert-deftest cmacs-gowl-test-scoped-lock-returns-unwind ()
+  "No body leaves the gowl lock held by returning around `unbind_to'.
+Once `cmacs_gowl_lock_scoped' has run, every exit must go through
+`unbind_to'; signalling unwinds on its own.  A plain `return' keeps
+the mutex and wedges the dispatch thread.  This guard exists because
+exactly one such return was written, and missed, in the change that
+added the lock."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (with-temp-buffer
+      (insert-file-contents source)
+      (cmacs-gowl-tests--strip-c-comments)
+      (goto-char (point-min))
+      (let ((offenders nil)
+            (scoped 0))
+        (while (re-search-forward "cmacs_gowl_lock_scoped ()" nil t)
+          (setq scoped (1+ scoped))
+          ;; From the lock to the end of its enclosing function.
+          (let ((end (save-excursion
+                       (if (re-search-forward "^}" nil t)
+                           (point)
+                         (point-max)))))
+            (save-excursion
+              (while (re-search-forward "^.*\\_<return\\_>.*$" end t)
+                (let ((line (match-string 0)))
+                  (unless (string-match-p "unbind_to" line)
+                    (push (string-trim line) offenders)))))))
+        (should (> scoped 0))
+        (should (equal offenders nil))))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

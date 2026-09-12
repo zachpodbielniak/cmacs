@@ -989,9 +989,16 @@ cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
 
   GOWL_DISPATCH_CHECK ();
 
+  /* These run on Emacs's thread, like the gowl DEFUNs, so they are
+     serialised against the dispatch thread the same way: it holds
+     this lock for the length of each dispatch.  Plain lock/unlock is
+     enough here -- nothing in this file signals, so there is no
+     longjmp to unwind past.  */
+  cmacs_gowl_lock ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     {
+      cmacs_gowl_unlock ();
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "No gowl config loaded");
       return NULL;
@@ -999,6 +1006,7 @@ cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
 
   if (!gowl_keybind_parse (key, &modifiers, &keysym))
     {
+      cmacs_gowl_unlock ();
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Invalid key string: %s", key);
       return NULL;
@@ -1006,6 +1014,7 @@ cmacs_dispatch_gowl_add_keybind (const gchar *key, gint action,
 
   gowl_config_add_keybind_full (config, modifiers, keysym, action,
                                  arg, desc);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1013,6 +1022,7 @@ gchar *
 cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error)
 {
   guint modifiers, keysym;
+  gboolean ran;
 
   GOWL_DISPATCH_CHECK ();
 
@@ -1025,10 +1035,13 @@ cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error)
 
   /* Runs the bind, which is NOT what the input-injection calls do:
      those hand a key to the focused client and never consult the
-     keybind table. */
-  return g_strdup (gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
-                                                     modifiers, keysym)
-                   ? "t" : "nil");
+     keybind table.  Under the gowl lock: a bind is a whole compositor
+     action, the same one the dispatch thread runs for a real press. */
+  cmacs_gowl_lock ();
+  ran = gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
+                                          modifiers, keysym);
+  cmacs_gowl_unlock ();
+  return g_strdup (ran ? "t" : "nil");
 }
 
 gchar *
@@ -1041,9 +1054,15 @@ cmacs_dispatch_gowl_list_keybinds (GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  /* Held across the whole walk: the array and its strings belong to
+     the config, so a reload must not free them mid-loop.  */
+  cmacs_gowl_lock ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return g_strdup ("[]");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("[]");
+    }
 
   keybinds = gowl_config_get_keybinds (config);
   buf = g_string_new ("[");
@@ -1076,6 +1095,7 @@ cmacs_dispatch_gowl_list_keybinds (GError **error)
       g_free (key_str);
     }
   g_string_append_c (buf, ']');
+  cmacs_gowl_unlock ();
   return g_string_free (buf, FALSE);
 }
 
@@ -1088,15 +1108,18 @@ cmacs_dispatch_gowl_add_rule (const gchar *app_id, const gchar *title,
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     {
+      cmacs_gowl_unlock ();
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "No gowl config loaded");
       return NULL;
     }
 
   gowl_config_add_rule (config, app_id, title, tags, floating, monitor);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1175,6 +1198,10 @@ cmacs_dispatch_gowl_reload_config (GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  /* The load rewrites the config in place while the dispatch thread
+     may be reading it, and applying the monitor overrides touches
+     live outputs; both belong under the lock.  */
+  cmacs_gowl_lock ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config != NULL)
     {
@@ -1184,6 +1211,7 @@ cmacs_dispatch_gowl_reload_config (GError **error)
        * a compositor restart. */
       gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
     }
+  cmacs_gowl_unlock ();
 
   return g_strdup ("t");
 }
@@ -1275,27 +1303,36 @@ gchar *
 cmacs_dispatch_gowl_config_get (const gchar *property, GError **error)
 {
   GowlConfig *config;
+  gchar *out = NULL;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
+  /* One exit instead of a return per property, so the unlock cannot
+     be forgotten when another property is added here.  */
   if (g_strcmp0 (property, "border-width") == 0)
-    return g_strdup_printf ("%d", gowl_config_get_border_width (config));
-  if (g_strcmp0 (property, "terminal") == 0)
-    return g_strdup (gowl_config_get_terminal (config) ? : "");
-  if (g_strcmp0 (property, "mfact") == 0)
-    return g_strdup_printf ("%.2f", gowl_config_get_mfact (config));
-  if (g_strcmp0 (property, "nmaster") == 0)
-    return g_strdup_printf ("%d", gowl_config_get_nmaster (config));
-  if (g_strcmp0 (property, "tag-count") == 0)
-    return g_strdup_printf ("%d", gowl_config_get_tag_count (config));
+    out = g_strdup_printf ("%d", gowl_config_get_border_width (config));
+  else if (g_strcmp0 (property, "terminal") == 0)
+    out = g_strdup (gowl_config_get_terminal (config) ? : "");
+  else if (g_strcmp0 (property, "mfact") == 0)
+    out = g_strdup_printf ("%.2f", gowl_config_get_mfact (config));
+  else if (g_strcmp0 (property, "nmaster") == 0)
+    out = g_strdup_printf ("%d", gowl_config_get_nmaster (config));
+  else if (g_strcmp0 (property, "tag-count") == 0)
+    out = g_strdup_printf ("%d", gowl_config_get_tag_count (config));
+  cmacs_gowl_unlock ();
 
-  g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
-               "Unknown config property: %s", property);
-  return NULL;
+  if (out == NULL)
+    g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                 "Unknown config property: %s", property);
+  return out;
 }
 
 gchar *

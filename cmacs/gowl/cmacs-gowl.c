@@ -1268,6 +1268,36 @@ gowl_resolve_client (Lisp_Object client)
          error ("Gowl compositor not running"); }    \
   while (0)
 
+/* Take the gowl lock for the rest of this Lisp call, and return the
+   specpdl mark to hand `unbind_to' on the way out.
+
+   Every DEFUN here runs on Emacs's thread while the dispatch thread
+   sits in `wl_event_loop_dispatch' holding this same lock, so reading
+   the compositor's config -- or running a keybind, which is a whole
+   compositor action -- has to be serialised against it.  Unserialised,
+   a read racing `gowl-reload-config' or gowl's own reload keybind can
+   land on a config that is being replaced out from under it.
+
+   A plain lock/unlock pair will not do: most of these bodies signal
+   ("No gowl config loaded", a key that will not parse, an unknown
+   property), and `error' longjmps straight past the unlock.  That
+   leaves the mutex held and wedges the dispatch thread on its next
+   pass -- a frozen desktop, which is far worse than the race.
+   Recording the unlock on the specpdl makes the release follow the
+   signal out.  The mutex is recursive, so one of these nesting inside
+   another -- or inside a caller that already locked -- is fine.  */
+static specpdl_ref
+cmacs_gowl_lock_scoped (void)
+{
+  specpdl_ref count = SPECPDL_INDEX ();
+
+  /* Locked before the record, so the unwind can never run against a
+     lock this call did not take.  */
+  cmacs_gowl_lock ();
+  record_unwind_protect_void (cmacs_gowl_unlock);
+  return count;
+}
+
 
 /* ── Compositor-level ESC escape-hatch ───��────────────────────────────
  *
@@ -1683,8 +1713,13 @@ cmacs_gowl_hand_over_config_and_modules (GowlCompositor *comp)
     return;
 
   owned = g_new0 (struct cmacs_gowl_owned, 1);
+  /* Both launch paths call this before the dispatch thread exists,
+     but `cmacs_gowl_replace_config' calls it with the thread running,
+     and it is asking the compositor what it is holding right now.  */
+  cmacs_gowl_lock ();
   owned->manager = gowl_compositor_get_module_manager (comp);
   owned->config = gowl_compositor_get_config (comp);
+  cmacs_gowl_unlock ();
   g_object_set_data_full (G_OBJECT (comp), CMACS_GOWL_OWNED_KEY, owned,
                           cmacs_gowl_owned_free);
 }
@@ -2565,12 +2600,17 @@ Use gobject-set to modify properties at runtime:
   (void)
 {
   GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (config));
+    return unbind_to (count, Qnil);
+  /* Wrapped under the lock: the wrapper takes a reference of its own,
+     so the config cannot be replaced and released between the read
+     and the ref.  */
+  return unbind_to (count, cmacs_gobject_wrap (G_OBJECT (config)));
 }
 
 DEFUN ("gowl-module-manager", Fgowl_module_manager, Sgowl_module_manager,
@@ -4193,18 +4233,20 @@ Keys: active (visible tags bitmask), count (total tags from config). */)
 {
   GowlMonitor *mon;
   GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   mon = gowl_resolve_monitor (monitor);
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
 
-  return list2 (
+  return unbind_to (count, list2 (
     Fcons (intern_c_string ("active"),
            mon ? make_fixnum ((EMACS_INT)gowl_monitor_get_tags (mon))
                : make_fixnum (0)),
     Fcons (intern_c_string ("count"),
            config ? make_fixnum (gowl_config_get_tag_count (config))
-                  : make_fixnum (9)));
+                  : make_fixnum (9))));
 }
 
 
@@ -4449,10 +4491,12 @@ all begin \"XF86\".  */)
   gint action_val;
   const gchar *arg_str = NULL;
   const gchar *desc_str = NULL;
+  specpdl_ref count;
 
   CHECK_STRING (key);
   GOWL_CHECK_RUNNING ();
 
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     error ("No gowl config loaded");
@@ -4478,7 +4522,7 @@ all begin \"XF86\".  */)
 
   gowl_config_add_keybind_full (config, modifiers, keysym,
                                  action_val, arg_str, desc_str);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-list-keybinds", Fgowl_list_keybinds, Sgowl_list_keybinds,
@@ -4500,11 +4544,16 @@ one.  `cmacs-gowl-describe-keybinds' renders this list.  */)
   GArray *keybinds;
   Lisp_Object result = Qnil;
   guint i;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  /* Held across the whole walk, not re-taken per entry: the array and
+     every string in it belong to the config, so releasing the lock
+     mid-loop would let a reload free them under the reader.  */
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   keybinds = gowl_config_get_keybinds (config);
   for (i = 0; i < keybinds->len; i++)
@@ -4531,7 +4580,7 @@ one.  `cmacs-gowl-describe-keybinds' renders this list.  */)
       result = Fcons (entry, result);
     }
 
-  return Fnreverse (result);
+  return unbind_to (count, Fnreverse (result));
 }
 
 DEFUN ("gowl-run-keybind", Fgowl_run_keybind, Sgowl_run_keybind,
@@ -4548,6 +4597,8 @@ Returns t if a bind matched, nil otherwise. */)
   (Lisp_Object key)
 {
   guint modifiers, keysym;
+  specpdl_ref count;
+  gboolean ran;
 
   CHECK_STRING (key);
   GOWL_CHECK_RUNNING ();
@@ -4555,9 +4606,13 @@ Returns t if a bind matched, nil otherwise. */)
   if (!gowl_keybind_parse (SSDATA (key), &modifiers, &keysym))
     error ("Invalid key string: %s", SSDATA (key));
 
-  return gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
-                                           modifiers, keysym)
-         ? Qt : Qnil;
+  /* A bind runs a whole compositor action -- a layout change, a tag
+     switch, a config reload -- exactly what the dispatch thread runs
+     under this lock when the key is really pressed.  */
+  count = cmacs_gowl_lock_scoped ();
+  ran = gowl_compositor_dispatch_keybind (cmacs_gowl_compositor,
+                                          modifiers, keysym);
+  return unbind_to (count, ran ? Qt : Qnil);
 }
 
 DEFUN ("gowl-remove-keybind", Fgowl_remove_keybind, Sgowl_remove_keybind,
@@ -4574,10 +4629,12 @@ Returns the number of keybinds removed (an integer). */)
   GowlConfig *config;
   guint modifiers, keysym;
   guint removed;
+  specpdl_ref count;
 
   CHECK_STRING (key);
   GOWL_CHECK_RUNNING ();
 
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     error ("No gowl config loaded");
@@ -4586,7 +4643,7 @@ Returns the number of keybinds removed (an integer). */)
     error ("Invalid key string: %s", SSDATA (key));
 
   removed = gowl_config_remove_keybind (config, modifiers, keysym);
-  return make_fixnum ((gint)removed);
+  return unbind_to (count, make_fixnum ((gint)removed));
 }
 
 DEFUN ("gowl-clear-keybinds", Fgowl_clear_keybinds, Sgowl_clear_keybinds,
@@ -4595,13 +4652,15 @@ DEFUN ("gowl-clear-keybinds", Fgowl_clear_keybinds, Sgowl_clear_keybinds,
   (void)
 {
   GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
   gowl_config_clear_keybinds (config);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 
@@ -4622,8 +4681,10 @@ TAGS is a bitmask, FLOATING is a boolean, MONITOR is an integer (-1 for any). */
   guint32 tags_val = 0;
   gboolean float_val = FALSE;
   gint mon_val = -1;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     error ("No gowl config loaded");
@@ -4636,7 +4697,7 @@ TAGS is a bitmask, FLOATING is a boolean, MONITOR is an integer (-1 for any). */
 
   gowl_config_add_rule (config, app_str, title_str,
                          tags_val, float_val, mon_val);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-add-rule-full", Fgowl_add_rule_full, Sgowl_add_rule_full,
@@ -4665,8 +4726,10 @@ minimal legacy form.  */)
   gint width_val = 0;
   gint height_val = 0;
   gboolean regex_val = FALSE;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     error ("No gowl config loaded");
@@ -4683,7 +4746,7 @@ minimal legacy form.  */)
   gowl_config_add_rule_full (config, app_str, title_str, tags_val,
                               float_val, mon_val, width_val,
                               height_val, TRUE, regex_val);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-remove-rule", Fgowl_remove_rule, Sgowl_remove_rule, 0, 2, 0,
@@ -4696,17 +4759,19 @@ Returns t if a rule was removed, nil otherwise. */)
   const gchar *app_str = NULL;
   const gchar *title_str = NULL;
   guint removed;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   if (STRINGP (app_id))  app_str = SSDATA (app_id);
   if (STRINGP (title))   title_str = SSDATA (title);
 
   removed = gowl_config_remove_rule (config, app_str, title_str);
-  return removed > 0 ? Qt : Qnil;
+  return unbind_to (count, removed > 0 ? Qt : Qnil);
 }
 
 DEFUN ("gowl-clear-rules", Fgowl_clear_rules, Sgowl_clear_rules, 0, 0, 0,
@@ -4714,13 +4779,15 @@ DEFUN ("gowl-clear-rules", Fgowl_clear_rules, Sgowl_clear_rules, 0, 0, 0,
   (void)
 {
   GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
   gowl_config_clear_rules (config);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-list-rules", Fgowl_list_rules, Sgowl_list_rules, 0, 0, 0,
@@ -4733,11 +4800,13 @@ height, center, regex. */)
   GPtrArray *rules;
   Lisp_Object result = Qnil;
   guint i;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   rules = gowl_config_get_rules (config);
   for (i = 0; i < rules->len; i++)
@@ -4768,7 +4837,7 @@ height, center, regex. */)
       result = Fcons (entry, result);
     }
 
-  return Fnreverse (result);
+  return unbind_to (count, Fnreverse (result));
 }
 
 DEFUN ("gowl-float-toggle", Fgowl_float_toggle, Sgowl_float_toggle,
@@ -4858,10 +4927,12 @@ precedence when non-zero.  ANCHOR is a symbol: `top', `bottom',
   gint    wa = 0;
   gint    ha = 0;
   gint    anc = 0;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
   CHECK_STRING (name);
   CHECK_STRING (spawn_cmd);
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
     error ("No gowl config loaded");
@@ -4881,7 +4952,7 @@ precedence when non-zero.  ANCHOR is a symbol: `top', `bottom',
 
   gowl_config_add_dropdown (config, SSDATA (name), SSDATA (spawn_cmd),
                              keybind_str, wp, hp, wa, ha, anc);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-remove-dropdown", Fgowl_remove_dropdown,
@@ -4891,14 +4962,16 @@ DEFUN ("gowl-remove-dropdown", Fgowl_remove_dropdown,
 {
   GowlConfig *config;
   guint removed;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
   CHECK_STRING (name);
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
   removed = gowl_config_remove_dropdown (config, SSDATA (name));
-  return removed > 0 ? Qt : Qnil;
+  return unbind_to (count, removed > 0 ? Qt : Qnil);
 }
 
 /* Look up the active dropdown module and return it as the
@@ -4963,13 +5036,17 @@ lets callers type `(gowl-dropdown-toggle)' for the common case. */)
   GowlConfig           *config;
   const gchar          *target = NULL;
   gchar                *first_name = NULL;
+  specpdl_ref           count;
 
   GOWL_CHECK_RUNNING ();
+  /* Taken before the provider lookup, which walks the module list,
+     and held through the config read below and the toggle.  */
+  count = cmacs_gowl_lock_scoped ();
   prov = cmacs_gowl_find_dropdown_provider ();
   if (prov == NULL)
     {
       message ("dropdown module not loaded");
-      return Qnil;
+      return unbind_to (count, Qnil);
     }
   if (STRINGP (name))
     {
@@ -4980,28 +5057,26 @@ lets callers type `(gowl-dropdown-toggle)' for the common case. */)
       GPtrArray *arr;
       config = gowl_compositor_get_config (cmacs_gowl_compositor);
       if (config == NULL)
-        return Qnil;
+        return unbind_to (count, Qnil);
       arr = gowl_config_get_dropdowns (config);
       if (arr == NULL || arr->len == 0)
         {
           message ("no dropdowns registered in gowl config");
-          return Qnil;
+          return unbind_to (count, Qnil);
         }
       {
         GowlDropdownEntry *e = g_ptr_array_index (arr, 0);
         if (e == NULL || e->name == NULL)
-          return Qnil;
+          return unbind_to (count, Qnil);
         first_name = g_strdup (e->name);
         target = first_name;
       }
     }
   {
     gboolean toggled;
-    cmacs_gowl_lock ();
     toggled = gowl_dropdown_provider_toggle_by_name (prov, target);
-    cmacs_gowl_unlock ();
     g_free (first_name);
-    return toggled ? Qt : Qnil;
+    return unbind_to (count, toggled ? Qt : Qnil);
   }
 }
 
@@ -5014,11 +5089,13 @@ DEFUN ("gowl-list-dropdowns", Fgowl_list_dropdowns, Sgowl_list_dropdowns,
   GPtrArray *arr;
   Lisp_Object result = Qnil;
   guint i;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
   arr = gowl_config_get_dropdowns (config);
   for (i = 0; i < arr->len; i++)
     {
@@ -5051,7 +5128,7 @@ DEFUN ("gowl-list-dropdowns", Fgowl_list_dropdowns, Sgowl_list_dropdowns,
                              Qnil))))))));
       result = Fcons (entry, result);
     }
-  return Fnreverse (result);
+  return unbind_to (count, Fnreverse (result));
 }
 
 
@@ -5268,13 +5345,16 @@ taken before it still names the old one; take it again after.  */)
   (Lisp_Object path)
 {
   GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
 
+  count = cmacs_gowl_lock_scoped ();
   if (NILP (path))
     {
       /* Reset to fresh defaults: a new config in place of the old one,
-         which goes (cmacs_gowl_replace_config).  */
+         which goes (cmacs_gowl_replace_config).  That locks too; the
+         mutex is recursive.  */
       cmacs_gowl_replace_config (cmacs_gowl_compositor, gowl_config_new ());
     }
   else
@@ -5285,10 +5365,17 @@ taken before it still names the old one; take it again after.  */)
       if (config == NULL)
         error ("No gowl config");
       if (!gowl_config_load_yaml (config, SSDATA (path), &err))
-        xsignal1 (Qgowl_error, build_string (err->message));
+        {
+          /* The message has to be copied out before the signal: a
+             longjmp runs no g_autoptr cleanup, so signalling straight
+             from the argument list would leak the GError.  */
+          Lisp_Object msg = build_string (err->message);
+          g_clear_error (&err);
+          xsignal1 (Qgowl_error, msg);
+        }
     }
 
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 
@@ -5467,51 +5554,64 @@ Supported: border-width, terminal, menu, mfact, nmaster, tag-count,
 {
   GowlConfig *config;
   const gchar *prop;
+  specpdl_ref count;
 
   CHECK_STRING (property);
   GOWL_CHECK_RUNNING ();
 
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   prop = SSDATA (property);
 
   if (g_strcmp0 (prop, "border-width") == 0)
-    return make_fixnum (gowl_config_get_border_width (config));
+    return unbind_to (count,
+                      make_fixnum (gowl_config_get_border_width (config)));
   if (g_strcmp0 (prop, "terminal") == 0)
-    return build_string (gowl_config_get_terminal (config) ? : "");
+    return unbind_to (count,
+                      build_string (gowl_config_get_terminal (config) ? : ""));
   if (g_strcmp0 (prop, "menu") == 0)
-    return build_string (gowl_config_get_menu (config) ? : "");
+    return unbind_to (count,
+                      build_string (gowl_config_get_menu (config) ? : ""));
   if (g_strcmp0 (prop, "mfact") == 0)
-    return make_float (gowl_config_get_mfact (config));
+    return unbind_to (count, make_float (gowl_config_get_mfact (config)));
   if (g_strcmp0 (prop, "nmaster") == 0)
-    return make_fixnum (gowl_config_get_nmaster (config));
+    return unbind_to (count,
+                      make_fixnum (gowl_config_get_nmaster (config)));
   if (g_strcmp0 (prop, "tag-count") == 0)
-    return make_fixnum (gowl_config_get_tag_count (config));
+    return unbind_to (count,
+                      make_fixnum (gowl_config_get_tag_count (config)));
   if (g_strcmp0 (prop, "repeat-rate") == 0)
-    return make_fixnum (gowl_config_get_repeat_rate (config));
+    return unbind_to (count,
+                      make_fixnum (gowl_config_get_repeat_rate (config)));
   if (g_strcmp0 (prop, "repeat-delay") == 0)
-    return make_fixnum (gowl_config_get_repeat_delay (config));
+    return unbind_to (count,
+                      make_fixnum (gowl_config_get_repeat_delay (config)));
   if (g_strcmp0 (prop, "sloppyfocus") == 0)
-    return gowl_config_get_sloppyfocus (config) ? Qt : Qnil;
+    return unbind_to (count,
+                      gowl_config_get_sloppyfocus (config) ? Qt : Qnil);
   if (g_strcmp0 (prop, "log-level") == 0)
-    return build_string (gowl_config_get_log_level (config) ? : "");
+    return unbind_to (count,
+                      build_string (gowl_config_get_log_level (config) ? : ""));
   if (g_strcmp0 (prop, "border-color-focus") == 0)
-    return build_string (
-      gowl_config_get_border_color_focus (config) ? : "");
+    return unbind_to (count, build_string (
+      gowl_config_get_border_color_focus (config) ? : ""));
   if (g_strcmp0 (prop, "border-color-unfocus") == 0)
-    return build_string (
-      gowl_config_get_border_color_unfocus (config) ? : "");
+    return unbind_to (count, build_string (
+      gowl_config_get_border_color_unfocus (config) ? : ""));
   if (g_strcmp0 (prop, "border-color-urgent") == 0)
-    return build_string (
-      gowl_config_get_border_color_urgent (config) ? : "");
+    return unbind_to (count, build_string (
+      gowl_config_get_border_color_urgent (config) ? : ""));
   if (g_strcmp0 (prop, "evaluate-gowl-config-with-cmacs") == 0)
-    return gowl_config_get_evaluate_gowl_config_with_cmacs (config)
-      ? Qt : Qnil;
+    return unbind_to (count,
+                      gowl_config_get_evaluate_gowl_config_with_cmacs (config)
+                      ? Qt : Qnil);
   if (g_strcmp0 (prop, "evaluate-c-config-with-cmacs") == 0)
-    return gowl_config_get_evaluate_c_config_with_cmacs (config)
-      ? Qt : Qnil;
+    return unbind_to (count,
+                      gowl_config_get_evaluate_c_config_with_cmacs (config)
+                      ? Qt : Qnil);
 
   error ("Unknown config property: %s", prop);
 }
@@ -5525,16 +5625,18 @@ Returns the YAML as a string.  Useful for saving config changes. */)
   GowlConfig *config;
   gchar *yaml;
   Lisp_Object result;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   yaml = gowl_config_generate_yaml (config);
   result = build_string (yaml ? yaml : "");
   g_free (yaml);
-  return result;
+  return unbind_to (count, result);
 }
 
 

@@ -2048,6 +2048,29 @@ Bar:
 | =gowl-bar-visible-p=          | Return =t= if the bar is visible               |
 | =gowl-set-bar-visible=        | Show or hide the bar                           |
 
+** The compositor lock
+
+The compositor runs on its own dispatch thread, which holds a
+recursive mutex for the length of every =wl_event_loop_dispatch=.
+Emacs's thread must take that same lock before it touches compositor
+state --- above all the config object, which is not merely mutated but
+*replaced*: =gowl-reload-config= with no file swaps in a fresh one,
+and gowl's own reload keybind does the same.  A read taken without the
+lock can land on a config that is being released underneath it.
+
+Every primitive above already does this.  It matters when you add one.
+In C, =cmacs_gowl_lock_scoped()= takes the lock and records the
+release on the specpdl, so it survives the =error= and =xsignal= calls
+these DEFUNs make; a plain unlock written after the body would be
+jumped straight over, leaving the mutex held and wedging the dispatch
+thread on its next pass --- a frozen desktop, which is worse than the
+race the lock closes.  Pair it with =unbind_to= on every exit.  The
+RPC surfaces in =cmacs/glib/cmacs-eval-dispatch.c= (D-Bus, MCP, bacon,
+podomation) run on the same thread and take the same lock, with a
+plain unlock per path because nothing there signals.  Three tests in
+=test/cmacs/cmacs-gowl-tests.el= fail the suite if a new call site
+skips either half.
+
 * Compositor Signals
 
 Gowl emits GObject signals when compositor state changes.  These
