@@ -21,6 +21,8 @@
 #include "cmacs-gowl.h"
 #include "cmacs-gobject.h"
 #include "cmacs-eval-dispatch.h"
+#include "keyboard.h"
+#include "../dbus/cmacs-dbus-internal.h"
 #include <gowl.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -1058,6 +1060,7 @@ static gboolean cmacs_gowl_key_intercept (GowlCompositor *comp,
                                            guint modifiers, guint keysym,
                                            guint keycode, gboolean pressed,
                                            gpointer data);
+static void cmacs_gowl_connect_dbus_signals (GowlCompositor *comp);
 
 /* Client-map callback: force-embed clients when embeds are pending.
    Runs on the dispatch thread (mutex held). */
@@ -1160,6 +1163,7 @@ cmacs_gowl_start_thread (void)
   gowl_compositor_set_client_map_callback (cmacs_gowl_compositor,
                                            cmacs_gowl_client_map,
                                            NULL);
+  cmacs_gowl_connect_dbus_signals (cmacs_gowl_compositor);
 
   if (cmacs_gowl_wake_fd < 0)
     {
@@ -4563,7 +4567,7 @@ one.  `cmacs-gowl-describe-keybinds' renders this list.  */)
       const gchar *action_nick = cmacs_gowl_action_to_name (kb->action);
       Lisp_Object entry;
 
-      entry = list4 (
+      entry = listn (8,
         Fcons (intern_c_string ("key"),
                build_string (key_str ? key_str : "")),
         /* A symbol when gowl knows the value, else the raw integer --
@@ -4574,7 +4578,18 @@ one.  `cmacs-gowl-describe-keybinds' renders this list.  */)
         Fcons (intern_c_string ("arg"),
                kb->arg ? build_string (kb->arg) : Qnil),
         Fcons (intern_c_string ("desc"),
-               kb->desc ? build_string (kb->desc) : Qnil));
+               kb->desc ? build_string (kb->desc) : Qnil),
+        /* The key mode the bind lives in (nil = the default mode) and
+           its flags, so a cheatsheet can group a mode's binds and mark
+           the ones that work on the lock screen. */
+        Fcons (intern_c_string ("mode"),
+               kb->mode ? build_string (kb->mode) : Qnil),
+        Fcons (intern_c_string ("locked"),
+               (kb->flags & GOWL_KEYBIND_FLAG_LOCKED) ? Qt : Qnil),
+        Fcons (intern_c_string ("release"),
+               (kb->flags & GOWL_KEYBIND_FLAG_RELEASE) ? Qt : Qnil),
+        Fcons (intern_c_string ("repeat"),
+               (kb->flags & GOWL_KEYBIND_FLAG_NO_REPEAT) ? Qnil : Qt));
 
       g_free (key_str);
       result = Fcons (entry, result);
@@ -4707,7 +4722,8 @@ APP-ID and TITLE are pattern strings (or nil).  TAGS is a bitmask.
 FLOATING and REGEX are booleans.  MONITOR, WIDTH, HEIGHT are integers
 (MONITOR -1 for any; WIDTH/HEIGHT 0 to keep natural size).  When
 REGEX is non-nil, APP-ID and TITLE are compiled as PCRE regexes
-(GRegex) instead of being matched as shell globs.
+(GRegex) instead of being matched as shell globs.  For the `sticky'
+property and every other field at once, see `gowl-add-rule-entry'.
 
 The rule's `center' flag (center floated match on target monitor)
 is always true from this entry point.  Use a YAML `rules:' section
@@ -4743,9 +4759,71 @@ minimal legacy form.  */)
   if (FIXNATP (height))       height_val = (gint)XFIXNAT (height);
   if (!NILP (regex))          regex_val = TRUE;
 
-  gowl_config_add_rule_full (config, app_str, title_str, tags_val,
-                              float_val, mon_val, width_val,
-                              height_val, TRUE, regex_val);
+  {
+    GowlRuleEntry rule;
+
+    memset (&rule, 0, sizeof rule);
+    rule.app_id = (gchar *) app_str;
+    rule.title = (gchar *) title_str;
+    rule.tags = tags_val;
+    rule.floating = float_val;
+    rule.monitor = mon_val;
+    rule.width = width_val;
+    rule.height = height_val;
+    rule.center = TRUE;
+    rule.regex_mode = regex_val;
+    rule.sticky = FALSE;
+    gowl_config_add_rule_entry (config, &rule);
+  }
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-add-rule-entry", Fgowl_add_rule_entry, Sgowl_add_rule_entry,
+       1, 1, 0,
+       doc: /* Add a window rule from ALIST, every field optional.
+Keys: `app-id' and `title' (pattern strings), `tags' (bitmask),
+`floating', `regex', `center' and `sticky' (booleans; `center' defaults
+to t), `monitor' (index, -1 for any), `width' and `height' (pixels for a
+floated match, 0 for natural).  This is the form with every property a
+YAML `rules:' entry has, `sticky' -- pin the match to every tag of its
+monitor -- included.  */)
+  (Lisp_Object alist)
+{
+  GowlConfig *config;
+  GowlRuleEntry rule;
+  Lisp_Object v;
+  specpdl_ref count;
+
+  CHECK_LIST (alist);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  memset (&rule, 0, sizeof rule);
+  rule.monitor = -1;
+  rule.center = TRUE;
+  v = Fcdr (Fassq (intern_c_string ("app-id"), alist));
+  if (STRINGP (v)) rule.app_id = SSDATA (v);
+  v = Fcdr (Fassq (intern_c_string ("title"), alist));
+  if (STRINGP (v)) rule.title = SSDATA (v);
+  v = Fcdr (Fassq (intern_c_string ("tags"), alist));
+  if (FIXNATP (v)) rule.tags = (guint32) XFIXNAT (v);
+  v = Fcdr (Fassq (intern_c_string ("monitor"), alist));
+  if (FIXNUMP (v)) rule.monitor = (gint) XFIXNUM (v);
+  v = Fcdr (Fassq (intern_c_string ("width"), alist));
+  if (FIXNATP (v)) rule.width = (gint) XFIXNAT (v);
+  v = Fcdr (Fassq (intern_c_string ("height"), alist));
+  if (FIXNATP (v)) rule.height = (gint) XFIXNAT (v);
+  rule.floating = !NILP (Fcdr (Fassq (intern_c_string ("floating"), alist)));
+  rule.regex_mode = !NILP (Fcdr (Fassq (intern_c_string ("regex"), alist)));
+  rule.sticky = !NILP (Fcdr (Fassq (intern_c_string ("sticky"), alist)));
+  v = Fassq (intern_c_string ("center"), alist);
+  if (!NILP (v))
+    rule.center = !NILP (Fcdr (v));
+
+  gowl_config_add_rule_entry (config, &rule);
   return unbind_to (count, Qt);
 }
 
@@ -8493,6 +8571,722 @@ Returns nil if the PID is unavailable. */)
  * Init
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* ── Key modes, keyboard layouts, focus navigation, sticky, power ────
+ *
+ * Thin covers over the compositor calls the same-named keybind actions
+ * use, so Elisp can do what a bind does.  Each takes the gowl lock:
+ * they run on Emacs's thread while the dispatch thread may be mid-key.
+ */
+
+DEFUN ("gowl-set-key-mode", Fgowl_set_key_mode, Sgowl_set_key_mode, 0, 1, 0,
+       doc: /* Enter key mode MODE, or leave it when MODE is nil or "default".
+A mode is a second set of binds (`gowl-add-keybind-ex' with a MODE, or a
+YAML `modes:' section) consulted only while it is entered; a key not
+bound in the mode goes to the focused window as usual.  The compositor
+emits `mode-changed', which `cmacs-gowl-mode-changed-functions' relays. */)
+  (Lisp_Object mode)
+{
+  GOWL_CHECK_RUNNING ();
+  if (!NILP (mode))
+    CHECK_STRING (mode);
+
+  cmacs_gowl_lock ();
+  gowl_compositor_set_key_mode (cmacs_gowl_compositor,
+                                NILP (mode) ? NULL : SSDATA (mode));
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+DEFUN ("gowl-key-mode", Fgowl_key_mode, Sgowl_key_mode, 0, 0, 0,
+       doc: /* Return the key mode in force, "default" when none. */)
+  (void)
+{
+  const gchar *mode;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  mode = gowl_compositor_get_key_mode (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return build_string (mode != NULL ? mode : "default");
+}
+
+DEFUN ("gowl-switch-keyboard-layout", Fgowl_switch_keyboard_layout,
+       Sgowl_switch_keyboard_layout, 0, 1, 0,
+       doc: /* Switch the active XKB layout.
+WHICH is "next" (the default), "prev", or a layout index from 0, among
+the layouts the config's `xkb-layout' names.  Returns t if the layout
+changed, nil with a single layout or when WHICH names the current one. */)
+  (Lisp_Object which)
+{
+  gboolean changed;
+
+  GOWL_CHECK_RUNNING ();
+  if (!NILP (which))
+    CHECK_STRING (which);
+
+  cmacs_gowl_lock ();
+  changed = gowl_compositor_switch_keyboard_layout (
+    cmacs_gowl_compositor, NILP (which) ? "next" : SSDATA (which));
+  cmacs_gowl_unlock ();
+  return changed ? Qt : Qnil;
+}
+
+DEFUN ("gowl-keyboard-layout", Fgowl_keyboard_layout, Sgowl_keyboard_layout,
+       0, 0, 0,
+       doc: /* Return the active keyboard layout as (NAME . INDEX), or nil.
+NAME is the layout's name as the keymap gives it, e.g. "English (US)". */)
+  (void)
+{
+  const gchar *name;
+  guint index = 0;
+  Lisp_Object result = Qnil;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  name = gowl_compositor_get_keyboard_layout (cmacs_gowl_compositor, &index);
+  if (name != NULL)
+    result = Fcons (build_string (name), make_fixnum ((EMACS_INT) index));
+  cmacs_gowl_unlock ();
+  return result;
+}
+
+DEFUN ("gowl-focus-direction", Fgowl_focus_direction, Sgowl_focus_direction,
+       1, 1, 0,
+       doc: /* Focus the nearest window in DIRECTION: `left', `right', `up' or `down'.
+Crosses to the next monitor that way when nothing lies that way on the
+focused one.  Returns t if focus moved. */)
+  (Lisp_Object direction)
+{
+  GowlDirection dir;
+  gboolean moved;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (direction);
+  if (EQ (direction, intern_c_string ("left")))
+    dir = GOWL_DIRECTION_LEFT;
+  else if (EQ (direction, intern_c_string ("right")))
+    dir = GOWL_DIRECTION_RIGHT;
+  else if (EQ (direction, intern_c_string ("up")))
+    dir = GOWL_DIRECTION_UP;
+  else if (EQ (direction, intern_c_string ("down")))
+    dir = GOWL_DIRECTION_DOWN;
+  else
+    error ("DIRECTION must be left, right, up or down");
+
+  cmacs_gowl_lock ();
+  moved = gowl_compositor_focus_direction (cmacs_gowl_compositor, dir);
+  cmacs_gowl_unlock ();
+  return moved ? Qt : Qnil;
+}
+
+DEFUN ("gowl-focus-urgent", Fgowl_focus_urgent, Sgowl_focus_urgent, 0, 0, 0,
+       doc: /* Focus the window marked urgent, viewing its tags if need be.
+Returns t if there was one. */)
+  (void)
+{
+  gboolean moved;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  moved = gowl_compositor_focus_urgent (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return moved ? Qt : Qnil;
+}
+
+DEFUN ("gowl-focus-last", Fgowl_focus_last, Sgowl_focus_last, 0, 0, 0,
+       doc: /* Focus the window that had focus before the current one.
+Its tags are viewed first when it is on another.  Returns t if there
+was one. */)
+  (void)
+{
+  gboolean moved;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  moved = gowl_compositor_focus_last (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return moved ? Qt : Qnil;
+}
+
+DEFUN ("gowl-set-outputs-powered", Fgowl_set_outputs_powered,
+       Sgowl_set_outputs_powered, 1, 1, 0,
+       doc: /* Power every output on (ON non-nil) or off.
+A powered-off output keeps its place and its windows; input half a
+second later, or `gowl-set-outputs-powered' with ON, brings it back.
+The compositor emits `output-power-changed' per output. */)
+  (Lisp_Object on)
+{
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  gowl_compositor_set_outputs_powered (cmacs_gowl_compositor, !NILP (on));
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+DEFUN ("gowl-outputs-powered-off-p", Fgowl_outputs_powered_off_p,
+       Sgowl_outputs_powered_off_p, 0, 0, 0,
+       doc: /* Return t if at least one output is powered off. */)
+  (void)
+{
+  gboolean off;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  off = gowl_compositor_any_output_powered_off (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return off ? Qt : Qnil;
+}
+
+DEFUN ("gowl-client-sticky-p", Fgowl_client_sticky_p, Sgowl_client_sticky_p,
+       1, 1, 0,
+       doc: /* Return t if CLIENT is pinned to every tag of its monitor. */)
+  (Lisp_Object client)
+{
+  GowlClient *c = gowl_resolve_client (client);
+
+  return gowl_client_get_sticky (c) ? Qt : Qnil;
+}
+
+DEFUN ("gowl-set-client-sticky", Fgowl_set_client_sticky,
+       Sgowl_set_client_sticky, 2, 2, 0,
+       doc: /* Pin CLIENT to every tag of its monitor (STICKY non-nil) or unpin it.
+The window keeps its own tags, so unpinning puts it back where it was. */)
+  (Lisp_Object client, Lisp_Object sticky)
+{
+  GowlClient *c = gowl_resolve_client (client);
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  gowl_client_set_sticky (c, !NILP (sticky));
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+/* ── Binds beyond a key: modes, buttons, gestures, input devices ──── */
+
+DEFUN ("gowl-add-keybind-ex", Fgowl_add_keybind_ex, Sgowl_add_keybind_ex,
+       2, 8, 0,
+       doc: /* Add a keybind with a mode and flags.
+KEY, ACTION, ARG and DESC are as in `gowl-add-keybind'.  MODE is the key
+mode the bind belongs to (nil or "default" for the default mode; see
+`gowl-set-key-mode').  Non-nil LOCKED lets the bind run while the
+session is locked; non-nil RELEASE runs it on the key's release; non-nil
+NO-REPEAT stops it repeating while the key is held.  */)
+  (Lisp_Object key, Lisp_Object action, Lisp_Object arg, Lisp_Object desc,
+   Lisp_Object mode, Lisp_Object locked, Lisp_Object release,
+   Lisp_Object no_repeat)
+{
+  GowlConfig *config;
+  guint modifiers, keysym;
+  gint action_val;
+  guint flags = GOWL_KEYBIND_FLAG_NONE;
+  specpdl_ref count;
+
+  CHECK_STRING (key);
+  GOWL_CHECK_RUNNING ();
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+  if (!gowl_keybind_parse (SSDATA (key), &modifiers, &keysym))
+    error ("Invalid key string: %s", SSDATA (key));
+  if (FIXNUMP (action))
+    action_val = (gint) XFIXNUM (action);
+  else if (SYMBOLP (action))
+    {
+      if (!cmacs_gowl_action_from_name (SSDATA (SYMBOL_NAME (action)),
+                                        &action_val))
+        error ("Unknown action: %s", SSDATA (SYMBOL_NAME (action)));
+    }
+  else
+    error ("ACTION must be an integer or symbol");
+  if (!NILP (locked))
+    flags |= GOWL_KEYBIND_FLAG_LOCKED;
+  if (!NILP (release))
+    flags |= GOWL_KEYBIND_FLAG_RELEASE;
+  if (!NILP (no_repeat))
+    flags |= GOWL_KEYBIND_FLAG_NO_REPEAT;
+
+  gowl_config_add_keybind_ex (config, modifiers, keysym, action_val,
+                              STRINGP (arg) ? SSDATA (arg) : NULL,
+                              STRINGP (desc) ? SSDATA (desc) : NULL,
+                              STRINGP (mode) ? SSDATA (mode) : NULL,
+                              flags);
+  return unbind_to (count, Qt);
+}
+
+/* Resolve ACTION the way `gowl-add-keybind' does. */
+static gint
+cmacs_gowl_action_arg (Lisp_Object action)
+{
+  gint action_val;
+
+  if (FIXNUMP (action))
+    return (gint) XFIXNUM (action);
+  if (SYMBOLP (action)
+      && cmacs_gowl_action_from_name (SSDATA (SYMBOL_NAME (action)),
+                                      &action_val))
+    return action_val;
+  if (SYMBOLP (action))
+    error ("Unknown action: %s", SSDATA (SYMBOL_NAME (action)));
+  error ("ACTION must be an integer or symbol");
+}
+
+DEFUN ("gowl-add-mousebind", Fgowl_add_mousebind, Sgowl_add_mousebind,
+       2, 4, 0,
+       doc: /* Bind pointer BUTTON to ACTION.
+BUTTON is a string like "Super+Button1", "Super+Right" or
+"Super+WheelUp" (Button1..9, Left/Middle/Right/Side/Extra/Task,
+WheelUp/Down/Left/Right).  ACTION, ARG and DESC are as in
+`gowl-add-keybind'; `move-window' and `resize-window' start the
+interactive grabs.  A bind for the same button and modifiers -- the
+shipped Super+Button1 and Super+Button3 included -- is replaced. */)
+  (Lisp_Object button, Lisp_Object action, Lisp_Object arg, Lisp_Object desc)
+{
+  GowlConfig *config;
+  guint modifiers, code;
+  gint action_val;
+  specpdl_ref count;
+
+  CHECK_STRING (button);
+  GOWL_CHECK_RUNNING ();
+  action_val = cmacs_gowl_action_arg (action);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+  if (!gowl_mousebind_parse (SSDATA (button), &modifiers, &code))
+    error ("Invalid button string: %s", SSDATA (button));
+  gowl_config_add_mousebind (config, modifiers, code, action_val,
+                             STRINGP (arg) ? SSDATA (arg) : NULL,
+                             STRINGP (desc) ? SSDATA (desc) : NULL);
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-remove-mousebind", Fgowl_remove_mousebind, Sgowl_remove_mousebind,
+       1, 1, 0,
+       doc: /* Remove the pointer bind for BUTTON (a string as in `gowl-add-mousebind').
+Returns the number of binds removed. */)
+  (Lisp_Object button)
+{
+  GowlConfig *config;
+  guint modifiers, code;
+  guint removed;
+  specpdl_ref count;
+
+  CHECK_STRING (button);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+  if (!gowl_mousebind_parse (SSDATA (button), &modifiers, &code))
+    error ("Invalid button string: %s", SSDATA (button));
+  removed = gowl_config_remove_mousebind (config, modifiers, code);
+  return unbind_to (count, make_fixnum ((EMACS_INT) removed));
+}
+
+DEFUN ("gowl-list-mousebinds", Fgowl_list_mousebinds, Sgowl_list_mousebinds,
+       0, 0, 0,
+       doc: /* Return the pointer binds as a list of alists.
+Each alist has keys: button, action, arg, desc. */)
+  (void)
+{
+  GowlConfig *config;
+  GArray *binds;
+  Lisp_Object result = Qnil;
+  guint i;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  binds = gowl_config_get_mousebinds (config);
+  for (i = 0; binds != NULL && i < binds->len; i++)
+    {
+      GowlMousebindEntry *mb = &g_array_index (binds, GowlMousebindEntry, i);
+      gchar *str = gowl_mousebind_to_string (mb->modifiers, mb->button);
+      const gchar *nick = cmacs_gowl_action_to_name (mb->action);
+
+      result = Fcons (list4 (
+        Fcons (intern_c_string ("button"), build_string (str ? str : "")),
+        Fcons (intern_c_string ("action"),
+               nick ? intern (nick) : make_fixnum (mb->action)),
+        Fcons (intern_c_string ("arg"),
+               mb->arg ? build_string (mb->arg) : Qnil),
+        Fcons (intern_c_string ("desc"),
+               mb->desc ? build_string (mb->desc) : Qnil)), result);
+      g_free (str);
+    }
+  return unbind_to (count, Fnreverse (result));
+}
+
+DEFUN ("gowl-add-gesture", Fgowl_add_gesture, Sgowl_add_gesture, 2, 4, 0,
+       doc: /* Bind touchpad GESTURE to ACTION.
+GESTURE is "swipe-<left|right|up|down>-<fingers>" or
+"pinch-<in|out>-<fingers>" with three or four fingers.  ACTION, ARG and
+DESC are as in `gowl-add-keybind'.  A finger count with any gesture
+bound is the compositor's for every gesture of that count: the cube and
+the overview no longer see it, nor does the focused application. */)
+  (Lisp_Object gesture, Lisp_Object action, Lisp_Object arg, Lisp_Object desc)
+{
+  GowlConfig *config;
+  GowlGestureKind kind;
+  GowlGestureDirection dir;
+  guint fingers;
+  gint action_val;
+  specpdl_ref count;
+
+  CHECK_STRING (gesture);
+  GOWL_CHECK_RUNNING ();
+  action_val = cmacs_gowl_action_arg (action);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+  if (!gowl_gesture_parse (SSDATA (gesture), &kind, &dir, &fingers))
+    error ("Invalid gesture string: %s", SSDATA (gesture));
+  gowl_config_add_gesture (config, kind, dir, fingers, action_val,
+                           STRINGP (arg) ? SSDATA (arg) : NULL,
+                           STRINGP (desc) ? SSDATA (desc) : NULL);
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-list-gestures", Fgowl_list_gestures, Sgowl_list_gestures,
+       0, 0, 0,
+       doc: /* Return the gesture binds as a list of alists.
+Each alist has keys: gesture, action, arg, desc. */)
+  (void)
+{
+  GowlConfig *config;
+  GArray *binds;
+  Lisp_Object result = Qnil;
+  guint i;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  binds = gowl_config_get_gestures (config);
+  for (i = 0; binds != NULL && i < binds->len; i++)
+    {
+      GowlGestureEntry *ge = &g_array_index (binds, GowlGestureEntry, i);
+      gchar *str = gowl_gesture_to_string ((GowlGestureKind) ge->kind,
+                                           (GowlGestureDirection) ge->direction,
+                                           ge->fingers);
+      const gchar *nick = cmacs_gowl_action_to_name (ge->action);
+
+      result = Fcons (list4 (
+        Fcons (intern_c_string ("gesture"), build_string (str)),
+        Fcons (intern_c_string ("action"),
+               nick ? intern (nick) : make_fixnum (ge->action)),
+        Fcons (intern_c_string ("arg"),
+               ge->arg ? build_string (ge->arg) : Qnil),
+        Fcons (intern_c_string ("desc"),
+               ge->desc ? build_string (ge->desc) : Qnil)), result);
+      g_free (str);
+    }
+  return unbind_to (count, Fnreverse (result));
+}
+
+DEFUN ("gowl-add-input-setting", Fgowl_add_input_setting,
+       Sgowl_add_input_setting, 3, 3, 0,
+       doc: /* Set libinput option KEY to VALUE for the devices MATCH names.
+MATCH is "touchpad", "pointer" (or "mouse"), "keyboard", "*", or a glob
+on the device name as libinput reports it.  KEY and VALUE are strings as
+in the YAML `input:' section -- "tap" "true", "accel-profile" "flat",
+"accel-speed" "-0.3".  Applied to matching devices, present and future,
+by `gowl-apply-input-config'. */)
+  (Lisp_Object match, Lisp_Object key, Lisp_Object value)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  CHECK_STRING (match);
+  CHECK_STRING (key);
+  CHECK_STRING (value);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+  gowl_config_add_input_setting (config, SSDATA (match), SSDATA (key),
+                                 SSDATA (value));
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-apply-input-config", Fgowl_apply_input_config,
+       Sgowl_apply_input_config, 0, 0, 0,
+       doc: /* Apply the `input:' settings and the xkb-* keymap to every device now.
+`gowl-add-input-setting' only records; this is what makes it take
+effect on devices already plugged in.  New devices get it on arrival. */)
+  (void)
+{
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  gowl_compositor_apply_input_config (cmacs_gowl_compositor);
+  gowl_compositor_apply_keymap (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+/* ── Layouts written in Elisp ────────────────────────────────────────
+ *
+ * A Lisp layout is a function of (MONITOR AREA CLIENTS) that returns a
+ * list of (CLIENT X Y WIDTH HEIGHT).  It is registered with gowl's
+ * layout registry under a name and a bar symbol like any module
+ * layout, so `gowl-set-layout', `gowl-cycle-layout', the `set_layout'
+ * keybind action and the bar all treat it as one.
+ *
+ * The arrange callback runs on the compositor's dispatch thread, under
+ * the gowl lock, exactly as a Lisp signal handler connected with
+ * `gobject-connect' does (see cmacs-gclosure.c): the function is called
+ * through safe_funcall, so an error in it is reported, not fatal, and
+ * that arrange simply places nothing.  Keep such a function quick --
+ * pure arithmetic over the list it is given -- the compositor waits on
+ * it. */
+
+static Lisp_Object cmacs_gowl_lisp_layouts;  /* alist (NAME . FUNCTION) */
+
+static void
+cmacs_gowl_lisp_layout_arrange (GowlCompositor *comp, GowlMonitor *mon)
+{
+  GowlLayoutEntry *entry;
+  Lisp_Object cell, func, result, clients_list = Qnil;
+  GList *clients, *l;
+  gint x, y, w, h;
+
+  entry = gowl_layout_get (comp, mon);
+  if (entry == NULL || entry->name == NULL)
+    return;
+  cell = Fassoc (build_string (entry->name), cmacs_gowl_lisp_layouts, Qnil);
+  if (NILP (cell))
+    return;
+  func = XCDR (cell);
+
+  gowl_monitor_get_window_area (mon, &x, &y, &w, &h);
+  clients = gowl_compositor_tiling_clients (comp, mon);
+  for (l = clients; l != NULL; l = l->next)
+    clients_list = Fcons (cmacs_gobject_wrap (G_OBJECT (l->data)),
+                          clients_list);
+  g_list_free (clients);
+  clients_list = Fnreverse (clients_list);
+
+  {
+    Lisp_Object args[4];
+    bool was_waiting = waiting_for_input;
+
+    args[0] = func;
+    args[1] = cmacs_gobject_wrap (G_OBJECT (mon));
+    args[2] = list4 (make_fixnum (x), make_fixnum (y),
+                     make_fixnum (w), make_fixnum (h));
+    args[3] = clients_list;
+    /* As cmacs-gclosure.c: an error while Emacs waits for input would
+       otherwise abort rather than be caught. */
+    if (was_waiting)
+      waiting_for_input = false;
+    result = safe_funcall (4, args);
+    if (was_waiting)
+      waiting_for_input = true;
+  }
+
+  /* Apply what came back: every (CLIENT X Y W H) whose client is one of
+     ours.  Anything malformed is skipped, not fatal. */
+  for (; CONSP (result); result = XCDR (result))
+    {
+      Lisp_Object p = XCAR (result);
+      Lisp_Object lc, lx, ly, lw, lh;
+      GObject *obj;
+
+      if (!CONSP (p))
+        continue;
+      lc = Fnth (make_fixnum (0), p);
+      lx = Fnth (make_fixnum (1), p);
+      ly = Fnth (make_fixnum (2), p);
+      lw = Fnth (make_fixnum (3), p);
+      lh = Fnth (make_fixnum (4), p);
+      if (!FIXNUMP (lx) || !FIXNUMP (ly) || !FIXNUMP (lw) || !FIXNUMP (lh))
+        continue;
+      obj = cmacs_gobject_unwrap (lc);
+      if (obj == NULL || !GOWL_IS_CLIENT (obj))
+        continue;
+      gowl_compositor_place_client (comp, GOWL_CLIENT (obj),
+                                    (gint) XFIXNUM (lx), (gint) XFIXNUM (ly),
+                                    (gint) XFIXNUM (lw), (gint) XFIXNUM (lh));
+    }
+}
+
+DEFUN ("gowl-register-layout", Fgowl_register_layout, Sgowl_register_layout,
+       3, 3, 0,
+       doc: /* Register an Elisp layout NAME with bar SYMBOL, arranged by FUNCTION.
+FUNCTION is called with three arguments: the GowlMonitor, the window
+area as (X Y WIDTH HEIGHT), and the list of tiled clients on it in
+stack order.  It returns a list of (CLIENT X Y WIDTH HEIGHT) placements
+in layout coordinates, borders included; a client left out keeps its
+place.  Re-registering NAME replaces the function.
+
+Once registered the layout is one of `gowl-list-layouts': select it with
+`gowl-set-layout', cycle to it, or bind `set-layout' to it.
+
+FUNCTION runs on the compositor's thread every time the monitor is
+arranged, so keep it to arithmetic over its arguments.  An error in it
+is reported in *Messages* and leaves the windows where they were.  */)
+  (Lisp_Object name, Lisp_Object symbol, Lisp_Object function)
+{
+  Lisp_Object cell;
+
+  CHECK_STRING (name);
+  CHECK_STRING (symbol);
+  CHECK_TYPE (FUNCTIONP (function), Qfunctionp, function);
+  GOWL_CHECK_RUNNING ();
+
+  cell = Fassoc (name, cmacs_gowl_lisp_layouts, Qnil);
+  if (NILP (cell))
+    cmacs_gowl_lisp_layouts = Fcons (Fcons (name, function),
+                                     cmacs_gowl_lisp_layouts);
+  else
+    XSETCDR (cell, function);
+
+  cmacs_gowl_lock ();
+  gowl_layout_register (cmacs_gowl_compositor, SSDATA (name), SSDATA (symbol),
+                        cmacs_gowl_lisp_layout_arrange, NULL);
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+DEFUN ("gowl-unregister-layout", Fgowl_unregister_layout,
+       Sgowl_unregister_layout, 1, 1, 0,
+       doc: /* Remove the Elisp layout NAME.
+A monitor using it falls back to the first registered layout.  Returns
+t if there was such a layout. */)
+  (Lisp_Object name)
+{
+  Lisp_Object cell;
+  gboolean removed;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+
+  cell = Fassoc (name, cmacs_gowl_lisp_layouts, Qnil);
+  if (NILP (cell))
+    return Qnil;
+  cmacs_gowl_lisp_layouts = Fdelq (cell, cmacs_gowl_lisp_layouts);
+  cmacs_gowl_lock ();
+  removed = gowl_layout_unregister (cmacs_gowl_compositor, SSDATA (name));
+  cmacs_gowl_unlock ();
+  return removed ? Qt : Qnil;
+}
+
+/* ── D-Bus signals for the compositor's events ───────────────────────
+ *
+ * org.cmacs.Editor1.Compositor had methods and no signals, so anything
+ * outside the process had to poll.  These handlers run on the
+ * dispatch thread and only build a variant and hand it to
+ * g_dbus_connection_emit_signal, which is thread-safe; with no D-Bus
+ * connection up the emit helper does nothing. */
+
+#define CMACS_GOWL_DBUS_PATH  "/org/cmacs/Editor"
+#define CMACS_GOWL_DBUS_IFACE "org.cmacs.Editor1.Compositor"
+
+static void
+cmacs_gowl_dbus_client_signal (const gchar *name, GowlClient *c)
+{
+  const gchar *app_id = c != NULL ? gowl_client_get_app_id (c) : NULL;
+  const gchar *title = c != NULL ? gowl_client_get_title (c) : NULL;
+
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE, name,
+                          g_variant_new ("(ss)",
+                                         app_id != NULL ? app_id : "",
+                                         title != NULL ? title : ""));
+}
+
+static void
+cmacs_gowl_on_client_added_dbus (GowlCompositor *comp, GowlClient *c,
+                                 gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_gowl_dbus_client_signal ("ClientAdded", c);
+}
+
+static void
+cmacs_gowl_on_client_removed_dbus (GowlCompositor *comp, GowlClient *c,
+                                   gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_gowl_dbus_client_signal ("ClientRemoved", c);
+}
+
+static void
+cmacs_gowl_on_focus_changed_dbus (GowlCompositor *comp, GowlClient *c,
+                                  gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_gowl_dbus_client_signal ("FocusChanged", c);
+}
+
+static void
+cmacs_gowl_on_mode_changed_dbus (GowlCompositor *comp, const gchar *mode,
+                                 gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "ModeChanged",
+                          g_variant_new ("(s)", mode != NULL ? mode : "default"));
+}
+
+static void
+cmacs_gowl_on_layout_switched_dbus (GowlCompositor *comp, const gchar *name,
+                                    guint index, gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "KeyboardLayoutChanged",
+                          g_variant_new ("(su)", name != NULL ? name : "",
+                                         index));
+}
+
+static void
+cmacs_gowl_on_output_power_dbus (GowlCompositor *comp, GowlMonitor *m,
+                                 gboolean on, gpointer data)
+{
+  const gchar *name = m != NULL ? gowl_monitor_get_name (m) : NULL;
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "OutputPowerChanged",
+                          g_variant_new ("(sb)", name != NULL ? name : "", on));
+}
+
+/* Connect once per compositor; the handlers hold nothing that outlives
+   it. */
+static void
+cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
+{
+  static gpointer connected_for = NULL;
+
+  if (comp == NULL || connected_for == comp)
+    return;
+  connected_for = comp;
+  g_signal_connect (comp, "client-added",
+                    G_CALLBACK (cmacs_gowl_on_client_added_dbus), NULL);
+  g_signal_connect (comp, "client-removed",
+                    G_CALLBACK (cmacs_gowl_on_client_removed_dbus), NULL);
+  g_signal_connect (comp, "focus-changed",
+                    G_CALLBACK (cmacs_gowl_on_focus_changed_dbus), NULL);
+  g_signal_connect (comp, "mode-changed",
+                    G_CALLBACK (cmacs_gowl_on_mode_changed_dbus), NULL);
+  g_signal_connect (comp, "keyboard-layout-changed",
+                    G_CALLBACK (cmacs_gowl_on_layout_switched_dbus), NULL);
+  g_signal_connect (comp, "output-power-changed",
+                    G_CALLBACK (cmacs_gowl_on_output_power_dbus), NULL);
+}
+
 void
 syms_of_cmacs_gowl (void)
 {
@@ -8654,6 +9448,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   /* Window rules */
   defsubr (&Sgowl_add_rule);
   defsubr (&Sgowl_add_rule_full);
+  defsubr (&Sgowl_add_rule_entry);
   defsubr (&Sgowl_remove_rule);
   defsubr (&Sgowl_clear_rules);
   defsubr (&Sgowl_list_rules);
@@ -8684,6 +9479,31 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_recording_active_p);
   defsubr (&Sgowl_config_get);
   defsubr (&Sgowl_config_generate_yaml);
+
+  /* Key modes, keyboard layouts, focus navigation, sticky, power */
+  defsubr (&Sgowl_set_key_mode);
+  defsubr (&Sgowl_key_mode);
+  defsubr (&Sgowl_switch_keyboard_layout);
+  defsubr (&Sgowl_keyboard_layout);
+  defsubr (&Sgowl_focus_direction);
+  defsubr (&Sgowl_focus_urgent);
+  defsubr (&Sgowl_focus_last);
+  defsubr (&Sgowl_set_outputs_powered);
+  defsubr (&Sgowl_outputs_powered_off_p);
+  defsubr (&Sgowl_client_sticky_p);
+  defsubr (&Sgowl_set_client_sticky);
+  defsubr (&Sgowl_add_keybind_ex);
+  defsubr (&Sgowl_add_mousebind);
+  defsubr (&Sgowl_remove_mousebind);
+  defsubr (&Sgowl_list_mousebinds);
+  defsubr (&Sgowl_add_gesture);
+  defsubr (&Sgowl_list_gestures);
+  defsubr (&Sgowl_add_input_setting);
+  defsubr (&Sgowl_apply_input_config);
+  defsubr (&Sgowl_register_layout);
+  defsubr (&Sgowl_unregister_layout);
+  cmacs_gowl_lisp_layouts = Qnil;
+  staticpro (&cmacs_gowl_lisp_layouts);
 
   /* Modules */
   defsubr (&Sgowl_run_command);

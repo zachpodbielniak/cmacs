@@ -2364,6 +2364,20 @@ Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and
 @kbd{Super+Ctrl+s} brings the focused window back onto the tags
 in view.
+@item Super+Ctrl+h / j / k / l
+Focus the nearest window in that direction, or the top window of the
+next monitor that way when there is none.  @kbd{Super+Ctrl+u} focuses
+the window marked urgent, viewing its tags first; @kbd{Super+Ctrl+Tab}
+the window that had focus before this one.
+@item Super+Shift+t
+Pin the focused window to every tag of its monitor, or unpin it.
+@item Super+r
+Enter the @code{resize} key mode: @kbd{h}/@kbd{l} change the master
+factor, @kbd{j}/@kbd{k} the master count, @kbd{Escape} or @kbd{Return}
+leave.  A key not bound in the mode reaches the focused window as
+usual.  @code{cmacs-gowl-resize-mode} turns the mode off.
+@item Super+Ctrl+o
+Power every output off; any input half a second later wakes them.
 @item Super+1..9
 View tag N; add @kbd{Shift} to move the focused client to it, @kbd{Ctrl}
 to toggle its visibility, @kbd{Shift+Ctrl} to toggle it on the client.

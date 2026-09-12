@@ -90,6 +90,40 @@ static const gchar *iface_xml =
   "  <method name='ScreensaverSetFps'>"
   "    <arg type='i' name='fps' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='SetKeyMode'>"
+  "    <arg type='s' name='mode' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='KeyMode'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='SwitchKeyboardLayout'>"
+  "    <arg type='s' name='which' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='KeyboardLayout'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='FocusDirection'>"
+  "    <arg type='s' name='direction' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='FocusUrgent'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='FocusLast'>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  "  <method name='OutputPower'>"
+  "    <arg type='s' name='mode' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
+  /* Signals: what a script outside the process used to have to poll
+     for.  Emitted from cmacs-gowl.c on the compositor's own signals. */
+  "  <signal name='ClientAdded'>"
+  "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
+  "  <signal name='ClientRemoved'>"
+  "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
+  "  <signal name='FocusChanged'>"
+  "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
+  "  <signal name='ModeChanged'>"
+  "    <arg type='s' name='mode'/></signal>"
+  "  <signal name='KeyboardLayoutChanged'>"
+  "    <arg type='s' name='name'/><arg type='u' name='index'/></signal>"
+  "  <signal name='OutputPowerChanged'>"
+  "    <arg type='s' name='output'/><arg type='b' name='on'/></signal>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"
@@ -258,6 +292,59 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       gint fps;
       g_variant_get (p, "(i)", &fps);
       RETURN_STR (cmacs_dispatch_screensaver_set_fps (fps, &err));
+    }
+  else if (g_strcmp0 (m, "SetKeyMode") == 0)
+    {
+      const gchar *mode;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &mode);
+      args[0] = mode;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (gowl-set-key-mode \"%s\") (gowl-key-mode))", args, 1);
+    }
+  else if (g_strcmp0 (m, "KeyMode") == 0)
+    cmacs_dbus_eval_to_reply_string (iv, "(gowl-key-mode)", NULL, 0);
+  else if (g_strcmp0 (m, "SwitchKeyboardLayout") == 0)
+    {
+      const gchar *which;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &which);
+      args[0] = (which != NULL && *which != '\0') ? which : "next";
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (gowl-switch-keyboard-layout \"%s\") "
+        "(car (gowl-keyboard-layout)))", args, 1);
+    }
+  else if (g_strcmp0 (m, "KeyboardLayout") == 0)
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(car (gowl-keyboard-layout))", NULL, 0);
+  else if (g_strcmp0 (m, "FocusDirection") == 0)
+    {
+      const gchar *direction;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &direction);
+      args[0] = direction;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(if (gowl-focus-direction (intern \"%s\")) \"moved\" \"nothing\")",
+        args, 1);
+    }
+  else if (g_strcmp0 (m, "FocusUrgent") == 0)
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(if (gowl-focus-urgent) \"moved\" \"nothing\")", NULL, 0);
+  else if (g_strcmp0 (m, "FocusLast") == 0)
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(if (gowl-focus-last) \"moved\" \"nothing\")", NULL, 0);
+  else if (g_strcmp0 (m, "OutputPower") == 0)
+    {
+      /* "on", "off", or anything else toggles, as the keybind action. */
+      const gchar *mode;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &mode);
+      args[0] = mode;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(let ((m \"%s\")) (gowl-set-outputs-powered "
+        "(cond ((equal m \"on\") t) ((equal m \"off\") nil) "
+        "(t (gowl-outputs-powered-off-p)))) "
+        "(if (gowl-outputs-powered-off-p) \"off\" \"on\"))", args, 1);
     }
   else if (g_strcmp0 (m, "ReloadConfig") == 0)
     RETURN_STR (cmacs_dispatch_gowl_reload_config (&err));

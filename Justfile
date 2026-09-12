@@ -535,6 +535,10 @@ check-defuns:
         (quote gowl-focus-redirect-sticky-p) \
         (quote gowl-set-prefix-key-policy) \
         (quote gowl-session-save) \
+        (quote gowl-set-key-mode) \
+        (quote gowl-focus-direction) \
+        (quote gowl-add-mousebind) \
+        (quote gowl-register-layout) \
         (quote gowl-session-restore) \
         (quote gowl-workspace-create) \
         (quote gowl-workspace-switch) \

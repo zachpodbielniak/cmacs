@@ -689,6 +689,12 @@ holds focus.
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
 | =Super+Ctrl+s=          | Scratchpad: bring the focused window back |
+| =Super+Ctrl+h/j/k/l=    | Focus the nearest window that way; the next monitor when none |
+| =Super+Ctrl+u=          | Focus the urgent window, viewing its tags |
+| =Super+Ctrl+Tab=        | Focus the window that had focus before   |
+| =Super+Shift+t=         | Pin the focused window to every tag, or unpin it |
+| =Super+r=               | Resize mode: h/l master factor, j/k master count, Escape or Return leave |
+| =Super+Ctrl+o=          | Screens off; any input half a second later wakes them |
 | =Super+Tab=             | Next layout (=Super+Shift+Tab= previous)|
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
@@ -720,6 +726,84 @@ it is what [[#keybind-cheatsheet][the cheatsheet]] renders instead of an action 
 =Super+Shift+q= quits Emacs.  Set =cmacs-gowl-default-keybindings= to
 nil and install your own binds with =gowl-add-keybind= to customise.
 #+end_quote
+
+** Key modes, pointer binds, gestures and input devices from Elisp
+
+gowl's =modes:=, =mousebinds:=, =gestures:= and =input:= sections (see =deps/gowl/docs/configuration.org=) have Elisp entry points, so a session started from Emacs -- which begins with an empty bind table -- can set them up without a YAML file:
+
+#+begin_src elisp
+;; A bind in a key mode, and the key that enters it.
+(gowl-add-keybind "Super+r" 'mode "resize" "Resize mode")
+(gowl-add-keybind-ex "h" 'set-mfact "-0.05" "Shrink master" "resize")
+(gowl-add-keybind-ex "Escape" 'mode "default" "Leave" "resize")
+;; A media key that works on the lock screen, and a bind on release.
+(gowl-add-keybind-ex "XF86AudioMute" 'custom "(cmacs-gowl-volume-mute-toggle)"
+                     "Mute" nil t)
+(gowl-add-keybind-ex "Super+x" 'zoom nil "Zoom on release" nil nil t)
+;; Pointer buttons and wheel steps.
+(gowl-add-mousebind "Super+Button2" 'toggle-float nil "Float")
+(gowl-add-mousebind "Super+WheelDown" 'focus-stack "+1")
+;; Touchpad gestures.  Binding a three-finger swipe takes it from the cube.
+(gowl-add-gesture "swipe-left-3" 'tag-view "2")
+;; libinput settings, then apply to the devices already plugged in.
+(gowl-add-input-setting "touchpad" "natural-scroll" "true")
+(gowl-add-input-setting "*TrackPoint*" "accel-profile" "flat")
+(gowl-apply-input-config)
+#+end_src
+
+=gowl-set-key-mode= enters or leaves a mode (=M-x cmacs-gowl-set-key-mode= completes over the modes the live binds name), =gowl-key-mode= reads it, and =gowl-list-keybinds= now carries each bind's =mode=, =locked=, =release= and =repeat=, which the cheatsheet uses to label a mode's binds =[resize] ...=.  The keyboard layout list comes from the config's =xkb-layout= (=gowl-config-get= / a YAML file); =gowl-switch-keyboard-layout= steps through it and =gowl-keyboard-layout= returns =(NAME . INDEX)=.  =gowl-focus-direction=, =gowl-focus-urgent=, =gowl-focus-last=, =gowl-set-client-sticky= / =gowl-client-sticky-p= and =gowl-set-outputs-powered= / =gowl-outputs-powered-off-p= cover the rest of the new actions; =gowl-add-rule-entry= takes an alist with every rule property, =sticky= included: =(gowl-add-rule-entry '((app-id . "mpv") (floating . t) (sticky . t)))=.
+
+** Hooks
+
+The compositor's events are Emacs hooks as well as GObject signals, so =add-hook= works and several handlers can share an event.  =cmacs-gowl-mode= connects the bridges on start and removes them on stop.
+
+| Hook                                          | Arguments        | When                                   |
+|-----------------------------------------------+------------------+----------------------------------------|
+| =cmacs-gowl-client-pre-map-functions=         | client           | after the rules, before the first placement |
+| =cmacs-gowl-client-added-functions=           | client           | mapped and placed                      |
+| =cmacs-gowl-client-removed-functions=         | client           | unmapping                              |
+| =cmacs-gowl-focus-changed-functions=          | client or nil    | keyboard focus moved                   |
+| =cmacs-gowl-mode-changed-functions=           | mode name        | a key mode entered or left             |
+| =cmacs-gowl-keyboard-layout-changed-functions= | name, index     | the XKB layout changed                 |
+| =cmacs-gowl-output-power-changed-functions=   | monitor, on      | an output powered on or off            |
+| =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
+| =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
+
+The pre-map hook is the one that decides placement: the rules have run, the layout has not, so a function that floats, retags, pins or moves the client there is reflected in the first frame drawn.  =cmacs-gowl-client-added-functions= runs after placement and can only correct.
+
+#+begin_src elisp
+(add-hook 'cmacs-gowl-client-pre-map-functions
+          (lambda (c)
+            (when (equal (cdr (assq 'app-id (gowl-client-info c))) "mpv")
+              (gowl-set-client-sticky c t))))
+#+end_src
+
+These functions run on the compositor's dispatch thread, like any handler connected with =gobject-connect=: keep them to quick decisions and compositor calls -- no prompting, nothing that waits on Emacs.  An error in one is reported and does not stop the compositor.  Monitor hooks are connected for the monitors present when the mode starts.
+
+** Layouts written in Elisp
+
+=gowl-register-layout= adds a layout to gowl's registry from a Lisp function, beside the module layouts: it appears in =gowl-list-layouts=, =gowl-set-layout= selects it, cycling reaches it, the =set_layout= keybind action names it, and the bar shows its symbol.
+
+#+begin_src elisp
+;; Equal columns, left to right.
+(gowl-register-layout "columns" "|||"
+  (lambda (_monitor area clients)
+    (pcase-let ((`(,x ,y ,w ,h) area))
+      (let* ((n (length clients))
+             (cw (if (> n 0) (/ w n) w))
+             (i -1))
+        (mapcar (lambda (c)
+                  (setq i (1+ i))
+                  (list c (+ x (* i cw)) y cw h))
+                clients)))))
+(gowl-set-layout "columns")
+#+end_src
+
+The function receives the monitor, the window area as =(X Y WIDTH HEIGHT)= and the tiled clients in stack order, and returns =(CLIENT X Y WIDTH HEIGHT)= placements in layout coordinates, borders included; a client it leaves out keeps its place.  It runs on the compositor's thread every time the monitor is arranged, so it should be arithmetic over its arguments and nothing else; an error leaves the windows where they were and is reported in =*Messages*=.  =gowl-unregister-layout= removes it.
+
+** D-Bus signals and =emacsctl=
+
+=org.cmacs.Editor1.Compositor= gained signals, so a script outside the process no longer polls: =ClientAdded=, =ClientRemoved= and =FocusChanged= (app-id, title), =ModeChanged= (mode), =KeyboardLayoutChanged= (name, index) and =OutputPowerChanged= (output, on).  New methods, and their =emacsctl= spellings: =SetKeyMode= / =KeyMode= (=compositor mode= / =mode-get=), =SwitchKeyboardLayout= / =KeyboardLayout= (=compositor keyboard-layout= / =keyboard-layout-get=), =FocusDirection=, =FocusUrgent=, =FocusLast= (=compositor focus-dir= / =focus-urgent= / =focus-last=) and =OutputPower= (=compositor power on|off|toggle=).
 
 ** The keybind cheatsheet
 :PROPERTIES:

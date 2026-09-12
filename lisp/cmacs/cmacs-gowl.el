@@ -209,6 +209,14 @@ Set to nil to let a frame's fullscreen request stand."
   :type 'boolean
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-resize-mode t
+  "Non-nil installs a `resize' key mode with the default keybindings.
+Super+r enters it; inside it h/l change the master factor, j/k the
+master count, and Escape or Return leave.  A key not bound in the mode
+goes to the focused window as usual."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-default-keybindings t
   "When non-nil, install the standard dwm-style compositor keybindings
 on `cmacs-gowl-mode' enable.
@@ -666,6 +674,34 @@ authoritative and keeps re-runs idempotent."
               "Scratchpad: bring the focused window back")
         (bind "Super+Ctrl+Shift+s" 'ipc-command "scratchpad-remove"
               "Scratchpad: bring the focused window back")
+        ;; Focus by direction, the previous window, the urgent one.
+        ;; Super+Ctrl+<digit> toggles a tag's visibility; the letters
+        ;; are free.
+        (bind "Super+Ctrl+h" 'focus-dir "left" "Focus the window to the left")
+        (bind "Super+Ctrl+j" 'focus-dir "down" "Focus the window below")
+        (bind "Super+Ctrl+k" 'focus-dir "up" "Focus the window above")
+        (bind "Super+Ctrl+l" 'focus-dir "right" "Focus the window to the right")
+        (bind "Super+Ctrl+u" 'focus-urgent nil "Focus the urgent window")
+        (bind "Super+Ctrl+Tab" 'focus-last nil "Focus the previous window")
+        ;; Pin the focused window to every tag of its monitor.
+        (bind "Super+Shift+t" 'toggle-sticky nil "Pin / unpin the window")
+        ;; Screens off by hand; any input half a second later wakes them.
+        (bind "Super+Ctrl+o" 'output-power "off" "Screens off")
+        ;; A resize mode: Super+r enters, the keys inside act on the
+        ;; master area, Escape/Return leave.  Registered with the mode
+        ;; through `gowl-add-keybind-ex'; a C layer without it (an
+        ;; older build) just has no mode.
+        (when (and cmacs-gowl-resize-mode (fboundp 'gowl-add-keybind-ex))
+          (bind "Super+r" 'mode "resize" "Resize mode")
+          (dolist (b '(("h" set-mfact "-0.05" "Shrink the master area")
+                       ("l" set-mfact "+0.05" "Grow the master area")
+                       ("j" inc-nmaster "+1" "One more master window")
+                       ("k" inc-nmaster "-1" "One less master window")
+                       ("Escape" mode "default" "Leave resize mode")
+                       ("Return" mode "default" "Leave resize mode")))
+            (ignore-errors
+              (gowl-add-keybind-ex (nth 0 b) (nth 1 b) (nth 2 b) (nth 3 b)
+                                   "resize"))))
         ;; Session.
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
@@ -692,14 +728,20 @@ Prefers the bind's own description.  Falls back to the action and its
 argument, so a bind registered without a description --- from a YAML
 config, or by a module --- still says something more useful than a
 bare action name."
-  (let ((desc   (cdr (assq 'desc entry)))
-        (action (cdr (assq 'action entry)))
-        (arg    (cdr (assq 'arg entry))))
-    (cond
-     ((and (stringp desc) (not (string-empty-p desc))) desc)
-     ((and arg (not (string-empty-p arg)))
-      (format "%s: %s" action arg))
-     (t (format "%s" action)))))
+  (let* ((desc   (cdr (assq 'desc entry)))
+         (action (cdr (assq 'action entry)))
+         (arg    (cdr (assq 'arg entry)))
+         (mode   (cdr (assq 'mode entry)))
+         (label  (cond
+                  ((and (stringp desc) (not (string-empty-p desc))) desc)
+                  ((and arg (not (string-empty-p arg)))
+                   (format "%s: %s" action arg))
+                  (t (format "%s" action)))))
+    ;; A bind in a key mode only works once the mode is entered, so
+    ;; say which.
+    (if (and (stringp mode) (not (string-empty-p mode)))
+        (format "[%s] %s" mode label)
+      label)))
 
 (defun cmacs-gowl--keybind-sort-key (entry)
   "Return a sort key for keybind alist ENTRY.
@@ -800,6 +842,8 @@ thread is running and applies configuration."
   ;; tag switching, Super+p menu, etc. are all inert.
   (when cmacs-gowl-default-keybindings
     (cmacs-gowl--install-default-keybinds))
+  ;; The compositor's events as Emacs hooks.
+  (cmacs-gowl--install-hook-bridges)
   ;; Serve org.freedesktop.Notifications.  Nothing else does in a gowl
   ;; session, which is why cmacs's own notification senders are silent
   ;; in it.  A no-op when something already owns the name.
@@ -903,6 +947,7 @@ thread is running and applies configuration."
   (cmacs-gowl--save-session-if-configured)
   (remove-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
   (cmacs-gowl-focus-teardown)
+  (cmacs-gowl--remove-hook-bridges)
   (when (and (gowl-running-p)
              (fboundp 'gowl-uninstall-workspace-provider))
     (gowl-uninstall-workspace-provider))
@@ -2024,6 +2069,95 @@ Returns a handle for `cmacs-gowl-signal-disconnect'."
         (push (cons handle "resume") cmacs-gowl--signal-handles)
         handle))))
 
+;;; Hooks
+;;
+;; The compositor's events as Emacs hooks, so `add-hook' works and
+;; several handlers can share an event.  Each is a bridge over one
+;; GObject signal, connected when `cmacs-gowl-mode' starts.  The
+;; functions run on the compositor's dispatch thread, exactly as a
+;; handler connected with `cmacs-gowl-on-focus-changed' does, so keep
+;; them light: no prompting, no blocking, nothing that waits on the
+;; compositor.
+
+(defvar cmacs-gowl-client-pre-map-functions nil
+  "Functions run with a client just before its first placement.
+The rules have run; the layout has not.  A function may float it
+\(`gowl-set-client-floating'), retag it (`gowl-set-tags'), pin it
+\(`gowl-set-client-sticky') or move it, and the first frame drawn
+already shows the result -- unlike `cmacs-gowl-client-added-functions',
+which run after it is placed.")
+
+(defvar cmacs-gowl-client-added-functions nil
+  "Functions run with a client after it maps and is placed.")
+
+(defvar cmacs-gowl-client-removed-functions nil
+  "Functions run with a client as it unmaps.")
+
+(defvar cmacs-gowl-focus-changed-functions nil
+  "Functions run with the newly focused client, or nil when focus cleared.")
+
+(defvar cmacs-gowl-mode-changed-functions nil
+  "Functions run with the key mode's name when it changes (\"default\" = none).")
+
+(defvar cmacs-gowl-keyboard-layout-changed-functions nil
+  "Functions run with the layout's NAME and INDEX when the XKB layout changes.")
+
+(defvar cmacs-gowl-output-power-changed-functions nil
+  "Functions run with a monitor and t/nil when it is powered on or off.")
+
+(defvar cmacs-gowl-tag-changed-functions nil
+  "Functions run with a monitor when the tags it views change.")
+
+(defvar cmacs-gowl-layout-changed-functions nil
+  "Functions run with a monitor when its layout changes.")
+
+(defvar cmacs-gowl--hook-bridges nil
+  "Signal handles installed by `cmacs-gowl--install-hook-bridges'.")
+
+(defun cmacs-gowl--bridge (hook &optional lead)
+  "Return a function running HOOK with the signal's arguments.
+LEAD, when non-nil, is passed before them: a monitor signal carries
+no argument of its own, so the monitor is supplied."
+  (lambda (&rest args)
+    (apply #'run-hook-with-args hook (if lead (cons lead args) args))))
+
+(defun cmacs-gowl--install-hook-bridges ()
+  "Connect the compositor's signals to the `cmacs-gowl-*-functions' hooks."
+  (cmacs-gowl--remove-hook-bridges)
+  (when (and (fboundp 'gowl-running-p) (gowl-running-p)
+             (fboundp 'gobject-connect))
+    (let ((comp (gowl-compositor)))
+      (dolist (pair '(("client-pre-map" . cmacs-gowl-client-pre-map-functions)
+                      ("client-added" . cmacs-gowl-client-added-functions)
+                      ("client-removed" . cmacs-gowl-client-removed-functions)
+                      ("focus-changed" . cmacs-gowl-focus-changed-functions)
+                      ("mode-changed" . cmacs-gowl-mode-changed-functions)
+                      ("keyboard-layout-changed"
+                       . cmacs-gowl-keyboard-layout-changed-functions)
+                      ("output-power-changed"
+                       . cmacs-gowl-output-power-changed-functions)))
+        (condition-case nil
+            (push (cons comp (gobject-connect comp (car pair)
+                                              (cmacs-gowl--bridge (cdr pair))))
+                  cmacs-gowl--hook-bridges)
+          (error nil)))
+      ;; Monitor signals carry no monitor; supply it.  Monitors that
+      ;; appear later are not covered until the mode is restarted.
+      (dolist (m (ignore-errors (gowl-list-monitors)))
+        (dolist (pair '(("tag-changed" . cmacs-gowl-tag-changed-functions)
+                        ("layout-changed" . cmacs-gowl-layout-changed-functions)))
+          (condition-case nil
+              (push (cons m (gobject-connect m (car pair)
+                                             (cmacs-gowl--bridge (cdr pair) m)))
+                    cmacs-gowl--hook-bridges)
+            (error nil)))))))
+
+(defun cmacs-gowl--remove-hook-bridges ()
+  "Disconnect what `cmacs-gowl--install-hook-bridges' connected."
+  (dolist (b cmacs-gowl--hook-bridges)
+    (ignore-errors (gobject-disconnect (car b) (cdr b))))
+  (setq cmacs-gowl--hook-bridges nil))
+
 (defun cmacs-gowl-signal-disconnect (handle)
   "Disconnect a signal connection identified by HANDLE.
 HANDLE is a value previously returned by one of the
@@ -2035,6 +2169,62 @@ HANDLE is a value previously returned by one of the
 
 
 ;;; Interactive commands
+
+(defun cmacs-gowl-set-key-mode (mode)
+  "Enter key MODE, or leave it: the `mode' keybind action from Emacs.
+Interactively, completes over the modes the live keybinds name; an
+empty answer or \"default\" leaves the current mode."
+  (interactive
+   (list (completing-read
+          "Key mode (empty for default): "
+          (delete-dups
+           (delq nil (mapcar (lambda (e) (cdr (assq 'mode e)))
+                             (ignore-errors (gowl-list-keybinds)))))
+          nil nil nil nil "default")))
+  (gowl-set-key-mode (if (or (null mode) (string-empty-p mode)) nil mode)))
+
+(defun cmacs-gowl-switch-keyboard-layout (&optional which)
+  "Switch the keyboard layout to the next one, or to WHICH.
+WHICH is \"next\", \"prev\" or an index; with a single layout in
+`xkb-layout' this does nothing.  Shows the layout it landed on."
+  (interactive)
+  (gowl-switch-keyboard-layout (or which "next"))
+  (let ((l (gowl-keyboard-layout)))
+    (when l
+      (message "Keyboard layout: %s" (car l)))))
+
+(defun cmacs-gowl-focus-direction (direction)
+  "Focus the nearest window in DIRECTION: left, right, up or down."
+  (interactive
+   (list (intern (completing-read "Focus: " '("left" "right" "up" "down")
+                                  nil t))))
+  (gowl-focus-direction direction))
+
+(defun cmacs-gowl-focus-urgent ()
+  "Focus the window marked urgent, viewing its tags if need be."
+  (interactive)
+  (unless (gowl-focus-urgent)
+    (message "No urgent window")))
+
+(defun cmacs-gowl-focus-last ()
+  "Focus the window that had focus before this one."
+  (interactive)
+  (unless (gowl-focus-last)
+    (message "No previous window")))
+
+(defun cmacs-gowl-toggle-sticky ()
+  "Pin the focused window to every tag of its monitor, or unpin it."
+  (interactive)
+  (let ((c (gowl-focused-client)))
+    (if (null c)
+        (message "No focused window")
+      (gowl-set-client-sticky c (not (gowl-client-sticky-p c)))
+      (message "%s" (if (gowl-client-sticky-p c) "Pinned" "Unpinned")))))
+
+(defun cmacs-gowl-screens-off ()
+  "Power every output off.  Any input half a second later wakes them."
+  (interactive)
+  (gowl-set-outputs-powered nil))
 
 (defun cmacs-gowl-zoom ()
   "Promote the focused client to master position."

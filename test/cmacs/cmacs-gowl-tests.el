@@ -756,6 +756,88 @@ not the plain tag number / \"0\" that gowl's default-config.c uses."
                                          (eq (nth 1 e) 'spawn)))
                         captured))))
 
+(ert-deftest cmacs-gowl-test-default-keybinds-navigation-and-modes ()
+  "The default set binds focus by direction, the urgent and previous
+window, pinning, screens-off, and a resize key mode registered through
+`gowl-add-keybind-ex' with the mode name."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((captured nil)
+        (in-mode nil)
+        (cmacs-gowl--keybinds-installed nil)
+        (cmacs-gowl-resize-mode t))
+    (cl-letf (((symbol-function 'gowl-add-keybind)
+               (lambda (key action &optional arg _desc)
+                 (push (list key action arg) captured)))
+              ((symbol-function 'gowl-add-keybind-ex)
+               (lambda (key action &optional arg _desc mode &rest _)
+                 (push (list key action arg mode) in-mode))))
+      (cmacs-gowl--install-default-keybinds))
+    (should (member '("Super+Ctrl+h" focus-dir "left") captured))
+    (should (member '("Super+Ctrl+j" focus-dir "down") captured))
+    (should (member '("Super+Ctrl+k" focus-dir "up") captured))
+    (should (member '("Super+Ctrl+l" focus-dir "right") captured))
+    (should (member '("Super+Ctrl+u" focus-urgent nil) captured))
+    (should (member '("Super+Ctrl+Tab" focus-last nil) captured))
+    (should (member '("Super+Shift+t" toggle-sticky nil) captured))
+    (should (member '("Super+Ctrl+o" output-power "off") captured))
+    (should (member '("Super+r" mode "resize") captured))
+    ;; The mode's binds carry the mode name, and both exits are bound.
+    (should (member '("h" set-mfact "-0.05" "resize") in-mode))
+    (should (member '("l" set-mfact "+0.05" "resize") in-mode))
+    (should (member '("Escape" mode "default" "resize") in-mode))
+    (should (member '("Return" mode "default" "resize") in-mode))
+    ;; The scratchpad's keys are untouched by the additions.
+    (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
+
+(ert-deftest cmacs-gowl-test-default-keybinds-resize-mode-optional ()
+  "`cmacs-gowl-resize-mode' nil installs no mode and no Super+r."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((captured nil)
+        (in-mode nil)
+        (cmacs-gowl--keybinds-installed nil)
+        (cmacs-gowl-resize-mode nil))
+    (cl-letf (((symbol-function 'gowl-add-keybind)
+               (lambda (key action &optional arg _desc)
+                 (push (list key action arg) captured)))
+              ((symbol-function 'gowl-add-keybind-ex)
+               (lambda (&rest args) (push args in-mode))))
+      (cmacs-gowl--install-default-keybinds))
+    (should-not in-mode)
+    (should-not (assoc "Super+r" captured))))
+
+(ert-deftest cmacs-gowl-test-hook-bridge-runs-hook-with-args ()
+  "A bridge runs its hook with the signal's arguments, prefixing the
+monitor for a monitor signal, and an empty hook is a no-op."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((seen nil)
+        (cmacs-gowl-focus-changed-functions nil)
+        (cmacs-gowl-tag-changed-functions nil))
+    (add-hook 'cmacs-gowl-focus-changed-functions
+              (lambda (&rest args) (push (cons 'focus args) seen)))
+    (add-hook 'cmacs-gowl-tag-changed-functions
+              (lambda (&rest args) (push (cons 'tag args) seen)))
+    (funcall (cmacs-gowl--bridge 'cmacs-gowl-focus-changed-functions) 'client-1)
+    (funcall (cmacs-gowl--bridge 'cmacs-gowl-tag-changed-functions 'mon-1))
+    (funcall (cmacs-gowl--bridge 'cmacs-gowl-client-added-functions) 'client-2)
+    (should (equal seen '((tag mon-1) (focus client-1))))))
+
+(ert-deftest cmacs-gowl-test-keybind-label-shows-mode ()
+  "A bind in a key mode is labelled with the mode; one without is not."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "h") (action . set-mfact) (arg . "-0.05")
+                    (desc . "Shrink") (mode . "resize")))
+                 "[resize] Shrink"))
+  (should (equal (cmacs-gowl--keybind-label
+                  '((key . "Super+r") (action . mode) (arg . "resize")
+                    (desc . "Resize mode") (mode . nil)))
+                 "Resize mode")))
+
 (ert-deftest cmacs-gowl-test-bemenu-binary-strips-run ()
   "`cmacs-gowl--bemenu-binary' derives the dmenu-mode binary name."
   (skip-unless (cmacs-feature-p 'gowl))
