@@ -2264,7 +2264,7 @@ Like the above, but pick via bemenu (dmenu mode).
 @item cmacs-gowl-spawn-in-tag COMMAND TAG
 Spawn @var{COMMAND} as a client placed directly on @var{TAG}.
 @item cmacs-gowl-set-layout LAYOUT
-Set the tiling layout (tile, monocle, float).
+Set the tiling layout (tile, monocle, tabbed, float).
 @item cmacs-gowl-toggle-vsplit
 Toggle the vsplit tile orientation on the focused monitor.  With vsplit
 on, the master row is on top and the stack row on the bottom (the
@@ -2992,7 +2992,9 @@ Scroll the scrolling layout's column strip by DX pixels.
 @end table
 
 All layouts are plugins. CMacs loads @file{tile.so}, @file{monocle.so},
-@file{float.so}, and @file{scrolling.so} before windows map. Standalone
+@file{tabbed.so}, @file{float.so}, and @file{scrolling.so} before windows
+map (tabbed is monocle under a strip of clickable tabs; @kbd{Super+Shift+m}
+selects it). Standalone
 Gowl selects enabled layout modules in its configuration.
 
 @kbd{Super+<} and @kbd{Super+>} cycle layouts on the current tag view

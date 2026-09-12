@@ -1566,7 +1566,7 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
      "animation" throughout.  Every one of them declines to load under a
      renderer whose GL context it cannot borrow, leaving the desktop
      exactly as it was without them. */
-  const gchar *names[] = { "tile", "monocle", "float", "scrolling",
+  const gchar *names[] = { "tile", "monocle", "tabbed", "float", "scrolling",
                            "animation", "cube", "expo", "switcher",
                            "magnifier", "blur", "layout-indicator",
                            /* The look, and the two providers the bar and
@@ -4379,7 +4379,7 @@ DEFUN ("gowl-get-layout", Fgowl_get_layout, Sgowl_get_layout, 0, 1, 0,
 
 DEFUN ("gowl-set-layout", Fgowl_set_layout, Sgowl_set_layout, 1, 2, 0,
        doc: /* Set LAYOUT on MONITOR.
-LAYOUT is a layout name: \"tile\", \"monocle\", \"float\",
+LAYOUT is a layout name: \"tile\", \"monocle\", \"tabbed\", \"float\",
 \"scrolling\", or any layout a loaded module registered.  See
 `gowl-list-layouts'.  Selection applies only to MONITOR's current tag
 view; nil means the focused monitor.
@@ -8597,6 +8597,28 @@ emits `mode-changed', which `cmacs-gowl-mode-changed-functions' relays. */)
   return Qt;
 }
 
+DEFUN ("gowl-output-profile", Fgowl_output_profile, Sgowl_output_profile,
+       0, 0, 0,
+       doc: /* Return the name of the output profile in force, or nil.
+A profile is a `profiles:' entry in the YAML config -- a named set of
+outputs (connector names or "Make Model Serial" descriptions) and what
+each gets while all of them are connected.  The compositor picks the
+first that matches on every hotplug and reload and emits
+`output-profile-changed', which `cmacs-gowl-output-profile-changed-functions'
+relays.  */)
+  (void)
+{
+  const gchar *name;
+  Lisp_Object result;
+
+  GOWL_CHECK_RUNNING ();
+  cmacs_gowl_lock ();
+  name = gowl_compositor_get_output_profile (cmacs_gowl_compositor);
+  result = name != NULL ? build_string (name) : Qnil;
+  cmacs_gowl_unlock ();
+  return result;
+}
+
 DEFUN ("gowl-key-mode", Fgowl_key_mode, Sgowl_key_mode, 0, 0, 0,
        doc: /* Return the key mode in force, "default" when none. */)
   (void)
@@ -9253,6 +9275,24 @@ cmacs_gowl_on_layout_switched_dbus (GowlCompositor *comp, const gchar *name,
 }
 
 static void
+cmacs_gowl_on_output_profile_dbus (GowlCompositor *comp, const gchar *name,
+                                   gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "OutputProfileChanged",
+                          g_variant_new ("(s)", name != NULL ? name : ""));
+}
+
+static void
+cmacs_gowl_on_title_changed_dbus (GowlCompositor *comp, GowlClient *c,
+                                  gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_gowl_dbus_client_signal ("ClientTitleChanged", c);
+}
+
+static void
 cmacs_gowl_on_output_power_dbus (GowlCompositor *comp, GowlMonitor *m,
                                  gboolean on, gpointer data)
 {
@@ -9285,6 +9325,10 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
                     G_CALLBACK (cmacs_gowl_on_layout_switched_dbus), NULL);
   g_signal_connect (comp, "output-power-changed",
                     G_CALLBACK (cmacs_gowl_on_output_power_dbus), NULL);
+  g_signal_connect (comp, "output-profile-changed",
+                    G_CALLBACK (cmacs_gowl_on_output_profile_dbus), NULL);
+  g_signal_connect (comp, "client-title-changed",
+                    G_CALLBACK (cmacs_gowl_on_title_changed_dbus), NULL);
 }
 
 void
@@ -9483,6 +9527,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   /* Key modes, keyboard layouts, focus navigation, sticky, power */
   defsubr (&Sgowl_set_key_mode);
   defsubr (&Sgowl_key_mode);
+  defsubr (&Sgowl_output_profile);
   defsubr (&Sgowl_switch_keyboard_layout);
   defsubr (&Sgowl_keyboard_layout);
   defsubr (&Sgowl_focus_direction);

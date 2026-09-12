@@ -70,7 +70,7 @@
   :type 'string
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-layouts '("tile" "monocle" "float")
+(defcustom cmacs-gowl-layouts '("tile" "monocle" "tabbed" "float")
   "List of available layout names."
   :type '(repeat string)
   :group 'cmacs-gowl)
@@ -592,6 +592,7 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+t" 'set-layout "tile" "Tile layout")
         (bind "Super+f" 'set-layout "float" "Float layout")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
+        (bind "Super+Shift+m" 'set-layout "tabbed" "Tabbed layout")
         ;; Super+s is the scratchpad (below).  The scrolling layout is
         ;; reached by cycling, like every other layout.
         (bind "Super+Shift+comma" 'cycle-layout "-1" "Previous layout on this tag")
@@ -2105,6 +2106,13 @@ which run after it is placed.")
 (defvar cmacs-gowl-output-power-changed-functions nil
   "Functions run with a monitor and t/nil when it is powered on or off.")
 
+(defvar cmacs-gowl-output-profile-changed-functions nil
+  "Functions run with the output profile's name when a different one
+matches the connected outputs (\"\" = none).  See `gowl-output-profile'.")
+
+(defvar cmacs-gowl-client-title-changed-functions nil
+  "Functions run with a client whose title or app id changed.")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -2135,7 +2143,11 @@ no argument of its own, so the monitor is supplied."
                       ("keyboard-layout-changed"
                        . cmacs-gowl-keyboard-layout-changed-functions)
                       ("output-power-changed"
-                       . cmacs-gowl-output-power-changed-functions)))
+                       . cmacs-gowl-output-power-changed-functions)
+                      ("output-profile-changed"
+                       . cmacs-gowl-output-profile-changed-functions)
+                      ("client-title-changed"
+                       . cmacs-gowl-client-title-changed-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))

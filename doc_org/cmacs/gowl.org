@@ -605,7 +605,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-launch-in-tag=    | Pick an app (completion) → launch on a tag |
 | =cmacs-gowl-bemenu-in-tag=    | Pick an app (bemenu) → launch on a tag    |
 | =cmacs-gowl-spawn-in-tag=     | Spawn a command on a specific tag         |
-| =cmacs-gowl-set-layout=       | Set layout (tile, monocle, float)         |
+| =cmacs-gowl-set-layout=       | Set layout (tile, monocle, tabbed, float) |
 | =cmacs-gowl-toggle-vsplit=    | Toggle vsplit tile orientation            |
 | =cmacs-gowl-list-monitors=    | Show monitor info table                   |
 | =cmacs-gowl-monitor-info=     | Show detailed info for one monitor        |
@@ -686,6 +686,7 @@ holds focus.
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+t= / =f= / =m=   | Tile / float / monocle layout           |
+| =Super+Shift+m=         | Tabbed layout                           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
 | =Super+Ctrl+s=          | Scratchpad: bring the focused window back |
@@ -766,6 +767,8 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 | =cmacs-gowl-mode-changed-functions=           | mode name        | a key mode entered or left             |
 | =cmacs-gowl-keyboard-layout-changed-functions= | name, index     | the XKB layout changed                 |
 | =cmacs-gowl-output-power-changed-functions=   | monitor, on      | an output powered on or off            |
+| =cmacs-gowl-output-profile-changed-functions= | profile name     | a different =profiles:= entry matches the connected outputs (see =gowl-output-profile=) |
+| =cmacs-gowl-client-title-changed-functions=   | client           | a window's title or app id changed     |
 | =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
 | =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
 
@@ -846,9 +849,11 @@ from a frozen cursor if you do not know a constraint exists.
 :CUSTOM_ID: layouts
 :END:
 
-Tile, monocle, float and scrolling are separate Gowl plugins. CMacs
-loads all four before windows map; standalone Gowl enables layouts in
+Tile, monocle, tabbed, float and scrolling are separate Gowl plugins. CMacs
+loads all five before windows map; standalone Gowl enables layouts in
 its =modules= config. Additional layout plugins join the same list.
+Tabbed is monocle under a strip of tabs drawn by the compositor, one
+per window on the tag, clickable; =Super+Shift+m= selects it.
 
 =Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
 forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
@@ -3209,7 +3214,7 @@ escape hatch that survives Emacs pathologies.
 (setq cmacs-gowl-border-width 2)
 (setq cmacs-gowl-border-color-focus "#5e81ac")
 (setq cmacs-gowl-border-color-unfocus "#4c566a")
-(setq cmacs-gowl-layouts '("tile" "monocle" "float"))
+(setq cmacs-gowl-layouts '("tile" "monocle" "tabbed" "float"))
 (setq cmacs-gowl-default-layout "tile")
 (setq cmacs-gowl-autostart '("waybar"))
 
