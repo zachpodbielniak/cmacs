@@ -3056,8 +3056,10 @@ Scroll the scrolling layout's column strip by DX pixels.
 @end table
 
 All layouts are plugins. CMacs loads @file{tile.so}, @file{monocle.so},
-@file{tabbed.so}, @file{float.so}, and @file{scrolling.so} before windows
-map (tabbed is monocle under a strip of clickable tabs; @kbd{Super+Shift+m}
+@file{tabbed.so}, @file{float.so}, @file{scrolling.so}, @file{bstack.so},
+@file{deck.so}, @file{grid.so}, @file{mirrortile.so}, @file{columns.so},
+@file{centeredmaster.so} and @file{fibonacci.so} before windows map
+(tabbed is monocle under a strip of clickable tabs; @kbd{Super+Shift+m}
 selects it). Standalone
 Gowl selects enabled layout modules in its configuration.
 

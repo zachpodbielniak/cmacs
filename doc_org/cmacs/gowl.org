@@ -442,10 +442,11 @@ machine driven over a private Wayland protocol, and a standalone
 =org.freedesktop.impl.portal.desktop.gowl= D-Bus name and runs the EIS
 server deskflow connects to.
 
+*Sharing one window.*  The same binary also serves =ScreenCast=, and that is worth knowing about: =xdg-desktop-portal-wlr= can only offer whole outputs, because =wlr-screencopy= addresses outputs, so "share this window" in a video call shares the screen it is on and everything else on it.  gowl makes a toplevel an addressable capture source (=ext-image-capture-source-v1=), so choosing a window shares that window.  It needs PipeWire; without it the backend declines the interface at startup and the frontend falls back to portal-wlr, exactly as before.  The "what to share" picker is an external dmenu-style program --- =$GOWL_PORTAL_CHOOSER=, else the first of bemenu, fuzzel, wofi, rofi or dmenu on =PATH=.
+
 *Enabling it.*  =make install= installs the portal binary, its =.portal=
-registration, a =portals.conf= that routes InputCapture/RemoteDesktop to
-gowl (ScreenCast still goes to =xdg-desktop-portal-wlr=), and a D-Bus
-=.service=.  The =cmacs --gowl= session's =XDG_CURRENT_DESKTOP= must contain
+registration, a =portals.conf= that routes InputCapture, RemoteDesktop
+and ScreenCast to gowl, and a D-Bus =.service=.  The =cmacs --gowl= session's =XDG_CURRENT_DESKTOP= must contain
 =gowl=; =install-wm= sets =DesktopNames=CMacs:gowl= for this reason.  The
 portal binary is launched at session start (and is D-Bus-activatable as a
 fallback).  Install =libeis-devel= (Fedora) before building.
@@ -753,7 +754,19 @@ gowl's =modes:=, =mousebinds:=, =gestures:= and =input:= sections (see =deps/gow
 (gowl-apply-input-config)
 #+end_src
 
-=gowl-set-key-mode= enters or leaves a mode (=M-x cmacs-gowl-set-key-mode= completes over the modes the live binds name), =gowl-key-mode= reads it, and =gowl-list-keybinds= now carries each bind's =mode=, =locked=, =release= and =repeat=, which the cheatsheet uses to label a mode's binds =[resize] ...=.  The keyboard layout list comes from the config's =xkb-layout= (=gowl-config-get= / a YAML file); =gowl-switch-keyboard-layout= steps through it and =gowl-keyboard-layout= returns =(NAME . INDEX)=.  =gowl-focus-direction=, =gowl-focus-urgent=, =gowl-focus-last=, =gowl-set-client-sticky= / =gowl-client-sticky-p= and =gowl-set-outputs-powered= / =gowl-outputs-powered-off-p= cover the rest of the new actions; =gowl-add-rule-entry= takes an alist with every rule property, =sticky= included: =(gowl-add-rule-entry '((app-id . "mpv") (floating . t) (sticky . t)))=.
+=gowl-set-key-mode= enters or leaves a mode (=M-x cmacs-gowl-set-key-mode= completes over the modes the live binds name), =gowl-key-mode= reads it, and =gowl-list-keybinds= now carries each bind's =mode=, =locked=, =release= and =repeat=, which the cheatsheet uses to label a mode's binds =[resize] ...=.  The keyboard layout list comes from the config's =xkb-layout= (=gowl-config-get= / a YAML file); =gowl-switch-keyboard-layout= steps through it and =gowl-keyboard-layout= returns =(NAME . INDEX)=.  =gowl-focus-direction=, =gowl-focus-urgent=, =gowl-focus-last=, =gowl-set-client-sticky= / =gowl-client-sticky-p= and =gowl-set-outputs-powered= / =gowl-outputs-powered-off-p= cover the rest of the new actions; =gowl-add-rule-entry= takes an alist with every rule field the YAML =rules:= section has: the matchers =app-id=, =title=, =initial-title=, =xwayland=, =pid=, =is-floating=, =is-fullscreen= and =on-tag=, and the properties =tags=, =monitor=, =width= / =height=, =width-pct= / =height-pct=, =opacity=, =floating=, =regex=, =center=, =sticky=, =no-focus=, =focus=, =fullscreen=, =no-blur=, =no-shadow=, =no-anim= and =idle-inhibit=.
+
+#+begin_src elisp
+(gowl-add-rule-entry '((app-id . "mpv") (floating . t) (sticky . t)))
+;; Every floating window on tag 3, at three fifths of whatever screen
+;; it lands on, with no shadow.
+(gowl-add-rule-entry '((is-floating . t) (on-tag . 3)
+                       (width-pct . 0.6) (height-pct . 0.6)
+                       (no-shadow . t)))
+;; Assigning tags is silent; `focus' is how a rule says the view
+;; should follow the window.
+(gowl-add-rule-entry '((app-id . "signal") (tags . 16) (focus . t)))
+#+end_src
 
 ** Hooks
 
@@ -770,6 +783,8 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 | =cmacs-gowl-output-power-changed-functions=   | monitor, on      | an output powered on or off            |
 | =cmacs-gowl-output-profile-changed-functions= | profile name     | a different =profiles:= entry matches the connected outputs (see =gowl-output-profile=) |
 | =cmacs-gowl-client-title-changed-functions=   | client           | a window's title or app id changed     |
+| =cmacs-gowl-monitor-added-functions=          | monitor          | an output was plugged in, configured and in the layout |
+| =cmacs-gowl-monitor-removed-functions=        | monitor          | an output was unplugged (readable only during the hook) |
 | =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
 | =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
 

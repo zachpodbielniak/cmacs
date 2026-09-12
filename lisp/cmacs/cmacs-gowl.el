@@ -70,8 +70,14 @@
   :type 'string
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-layouts '("tile" "monocle" "tabbed" "float")
-  "List of available layout names."
+(defcustom cmacs-gowl-layouts
+  '("tile" "monocle" "tabbed" "float" "scrolling" "bstack" "deck"
+    "grid" "mirrortile" "columns" "centeredmaster" "fibonacci")
+  "Layout names offered when the compositor cannot be asked.
+`cmacs-gowl-set-layout' completes over the layouts actually registered
+by loaded modules (`gowl-list-layouts') and only falls back to this
+list when gowl is not running, so a layout module loaded at runtime is
+offered without editing this."
   :type '(repeat string)
   :group 'cmacs-gowl)
 
@@ -1468,9 +1474,16 @@ Falls back to `cmacs-gowl-launch-in-tag' when bemenu is missing."
           (message "No application selected"))))))
 
 (defun cmacs-gowl-set-layout (layout)
-  "Set the current monitor LAYOUT."
+  "Set the current monitor LAYOUT.
+Completes over the layouts loaded modules registered, so a layout
+module added at runtime is offered straight away."
   (interactive
-   (list (completing-read "Layout: " cmacs-gowl-layouts nil t)))
+   (list (completing-read
+          "Layout: "
+          (or (and (fboundp 'gowl-running-p) (gowl-running-p)
+                   (ignore-errors (gowl-list-layouts)))
+              cmacs-gowl-layouts)
+          nil t)))
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
   (gowl-set-layout layout))
@@ -2190,6 +2203,15 @@ matches the connected outputs (\"\" = none).  See `gowl-output-profile'.")
 (defvar cmacs-gowl-client-title-changed-functions nil
   "Functions run with a client whose title or app id changed.")
 
+(defvar cmacs-gowl-monitor-added-functions nil
+  "Functions run with a monitor that was just plugged in.
+It is already configured and in the layout when this runs.")
+
+(defvar cmacs-gowl-monitor-removed-functions nil
+  "Functions run with a monitor that was unplugged.
+The monitor is still readable while the hook runs and is released
+immediately afterwards, so keep its name, not the object.")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -2205,6 +2227,21 @@ LEAD, when non-nil, is passed before them: a monitor signal carries
 no argument of its own, so the monitor is supplied."
   (lambda (&rest args)
     (apply #'run-hook-with-args hook (if lead (cons lead args) args))))
+
+(defun cmacs-gowl--bridge-monitor (monitor)
+  "Connect MONITOR's own signals to the per-monitor hooks.
+A monitor's \"tag-changed\" and \"layout-changed\" live on the monitor,
+not the compositor, so every output needs its own connection -- and an
+output plugged in after the mode started needs one too, which is why
+this runs from `cmacs-gowl-monitor-added-functions' as well."
+  (dolist (pair '(("tag-changed" . cmacs-gowl-tag-changed-functions)
+                  ("layout-changed" . cmacs-gowl-layout-changed-functions)))
+    (condition-case nil
+        (push (cons monitor
+                    (gobject-connect monitor (car pair)
+                                     (cmacs-gowl--bridge (cdr pair) monitor)))
+              cmacs-gowl--hook-bridges)
+      (error nil))))
 
 (defun cmacs-gowl--install-hook-bridges ()
   "Connect the compositor's signals to the `cmacs-gowl-*-functions' hooks."
@@ -2224,25 +2261,28 @@ no argument of its own, so the monitor is supplied."
                       ("output-profile-changed"
                        . cmacs-gowl-output-profile-changed-functions)
                       ("client-title-changed"
-                       . cmacs-gowl-client-title-changed-functions)))
+                       . cmacs-gowl-client-title-changed-functions)
+                      ("monitor-added"
+                       . cmacs-gowl-monitor-added-functions)
+                      ("monitor-removed"
+                       . cmacs-gowl-monitor-removed-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))
                   cmacs-gowl--hook-bridges)
           (error nil)))
-      ;; Monitor signals carry no monitor; supply it.  Monitors that
-      ;; appear later are not covered until the mode is restarted.
+      ;; Monitor signals carry no monitor; supply it.  An output plugged
+      ;; in later gets the same treatment from the monitor-added hook
+      ;; below, so these do not go stale after a hotplug.
       (dolist (m (ignore-errors (gowl-list-monitors)))
-        (dolist (pair '(("tag-changed" . cmacs-gowl-tag-changed-functions)
-                        ("layout-changed" . cmacs-gowl-layout-changed-functions)))
-          (condition-case nil
-              (push (cons m (gobject-connect m (car pair)
-                                             (cmacs-gowl--bridge (cdr pair) m)))
-                    cmacs-gowl--hook-bridges)
-            (error nil)))))))
+        (cmacs-gowl--bridge-monitor m))
+      (add-hook 'cmacs-gowl-monitor-added-functions
+                #'cmacs-gowl--bridge-monitor))))
 
 (defun cmacs-gowl--remove-hook-bridges ()
   "Disconnect what `cmacs-gowl--install-hook-bridges' connected."
+  (remove-hook 'cmacs-gowl-monitor-added-functions
+               #'cmacs-gowl--bridge-monitor)
   (dolist (b cmacs-gowl--hook-bridges)
     (ignore-errors (gobject-disconnect (car b) (cdr b))))
   (setq cmacs-gowl--hook-bridges nil))

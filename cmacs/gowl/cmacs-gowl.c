@@ -1567,6 +1567,13 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
      renderer whose GL context it cannot borrow, leaving the desktop
      exactly as it was without them. */
   const gchar *names[] = { "tile", "monocle", "tabbed", "float", "scrolling",
+                           /* The rest of the catalogue.  Each is a few
+                              hundred bytes of .so and registers one
+                              layout; loading them is what makes
+                              Super+Tab and `cmacs-gowl-set-layout'
+                              able to offer them at all. */
+                           "bstack", "deck", "grid", "mirrortile",
+                           "columns", "centeredmaster", "fibonacci",
                            "animation", "cube", "expo", "switcher",
                            "magnifier", "blur", "layout-indicator",
                            /* The look, and the two providers the bar and
@@ -4807,15 +4814,22 @@ Matchers: `app-id', `title' and `initial-title' (pattern strings;
 `initial-title' matches the title the window had when it mapped, which
 is how a terminal is caught before its title follows the shell),
 `xwayland' (t for X11 windows only, `wayland' for native only), `pid'
-(a process id).
+(a process id), `is-floating' and `is-fullscreen' (the state the window
+must already be in; absent matches either), and `on-tag' (1-9: apply
+only while that tag is the one being viewed).
 
 Properties: `tags' (bitmask), `monitor' (index, -1 for any), `width'
-and `height' (pixels for a floated match, 0 for natural), `opacity' (a
-float 0.0-1.0), and the booleans `floating', `regex', `center'
-(defaults to t), `sticky' (pin to every tag of its monitor),
-`no-focus' (map without taking focus), `fullscreen', `no-blur',
+and `height' (pixels for a floated match, 0 for natural), `width-pct'
+and `height-pct' (a fraction of the output's usable area, so one rule
+fits every screen), `opacity' (a float 0.0-1.0), and the booleans
+`floating', `regex', `center' (defaults to t), `sticky' (pin to every
+tag of its monitor), `no-focus' (map without taking focus), `focus'
+(take it, viewing the tags the rule assigns), `fullscreen', `no-blur',
 `no-shadow', `no-anim' and `idle-inhibit' (the match keeps the screen
 awake while it is mapped).
+
+A rule that assigns `tags' does not switch the view to them; use
+`focus' when it should.
 
 This is the form with every field a YAML `rules:' entry has.  */)
   (Lisp_Object alist)
@@ -4865,6 +4879,20 @@ This is the form with every field a YAML `rules:' entry has.  */)
     }
   v = Fcdr (Fassq (intern_c_string ("pid"), alist));
   if (FIXNATP (v)) rule.pid = (gint) XFIXNAT (v);
+  /* State matchers: tri-state again, so absent is not nil. */
+  v = Fassq (intern_c_string ("is-floating"), alist);
+  if (!NILP (v)) rule.match_floating = NILP (Fcdr (v)) ? 0 : 1;
+  v = Fassq (intern_c_string ("is-fullscreen"), alist);
+  if (!NILP (v)) rule.match_fullscreen = NILP (Fcdr (v)) ? 0 : 1;
+  v = Fcdr (Fassq (intern_c_string ("on-tag"), alist));
+  if (FIXNATP (v))
+    {
+      EMACS_INT t = XFIXNAT (v);
+
+      if (t < 1 || t > 9)
+        error ("Rule on-tag must be a tag, 1 to 9");
+      rule.on_tag = (gint) t;
+    }
 
   /* Per-window properties: what the window is, and which effects skip
      it.  The effect flags reach the alpha, blur and animation modules
@@ -4884,6 +4912,11 @@ This is the form with every field a YAML `rules:' entry has.  */)
   rule.no_anim = !NILP (Fcdr (Fassq (intern_c_string ("no-anim"), alist)));
   rule.idle_inhibit =
     !NILP (Fcdr (Fassq (intern_c_string ("idle-inhibit"), alist)));
+  rule.focus = !NILP (Fcdr (Fassq (intern_c_string ("focus"), alist)));
+  v = Fcdr (Fassq (intern_c_string ("width-pct"), alist));
+  if (NUMBERP (v)) rule.width_pct = CLAMP (XFLOATINT (v), 0.0, 1.0);
+  v = Fcdr (Fassq (intern_c_string ("height-pct"), alist));
+  if (NUMBERP (v)) rule.height_pct = CLAMP (XFLOATINT (v), 0.0, 1.0);
 
   gowl_config_add_rule_entry (config, &rule);
   return unbind_to (count, Qt);

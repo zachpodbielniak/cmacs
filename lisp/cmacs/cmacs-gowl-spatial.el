@@ -39,7 +39,14 @@ switches to a tag, the corresponding file is opened."
   "The currently active tag number, or nil.")
 
 (defvar cmacs-gowl-spatial--signal-handle nil
-  "Signal handle for the focus-changed connection.")
+  "Obsolete; the mode runs off `cmacs-gowl-tag-changed-functions' now.")
+
+(defun cmacs-gowl-spatial--on-tag-changed-1 (&optional _monitor)
+  "Hook shim: `cmacs-gowl-tag-changed-functions' passes the monitor.
+The handler reads the focused monitor itself, so a tag change on a
+monitor that is not focused is ignored, which is what following the
+focused screen means."
+  (cmacs-gowl-spatial--on-tag-changed))
 
 (defun cmacs-gowl-spatial--on-tag-changed ()
   "Handle tag change by switching to the associated Org file."
@@ -77,11 +84,17 @@ the associated Org file and restores the window configuration."
   :lighter " Spatial"
   :group 'cmacs-gowl-spatial
   (if cmacs-gowl-spatial-mode
-      (when (and (fboundp 'gowl-running-p) (gowl-running-p))
-        (setq cmacs-gowl-spatial--signal-handle
-              (cmacs-gowl-on-focus-changed
-               (lambda (_client)
-                 (cmacs-gowl-spatial--on-tag-changed)))))
+      ;; The tags-changed hook, not focus-changed.  Focus moves for
+      ;; every window switch, so the old wiring ran this on each one and
+      ;; only noticed a tag change because the handler compares against
+      ;; the last tag it saw; a tag switch that moved focus to nothing
+      ;; -- an empty tag -- was missed entirely.  The hook carries the
+      ;; monitor and covers every one of them, including outputs plugged
+      ;; in after the mode was turned on.
+      (add-hook 'cmacs-gowl-tag-changed-functions
+                #'cmacs-gowl-spatial--on-tag-changed-1)
+    (remove-hook 'cmacs-gowl-tag-changed-functions
+                 #'cmacs-gowl-spatial--on-tag-changed-1)
     (when cmacs-gowl-spatial--signal-handle
       (cmacs-gowl-signal-disconnect cmacs-gowl-spatial--signal-handle)
       (setq cmacs-gowl-spatial--signal-handle nil))
