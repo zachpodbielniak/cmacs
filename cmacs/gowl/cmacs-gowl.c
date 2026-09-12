@@ -6211,18 +6211,23 @@ and HEX is "#rrggbb" or "#rrggbbaa".  The list is sorted by name.  */)
   g_auto (GStrv) names = NULL;
   Lisp_Object out = Qnil;
   gsize i, n;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
 
-  pthread_mutex_lock (&cmacs_gowl_mutex);
+  /* Held across the whole build.  The palette belongs to the config,
+     and a reload replaces the config outright, so releasing the lock
+     between reading the names and looking each colour up would leave
+     `palette' pointing into freed memory.  The names are a strv of
+     our own and would have survived; the palette would not.  */
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   palette = config != NULL ? gowl_config_get_palette (config) : NULL;
   if (palette != NULL)
     names = gowl_palette_names (palette);
-  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
   if (names == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   /* Built backwards so the result comes out in the sorted order the
      names already have. */
@@ -6232,15 +6237,13 @@ and HEX is "#rrggbb" or "#rrggbbaa".  The list is sorted by name.  */)
     {
       const gchar *hex;
 
-      pthread_mutex_lock (&cmacs_gowl_mutex);
       hex = gowl_palette_lookup (palette, names[i - 1]);
       out = Fcons (Fcons (build_string (names[i - 1]),
 			  hex != NULL ? build_string (hex) : Qnil),
 		   out);
-      pthread_mutex_unlock (&cmacs_gowl_mutex);
     }
 
-  return out;
+  return unbind_to (count, out);
 }
 
 DEFUN ("gowl-set-palette", Fgowl_set_palette, Sgowl_set_palette, 1, 2, 0,
@@ -6263,6 +6266,7 @@ screen --- is redrawn.  */)
   GowlConfig *config;
   Lisp_Object tail;
   GList *monitors, *l;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
 
@@ -6278,13 +6282,10 @@ screen --- is redrawn.  */)
       palette = Qnil;
     }
 
-  pthread_mutex_lock (&cmacs_gowl_mutex);
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    {
-      pthread_mutex_unlock (&cmacs_gowl_mutex);
-      error ("No gowl config");
-    }
+    error ("No gowl config");
 
   if (STRINGP (palette))
     gowl_config_set_palette_name (config, SSDATA (palette));
@@ -6318,9 +6319,8 @@ screen --- is redrawn.  */)
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
-  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-set-border-colors", Fgowl_set_border_colors,
@@ -6339,6 +6339,7 @@ editor's theme.  A literal is frozen until it is set again.  */)
 {
   GowlConfig *config;
   GList *monitors, *l;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
 
@@ -6349,13 +6350,10 @@ editor's theme.  A literal is frozen until it is set again.  */)
   if (!NILP (urgent))
     CHECK_STRING (urgent);
 
-  pthread_mutex_lock (&cmacs_gowl_mutex);
+  count = cmacs_gowl_lock_scoped ();
   config = gowl_compositor_get_config (cmacs_gowl_compositor);
   if (config == NULL)
-    {
-      pthread_mutex_unlock (&cmacs_gowl_mutex);
-      error ("No gowl config");
-    }
+    error ("No gowl config");
 
   if (!NILP (focus))
     g_object_set (config, "border-color-focus", SSDATA (focus), NULL);
@@ -6367,9 +6365,8 @@ editor's theme.  A literal is frozen until it is set again.  */)
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     gowl_compositor_arrange (cmacs_gowl_compositor, l->data);
-  pthread_mutex_unlock (&cmacs_gowl_mutex);
 
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-get-border-color-specs", Fgowl_get_border_color_specs,

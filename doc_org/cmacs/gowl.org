@@ -2071,6 +2071,14 @@ plain unlock per path because nothing there signals.  Three tests in
 =test/cmacs/cmacs-gowl-tests.el= fail the suite if a new call site
 skips either half.
 
+Releasing the lock early is safe only for values already copied out of
+the compositor.  =gowl-get-border-color-specs= reads its three strings
+with =g_object_get=, which hands back copies, and builds the Lisp list
+afterwards with the lock dropped.  A pointer that still points *into*
+the config --- a palette, a rule array, a keybind's string --- has to
+be used under the same lock that fetched it, because a reload frees
+the whole config and not just the field being read.
+
 * Compositor Signals
 
 Gowl emits GObject signals when compositor state changes.  These
