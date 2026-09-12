@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: linux-amd64
     container:
-      image: git.podbielniak.com/zachpodbielniak/build-container:43
+      image: git.podbielniak.com/zachpodbielniak/build-container:44
       options: --privileged
 
     steps:
