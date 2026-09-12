@@ -3056,7 +3056,16 @@ and then use this to move the client into the float layer. */)
 
 DEFUN ("gowl-toggle-client-fullscreen", Fgowl_toggle_client_fullscreen,
        Sgowl_toggle_client_fullscreen, 1, 1, 0,
-       doc: /* Toggle fullscreen state of CLIENT. */)
+       doc: /* Toggle fullscreen state of CLIENT.
+Returns t when CLIENT is now fullscreen.
+
+Taking a window out of fullscreen also refuses its own later requests
+to go back in, until something puts it back: a game re-asserts
+fullscreen the instant it loses it -- some engines on every frame --
+and without that the window could not be recovered.  Putting it back in
+lifts the refusal, so this stays a plain toggle from the caller's
+side.  Same behaviour as the `toggle_fullscreen' keybind, which is
+Super+f by default.  */)
   (Lisp_Object client)
 {
   GowlClient *c = gowl_resolve_client (client);
