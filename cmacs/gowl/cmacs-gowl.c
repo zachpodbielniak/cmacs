@@ -2012,6 +2012,10 @@ the event loop source and returns. */)
   return Qt;
 }
 
+/* Closes the IPC socket; defined with the rest of the IPC server, far
+   below, but gowl-stop has to reach it before the compositor goes.  */
+static void cmacs_gowl_ipc_shutdown (void);
+
 DEFUN ("gowl-stop", Fgowl_stop, Sgowl_stop, 0, 0, 0,
        doc: /* Shut down the gowl compositor.
 Every module's shutdown hook runs while the compositor is still alive;
@@ -2024,6 +2028,10 @@ is.  */)
   if (cmacs_gowl_compositor != NULL)
     {
       GowlModuleManager *mgr;
+
+      /* Before the compositor: the listener is an event source on its
+         event loop, and the socket file has to be unlinked.  */
+      cmacs_gowl_ipc_shutdown ();
 
       cmacs_gowl_stop_thread ();
       gowl_compositor_quit (cmacs_gowl_compositor);
@@ -4115,22 +4123,16 @@ MONITOR defaults to focused. */)
     }
 }
 
-DEFUN ("gowl-set-monitor-transform", Fgowl_set_monitor_transform,
-       Sgowl_set_monitor_transform, 1, 2, 0,
-       doc: /* Set MONITOR transform to TRANSFORM.
-TRANSFORM is an integer 0-7 or a symbol: normal, 90, 180, 270,
-flipped, flipped-90, flipped-180, flipped-270.
-Returns t on success, nil on failure.  MONITOR defaults to focused. */)
-  (Lisp_Object transform, Lisp_Object monitor)
+/* A wl_output transform from Lisp: 0-7, or one of the eight symbols
+   the manual documents.  Signals rather than returning an error code,
+   since every caller is a DEFUN that would only re-signal.  */
+static gint
+cmacs_gowl_parse_transform (Lisp_Object transform)
 {
-  GowlMonitor *mon;
   gint xform;
-  gboolean ok;
-
-  GOWL_CHECK_RUNNING ();
 
   if (FIXNUMP (transform))
-    xform = (gint)XFIXNUM (transform);
+    xform = (gint) XFIXNUM (transform);
   else if (EQ (transform, Qnormal))
     xform = 0;
   else if (EQ (transform, Q90))
@@ -4152,7 +4154,24 @@ Returns t on success, nil on failure.  MONITOR defaults to focused. */)
 
   if (xform < 0 || xform > 7)
     error ("Transform must be between 0 and 7");
+  return xform;
+}
 
+DEFUN ("gowl-set-monitor-transform", Fgowl_set_monitor_transform,
+       Sgowl_set_monitor_transform, 1, 2, 0,
+       doc: /* Set MONITOR transform to TRANSFORM.
+TRANSFORM is an integer 0-7 or a symbol: normal, 90, 180, 270,
+flipped, flipped-90, flipped-180, flipped-270.
+Returns t on success, nil on failure.  MONITOR defaults to focused. */)
+  (Lisp_Object transform, Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gint xform;
+  gboolean ok;
+
+  GOWL_CHECK_RUNNING ();
+
+  xform = cmacs_gowl_parse_transform (transform);
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
     return Qnil;
@@ -4762,7 +4781,9 @@ minimal legacy form.  */)
   {
     GowlRuleEntry rule;
 
-    memset (&rule, 0, sizeof rule);
+    /* Not a memset: xwayland 0 means "native Wayland only", so a
+       zeroed entry would quietly stop matching X11 windows.  */
+    gowl_rule_entry_init (&rule);
     rule.app_id = (gchar *) app_str;
     rule.title = (gchar *) title_str;
     rule.tags = tags_val;
@@ -4781,12 +4802,22 @@ minimal legacy form.  */)
 DEFUN ("gowl-add-rule-entry", Fgowl_add_rule_entry, Sgowl_add_rule_entry,
        1, 1, 0,
        doc: /* Add a window rule from ALIST, every field optional.
-Keys: `app-id' and `title' (pattern strings), `tags' (bitmask),
-`floating', `regex', `center' and `sticky' (booleans; `center' defaults
-to t), `monitor' (index, -1 for any), `width' and `height' (pixels for a
-floated match, 0 for natural).  This is the form with every property a
-YAML `rules:' entry has, `sticky' -- pin the match to every tag of its
-monitor -- included.  */)
+
+Matchers: `app-id', `title' and `initial-title' (pattern strings;
+`initial-title' matches the title the window had when it mapped, which
+is how a terminal is caught before its title follows the shell),
+`xwayland' (t for X11 windows only, `wayland' for native only), `pid'
+(a process id).
+
+Properties: `tags' (bitmask), `monitor' (index, -1 for any), `width'
+and `height' (pixels for a floated match, 0 for natural), `opacity' (a
+float 0.0-1.0), and the booleans `floating', `regex', `center'
+(defaults to t), `sticky' (pin to every tag of its monitor),
+`no-focus' (map without taking focus), `fullscreen', `no-blur',
+`no-shadow', `no-anim' and `idle-inhibit' (the match keeps the screen
+awake while it is mapped).
+
+This is the form with every field a YAML `rules:' entry has.  */)
   (Lisp_Object alist)
 {
   GowlConfig *config;
@@ -4801,9 +4832,7 @@ monitor -- included.  */)
   if (config == NULL)
     error ("No gowl config loaded");
 
-  memset (&rule, 0, sizeof rule);
-  rule.monitor = -1;
-  rule.center = TRUE;
+  gowl_rule_entry_init (&rule);
   v = Fcdr (Fassq (intern_c_string ("app-id"), alist));
   if (STRINGP (v)) rule.app_id = SSDATA (v);
   v = Fcdr (Fassq (intern_c_string ("title"), alist));
@@ -4822,6 +4851,39 @@ monitor -- included.  */)
   v = Fassq (intern_c_string ("center"), alist);
   if (!NILP (v))
     rule.center = !NILP (Fcdr (v));
+
+  /* The matchers YAML gained alongside app-id/title.  `xwayland' is
+     tri-state -- unset (from gowl_rule_entry_init), X11 only, Wayland
+     only.  */
+  v = Fcdr (Fassq (intern_c_string ("initial-title"), alist));
+  if (STRINGP (v)) rule.initial_title = SSDATA (v);
+  v = Fassq (intern_c_string ("xwayland"), alist);
+  if (!NILP (v))
+    {
+      Lisp_Object x = Fcdr (v);
+      rule.xwayland = (EQ (x, intern_c_string ("wayland")) || NILP (x)) ? 0 : 1;
+    }
+  v = Fcdr (Fassq (intern_c_string ("pid"), alist));
+  if (FIXNATP (v)) rule.pid = (gint) XFIXNAT (v);
+
+  /* Per-window properties: what the window is, and which effects skip
+     it.  The effect flags reach the alpha, blur and animation modules
+     through the client's rule flags.  */
+  v = Fcdr (Fassq (intern_c_string ("opacity"), alist));
+  if (NUMBERP (v))
+    {
+      double o = XFLOATINT (v);
+      if (o < 0.0 || o > 1.0)
+        error ("Rule opacity must be between 0.0 and 1.0");
+      rule.opacity = o;
+    }
+  rule.no_focus = !NILP (Fcdr (Fassq (intern_c_string ("no-focus"), alist)));
+  rule.fullscreen = !NILP (Fcdr (Fassq (intern_c_string ("fullscreen"), alist)));
+  rule.no_blur = !NILP (Fcdr (Fassq (intern_c_string ("no-blur"), alist)));
+  rule.no_shadow = !NILP (Fcdr (Fassq (intern_c_string ("no-shadow"), alist)));
+  rule.no_anim = !NILP (Fcdr (Fassq (intern_c_string ("no-anim"), alist)));
+  rule.idle_inhibit =
+    !NILP (Fcdr (Fassq (intern_c_string ("idle-inhibit"), alist)));
 
   gowl_config_add_rule_entry (config, &rule);
   return unbind_to (count, Qt);
@@ -8597,6 +8659,374 @@ emits `mode-changed', which `cmacs-gowl-mode-changed-functions' relays. */)
   return Qt;
 }
 
+/* One output's settings from an alist, for `monitors:' and for a
+   profile's outputs.  Every key is optional; what is not named keeps
+   the "unset" sentinel gowl_monitor_config_init wrote, so a caller can
+   set scale alone without also claiming position 0,0.  */
+static void
+cmacs_gowl_parse_monitor_config (Lisp_Object alist, GowlMonitorConfig *mc)
+{
+  Lisp_Object v;
+
+  gowl_monitor_config_init (mc);
+  if (NILP (alist))
+    return;
+  CHECK_LIST (alist);
+
+  v = Fcdr (Fassq (intern_c_string ("width"), alist));
+  if (FIXNATP (v)) mc->width = (gint) XFIXNAT (v);
+  v = Fcdr (Fassq (intern_c_string ("height"), alist));
+  if (FIXNATP (v)) mc->height = (gint) XFIXNAT (v);
+  v = Fcdr (Fassq (intern_c_string ("refresh"), alist));
+  if (NUMBERP (v)) mc->refresh = XFLOATINT (v);
+  v = Fcdr (Fassq (intern_c_string ("x"), alist));
+  if (FIXNUMP (v)) mc->x = (gint) XFIXNUM (v);
+  v = Fcdr (Fassq (intern_c_string ("y"), alist));
+  if (FIXNUMP (v)) mc->y = (gint) XFIXNUM (v);
+  v = Fcdr (Fassq (intern_c_string ("scale"), alist));
+  if (NUMBERP (v)) mc->scale = XFLOATINT (v);
+  v = Fcdr (Fassq (intern_c_string ("transform"), alist));
+  if (!NILP (v)) mc->transform = cmacs_gowl_parse_transform (v);
+
+  /* Tri-states: absent is not the same as nil, so both are found with
+     Fassq rather than read through Fcdr.  */
+  v = Fassq (intern_c_string ("enabled"), alist);
+  if (!NILP (v)) mc->enabled = NILP (Fcdr (v)) ? 0 : 1;
+  v = Fassq (intern_c_string ("vrr"), alist);
+  if (!NILP (v))
+    {
+      Lisp_Object x = Fcdr (v);
+
+      if (EQ (x, intern_c_string ("on-demand")))
+        mc->vrr = 2;
+      else
+        mc->vrr = NILP (x) ? 0 : 1;
+    }
+}
+
+DEFUN ("gowl-set-monitor-config", Fgowl_set_monitor_config,
+       Sgowl_set_monitor_config, 1, 2, 0,
+       doc: /* Configure the output named KEY from SETTINGS.
+KEY is a connector name ("eDP-1"), a description ("Make Model" or
+"Make Model Serial", as `gowl-monitor-info' reports), or "*" for any
+output.  A connector or a full description wins over a make-and-model
+key, which wins over "*".
+
+SETTINGS is an alist; every key is optional and what is absent is left
+alone: `width' and `height' (a mode, together), `refresh' (Hz), `x' and
+`y' (layout position), `scale', `transform' (0-7 or a symbol, as
+`gowl-set-monitor-transform' takes), `enabled' (nil disables the
+output) and `vrr' (t, nil, or `on-demand' for adaptive sync only while
+a fullscreen window says it is a game or a video).
+
+SETTINGS nil removes the entry.  This is the YAML `monitors:' section,
+which an embedded session has no file to write.  Settings apply when
+an output appears and on `gowl-apply-monitor-configs'.  */)
+  (Lisp_Object key, Lisp_Object settings)
+{
+  GowlConfig *config;
+  GowlMonitorConfig mc;
+  specpdl_ref count;
+
+  CHECK_STRING (key);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  if (NILP (settings))
+    gowl_config_set_monitor_config (config, SSDATA (key), NULL);
+  else
+    {
+      cmacs_gowl_parse_monitor_config (settings, &mc);
+      gowl_config_set_monitor_config (config, SSDATA (key), &mc);
+    }
+  gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
+  return unbind_to (count, Qt);
+}
+
+/* ── The IPC socket ──────────────────────────────────────────────────
+ *
+ * Standalone gowl listens on $XDG_RUNTIME_DIR/gowl.sock and answers
+ * one line per command; `gowl-msg' is the client.  Embedded, cmacs has
+ * D-Bus, MCP and emacsctl and so never opened one, which left the
+ * shell -- and every script that is not Emacs -- with no way in.
+ *
+ * The listener is an event source on the compositor's wl_event_loop,
+ * so connections are accepted and commands answered on the dispatch
+ * thread, inside the same lock a keybind runs under
+ * (cmacs_gowl_dispatch_thread holds cmacs_gowl_mutex across
+ * wl_event_loop_dispatch).  A command is therefore exactly as safe as
+ * the key bound to it: `gowl-msg dispatch Super+Return' runs what that
+ * key runs, on the thread it would have run on.  Nothing here evaluates
+ * Lisp of its own -- unlike emacsctl's eval, which can wedge the
+ * session.
+ */
+
+static GowlIpc *cmacs_gowl_ipc = NULL;
+
+/* Close the socket and hand the compositor back its NULL.  Safe to
+   call with nothing running; called from gowl-stop before the
+   compositor (and its event loop) go.  */
+static void
+cmacs_gowl_ipc_shutdown (void)
+{
+  if (cmacs_gowl_ipc == NULL)
+    return;
+  if (cmacs_gowl_compositor != NULL)
+    gowl_compositor_set_ipc (cmacs_gowl_compositor, NULL);
+  gowl_ipc_stop (cmacs_gowl_ipc);
+  g_clear_object (&cmacs_gowl_ipc);
+}
+
+DEFUN ("gowl-start-ipc", Fgowl_start_ipc, Sgowl_start_ipc, 0, 1, 0,
+       doc: /* Listen for gowl IPC commands on PATH.
+With PATH nil the socket is $XDG_RUNTIME_DIR/gowl.sock, which is where
+the `gowl-msg' client looks, so
+
+  gowl-msg clients | jq .
+  gowl-msg focus 3
+  gowl-msg dispatch Super+Return
+  gowl-msg -s                    # subscribe to the event stream
+
+work against this Emacs exactly as they do against a standalone gowl.
+Returns the socket path.
+
+Commands run on the compositor's dispatch thread, under the same lock a
+keybind runs under, and do only what the compositor can already be
+asked to do -- there is no eval here.  Anyone who can open the socket
+can drive the desktop, so it lives in the runtime directory, which is
+yours alone.
+
+Already listening on the same path is a no-op; on a different one the
+old socket is closed first.  `gowl-stop' closes it.  */)
+  (Lisp_Object path)
+{
+  g_autoptr (GError) err = NULL;
+  GowlIpc *ipc;
+  specpdl_ref count;
+
+  if (!NILP (path))
+    CHECK_STRING (path);
+  GOWL_CHECK_RUNNING ();
+
+  count = cmacs_gowl_lock_scoped ();
+  if (cmacs_gowl_ipc != NULL)
+    {
+      const gchar *current = gowl_ipc_get_socket_path (cmacs_gowl_ipc);
+
+      if (NILP (path) || g_strcmp0 (current, SSDATA (path)) == 0)
+        return unbind_to (count, build_string (current));
+      cmacs_gowl_ipc_shutdown ();
+    }
+
+  ipc = gowl_ipc_new (NILP (path) ? NULL : SSDATA (path));
+  if (!gowl_ipc_start (ipc,
+                       gowl_compositor_get_event_loop (cmacs_gowl_compositor),
+                       &err))
+    {
+      /* Copied out before the signal: a longjmp runs no g_autoptr
+         cleanup.  */
+      Lisp_Object msg = build_string (err != NULL ? err->message
+                                      : "could not listen");
+      g_object_unref (ipc);
+      g_clear_error (&err);
+      xsignal1 (Qgowl_error, msg);
+    }
+
+  cmacs_gowl_ipc = ipc;
+  gowl_compositor_set_ipc (cmacs_gowl_compositor, ipc);
+  return unbind_to (count, build_string (gowl_ipc_get_socket_path (ipc)));
+}
+
+DEFUN ("gowl-stop-ipc", Fgowl_stop_ipc, Sgowl_stop_ipc, 0, 0, 0,
+       doc: /* Stop listening for gowl IPC commands.
+Returns t if a socket was open.  */)
+  (void)
+{
+  gboolean was_open;
+  specpdl_ref count;
+
+  count = cmacs_gowl_lock_scoped ();
+  was_open = cmacs_gowl_ipc != NULL;
+  cmacs_gowl_ipc_shutdown ();
+  return unbind_to (count, was_open ? Qt : Qnil);
+}
+
+DEFUN ("gowl-ipc-socket", Fgowl_ipc_socket, Sgowl_ipc_socket, 0, 0, 0,
+       doc: /* Return the path of the gowl IPC socket, or nil if none.  */)
+  (void)
+{
+  Lisp_Object result;
+  specpdl_ref count;
+
+  count = cmacs_gowl_lock_scoped ();
+  result = cmacs_gowl_ipc != NULL
+    ? build_string (gowl_ipc_get_socket_path (cmacs_gowl_ipc)) : Qnil;
+  return unbind_to (count, result);
+}
+
+DEFUN ("gowl-apply-monitor-configs", Fgowl_apply_monitor_configs,
+       Sgowl_apply_monitor_configs, 0, 0, 0,
+       doc: /* Re-apply every output's configuration now.
+Chooses the output profile again from what is connected, then applies
+each output's settings.  The compositor does this by itself when an
+output appears or goes and on `gowl-reload-config'; call it after
+changing settings by hand.  */)
+  (void)
+{
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-add-output-profile", Fgowl_add_output_profile,
+       Sgowl_add_output_profile, 2, 2, 0,
+       doc: /* Define output profile NAME over OUTPUTS.
+
+A profile is a named set of outputs that must all be connected for it
+to apply, and what each one gets while it does -- kanshi, in the
+config.  OUTPUTS is a list whose elements are either an output key (a
+string, as `gowl-set-monitor-config' takes) or a cons of that key and a
+settings alist.  A key with no settings means "must be connected;
+settings from `gowl-set-monitor-config'".
+
+Profiles are tried in the order they were defined and the first whose
+outputs are all connected wins, so define the docked profile before the
+mobile one.  The choice is made again on every hotplug and on
+`gowl-reload-config'; `gowl-output-profile' reports it and
+`cmacs-gowl-output-profile-changed-functions' runs on a change.
+
+Defining a name twice refines that profile rather than adding a second.
+
+  (gowl-add-output-profile
+   "docked" \='(("eDP-1" . ((enabled . nil)))
+              ("Dell Inc. U2720Q" . ((x . 0) (y . 0) (scale . 1.5)))))
+  (gowl-add-output-profile "mobile" \='("eDP-1"))  */)
+  (Lisp_Object name, Lisp_Object outputs)
+{
+  GowlConfig *config;
+  GowlOutputProfile *profile;
+  Lisp_Object tail;
+  specpdl_ref count;
+
+  CHECK_STRING (name);
+  CHECK_LIST (outputs);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  profile = gowl_config_add_output_profile (config, SSDATA (name));
+  for (tail = outputs; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      GowlMonitorConfig mc;
+
+      if (STRINGP (entry))
+        {
+          gowl_output_profile_set_output (profile, SSDATA (entry), NULL);
+          continue;
+        }
+      if (!CONSP (entry) || !STRINGP (XCAR (entry)))
+        error ("Profile output must be a string or (KEY . SETTINGS)");
+      cmacs_gowl_parse_monitor_config (XCDR (entry), &mc);
+      gowl_output_profile_set_output (profile, SSDATA (XCAR (entry)), &mc);
+    }
+
+  /* The new profile may already match what is plugged in. */
+  gowl_compositor_select_output_profile (cmacs_gowl_compositor);
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-remove-output-profile", Fgowl_remove_output_profile,
+       Sgowl_remove_output_profile, 1, 1, 0,
+       doc: /* Remove the output profile called NAME.
+Returns t if there was one.  If it was the profile in force, the
+outputs are configured again from what is left.  */)
+  (Lisp_Object name)
+{
+  GowlConfig *config;
+  gboolean removed;
+  specpdl_ref count;
+
+  CHECK_STRING (name);
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config loaded");
+
+  removed = gowl_config_remove_output_profile (config, SSDATA (name));
+  if (removed)
+    {
+      /* The compositor holds a borrowed pointer to the profile that was
+         just freed; apply_monitor_configs clears it before choosing
+         again.  */
+      gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
+    }
+  return unbind_to (count, removed ? Qt : Qnil);
+}
+
+DEFUN ("gowl-output-profiles", Fgowl_output_profiles,
+       Sgowl_output_profiles, 0, 0, 0,
+       doc: /* Return the defined output profiles, in the order tried.
+Each element is (NAME OUTPUT-KEY...).  The one in force, if any, is
+`gowl-output-profile'.  */)
+  (void)
+{
+  Lisp_Object result = Qnil;
+  GowlConfig *config;
+  GList *l;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+
+  for (l = gowl_config_get_output_profiles (config); l != NULL; l = l->next)
+    {
+      const GowlOutputProfile *p = (const GowlOutputProfile *) l->data;
+      GHashTableIter iter;
+      gpointer k;
+      Lisp_Object keys = Qnil;
+
+      g_hash_table_iter_init (&iter, p->outputs);
+      while (g_hash_table_iter_next (&iter, &k, NULL))
+        keys = Fcons (build_string ((const gchar *) k), keys);
+      result = Fcons (Fcons (build_string (p->name), Fnreverse (keys)),
+                      result);
+    }
+  return unbind_to (count, Fnreverse (result));
+}
+
+DEFUN ("gowl-config-problems", Fgowl_config_problems,
+       Sgowl_config_problems, 0, 0, 0,
+       doc: /* Return how many problems the last config load found.
+An unknown key, a misspelled one, or a value outside what a key accepts
+counts as one, and each was named in a warning when it was read.  This
+is what `gowl --check-config' exits non-zero on; from Lisp it is the
+way to tell whether a `gowl-reload-config' was clean.  */)
+  (void)
+{
+  GowlConfig *config;
+  guint problems;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  problems = config != NULL ? gowl_config_get_problem_count (config) : 0;
+  return unbind_to (count, make_fixnum ((EMACS_INT) problems));
+}
+
 DEFUN ("gowl-output-profile", Fgowl_output_profile, Sgowl_output_profile,
        0, 0, 0,
        doc: /* Return the name of the output profile in force, or nil.
@@ -9528,6 +9958,15 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_key_mode);
   defsubr (&Sgowl_key_mode);
   defsubr (&Sgowl_output_profile);
+  defsubr (&Sgowl_output_profiles);
+  defsubr (&Sgowl_add_output_profile);
+  defsubr (&Sgowl_remove_output_profile);
+  defsubr (&Sgowl_set_monitor_config);
+  defsubr (&Sgowl_apply_monitor_configs);
+  defsubr (&Sgowl_config_problems);
+  defsubr (&Sgowl_start_ipc);
+  defsubr (&Sgowl_stop_ipc);
+  defsubr (&Sgowl_ipc_socket);
   defsubr (&Sgowl_switch_keyboard_layout);
   defsubr (&Sgowl_keyboard_layout);
   defsubr (&Sgowl_focus_direction);

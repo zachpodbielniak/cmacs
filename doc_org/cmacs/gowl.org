@@ -606,6 +606,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-bemenu-in-tag=    | Pick an app (bemenu) → launch on a tag    |
 | =cmacs-gowl-spawn-in-tag=     | Spawn a command on a specific tag         |
 | =cmacs-gowl-set-layout=       | Set layout (tile, monocle, tabbed, float) |
+| =cmacs-gowl-apply-output-config= | Re-apply monitor settings and output profiles |
 | =cmacs-gowl-toggle-vsplit=    | Toggle vsplit tile orientation            |
 | =cmacs-gowl-list-monitors=    | Show monitor info table                   |
 | =cmacs-gowl-monitor-info=     | Show detailed info for one monitor        |
@@ -1773,6 +1774,48 @@ Discover output names via =M-: (cmacs-gowl-list-monitors)= or
 
 Changes take effect live on =M-x cmacs-gowl-reload-config= /
 =cmacsgi compositor reload= / =Mod+R= — no compositor restart needed.
+
+*** Monitor settings and profiles from Elisp
+
+A =--gowl= session reads no YAML at all — everything is explicit, from Lisp — so the =monitors:= section above is only reachable through =(gowl-reload-config "/path/to.yaml")=. The same two tables are writable directly:
+
+#+begin_src elisp
+;; What an output gets when no profile covers it.
+(setq cmacs-gowl-monitor-configs
+      '(("eDP-1" . ((scale . 2.0)))
+        ("*"     . ((vrr . on-demand)))))
+
+;; Named sets of outputs, kanshi style: the first profile whose outputs
+;; are ALL connected wins, so the docked one goes first.
+(setq cmacs-gowl-output-profiles
+      '(("docked" . (("eDP-1" . ((enabled . nil)))
+                     ("Dell Inc. U2720Q" . ((x . 0) (y . 0) (scale . 1.5)))))
+        ("mobile" . ("eDP-1"))))
+#+end_src
+
+Both are applied when =cmacs-gowl-mode= starts, and =M-x cmacs-gowl-apply-output-config= pushes them again after a change. The underlying commands are =gowl-set-monitor-config=, =gowl-add-output-profile=, =gowl-remove-output-profile=, =gowl-output-profiles= and =gowl-apply-monitor-configs=.
+
+An output key is a connector name (=eDP-1=), a description (=Make Model= or =Make Model Serial=, which survives being plugged into a different port), or =*=. A connector or a full description beats a make-and-model key, which beats =*=. =gowl-monitor-info= and =gowl-msg monitors= both report all three fields.
+
+An output a profile names without settings — the bare ="eDP-1"= in =mobile= above — must be connected for the profile to match, and otherwise takes its settings from =cmacs-gowl-monitor-configs=. The profile in force is chosen again on every hotplug and every reload; =gowl-output-profile= returns its name, and =cmacs-gowl-output-profile-changed-functions= runs on a change, which is the hook to hang "re-tile the workspace when I dock" on.
+
+** The IPC socket: driving the session from a shell
+
+Standalone gowl listens on =$XDG_RUNTIME_DIR/gowl.sock= and answers one line per command; =gowl-msg= is its client. An embedded session opens the same socket, so everything outside Emacs — a shell script, a status bar, a keyboard macro on another machine — reaches =cmacs --gowl= exactly as it reaches a standalone gowl:
+
+#+begin_src sh
+gowl-msg clients | jq .          # every window, as JSON
+gowl-msg monitors | jq '.[].name'
+gowl-msg profile                 # the output profile in force
+gowl-msg focus 3                 # activate a window by id
+gowl-msg layout monocle
+gowl-msg dispatch Super+Return   # run what a key is bound to
+gowl-msg -s                      # subscribe: one line per event
+#+end_src
+
+It is on by default; =cmacs-gowl-ipc= turns it off (nil) or moves it (a path string), and =gowl-start-ipc=, =gowl-stop-ipc= and =gowl-ipc-socket= drive it by hand. =gowl-stop= closes it.
+
+Commands run on the compositor's dispatch thread, inside the lock a keybind runs under, and do only what the compositor can already be asked to do — this is not =emacsctl='s eval, and nothing arriving here evaluates Lisp. That said, anyone who can open the socket can drive your desktop, which is why it lives in your runtime directory. See =deps/gowl/docs/ipc.org= for the full command and event list.
 
 ** Enable / Disable
 

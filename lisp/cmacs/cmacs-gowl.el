@@ -75,6 +75,53 @@
   :type '(repeat string)
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-ipc t
+  "Whether to listen on the gowl IPC socket.
+
+When non-nil, `cmacs-gowl-mode' opens $XDG_RUNTIME_DIR/gowl.sock, which
+is where the `gowl-msg' client looks, so the shell can drive the
+compositor the same way it drives a standalone gowl:
+
+  gowl-msg clients | jq .
+  gowl-msg dispatch Super+Return
+  gowl-msg -s                    # the event stream
+
+A string is used as the socket path instead of the default.  Commands
+run on the compositor's dispatch thread and do only what the compositor
+can already be asked to do -- there is no eval behind this socket --
+but anyone who can open it can drive the desktop, so it lives in your
+runtime directory.  Set to nil to keep it closed."
+  :type '(choice (const :tag "Default socket" t)
+                 (const :tag "Off" nil)
+                 (string :tag "Socket path"))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-output-profiles nil
+  "Output profiles applied when `cmacs-gowl-mode' starts.
+
+Each element is (NAME . OUTPUTS), the arguments of
+`gowl-add-output-profile': a named set of outputs that must all be
+connected for the profile to apply, and what each gets while it does.
+Profiles are tried in order and the first that matches wins, so put the
+docked one first.  An output key is a connector name, a \"Make Model\"
+or \"Make Model Serial\" description, or \"*\".
+
+Example:
+  (setq cmacs-gowl-output-profiles
+        \='((\"docked\" . ((\"eDP-1\" . ((enabled . nil)))
+                       (\"Dell Inc. U2720Q\" . ((x . 0) (y . 0) (scale . 1.5)))))
+          (\"mobile\" . (\"eDP-1\"))))"
+  :type '(alist :key-type string :value-type sexp)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-monitor-configs nil
+  "Per-output settings applied when `cmacs-gowl-mode' starts.
+An alist of (KEY . SETTINGS), the arguments of
+`gowl-set-monitor-config'.  These are the fallback an output gets when
+no profile in `cmacs-gowl-output-profiles' covers it."
+  :type '(alist :key-type string :value-type sexp)
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-autostart nil
   "List of commands to spawn when `cmacs-gowl-mode' is enabled.
 Each element is a string command to launch as a Wayland client.
@@ -459,6 +506,25 @@ they are purely a cmacs `--gowl' concern."
               (const :tag "C config"    c))
   :group 'cmacs-gowl)
 
+(defun cmacs-gowl-apply-output-config ()
+  "Push `cmacs-gowl-monitor-configs' and `cmacs-gowl-output-profiles'.
+
+The per-output settings go first and the profiles on top of them, since
+a profile's entry for an output wins over the plain one.  A single
+`gowl-apply-monitor-configs' at the end picks whichever profile the
+connected outputs match and configures every output once.
+
+Safe to call again: `gowl-add-output-profile' refines a profile of the
+same name rather than adding a second, and a monitor entry is replaced.
+No-op when gowl is not running."
+  (interactive)
+  (when (and (gowl-running-p) (fboundp 'gowl-set-monitor-config))
+    (dolist (entry cmacs-gowl-monitor-configs)
+      (gowl-set-monitor-config (car entry) (cdr entry)))
+    (dolist (entry cmacs-gowl-output-profiles)
+      (gowl-add-output-profile (car entry) (cdr entry)))
+    (gowl-apply-monitor-configs)))
+
 (defun cmacs-gowl-apply-config-evaluation ()
   "Push `cmacs-gowl-config-evaluation' onto the live GowlConfig.
 Sets the two root-level properties so any subsequent
@@ -835,6 +901,17 @@ thread is running and applies configuration."
   ;; Reflect the Elisp defcustom onto the live GowlConfig so any
   ;; later `gowl-reload-config' honours it.
   (cmacs-gowl-apply-config-evaluation)
+  ;; Outputs: the plain per-output settings first, then the profiles
+  ;; that override them, then one pass to apply whichever profile the
+  ;; connected outputs match.
+  (cmacs-gowl-apply-output-config)
+  ;; The IPC socket, so `gowl-msg' and any other script reaches this
+  ;; session the way it reaches a standalone gowl.
+  (when cmacs-gowl-ipc
+    (condition-case err
+        (gowl-start-ipc (and (stringp cmacs-gowl-ipc) cmacs-gowl-ipc))
+      (error (message "cmacs-gowl: no IPC socket: %s"
+                      (error-message-string err)))))
   ;; Apply default layout.
   (when cmacs-gowl-default-layout
     (gowl-set-layout cmacs-gowl-default-layout))

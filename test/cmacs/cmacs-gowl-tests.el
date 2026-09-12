@@ -1619,5 +1619,131 @@ added the lock."
         (should (> scoped 0))
         (should (equal offenders nil))))))
 
+(defconst cmacs-gowl-tests--ipc-and-profiles-form
+  '(let ((socket nil))
+     ;; One command, one reply line.  Through the `gowl-msg' binary when
+     ;; the parent found it -- that is the path a user takes, and it
+     ;; proves a separate process can drive the session -- and over the
+     ;; socket directly otherwise, so the test still runs in a tree
+     ;; where gowl's tools were not built.
+     (defun cmacs-gowl-tests--ask (socket cmd)
+       (let ((msg (getenv "CMACS_TEST_GOWL_MSG")))
+         (if (and msg (file-executable-p msg))
+             (with-temp-buffer
+               (unless (eql 0 (apply #'call-process msg nil t nil
+                                     "--socket" socket
+                                     (split-string cmd " " t)))
+                 (error "gowl-msg %s failed: %s" cmd (buffer-string)))
+               (buffer-string))
+           (let* ((proc (make-network-process
+                         :name "gowl-ipc-test" :family 'local
+                         :service socket :coding 'utf-8-unix))
+                  (reply ""))
+             (unwind-protect
+                 (progn
+                   (set-process-filter
+                    proc (lambda (_p out) (setq reply (concat reply out))))
+                   (process-send-string proc (concat cmd "\n"))
+                   (with-timeout (5 (error "No reply to %s" cmd))
+                     (while (not (string-search "\n" reply))
+                       (accept-process-output proc 0.1)))
+                   reply)
+               (delete-process proc))))))
+     (gowl-start)
+     ;; The IPC socket: what `gowl-msg' and any other script outside
+     ;; Emacs reaches this session through.  Embedded cmacs never opened
+     ;; one, so the shell had no way in at all.
+     (setq socket (gowl-start-ipc))
+     (unless (file-exists-p socket)
+       (error "No socket at %s" socket))
+     (unless (equal socket (gowl-ipc-socket))
+       (error "`gowl-ipc-socket' disagrees: %s" (gowl-ipc-socket)))
+     ;; Asking again for the same path is a no-op, not a second listener.
+     (unless (equal socket (gowl-start-ipc))
+       (error "A second `gowl-start-ipc' moved the socket"))
+
+     ;; Output profiles from Lisp.  There is no YAML in an embedded
+     ;; session, so this is the only way to have one; "desk" names an
+     ;; output that is not connected and must lose to "solo".
+     (gowl-add-output-profile "desk" '("HEADLESS-1" "NO-SUCH-OUTPUT-9"))
+     (gowl-add-output-profile "solo" '(("HEADLESS-1" . ((scale . 2.0)))))
+     (unless (equal (mapcar #'car (gowl-output-profiles)) '("desk" "solo"))
+       (error "Profiles out of order: %S" (gowl-output-profiles)))
+     (unless (equal (gowl-output-profile) "solo")
+       (error "Wrong profile in force: %S" (gowl-output-profile)))
+     ;; Defining a name twice refines it rather than adding a second.
+     (gowl-add-output-profile "solo" '(("HEADLESS-1" . ((scale . 1.0)))))
+     (unless (= (length (gowl-output-profiles)) 2)
+       (error "A repeated name added a profile: %S" (gowl-output-profiles)))
+
+     ;; The socket answers, and sees the same profile Lisp does.
+     (let ((reply (cmacs-gowl-tests--ask socket "profile")))
+       (unless (string-search "\"active\":\"solo\"" reply)
+         (error "The socket does not report the profile: %s" reply)))
+     (let ((reply (cmacs-gowl-tests--ask socket "monitors")))
+       (unless (string-search "HEADLESS-1" reply)
+         (error "The socket does not list the output: %s" reply)))
+     ;; A command, not just a query: the layout really changes, and
+     ;; Lisp sees it.  `gowl-get-layout' answers with the layout's
+     ;; symbol, the socket with its name.
+     (let ((before (gowl-get-layout)))
+       (cmacs-gowl-tests--ask socket "layout monocle")
+       (when (equal (gowl-get-layout) before)
+         (error "A socket command did not take: still %S" before))
+       (unless (equal (gowl-get-layout) "[M]")
+         (error "Unexpected layout after the command: %S" (gowl-get-layout)))
+       (unless (string-search "monocle"
+                              (cmacs-gowl-tests--ask socket "layout"))
+         (error "The socket does not report the layout it set")))
+
+     ;; Removing the profile in force falls back to what is left.
+     (unless (gowl-remove-output-profile "solo")
+       (error "`gowl-remove-output-profile' found nothing"))
+     (when (gowl-output-profile)
+       (error "A profile still in force: %S" (gowl-output-profile)))
+
+     ;; Config problems are readable from Lisp, the way --check-config
+     ;; reports them to a shell.
+     (unless (integerp (gowl-config-problems))
+       (error "`gowl-config-problems' is not a number"))
+
+     ;; A rule with the matchers and properties the YAML section has.
+     ;; This used to build a Wayland-only rule pinned to monitor 0,
+     ;; because a zeroed GowlRuleEntry means exactly that.
+     (gowl-add-rule-entry '((app-id . "foot") (initial-title . "boot")
+                            (xwayland . t) (pid . 42) (opacity . 0.9)
+                            (no-focus . t) (no-blur . t) (idle-inhibit . t)))
+
+     (gowl-stop-ipc)
+     (when (file-exists-p socket)
+       (error "The socket outlived `gowl-stop-ipc'"))
+     (gowl-stop)
+     (princ "cmacs-gowl-ipc-and-profiles: ok\n")))
+
+(ert-deftest cmacs-gowl-test-ipc-and-profiles-headless ()
+  "The IPC socket and output profiles work in an embedded session.
+
+Both were gowl-only until now: `cmacs --gowl' loads no YAML, so
+`profiles:' was unreachable, and it opened no socket, so `gowl-msg' and
+every other non-Emacs script had no way to talk to it.  The child
+checks the socket answers queries and runs commands, that a profile
+defined from Lisp is chosen by the same first-match rule the file uses,
+and that the socket and Lisp agree on which one is in force."
+  (skip-unless (fboundp 'gowl-start-ipc))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((msg (expand-file-name "../deps/gowl/build/release/gowl-msg"
+                                invocation-directory))
+         (result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--ipc-and-profiles-form
+                  ;; The real client when this tree built it, so the
+                  ;; test covers a separate process driving the session.
+                  (and (file-executable-p msg)
+                       (list (concat "CMACS_TEST_GOWL_MSG=" msg)))))
+         (status (car result))
+         (output (cdr result)))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-search "cmacs-gowl-ipc-and-profiles: ok" output)))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

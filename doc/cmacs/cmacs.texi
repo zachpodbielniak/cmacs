@@ -2573,6 +2573,70 @@ Changes take effect live on @kbd{M-x cmacs-gowl-reload-config},
 @code{cmacsgi compositor reload}, or the @kbd{Mod+R} keybind --- no
 compositor restart needed.
 
+@subsection Monitor Settings and Output Profiles from Elisp
+
+A @code{--gowl} session reads no YAML at all, so the @code{monitors:}
+section above is reachable only through @code{(gowl-reload-config
+"/path/to.yaml")}.  The same two tables are writable directly.
+
+@lisp
+;; What an output gets when no profile covers it.
+(setq cmacs-gowl-monitor-configs
+      '(("eDP-1" . ((scale . 2.0)))
+        ("*"     . ((vrr . on-demand)))))
+
+;; Named sets of outputs, kanshi style: the first profile whose
+;; outputs are ALL connected wins, so the docked one goes first.
+(setq cmacs-gowl-output-profiles
+      '(("docked" . (("eDP-1" . ((enabled . nil)))
+                     ("Dell Inc. U2720Q" . ((x . 0) (y . 0) (scale . 1.5)))))
+        ("mobile" . ("eDP-1"))))
+@end lisp
+
+Both apply when @code{cmacs-gowl-mode} starts; @kbd{M-x
+cmacs-gowl-apply-output-config} pushes them again after a change.  The
+commands underneath are @code{gowl-set-monitor-config},
+@code{gowl-add-output-profile}, @code{gowl-remove-output-profile},
+@code{gowl-output-profiles} and @code{gowl-apply-monitor-configs}.
+
+An output key is a connector name (@code{eDP-1}), a description
+(@code{Make Model} or @code{Make Model Serial}, which survives being
+plugged into a different port), or @code{*}.  A connector or a full
+description beats a make-and-model key, which beats @code{*}.  An
+output a profile names without settings must be connected for the
+profile to match, and otherwise takes its settings from
+@code{cmacs-gowl-monitor-configs}.
+
+The profile in force is chosen again on every hotplug and reload;
+@code{gowl-output-profile} returns its name and
+@code{cmacs-gowl-output-profile-changed-functions} runs on a change.
+
+@subsection The IPC Socket
+
+Standalone gowl listens on @file{$XDG_RUNTIME_DIR/gowl.sock} and
+answers one line per command, with @command{gowl-msg} as its client.
+An embedded session opens the same socket, so anything outside Emacs
+drives @code{cmacs --gowl} exactly as it drives a standalone gowl.
+
+@example
+gowl-msg clients | jq .          # every window, as JSON
+gowl-msg profile                 # the output profile in force
+gowl-msg focus 3                 # activate a window by id
+gowl-msg dispatch Super+Return   # run what a key is bound to
+gowl-msg -s                      # subscribe: one line per event
+@end example
+
+It is on by default; @code{cmacs-gowl-ipc} turns it off (@code{nil}) or
+moves it (a path string), and @code{gowl-start-ipc},
+@code{gowl-stop-ipc} and @code{gowl-ipc-socket} drive it by hand.
+@code{gowl-stop} closes it.
+
+Commands run on the compositor's dispatch thread, inside the lock a
+keybind runs under, and do only what the compositor can already be
+asked to do --- nothing arriving here evaluates Lisp.  Anyone who can
+open the socket can drive the desktop, which is why it lives in the
+user's runtime directory.
+
 @subsection Enable / Disable
 
 @example
