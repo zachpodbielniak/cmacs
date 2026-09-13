@@ -19,6 +19,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'seq)
 (require 'cmacs)
 ;; The cheatsheet helpers are internal, so nothing autoloads them.
 (require 'cmacs-gowl)
@@ -150,6 +151,73 @@ would outlive the test, and nothing would fail on a critical."
      (gowl-stop)
      (princ "cmacs-gowl-failed-start: ok\n"))
   "What `cmacs-gowl-test-failed-start-headless' runs in the second cmacs.")
+
+(defun cmacs-gowl-tests--wayland-client ()
+  "A program that maps a Wayland window, or nil.
+The off-thread signal test needs something to map and set a title; any
+of these will do and none of them is worth depending on."
+  (seq-find #'executable-find
+            '("gst" "foot" "weston-terminal" "alacritty" "kitty")))
+
+(defconst cmacs-gowl-tests--off-thread-signal-form
+  '(progn
+     (setq cmacs-gowl-ipc nil)
+     (require 'cmacs-gowl)
+     (if (not (gowl-start))
+         (progn (princ "cmacs-gowl-off-thread: no compositor\n")
+                (kill-emacs 77))
+       (let ((added 0) (titles 0))
+         (cmacs-gowl--install-hook-bridges)
+         (add-hook 'cmacs-gowl-client-added-functions
+                   (lambda (&rest _) (setq added (1+ added))))
+         (add-hook 'cmacs-gowl-client-title-changed-functions
+                   (lambda (&rest _) (setq titles (1+ titles))))
+         (gowl-spawn (getenv "CMACS_GOWL_TEST_CLIENT"))
+         ;; Turn the main loop.  A handler that came from the compositor
+         ;; thread is waiting on the CMacs GMainContext, which is pumped
+         ;; from the pselect inside this wait and nowhere else.
+         (dotimes (_ 80) (sit-for 0.1))
+         (princ (format "cmacs-gowl-off-thread: added=%d titles=%d\n"
+                        added titles))
+         (ignore-errors (gowl-stop))
+         (kill-emacs (if (and (> added 0) (> titles 0)) 0 3)))))
+  "What `cmacs-gowl-test-off-thread-signals-reach-lisp' runs in a child.")
+
+(ert-deftest cmacs-gowl-test-off-thread-signals-reach-lisp ()
+  "A compositor signal raised off the Lisp thread still reaches its hook.
+
+THIS IS THE HALF OF THE FIX THAT CAN BE LOST SILENTLY.  Compositor
+signals are emitted from gowl's dispatch thread, and Elisp must not run
+there: `specpdl' is the main thread's and two threads winding it is a
+garbage function pointer that the next `unbind_to' calls.  Two cores on
+2026-09-13 were exactly that, one of them nine seconds into a session,
+both raised by a window setting its title.
+
+So `cmacs_gclosure_marshal' now queues those calls to the CMacs
+GMainContext instead of running them where they were raised.  The
+failure mode that swaps one bug for a worse one is queueing them
+somewhere nothing pumps: no crash, and every hook in the session quietly
+stops firing.  Nothing else in the suite would notice.
+
+`client-added' and `client-title-changed' are both raised on the
+dispatch thread when a window maps -- the second is the one from the
+dumps -- so a client that maps and names itself exercises the path
+end to end."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let ((client (cmacs-gowl-tests--wayland-client)))
+    (skip-unless client)
+    (let* ((result (cmacs-gowl-tests--run-headless
+                    cmacs-gowl-tests--off-thread-signal-form
+                    (list (concat "CMACS_GOWL_TEST_CLIENT=" client))))
+           (status (car result))
+           (output (cdr result)))
+      (when (eql status 77)
+        (ert-skip "no headless compositor here"))
+      (ert-info (output :prefix "child output: ")
+        (should (eql status 0))
+        (should (string-match-p "added=[1-9]" output))
+        (should (string-match-p "titles=[1-9]" output))))))
 
 (ert-deftest cmacs-gowl-test-start-stop-headless ()
   "`gowl-start' and `gowl-stop' really bring a compositor up and down.
@@ -1403,6 +1471,7 @@ found.  It now calls `cmacs_gowl_detect_nested', which probes."
 ;; replies, and whether cmacs loads and configures the module at all.
 
 (require 'cl-lib)
+(require 'seq)
 
 (defmacro cmacs-gowl-tests--with-scratchpad (replies &rest body)
   "Run BODY with gowl stubbed to answer scratchpad commands from REPLIES.

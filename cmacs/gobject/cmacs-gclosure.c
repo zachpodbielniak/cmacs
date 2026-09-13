@@ -4,8 +4,27 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * All closures fire on the Emacs main thread.  If a GLib API fires a
- * closure from a worker thread, the call is queued to the main
- * GMainContext via g_main_context_invoke().
+ * closure from a worker thread, the call is queued to the CMacs
+ * GMainContext and runs there instead.
+ *
+ * THIS FILE SAID THAT FOR A YEAR AND DID NOT DO IT.  The marshaller
+ * called safe_funcall on whatever thread GLib dispatched it on, and
+ * under `cmacs --gowl' that is the compositor's dispatch thread: every
+ * window that set a title ran Elisp beside a main thread that was very
+ * often already in the Lisp VM.  `specpdl' belongs to current_thread
+ * and a foreign pthread does not have one, so both threads pushed and
+ * popped the MAIN thread's unwind stack.  The result is not a wrong
+ * answer, it is a garbage function pointer in a SPECPDL_UNWIND slot,
+ * which the next `do_one_unbind' calls: SIGSEGV at 0x0 or 0x31, on
+ * whichever thread reached it first, with a backtrace naming neither
+ * the writer nor the cause.  Two cores on 2026-09-13, one of them nine
+ * seconds into a session because session restore maps clients that
+ * immediately set titles.
+ *
+ * So the hop below is not an optimisation and not tidiness.  Note that
+ * it has to happen BEFORE the parameters are marshalled: building a
+ * Lisp object allocates, and allocating is exactly as unsafe as
+ * calling.
  */
 
 #include <config.h>
@@ -42,7 +61,56 @@ typedef struct
 /* Forward-declared from cmacs-gobject.c */
 extern Lisp_Object cmacs_gvalue_to_lisp_external (const GValue *val);
 
-/* Marshal: called by GLib when the signal fires. */
+/* One deferred closure call: everything needed to run it later, owning
+   a reference to all of it.  The GValue copies matter -- a signal's
+   parameters live only for the length of the emission, and a copy of a
+   GObject-typed value takes a reference, which is what keeps the
+   GowlClient in a `client-title-changed' alive until the hook runs. */
+typedef struct
+{
+  GClosure *closure;
+  guint     n_values;
+  GValue   *values;
+} CmacsDeferredCall;
+
+static void
+cmacs_deferred_call_free (gpointer data)
+{
+  CmacsDeferredCall *call = data;
+  guint i;
+
+  for (i = 0; i < call->n_values; i++)
+    {
+      if (G_IS_VALUE (&call->values[i]))
+        g_value_unset (&call->values[i]);
+    }
+  g_free (call->values);
+  g_closure_unref (call->closure);
+  g_free (call);
+}
+
+static void cmacs_gclosure_invoke (GClosure *closure, GValue *return_value,
+                                   guint n_param_values,
+                                   const GValue *param_values);
+
+/* Runs on the Lisp thread, from the CMacs context. */
+static gboolean
+cmacs_gclosure_deferred_idle (gpointer data)
+{
+  CmacsDeferredCall *call = data;
+
+  /* The closure may have been invalidated between the emission and now
+     -- the object it was connected to went away.  g_closure_ref keeps
+     the struct alive; `is_invalid' says whether it still means
+     anything. */
+  if (!call->closure->is_invalid)
+    cmacs_gclosure_invoke (call->closure, NULL, call->n_values,
+                           call->values);
+  return G_SOURCE_REMOVE;
+}
+
+/* Marshal: called by GLib when the signal fires, on whatever thread the
+   emitter happened to be on. */
 static void
 cmacs_gclosure_marshal (GClosure     *closure,
                         GValue       *return_value,
@@ -51,16 +119,78 @@ cmacs_gclosure_marshal (GClosure     *closure,
                         gpointer      invocation_hint,
                         gpointer      marshal_data)
 {
+  (void)invocation_hint;
+  (void)marshal_data;
+
+  if (cmacs_glib_on_main_thread ())
+    {
+      cmacs_gclosure_invoke (closure, return_value, n_param_values,
+                             param_values);
+      return;
+    }
+
+  /* Off the Lisp thread.  Copy everything and run it there instead.
+     Nothing below this point may touch Lisp -- not even to build an
+     argument. */
+  {
+    CmacsDeferredCall *call;
+    guint i;
+
+    if (return_value != NULL && G_VALUE_TYPE (return_value) != G_TYPE_NONE)
+      {
+        /* A handler whose answer the emitter reads cannot be deferred:
+           by the time it runs, the emitter has long since used the
+           default.  Running it late is still better than corrupting the
+           VM, so the call goes ahead and this says so once. */
+        static gboolean warned = FALSE;
+        if (!warned)
+          {
+            warned = TRUE;
+            g_warning ("cmacs-gclosure: a signal expecting a return value "
+                       "fired off the Lisp thread; the handler will run, "
+                       "but its value cannot be given back");
+          }
+      }
+
+    call = g_new0 (CmacsDeferredCall, 1);
+    call->closure = g_closure_ref (closure);
+    call->n_values = n_param_values;
+    call->values = g_new0 (GValue, n_param_values);
+    for (i = 0; i < n_param_values; i++)
+      {
+        g_value_init (&call->values[i], G_VALUE_TYPE (&param_values[i]));
+        g_value_copy (&param_values[i], &call->values[i]);
+      }
+    cmacs_glib_invoke_on_main (cmacs_gclosure_deferred_idle, call,
+                               cmacs_deferred_call_free);
+  }
+}
+
+/* The actual call.  ALWAYS on the Lisp thread. */
+static void
+cmacs_gclosure_invoke (GClosure     *closure,
+                       GValue       *return_value,
+                       guint         n_param_values,
+                       const GValue *param_values)
+{
   CmacsElispClosure *eclosure = (CmacsElispClosure *)closure;
   Lisp_Object *args;
   Lisp_Object result;
   guint i;
 
+  /* The last line of defence.  If some future path reaches here off the
+     Lisp thread without going through the hop above, refusing is a lost
+     event; carrying on is memory corruption that surfaces later,
+     somewhere else, as an unattributable crash. */
+  if (!cmacs_glib_on_main_thread ())
+    {
+      g_critical ("cmacs-gclosure: refusing to run Elisp off the Lisp "
+                  "thread; the handler was dropped");
+      return;
+    }
+
   /* Allocate args on the stack.  GLib signals rarely exceed 8 params. */
   args = (Lisp_Object *)alloca ((n_param_values + 1) * sizeof (Lisp_Object));
-
-  (void)invocation_hint;
-  (void)marshal_data;
 
   args[0] = eclosure->func;
 
@@ -132,15 +262,57 @@ cmacs_gclosure_marshal (GClosure     *closure,
     }
 }
 
+/* Drop one function from the GC protection list, on the Lisp thread. */
+static gboolean
+cmacs_gclosure_unprotect_idle (gpointer data)
+{
+  Lisp_Object *held = data;
+
+  cmacs_gclosure_prevent_gc_list =
+    Fdelq (*held, cmacs_gclosure_prevent_gc_list);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+cmacs_gclosure_unprotect_free (gpointer data)
+{
+  g_free (data);
+}
+
+/*
+ * A closure is invalidated when the object it was connected to is
+ * finalised -- and under `cmacs --gowl' that happens on the compositor
+ * thread: a monitor is unplugged, its GowlMonitor goes, and every
+ * per-output bridge connected to it is invalidated right there.
+ *
+ * Fdelq walks and rewrites a Lisp list that the main thread's GC also
+ * walks, so this is the same hazard as calling a handler off-thread,
+ * only quieter: it corrupts a GC root rather than the unwind stack.
+ * Deferring costs one cons of protection living until the next idle,
+ * which is nothing.
+ */
 static void
 cmacs_gclosure_invalidate (gpointer data, GClosure *closure)
 {
   CmacsElispClosure *eclosure = (CmacsElispClosure *)closure;
   (void)data;
 
-  /* Remove the function from the GC protection list. */
-  cmacs_gclosure_prevent_gc_list =
-    Fdelq (eclosure->func, cmacs_gclosure_prevent_gc_list);
+  if (cmacs_glib_on_main_thread ())
+    {
+      cmacs_gclosure_prevent_gc_list =
+        Fdelq (eclosure->func, cmacs_gclosure_prevent_gc_list);
+      return;
+    }
+
+  {
+    /* The Lisp_Object is copied by value: the closure is being torn down
+       and must not be read from the idle. */
+    Lisp_Object *held = g_malloc (sizeof *held);
+
+    *held = eclosure->func;
+    cmacs_glib_invoke_on_main (cmacs_gclosure_unprotect_idle, held,
+                               cmacs_gclosure_unprotect_free);
+  }
 }
 
 GClosure *

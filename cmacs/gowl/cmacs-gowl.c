@@ -20,6 +20,7 @@
 #include <epaths.h>
 #include "cmacs-gowl.h"
 #include "cmacs-gobject.h"
+#include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
 #include "keyboard.h"
 #include "../dbus/cmacs-dbus-internal.h"
@@ -10081,10 +10082,35 @@ effect on devices already plugged in.  New devices get it on arrival. */)
  * `gobject-connect' does (see cmacs-gclosure.c): the function is called
  * through safe_funcall, so an error in it is reported, not fatal, and
  * that arrange simply places nothing.  Keep such a function quick --
- * pure arithmetic over the list it is given -- the compositor waits on
- * it. */
+ * pure arithmetic over the list it is given.
+ *
+ * It runs on the LISP thread, never on the compositor's.  An arrange
+ * asked for from the compositor thread queues itself back here rather
+ * than calling Lisp there; see cmacs_gowl_lisp_layout_arrange. */
 
 static Lisp_Object cmacs_gowl_lisp_layouts;  /* alist (NAME . FUNCTION) */
+
+/* Re-arrange one monitor on the Lisp thread; see the arrange function. */
+static gboolean
+cmacs_gowl_lisp_layout_retry_idle (gpointer data)
+{
+  GowlMonitor *mon = data;
+
+  if (cmacs_gowl_compositor != NULL && GOWL_IS_MONITOR (mon))
+    {
+      cmacs_gowl_lock ();
+      g_object_set_data (G_OBJECT (mon), "cmacs-lisp-arrange-queued", NULL);
+      gowl_compositor_arrange (cmacs_gowl_compositor, mon);
+      cmacs_gowl_unlock ();
+    }
+  return G_SOURCE_REMOVE;
+}
+
+static void
+cmacs_gowl_lisp_layout_retry_free (gpointer data)
+{
+  g_object_unref (data);
+}
 
 static void
 cmacs_gowl_lisp_layout_arrange (GowlCompositor *comp, GowlMonitor *mon)
@@ -10097,6 +10123,42 @@ cmacs_gowl_lisp_layout_arrange (GowlCompositor *comp, GowlMonitor *mon)
   entry = gowl_layout_get (comp, mon);
   if (entry == NULL || entry->name == NULL)
     return;
+
+  /*
+   * A LAYOUT CANNOT BE DEFERRED AND CANNOT RUN HERE.
+   *
+   * Arranging happens on whichever thread asked, and most of the time
+   * that is the compositor's dispatch thread -- a window mapped, a tag
+   * changed, something resized.  Running the Elisp function there
+   * builds Lisp objects and calls a Lisp function beside a main thread
+   * that may be in the middle of doing the same, on the same specpdl.
+   * cmacs-glib-loop.h sets out what that does; the short version is a
+   * SIGSEGV somewhere else entirely, later.
+   *
+   * But unlike a signal handler this one has an ANSWER the caller needs
+   * -- where each window goes -- so it cannot simply be queued and
+   * forgotten.  What is queued instead is the arrange ITSELF: come back
+   * on the Lisp thread and do the whole thing properly.  The windows
+   * keep the positions they had for one turn of the main loop and then
+   * move, which is a flicker on a tag switch and nothing at all the
+   * rest of the time.
+   *
+   * The flag stops a burst of arrangements queueing a burst of
+   * retries; whichever one runs does the current state anyway.
+   */
+  if (!cmacs_glib_on_main_thread ())
+    {
+      if (g_object_get_data (G_OBJECT (mon),
+                             "cmacs-lisp-arrange-queued") == NULL)
+        {
+          g_object_set_data (G_OBJECT (mon), "cmacs-lisp-arrange-queued",
+                             GINT_TO_POINTER (1));
+          cmacs_glib_invoke_on_main (cmacs_gowl_lisp_layout_retry_idle,
+                                     g_object_ref (mon),
+                                     cmacs_gowl_lisp_layout_retry_free);
+        }
+      return;
+    }
   cell = Fassoc (build_string (entry->name), cmacs_gowl_lisp_layouts, Qnil);
   if (NILP (cell))
     return;
@@ -10166,9 +10228,14 @@ place.  Re-registering NAME replaces the function.
 Once registered the layout is one of `gowl-list-layouts': select it with
 `gowl-set-layout', cycle to it, or bind `set-layout' to it.
 
-FUNCTION runs on the compositor's thread every time the monitor is
-arranged, so keep it to arithmetic over its arguments.  An error in it
-is reported in *Messages* and leaves the windows where they were.  */)
+FUNCTION runs on the Lisp thread every time the monitor is arranged, so
+keep it to arithmetic over its arguments.  An error in it is reported in
+*Messages* and leaves the windows where they were.
+
+An arrange asked for by the compositor itself -- a window mapping, a tag
+changing -- happens on its own thread, where Elisp must not run at all.
+That arrange is queued back to this thread instead, so the windows keep
+their old places for one turn of the main loop and then move.  */)
   (Lisp_Object name, Lisp_Object symbol, Lisp_Object function)
 {
   Lisp_Object cell;

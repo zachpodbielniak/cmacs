@@ -23,6 +23,8 @@
 #include "timespec.h"
 #include "keyboard.h"
 #include "cmacs-glib-loop.h"
+
+#include <pthread.h>
 #include "cmacs-glib-screenshot.h"
 #include "cmacs-ink-overlay.h"
 
@@ -48,6 +50,10 @@ static gint     poll_max_priority = 0;
  * → cmacs_glib_prepare → would try to acquire an already-held
  * context, corrupting the poll_fds scratch array). */
 static bool cmacs_context_acquired = false;
+
+/* The thread that runs the Lisp VM; see cmacs_glib_on_main_thread. */
+static pthread_t cmacs_main_thread;
+static bool      cmacs_main_thread_known = false;
 
 /* TRUE while cmacs_glib_dispatch is actively running its
  * check/dispatch loop on cmacs_context.  Guards against re-entrant
@@ -245,6 +251,40 @@ cmacs_glib_get_context (void)
   return cmacs_context;
 }
 
+bool
+cmacs_glib_on_main_thread (void)
+{
+  /* Unknown means init_cmacs_glib() has not run, which means main() has
+   * not got far enough to start anything.  There is no other thread to
+   * be on. */
+  if (!cmacs_main_thread_known)
+    return true;
+  return pthread_equal (pthread_self (), cmacs_main_thread) != 0;
+}
+
+void
+cmacs_glib_invoke_on_main (GSourceFunc func, gpointer data,
+                           GDestroyNotify notify)
+{
+  GSource *src;
+
+  if (func == NULL)
+    {
+      if (notify != NULL && data != NULL)
+        notify (data);
+      return;
+    }
+
+  src = g_idle_source_new ();
+  g_source_set_priority (src, G_PRIORITY_DEFAULT_IDLE);
+  g_source_set_callback (src, func, data, notify);
+  /* NULL context would mean the default one; cmacs_context is what
+   * Emacs's pselect actually pumps.  Before init there is no context
+   * and no other thread either, so the default is harmless. */
+  g_source_attach (src, cmacs_context);
+  g_source_unref (src);
+}
+
 /* ──────────────────────────────────────────────────────────────────── */
 /* DEFUN primitives                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
@@ -401,6 +441,10 @@ void
 init_cmacs_glib (void)
 {
   cmacs_context = g_main_context_new ();
+  /* Called from main() before anything has been started that could run
+   * on another thread, so this IS the Lisp thread. */
+  cmacs_main_thread = pthread_self ();
+  cmacs_main_thread_known = true;
 }
 
 /* ──────────────────────────────────────────────────────────────────────

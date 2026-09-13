@@ -2367,12 +2367,21 @@ Returns a handle for `cmacs-gowl-signal-disconnect'."
 ;; compositor.
 
 (defvar cmacs-gowl-client-pre-map-functions nil
-  "Functions run with a client just before its first placement.
-The rules have run; the layout has not.  A function may float it
+  "Functions run with a client around its first placement.
+The rules have run.  A function may float it
 \(`gowl-set-client-floating'), retag it (`gowl-set-tags'), pin it
-\(`gowl-set-client-sticky') or move it, and the first frame drawn
-already shows the result -- unlike `cmacs-gowl-client-added-functions',
-which run after it is placed.")
+\(`gowl-set-client-sticky') or move it.
+
+NO LONGER BEFORE THE FIRST FRAME.  The compositor raises this on its own
+thread, where Elisp cannot run -- see `cmacs-gowl-client-added-functions'
+and the commentary in cmacs-gclosure.c; briefly, two threads winding the
+same `specpdl' is a crash, and it was one.  So these run on the Lisp
+thread a moment later, by which time the window has been placed once.
+A window this hook floats or retags will visibly jump.
+
+For a rule that must apply before anything is drawn, use a gowl window
+rule (`cmacs-gowl-window-rules'): the windowrules module is C, runs in
+the compositor, and really is pre-placement.")
 
 (defvar cmacs-gowl-client-added-functions nil
   "Functions run with a client after it maps and is placed.")

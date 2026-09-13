@@ -784,7 +784,7 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 
 | Hook                                          | Arguments        | When                                   |
 |-----------------------------------------------+------------------+----------------------------------------|
-| =cmacs-gowl-client-pre-map-functions=         | client           | after the rules, before the first placement |
+| =cmacs-gowl-client-pre-map-functions=         | client           | after the rules, around the first placement (see below) |
 | =cmacs-gowl-client-added-functions=           | client           | mapped and placed                      |
 | =cmacs-gowl-client-removed-functions=         | client           | unmapping                              |
 | =cmacs-gowl-focus-changed-functions=          | client or nil    | keyboard focus moved                   |
@@ -800,7 +800,9 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 | =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
 | =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
 
-The pre-map hook is the one that decides placement: the rules have run, the layout has not, so a function that floats, retags, pins or moves the client there is reflected in the first frame drawn.  =cmacs-gowl-client-added-functions= runs after placement and can only correct.
+The pre-map hook is the earliest one, but it is *no longer before the first frame*, and that changed for a reason worth knowing.  The compositor raises every one of these signals on its own thread, and Elisp cannot run there: Emacs's unwind stack belongs to the Lisp thread, and two threads winding it produces a garbage function pointer that the next unwind calls.  It was not theoretical --- it was two SIGSEGVs on 2026-09-13, one of them nine seconds into a session, both raised by a window setting its title.  Handlers are now queued to the Lisp thread and run a moment later, by which time the window has been placed once, so a window this hook floats or retags will visibly jump.
+
+*For a rule that must apply before anything is drawn, use a window rule* (=gowl-add-rule-entry=, above).  The windowrules module is C, runs inside the compositor, and really is pre-placement.  The hook is for decisions that can tolerate a frame.
 
 #+begin_src elisp
 (add-hook 'cmacs-gowl-client-pre-map-functions
@@ -809,7 +811,7 @@ The pre-map hook is the one that decides placement: the rules have run, the layo
               (gowl-set-client-sticky c t))))
 #+end_src
 
-These functions run on the compositor's dispatch thread, like any handler connected with =gobject-connect=: keep them to quick decisions and compositor calls -- no prompting, nothing that waits on Emacs.  An error in one is reported and does not stop the compositor.  Monitor hooks are connected for the monitors present when the mode starts.
+These functions run on the Lisp thread, queued there from the compositor's dispatch thread --- as does any handler connected with =gobject-connect=.  Keep them quick anyway: they run at idle in the main loop, so a slow one delays redisplay rather than the compositor.  An error in one is reported and does not stop the compositor.  Monitor hooks are connected for the monitors present when the mode starts.
 
 ** Layouts written in Elisp
 
