@@ -615,7 +615,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
-| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: glass, water, blur, nothing |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: water, glass, blur, nothing |
 | =cmacs-gowl-set-water=        | Pick a kind of water (pool … storm) and switch to it |
 | =cmacs-gowl-set-water-intensity= | How rough the water is, over its preset |
 
@@ -717,7 +717,7 @@ holds focus.
 | =Super+Shift+0=         | Tag focused client to all tags          |
 | =Super+,= / =Super+.=   | Focus previous / next monitor           |
 | =Super+Ctrl+Shift+,= / =.= | Move client to previous / next monitor  |
-| =Super+Shift+"=         | Cycle the window backdrop: glass, blur, nothing |
+| =Super+"=               | Cycle the window backdrop: water, glass, blur, nothing |
 | =Super+Shift+l=         | Lock the session                        |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
@@ -1130,13 +1130,14 @@ Two modules can fill the space behind a translucent window, and
 
 | Value    | What you see                                          |
 |----------+-------------------------------------------------------|
-| =glass=  | the wallpaper refracted through the window (default)  |
-| =water=  | refracted through a MOVING water surface               |
+| =water=  | refracted through a MOVING water surface (the default) |
+| =glass=  | the wallpaper refracted through the window             |
 | =blur=   | the wallpaper, blurred behind it                       |
 | =none=   | the desktop, straight through                          |
 
-=Super+Shift+"= cycles the four, and so does =M-x
-cmacs-gowl-cycle-backdrop= (a prefix argument goes the other way).  Either
+=Super+"= cycles the four --- water, glass, blur, nothing --- and so
+does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the other
+way).  Either
 way the layout indicator draws a brief toast naming what it landed on
 --- "Liquid glass", "Liquid water", "Blur", "No backdrop" --- because
 over a busy wallpaper a calm water and a subtle glass can both look a
@@ -1244,6 +1245,10 @@ none of the other effect modules with it.
 :PROPERTIES:
 :CUSTOM_ID: liquidwater
 :END:
+
+*This is what CMacs shows by default*, as a =sea= at
+=cmacs-gowl-water-intensity= 0.4 --- a swell you can read a terminal
+through.
 
 The wallpaper seen through a moving water surface. A real height field
 --- four octaves of two-dimensional wave plus up to six expanding ripples

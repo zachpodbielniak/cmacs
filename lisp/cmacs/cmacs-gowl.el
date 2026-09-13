@@ -130,29 +130,30 @@ re-pushes it."
                                           (string :tag "Mode"))))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-backdrop 'glass
+(defcustom cmacs-gowl-backdrop 'water
   "What shows through a translucent window.
 
 `glass' refracts the wallpaper through the window, as though the window
 were a slab of glass with a bevelled edge: the flat middle passes light
 straight through, and the rim bends what is behind the middle out
 towards it, splits it into colours, darkens where it magnifies and
-catches a line of light.  This is the default.
+catches a line of light.
 
 `water' refracts it through a MOVING water surface -- a real height
 field, its normal and curvature taken per pixel, one ray bent through it
 at n = 1.333.  `cmacs-gowl-water-preset' says what kind of water, from a
 barely-disturbed pool to a storm.  Unlike the others this one never
 settles, so a screen showing it is a screen that is rendering; see
-`cmacs-gowl-water-fps'.
+`cmacs-gowl-water-fps'.  This is the default, as a `sea' at an intensity
+of 0.4 -- a swell you can read a terminal through.
 
 `blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
 `none' leaves the desktop showing straight through.
 
 Every backdrop module reads this and only one of them draws, so
-switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+Shift+\"
-step through the four.
+switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+\" step
+through the four, in the order water, glass, blur, nothing.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
@@ -934,7 +935,7 @@ authoritative and keeps re-runs idempotent."
         ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
         ;; a tag showing a browser or a game there was no way to lock at
         ;; all.  The action runs `cmacs-gowl-lock-command'.
-        ;; The window backdrop: glass, blur, nothing.  A compositor
+        ;; The window backdrop: water, glass, blur, nothing.  A compositor
         ;; action rather than a `custom' one, so it works whatever has
         ;; the keyboard -- the same reason the lock below is.  The key
         ;; is Super+Shift+" ; the level-0 name for it is `apostrophe',
@@ -3002,7 +3003,7 @@ water bends what is behind it and the foam -- and nothing else."
 
 ;;;###autoload
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)
-  "Step to the next window backdrop: glass, blur, nothing, glass again.
+  "Step to the next window backdrop: water, glass, blur, nothing, round again.
 
 With a prefix argument BACKWARDS, step the other way.
 
