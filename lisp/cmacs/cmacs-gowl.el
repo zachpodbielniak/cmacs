@@ -163,7 +163,7 @@ opaque window shows no backdrop of any kind."
                  (const :tag "Nothing" none))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-water-preset 'pond
+(defcustom cmacs-gowl-water-preset 'sea
   "What kind of water `cmacs-gowl-backdrop' shows when it is `water'.
 
 Each is a whole tuned set, not a single knob, because the numbers in one
@@ -172,8 +172,8 @@ wavelength is not a calmer sea, it is a flat pane with a slow wobble.
 
   `pool'      barely disturbed; it is almost entirely its ripples
   `fountain'  livelier, six ripple sources, quick
-  `pond'      a gentle swell with the odd ring (the default)
-  `sea'       a rolling swell, no ripples, a little foam
+  `pond'      a gentle swell with the odd ring
+  `sea'       a rolling swell, no ripples, a little foam (the default)
   `storm'     choppy, fast, white-capped, running into the edges
 
 `cmacs-gowl-water-intensity' scales the roughness of whichever you pick."
@@ -184,10 +184,11 @@ wavelength is not a calmer sea, it is a flat pane with a slow wobble.
                  (const :tag "Storm" storm))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-water-intensity 1.0
+(defcustom cmacs-gowl-water-intensity 0.4
   "How rough the water is, over and above `cmacs-gowl-water-preset'.
 
-1.0 is the preset as tuned.  It scales the four things that together
+1.0 is the preset as tuned; the default is 0.4, which is a sea you can
+read a terminal through.  It scales the four things that together
 mean \"how rough is it\" -- the wave height, the choppiness, how far the
 water bends what is behind it, and the foam -- and nothing else.
 Scaling the wavelength with them would not make a rougher sea, it would
