@@ -1642,7 +1642,14 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               and a frame rate -- so it holds an output
                               awake while a translucent window is on it.
                               Only one of the three draws at a time. */
-                           "liquidwater", "layout-indicator",
+                           "liquidwater",
+                           /* And the fourth: the wallpaper through a
+                              window that has been left out in the rain.
+                              Animated like the water and throttled the
+                              same way, and one of the four the backdrop
+                              key steps through -- water, rain, glass,
+                              blur, off. */
+                           "liquidrain", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were
                               left to the user's config, which meant a
@@ -5817,6 +5824,98 @@ reload, and it does not switch the backdrop on.  See
     }
   gowl_config_set_water_preset (config, name);
   return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-set-rain-preset", Fgowl_set_rain_preset,
+       Sgowl_set_rain_preset, 1, 1, 0,
+       doc: /* Set what kind of rain the `rain' backdrop shows.
+
+PRESET is `mist', `drizzle', `shower', `downpour' or `storm'.  Each is a
+whole tuned set rather than a single knob: a mist is almost entirely
+resting condensation and a storm is almost entirely water going down the
+glass, and the numbers in one only mean anything together.
+
+Takes effect on the next frame the rain draws; it does not need a
+reload, and it does not switch the backdrop on.  See
+`gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_rain_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown rain preset: %s "
+             "(want mist, drizzle, shower, downpour or storm)", name);
+    }
+  gowl_config_set_rain_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-rain-intensity", Fgowl_rain_intensity, Sgowl_rain_intensity,
+       0, 0, 0,
+       doc: /* Return how hard it is raining, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_rain_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-rain-intensity", Fgowl_set_rain_intensity,
+       Sgowl_set_rain_intensity, 1, 1, 0,
+       doc: /* Set how hard it is raining, over and above the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales the three things that together mean "how hard is it raining" --
+how many drops there are, how many of them are running down the glass,
+and how fast those fall -- and nothing else.
+
+It deliberately leaves the DROP SIZE alone.  Scaling that as well would
+not give heavier rain, it would give the same rain on a smaller window.
+
+0.0 is a clean, dry pane, which passes light straight through.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_rain_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_rain_intensity (config)));
 }
 
 DEFUN ("gowl-water-intensity", Fgowl_water_intensity, Sgowl_water_intensity,
@@ -10616,6 +10715,9 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_water_preset);
   defsubr (&Sgowl_water_intensity);
   defsubr (&Sgowl_set_water_intensity);
+  defsubr (&Sgowl_set_rain_preset);
+  defsubr (&Sgowl_rain_intensity);
+  defsubr (&Sgowl_set_rain_intensity);
   defsubr (&Sgowl_lock_command);
   defsubr (&Sgowl_set_lock_command);
   defsubr (&Sgowl_lock_on_suspend_p);

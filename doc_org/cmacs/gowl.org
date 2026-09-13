@@ -615,7 +615,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
-| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: water, glass, blur, nothing |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: water, rain, glass, blur, nothing |
 | =cmacs-gowl-set-water=        | Pick a kind of water (pool … storm) and switch to it |
 | =cmacs-gowl-set-water-intensity= | How rough the water is, over its preset |
 
@@ -717,7 +717,7 @@ holds focus.
 | =Super+Shift+0=         | Tag focused client to all tags          |
 | =Super+,= / =Super+.=   | Focus previous / next monitor           |
 | =Super+Ctrl+Shift+,= / =.= | Move client to previous / next monitor  |
-| =Super+"=               | Cycle the window backdrop: water, glass, blur, nothing |
+| =Super+"=               | Cycle the window backdrop: water, rain, glass, blur, nothing |
 | =Super+Shift+l=         | Lock the session                        |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
@@ -1131,15 +1131,18 @@ Two modules can fill the space behind a translucent window, and
 | Value    | What you see                                          |
 |----------+-------------------------------------------------------|
 | =water=  | refracted through a MOVING water surface (the default) |
+| =rain=   | through a rained-on window: drops, runs and streaks    |
 | =glass=  | the wallpaper refracted through the window             |
 | =blur=   | the wallpaper, blurred behind it                       |
 | =none=   | the desktop, straight through                          |
 
-=Super+"= cycles the four --- water, glass, blur, nothing --- and so
-does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the other
-way).  Either
+=Super+"= cycles the five --- water, rain, glass, blur, nothing --- and
+so does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the other
+way). The two that MOVE are adjacent on purpose, so one press from the
+default lands on the other animated look rather than on nothing. Either
 way the layout indicator draws a brief toast naming what it landed on
---- "Liquid glass", "Liquid water", "Blur", "No backdrop" --- because
+--- "Liquid glass", "Liquid water", "Liquid rain", "Blur",
+"No backdrop" --- because
 over a busy wallpaper a calm water and a subtle glass can both look a
 great deal like the blur they replaced, and without one the honest
 reaction to pressing the key is "did that do anything?".
@@ -1320,6 +1323,77 @@ that does not do this. =cmacs-gowl-water-fps= is 30 by default, which is
 half the cost of 60 for a difference nobody can see on something that
 moves as slowly as water.
 
+*** Liquid rain
+:PROPERTIES:
+:CUSTOM_ID: liquidrain
+:END:
+
+The wallpaper through a window somebody left out in the rain. Drops
+collect on the glass, sit, and slide away when they get heavy; others run
+down it in wandering columns, leaving beaded trails that clear the frost
+behind them.
+
+*The drops are lenses and the glass is not*, and that contrast is the
+whole effect. The pane between them is frosted; a drop is a clean
+spherical cap, and what shows through it is sharp, bent and upside down.
+A water drop inverts what is behind it because it is a ball lens, and
+that is computed rather than drawn: a sphere of water focuses at two of
+its own radii, so the magnification is =1 - depth/2= and the inversion
+falls out of the arithmetic.
+
+Nothing is simulated and nothing is stored. Every drop, every trail and
+every bead is a function of the clock and the pixel, which is what lets
+any frame be drawn without the one before it.
+
+**** Choosing your rain
+
+=cmacs-gowl-rain-preset= names a whole tuned set, because the numbers in
+one only mean anything together --- raising the drop count without
+raising the drop size gives a finer mist, not heavier rain.
+
+| Preset      | What it is |
+|-------------+------------|
+| =mist=      | Almost entirely resting condensation; barely anything runs |
+| =drizzle=   | A light scatter with the occasional run |
+| =shower=    | A steady fall, with runs and beaded trails (the default) |
+| =downpour=  | Heavy and fast; most of the glass is running |
+| =storm=     | As hard as it goes |
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-rain-preset 'shower)   ;; the default
+(setq cmacs-gowl-rain-intensity 1.0)    ;; the default; 0 is a dry pane
+#+end_src
+
+=M-x cmacs-gowl-set-rain= completes over the five and switches the
+backdrop to =rain= at the same time --- choosing a kind of rain and then
+not seeing any is nobody's intent. =M-x cmacs-gowl-set-rain-intensity=
+prompts for the one knob over the whole preset.
+
+=cmacs-gowl-rain-intensity= scales exactly the three things that together
+mean "how hard is it raining": how many drops there are, how many of them
+are running, and how fast those fall. It deliberately does NOT scale the
+drop size --- that would not give heavier rain, it would give the same
+rain on a smaller window, which is the same trap the water's knob avoids
+with its wavelength. At =0= the pane is clean and dry, and a dry pane
+passes light straight through.
+
+Every value a preset sets can be overridden individually from gowl's YAML
+config (=rain-cell=, =rain-density=, =rain-depth=, =rain-runs=,
+=rain-beads=, =rain-fog= and the rest); an override that is not named
+leaves the preset in charge. The full list is in gowl's own
+[[file:../../deps/gowl/docs/configuration.org][configuration guide]].
+
+**** What it costs
+
+Everything the water's cost section above says applies here unchanged:
+the clock, the frame rate, and the fact that a screen showing rain is a
+screen that is rendering.
+
+The one difference is that the shader is dearer per pixel. The water
+takes five samples of one height field; the rain asks nine cells of each
+of two turned lattices and three columns of running drops. It is drawn at
+half the window's size for the same reason, and that matters more here.
+
 *** Frosted glass and shadows
 
 Translucent windows (through the =alpha= module or a window rule) get a
@@ -1375,13 +1449,13 @@ core knowing that an overview exists. The same string works from a
 keybind (=@{ action: ipc_command, arg: "expo" @}=) and from the IPC
 socket.
 
-*** How eight effects share one compositor
+*** How nine effects share one compositor
 
-All eight --- animation, cube, expo, switcher, magnifier, blur,
-liquidglass, liquidwater --- are separate plugins implementing one
-interface, and CMacs loads all of them. The last three are the set that
-are alternatives rather than additions; see [[#window-backdrop][What shows through a
-translucent window]].
+All nine --- animation, cube, expo, switcher, magnifier, blur,
+liquidglass, liquidwater, liquidrain --- are separate plugins
+implementing one interface, and CMacs loads all of them. The last four
+are the set that are alternatives rather than additions; see
+[[#window-backdrop][What shows through a translucent window]].
 gowl decides who gets a given hook per event rather than handing the
 whole interface to one module: the hooks that decide where a window IS
 stop at the first module that claims them, and the per-frame and teardown
@@ -2082,9 +2156,13 @@ HDR is two things accepted together: an image description (BT.2020 primaries, th
 
 An output qualifies only when it advertises *both* BT.2020 and PQ, which is a property of the whole chain rather than the panel: an HDR monitor on a cable or port that cannot carry ten bits at the current refresh rate reports neither.  =gowl-monitor-hdr-capable-p= is the check, =gowl-monitor-hdr-p= the state, =gowl-set-monitor-hdr= the setter, and =cmacs-gowl-monitor-hdr-changed-functions= runs on every change wherever it came from.
 
+*And so does the RENDERER, which under =cmacs --gowl= is the catch.*  PQ carries absolute luminance, so every SDR window has to be re-encoded into it; wlroots implements that in its Vulkan renderer and nowhere else, and cmacs runs GLES2 because that is the context the blur, the glass, the water, the rain, the cube, the overview, the switcher and the magnifier all borrow.  On GLES2 an HDR output was being fed raw sRGB code values, so ordinary white asked the panel for ten thousand candelas --- which is one cause wearing three disguises: Electron applications looking dim (Chromium encodes itself correctly at 203 cd/m² and is then the only correctly scaled thing on screen), the battery going, and dark interfaces washing out enough to read as light mode.
+
+So =gowl-monitor-hdr-capable-p= now answers =nil= on such an output, =cmacs-gowl-toggle-hdr= says the display cannot do it, and the log says why once.  Two ways to have it anyway, and they are a real choice rather than a fix: start the session with =WLR_RENDERER=vulkan= (correct colour, and every effect module declines to run), or set =hdr-unmanaged: true= in =~/.config/gowl/config.yaml= (HDR as it was, uncorrected).  The honest summary for a cmacs session is that HDR is something to turn on for a film and off afterwards.
+
 *The mastering display is read, not guessed.*  Switching into HDR means declaring what the content was graded on, and gowl describes /that display/: its own primaries, and its own peak, minimum and frame-average luminance parsed out of the CTA-861 HDR block in its EDID.  Declaring a brighter grade than the panel reaches is what makes it tone-map --- which only dims the desktop, and is what "HDR does not work" usually turns out to be.  =gowl-msg monitors= reports the numbers as =hdr_max_luminance=, =hdr_min_luminance= and =hdr_max_frame_average=; a display that states none keeps the conventional 1000 cd/m².
 
-*It does not tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application declares its surface HDR.  That is what =wp-color-management-v1= is for, and gowl advertises it, so a colour-managed player describes its content and the scene graph converts it.  This is why HDR is a command rather than something to leave on --- and why =cmacs-gowl-monitor-configs= takes =hdr= for the displays where it is worth it:
+*It does not tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application declares its surface HDR.  That is what =wp-color-management-v1= is for, and gowl advertises it --- but only what the renderer can actually perform, for the reason above: advertising PQ on a renderer that cannot encode it is what sends a colour-managed client down the HDR path and leaves it the one correctly scaled window on the screen.  This is why HDR is a command rather than something to leave on --- and why =cmacs-gowl-monitor-configs= takes =hdr= for the displays where it is worth it:
 
 #+begin_src elisp
 (setq cmacs-gowl-monitor-configs

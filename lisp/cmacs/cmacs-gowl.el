@@ -160,6 +160,7 @@ How much of it you see is set by how transparent the window is --
 opaque window shows no backdrop of any kind."
   :type '(choice (const :tag "Refracted through the window" glass)
                  (const :tag "Through moving water" water)
+                 (const :tag "Through a rained-on window" rain)
                  (const :tag "Blurred behind the window" blur)
                  (const :tag "Nothing" none))
   :group 'cmacs-gowl)
@@ -197,6 +198,42 @@ make the same sea seen from further away.
 
 0.0 is a flat surface, which passes light straight through: still water,
 not a fixed distortion."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-rain-preset 'shower
+  "What kind of rain `cmacs-gowl-backdrop' shows when it is `rain'.
+
+Each is a whole tuned set rather than a single knob, because the numbers
+in one only mean anything together: raising the drop count without
+raising the drop size gives a finer mist, not heavier rain.
+
+  `mist'      almost entirely resting condensation, barely running
+  `drizzle'   a light scatter with the occasional run
+  `shower'    a steady fall with runs and beaded trails (the default)
+  `downpour'  heavy, fast, most of the glass running
+  `storm'     as hard as it goes
+
+`cmacs-gowl-rain-intensity' scales how hard it falls."
+  :type '(choice (const :tag "Mist" mist)
+                 (const :tag "Drizzle" drizzle)
+                 (const :tag "Shower" shower)
+                 (const :tag "Downpour" downpour)
+                 (const :tag "Storm" storm))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-rain-intensity 1.0
+  "How hard it rains, over and above `cmacs-gowl-rain-preset'.
+
+1.0 is the preset as tuned.  It scales the three things that together
+mean \"how hard is it raining\" -- how many drops there are, how many of
+them are running down the glass, and how fast those fall -- and nothing
+else.
+
+It deliberately leaves the DROP SIZE alone.  Scaling that as well would
+not give heavier rain, it would give the same rain on a smaller window.
+
+0.0 is a clean, dry pane, which passes light straight through."
   :type 'number
   :group 'cmacs-gowl)
 
@@ -935,11 +972,13 @@ authoritative and keeps re-runs idempotent."
         ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
         ;; a tag showing a browser or a game there was no way to lock at
         ;; all.  The action runs `cmacs-gowl-lock-command'.
-        ;; The window backdrop: water, glass, blur, nothing.  A compositor
-        ;; action rather than a `custom' one, so it works whatever has
-        ;; the keyboard -- the same reason the lock below is.  The key
-        ;; is Super+Shift+" ; the level-0 name for it is `apostrophe',
-        ;; which is what gowl matches when Shift is held.
+        ;; The window backdrop: water, rain, glass, blur, nothing.  A
+        ;; compositor action rather than a `custom' one, so it works
+        ;; whatever has the keyboard -- the same reason the lock below
+        ;; is.  The key is Super+" ; the level-0 name for that is
+        ;; `apostrophe', which is what gowl matches when Shift is held,
+        ;; so the bind reads Super+Shift+apostrophe and the key you
+        ;; press is Super and the double-quote.
         (bind "Super+Shift+apostrophe" 'cycle-backdrop nil
               "Cycle the window backdrop")
         (bind "Super+Shift+l" 'lock nil "Lock the session")
@@ -2961,6 +3000,9 @@ the compositor looks like from here."
   (when (fboundp 'gowl-set-water-preset)
     (ignore-errors (gowl-set-water-preset cmacs-gowl-water-preset))
     (ignore-errors (gowl-set-water-intensity cmacs-gowl-water-intensity)))
+  (when (fboundp 'gowl-set-rain-preset)
+    (ignore-errors (gowl-set-rain-preset cmacs-gowl-rain-preset))
+    (ignore-errors (gowl-set-rain-intensity cmacs-gowl-rain-intensity)))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
 
@@ -3002,14 +3044,57 @@ water bends what is behind it and the foam -- and nothing else."
   (message "Water intensity: %.2f" cmacs-gowl-water-intensity))
 
 ;;;###autoload
+(defun cmacs-gowl-set-rain (preset)
+  "Set the kind of rain shown behind translucent windows to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `rain' if it is not there
+already: choosing a kind of rain and then not seeing any is nobody's
+intent."
+  (interactive
+   (list (intern (completing-read
+                  "Rain: "
+                  '("mist" "drizzle" "shower" "downpour" "storm")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-rain-preset)))))
+  (unless (fboundp 'gowl-set-rain-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-rain-preset preset)
+  (gowl-set-rain-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'rain)
+    (setq cmacs-gowl-backdrop 'rain)
+    (gowl-set-backdrop 'rain))
+  (message "Rain: %s (intensity %.2f)" preset cmacs-gowl-rain-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-rain-intensity (intensity)
+  "Set how hard it rains, over and above its preset.
+
+1.0 is the preset as tuned; 0.0 is a clean, dry pane, which passes light
+straight through.  Scales how many drops there are, how many are running
+and how fast they fall -- and not the drop size, which would only be the
+same rain on a smaller window."
+  (interactive
+   (list (read-number "Rain intensity (0-3): " cmacs-gowl-rain-intensity)))
+  (unless (fboundp 'gowl-set-rain-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-rain-intensity
+        (gowl-set-rain-intensity intensity))
+  (message "Rain intensity: %.2f" cmacs-gowl-rain-intensity))
+
+;;;###autoload
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)
-  "Step to the next window backdrop: water, glass, blur, nothing, round again.
+  "Step to the next window backdrop.
+
+The order is water, rain, glass, blur, nothing, round again: the four
+that draw something come first and the two that MOVE are adjacent, so
+one press from the default lands on the other animated look rather than
+on nothing at all.
 
 With a prefix argument BACKWARDS, step the other way.
 
-This is what Super+Shift+\" is bound to.  It changes the running
-compositor and `cmacs-gowl-backdrop' together, so the choice survives
-the next `cmacs-gowl-mode' as well as this session."
+This is what Super+\" is bound to.  It changes the running compositor
+and `cmacs-gowl-backdrop' together, so the choice survives the next
+`cmacs-gowl-mode' as well as this session."
   (interactive "P")
   (unless (fboundp 'gowl-set-backdrop)
     (user-error "This cmacs has no compositor"))

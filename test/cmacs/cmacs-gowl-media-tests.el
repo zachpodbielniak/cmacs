@@ -19,7 +19,9 @@
 
 (require 'ert)
 (require 'cmacs)
+(require 'cl-lib)
 (require 'cmacs-gowl-media)
+(require 'cmacs-gowl nil t)
 
 (declare-function cmacs-feature-p "cmacs-glib-tests")
 
@@ -198,6 +200,41 @@ failure being fixed rather than a cost worth paying."
                  (lambda (&rest _) (setq ran t))))
         (cmacs-gowl-media--adjust-brightness 5)
         (should ran)))))
+
+;;; HDR must not touch the system appearance
+
+(ert-deftest cmacs-gowl-media-test-hdr-does-not-touch-the-theme ()
+  "Switching an output into HDR changes no light/dark state.
+
+A fence rather than a fix.  \"Applications set to match system come up
+light-themed after enabling HDR\" was reported as an HDR bug and is not
+one: the compositor serves no appearance preference and has no path to
+the portal that does.  It was two things at once -- a portal whose
+Settings interface was routed to a backend that does not implement it,
+and a dark interface washed out by an unconverted PQ signal.
+
+What this asserts is that the first half stays true of cmacs: the HDR
+command must never acquire a side effect on the theme.  The stubs take
+`&rest' because the functions they stand in for are C DEFUNs with an
+optional monitor argument."
+  (skip-unless (fboundp 'cmacs-gowl-toggle-hdr))
+  (let ((themes (copy-sequence custom-enabled-themes))
+        (mode   frame-background-mode)
+        (hdr    nil))
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda (&rest _) t))
+              ((symbol-function 'gowl-monitor-hdr-capable-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'gowl-monitor-hdr-p) (lambda (&rest _) hdr))
+              ((symbol-function 'gowl-monitor-info) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-focused-monitor) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-monitor-hdr)
+               (lambda (on &rest _) (setq hdr on) t)))
+      (cmacs-gowl-toggle-hdr)
+      (should hdr)
+      (cmacs-gowl-toggle-hdr)
+      (should-not hdr))
+    (should (equal custom-enabled-themes themes))
+    (should (eq frame-background-mode mode))))
 
 ;;; Missing backends
 
