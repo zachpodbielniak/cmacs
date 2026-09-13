@@ -1136,7 +1136,12 @@ Two modules can fill the space behind a translucent window, and
 | =none=   | the desktop, straight through                          |
 
 =Super+Shift+"= cycles the four, and so does =M-x
-cmacs-gowl-cycle-backdrop= (a prefix argument goes the other way).
+cmacs-gowl-cycle-backdrop= (a prefix argument goes the other way).  Either
+way the layout indicator draws a brief toast naming what it landed on
+--- "Liquid glass", "Liquid water", "Blur", "No backdrop" --- because
+over a busy wallpaper a calm water and a subtle glass can both look a
+great deal like the blur they replaced, and without one the honest
+reaction to pressing the key is "did that do anything?".
 =(gowl-set-backdrop 'blur)= sets one outright; =(gowl-backdrop)= reads
 it. Every one of those changes the running compositor immediately --- no
 reload, no module load --- because both modules read the one setting and
@@ -1174,8 +1179,32 @@ of a window moves and text under it does not swim.
 
 Nothing about the rim is painted on. How far the picture is pulled, where
 it darkens, where the light sits and how wide the colour fringe is all
-fall out of that one ray, which is why it holds together at any window
-size and around the corners.
+fall out of that one ray.
+
+*Two things stop it being a blur with a highlight.* The slab is very
+slightly DOMED rather than flat (=glass-lens=), so the middle magnifies
+instead of merely frosting --- a flat slab passes light straight through
+and can do nothing to its own middle, which is why the first version was
+genuinely hard to tell from the blur module. And =glass-centre-clarity=
+leaves the middle something to see through. =glass-sheen= is the
+highlight the dome catches, taken from the dome's own normal rather than
+painted, so it sits towards the light and moves with it.
+
+*The corners are a different lens from the edges.* A straight edge is a
+cylinder: it bends in one direction, and the band of wallpaper it gathers
+is as long after the bend as before. A corner is a piece of a torus --- it
+bends in two, and the arc it gathers from is shorter than the arc it
+spreads over, so the same displacement concentrates far more there. That
+falls out of the distance field for free and scales both the shading and
+the colour fringe.
+
+*It ends exactly where the window does.* =roundcorners= strokes a path
+inset by half the border width and clamps its radius to half of what is
+left, so the visible outer edge is a rounded rect over the whole frame
+with radius /clamped radius + half a border/. Both per-window backdrops
+mask themselves with that number rather than the decorator's raw radius,
+which would leave a transparent nick inside each corner on a bordered
+window.
 
 The knobs are gowl YAML config keys --- =glass-bevel=,
 =glass-thickness=, =glass-slope=, =glass-dispersion=, =glass-rim=,
@@ -1234,13 +1263,13 @@ wavelength is not a calmer sea, it is a flat pane with a slow wobble.
 |-------------+------------|
 | =pool=      | Barely disturbed; almost entirely its ripples |
 | =fountain=  | Livelier and quick: six ripple sources |
-| =pond=      | A gentle swell with the odd ring (the default) |
-| =sea=       | A rolling swell, no ripples, a little foam |
+| =pond=      | A gentle swell with the odd ring |
+| =sea=       | A rolling swell, no ripples, a little foam (the default) |
 | =storm=     | Choppy, fast, white-capped, running into the edges |
 
 #+begin_src emacs-lisp
-(setq cmacs-gowl-water-preset 'sea)
-(setq cmacs-gowl-water-intensity 1.0)   ;; 0 is a flat surface
+(setq cmacs-gowl-water-preset 'sea)     ;; the default
+(setq cmacs-gowl-water-intensity 0.4)   ;; the default; 0 is a flat surface
 #+end_src
 
 =M-x cmacs-gowl-set-water= completes over the five and switches the
