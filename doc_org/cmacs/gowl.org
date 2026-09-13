@@ -615,6 +615,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: glass, blur, nothing |
 
 * Tags and Workspaces
 
@@ -714,6 +715,7 @@ holds focus.
 | =Super+Shift+0=         | Tag focused client to all tags          |
 | =Super+,= / =Super+.=   | Focus previous / next monitor           |
 | =Super+Ctrl+Shift+,= / =.= | Move client to previous / next monitor  |
+| =Super+Shift+"=         | Cycle the window backdrop: glass, blur, nothing |
 | =Super+Shift+l=         | Lock the session                        |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
@@ -1114,11 +1116,102 @@ magnifying to inspect pixels actually wants. A scroll the magnifier
 claims never reaches the client, so =magnifier-modifier= has to name a
 combination applications do not use.
 
+*** What shows through a translucent window
+:PROPERTIES:
+:CUSTOM_ID: window-backdrop
+:END:
+
+Two modules can fill the space behind a translucent window, and
+=cmacs-gowl-backdrop= says which one does. CMacs loads both.
+
+| Value    | What you see                                          |
+|----------+-------------------------------------------------------|
+| =glass=  | the wallpaper refracted through the window (default)  |
+| =blur=   | the wallpaper, blurred behind it                       |
+| =none=   | the desktop, straight through                          |
+
+=Super+Shift+"= cycles the three, and so does =M-x
+cmacs-gowl-cycle-backdrop= (a prefix argument goes the other way).
+=(gowl-set-backdrop 'blur)= sets one outright; =(gowl-backdrop)= reads
+it. Every one of those changes the running compositor immediately --- no
+reload, no module load --- because both modules read the one setting and
+every window is re-placed when it moves.
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-backdrop 'glass)   ;; the default
+#+end_src
+
+*They are alternatives, not layers.* Both modules put a node in the same
+place in the same window's scene tree, so both drawing would mean one
+hidden behind the other while both still paid for a capture and a blur on
+every tag switch. Loading both is deliberate: it is what makes the key
+instant.
+
+*How much of it you see is not this setting.* It is how transparent the
+window is --- =cmacs-gowl-focused-alpha=, a window rule, or the client's
+own background alpha (Emacs's own frames use =alpha-background=). An
+opaque window shows no backdrop of any kind, and neither module is at
+fault for that.
+
+*** Liquid glass
+:PROPERTIES:
+:CUSTOM_ID: liquidglass
+:END:
+
+The default. The window is treated as a slab of glass whose edge is
+rounded off over a bevel: a viewer's ray comes straight down, meets that
+rounded edge at an angle, refracts towards the surface normal (n = 1.5)
+and travels through the glass still under it before it reaches the
+wallpaper. Where it lands is not where it started, and that offset ---
+inward, because the surface leans outward --- is the whole effect. The
+flat centre passes light straight through, so nothing behind the middle
+of a window moves and text under it does not swim.
+
+Nothing about the rim is painted on. How far the picture is pulled, where
+it darkens, where the light sits and how wide the colour fringe is all
+fall out of that one ray, which is why it holds together at any window
+size and around the corners.
+
+The knobs are gowl config keys --- =glass-bevel=, =glass-thickness=,
+=glass-slope=, =glass-dispersion=, =glass-rim=, =glass-shade=,
+=glass-clarity= and the rest --- reachable with =gowl-config-get= and
+=gowl-set-config-value=, and documented in full in gowl's own
+[[file:../../deps/gowl/docs/configuration.org][configuration guide]]. Three are worth knowing before touching them:
+
+- =glass-bevel= and =glass-thickness= are proportions of a window;
+  =glass-dispersion= and =glass-edge-width= are fixed pixel counts,
+  because a colour fringe is one or two pixels of real glass whatever the
+  window's size. Scaling those with the bevel turns a wide rim into grey
+  mud.
+- Above a =glass-slope= of 1 the field FOLDS --- the same wallpaper shows
+  up twice along the rim, which is where the liquid look comes from. The
+  default of 3.0 folds on purpose.
+- The bevel is clamped to half the short side. A small window gets a
+  proportionally smaller lens rather than a broken one.
+
+*What it costs.* One capture and one blur of the wallpaper per output per
+tag switch, exactly like the blur. Then one fragment-shader pass over a
+window each time it moves or resizes, which the blur does not pay: a blur
+backdrop is a crop of one shared picture and stays correct wherever the
+window goes, while glass bends the wallpaper behind THAT window. A window
+at rest is drawn at full resolution and one still moving at half, a move
+of less than a pixel is not a move, and a render that fails leaves the
+last picture up rather than blinking.
+
+Under a renderer whose GL context it cannot borrow, or a driver that will
+not compile the refraction shader, it sits the session out --- and takes
+none of the other effect modules with it.
+
 *** Frosted glass and shadows
 
 Translucent windows (through the =alpha= module or a window rule) get a
 blurred backdrop, and every window gets a soft drop shadow. CMacs loads
 gowl's =blur.so= by default.
+
+The backdrop half draws only when =cmacs-gowl-backdrop= is =blur=. The
+SHADOWS are not part of that choice: they are this module's alone, they
+have their own =shadow= key, and they stay whichever backdrop is
+selected, including =none=.
 
 *What the blur actually blurs is the wallpaper*, computed once and
 cropped per window --- not other windows. Doing that honestly would cost
@@ -1164,10 +1257,13 @@ core knowing that an overview exists. The same string works from a
 keybind (=@{ action: ipc_command, arg: "expo" @}=) and from the IPC
 socket.
 
-*** How six effects share one compositor
+*** How seven effects share one compositor
 
-All six --- animation, cube, expo, switcher, magnifier, blur --- are
-separate plugins implementing one interface, and CMacs loads all of them.
+All seven --- animation, cube, expo, switcher, magnifier, blur,
+liquidglass --- are separate plugins implementing one interface, and
+CMacs loads all of them. The last two are the one pair that are
+alternatives rather than additions; see [[#window-backdrop][What shows through a translucent
+window]].
 gowl decides who gets a given hook per event rather than handing the
 whole interface to one module: the hooks that decide where a window IS
 stop at the first module that claims them, and the per-frame and teardown

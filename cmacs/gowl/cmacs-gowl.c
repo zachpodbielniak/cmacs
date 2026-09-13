@@ -1623,7 +1623,18 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                            "bstack", "deck", "grid", "mirrortile",
                            "columns", "centeredmaster", "fibonacci",
                            "animation", "cube", "expo", "switcher",
-                           "magnifier", "blur", "layout-indicator",
+                           "magnifier", "blur",
+                           /* The blur's alternative, and the default:
+                              the wallpaper refracted through the window
+                              rather than merely blurred behind it.  Both
+                              are loaded on purpose.  They draw into the
+                              same place in the same window's tree, so
+                              only one of them draws at a time --
+                              `window-backdrop' picks which, and
+                              Super+Shift+" cycles it.  Loading both is
+                              what makes that key instant instead of a
+                              module load. */
+                           "liquidglass", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were
                               left to the user's config, which meant a
@@ -5675,6 +5686,67 @@ only at the next `gowl-start'.  */)
   gowl_config_set_lock_on_suspend (config, !NILP (enable));
   gowl_compositor_apply_lock_config (cmacs_gowl_compositor);
   return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-backdrop", Fgowl_backdrop, Sgowl_backdrop, 0, 0, 0,
+       doc: /* Return what shows through translucent windows.
+
+One of the symbols `glass', `blur' or `none'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  GowlBackdropStyle style;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  style = gowl_config_get_backdrop_style (config);
+  return unbind_to (count,
+                    intern (gowl_config_backdrop_style_name (style)));
+}
+
+DEFUN ("gowl-set-backdrop", Fgowl_set_backdrop, Sgowl_set_backdrop, 1, 1, 0,
+       doc: /* Choose what shows through translucent windows.
+
+STYLE is `glass' (the wallpaper refracted through the window, the
+default), `blur' (the wallpaper blurred behind it), or `none'.  It may
+also be `next' or `prev' to step through those in order, which is what
+\[gowl-cycle-backdrop] and Super+Shift+\" do.
+
+Both modules read this, so the change is immediate and needs no reload:
+every window is re-placed here, which is how each of them hears to add
+or drop its node.  Returns the style now in force.  */)
+  (Lisp_Object style)
+{
+  GowlBackdropStyle want;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (style);
+  name = SSDATA (SYMBOL_NAME (style));
+
+  count = cmacs_gowl_lock_scoped ();
+  if (!strcmp (name, "next"))
+    gowl_compositor_cycle_backdrop_style (cmacs_gowl_compositor, 1);
+  else if (!strcmp (name, "prev"))
+    gowl_compositor_cycle_backdrop_style (cmacs_gowl_compositor, -1);
+  else if (gowl_config_backdrop_style_from_name (name, &want))
+    gowl_compositor_set_backdrop_style (cmacs_gowl_compositor, want);
+  else
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown backdrop style: %s (want glass, blur, none, next or prev)",
+             name);
+    }
+  return unbind_to (count,
+    intern (gowl_config_backdrop_style_name (
+      gowl_compositor_get_backdrop_style (cmacs_gowl_compositor))));
 }
 
 DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
@@ -10349,6 +10421,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_lock);
   defsubr (&Sgowl_unlock);
   defsubr (&Sgowl_locked_p);
+  defsubr (&Sgowl_backdrop);
+  defsubr (&Sgowl_set_backdrop);
   defsubr (&Sgowl_lock_command);
   defsubr (&Sgowl_set_lock_command);
   defsubr (&Sgowl_lock_on_suspend_p);

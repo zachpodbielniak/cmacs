@@ -130,6 +130,31 @@ re-pushes it."
                                           (string :tag "Mode"))))
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-backdrop 'glass
+  "What shows through a translucent window.
+
+`glass' refracts the wallpaper through the window, as though the window
+were a slab of glass with a bevelled edge: the flat middle passes light
+straight through, and the rim bends what is behind the middle out
+towards it, splits it into colours, darkens where it magnifies and
+catches a line of light.  This is the default.
+
+`blur' is the older look -- the wallpaper, blurred, behind the window.
+
+`none' leaves the desktop showing straight through.
+
+Both the `liquidglass' and `blur' modules read this and only one of them
+draws, so switching is instant.  \[cmacs-gowl-cycle-backdrop] and
+Super+Shift+\" step through the three.
+
+How much of it you see is set by how transparent the window is --
+`cmacs-gowl-focused-alpha' and the client's own background alpha.  An
+opaque window shows no backdrop of any kind."
+  :type '(choice (const :tag "Refracted through the window" glass)
+                 (const :tag "Blurred behind the window" blur)
+                 (const :tag "Nothing" none))
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-lock-command 'default
   "The program that locks the screen and takes your password.
 
@@ -853,6 +878,13 @@ authoritative and keeps re-runs idempotent."
         ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
         ;; a tag showing a browser or a game there was no way to lock at
         ;; all.  The action runs `cmacs-gowl-lock-command'.
+        ;; The window backdrop: glass, blur, nothing.  A compositor
+        ;; action rather than a `custom' one, so it works whatever has
+        ;; the keyboard -- the same reason the lock below is.  The key
+        ;; is Super+Shift+" ; the level-0 name for it is `apostrophe',
+        ;; which is what gowl matches when Shift is held.
+        (bind "Super+Shift+apostrophe" 'cycle-backdrop nil
+              "Cycle the window backdrop")
         (bind "Super+Shift+l" 'lock nil "Lock the session")
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
@@ -1055,6 +1087,8 @@ thread is running and applies configuration."
   (cmacs-gowl--apply-scratchpad)
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
+  ;; What shows through a translucent window: glass, blur, or nothing.
+  (cmacs-gowl--apply-backdrop)
   ;; Per-screen wallpapers, for a desk with displays of different shapes.
   (cmacs-gowl-apply-output-wallpapers)
   ;; Tell the dropdown module to adopt any newly-added config
@@ -2845,6 +2879,30 @@ the module's configure method."
              (mode   (and (consp value) (cdr value))))
         (ignore-errors
           (gowl-set-output-wallpaper output path mode))))))
+
+(defun cmacs-gowl--apply-backdrop ()
+  "Push `cmacs-gowl-backdrop' to the compositor.
+
+Silent when the DEFUN is missing, which is what a cmacs built without
+the compositor looks like from here."
+  (when (fboundp 'gowl-set-backdrop)
+    (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
+
+;;;###autoload
+(defun cmacs-gowl-cycle-backdrop (&optional backwards)
+  "Step to the next window backdrop: glass, blur, nothing, glass again.
+
+With a prefix argument BACKWARDS, step the other way.
+
+This is what Super+Shift+\" is bound to.  It changes the running
+compositor and `cmacs-gowl-backdrop' together, so the choice survives
+the next `cmacs-gowl-mode' as well as this session."
+  (interactive "P")
+  (unless (fboundp 'gowl-set-backdrop)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-backdrop
+        (gowl-set-backdrop (if backwards 'prev 'next)))
+  (message "Window backdrop: %s" cmacs-gowl-backdrop))
 
 (defun cmacs-gowl--apply-lock ()
   "Push `cmacs-gowl-lock-command' and `cmacs-gowl-lock-on-suspend'.
