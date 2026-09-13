@@ -1552,6 +1552,54 @@ cmacs_gowl_find_module (const gchar *name)
   return NULL;
 }
 
+/* Search for a gowl helper BINARY by name -- `gowl-lock', and anything
+   else gowl ships alongside the compositor.  The same resolution order
+   as `cmacs_gowl_find_module', for the same reason: a development build
+   must use the binary it was built with rather than whatever an older
+   `make install' left on PATH.
+
+     0. $CMACS_GOWL_TOOL_DIR/<name>   (explicit override)
+     1. the in-tree dev build          (<exe-dir>/../deps/gowl/build/...)
+     2. the bundled libexec location   (PATH_EXEC)
+     3. PATH, which is where a system-installed gowl puts it.
+
+   Returns a newly allocated path, or NULL when there is none -- which
+   the caller must treat as "fall back", not as an error: the compositor
+   still has its in-process lock handler.  */
+static gchar *
+cmacs_gowl_find_tool (const gchar *name)
+{
+  g_autofree gchar *exe_path = NULL;
+  const gchar *env_dir;
+
+  env_dir = g_getenv ("CMACS_GOWL_TOOL_DIR");
+  if (env_dir != NULL && env_dir[0] != '\0')
+    {
+      g_autofree gchar *env_path = g_build_filename (env_dir, name, NULL);
+      if (g_file_test (env_path, G_FILE_TEST_IS_EXECUTABLE))
+        return g_steal_pointer (&env_path);
+    }
+
+  exe_path = g_file_read_link ("/proc/self/exe", NULL);
+  if (exe_path != NULL)
+    {
+      g_autofree gchar *bin_dir = g_path_get_dirname (exe_path);
+      g_autofree gchar *dev_path =
+        g_build_filename (bin_dir, "..", "deps", "gowl", "build",
+                          CMACS_GOWL_BUILDTYPE, name, NULL);
+      if (g_file_test (dev_path, G_FILE_TEST_IS_EXECUTABLE))
+        return g_steal_pointer (&dev_path);
+    }
+
+  {
+    g_autofree gchar *inst_path = g_build_filename (PATH_EXEC, name, NULL);
+    if (g_file_test (inst_path, G_FILE_TEST_IS_EXECUTABLE))
+      return g_steal_pointer (&inst_path);
+  }
+
+  return g_find_program_in_path (name);
+}
+
 /* Load required plugins before clients map, including pre-Lisp startup. */
 gboolean
 cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
@@ -1945,6 +1993,29 @@ the event loop source and returns. */)
      does (cmacs_gowl_hand_over_config_and_modules).  */
   {
     GowlConfig *config = gowl_config_new ();
+
+    /* Point `lock-command' at the gowl-lock this build ships with.
+       The default is the bare name "gowl-lock", which only works if one
+       is on PATH -- true for an installed cmacs, false for a tree built
+       in place, where the lock would silently fall back to the
+       in-process module and PAM would end up inside Emacs after all.
+       Resolving it here is what makes `cmacs --gowl' get the same
+       separate lock program standalone gowl gets.  */
+    {
+      g_autofree gchar *lock_bin = cmacs_gowl_find_tool ("gowl-lock");
+
+      if (lock_bin != NULL)
+        gowl_config_set_lock_command (config, lock_bin);
+      else
+        {
+          /* None built or installed: the built-in screenlock module is
+             the fallback, and an empty command is how the compositor is
+             told to use it. */
+          gowl_config_set_lock_command (config, "");
+          g_debug ("gowl: no gowl-lock binary; locking falls back to the "
+                   "screenlock module");
+        }
+    }
     gowl_compositor_set_config (cmacs_gowl_compositor, config);
   }
 
@@ -5380,27 +5451,65 @@ cmacs_gowl_ensure_screenlock (GowlModuleManager *mgr)
   return mod;
 }
 
-DEFUN ("gowl-lock", Fgowl_lock, Sgowl_lock, 0, 0, 0,
-       doc: /* Lock the session, showing the screenlock password prompt.
+DEFUN ("gowl-lock", Fgowl_lock, Sgowl_lock, 0, 0, "",
+       doc: /* Lock the session and ask for your password.
 
-Loads and activates the `screenlock' module if needed, points it at a
-working PAM service, then engages the lock through the lock handler so a
-password prompt is drawn.  Unlock with your account password (or
-`M-x gowl-unlock' as an administrative override).
+Normally this starts `gowl-lock', a separate program that draws the lock
+screen, holds the session through ext-session-lock-v1, and runs PAM in
+its own process.  That separation is the point: PAM dlopens arbitrary
+modules, and under `emacs --gowl' the compositor IS this Emacs, with an
+Elisp evaluator, an MCP server and a D-Bus interface in the same address
+space.  A lock program that crashes leaves the session locked -- the
+compositor keeps the screen sealed and starts a new one -- where a lock
+inside Emacs would take the whole desktop down with it.
 
-Rather than leaving you on a blank, unopenable screen, this signals
-`gowl-error' when no lock handler can be activated or no PAM service is
-found in /etc/pam.d.  In the latter case install the profile with
-`sudo make install-cmacs-pam' (or `sudo make install').  */)
+Set `cmacs-gowl-lock-command' to nil (or the empty string) to use the
+in-process `screenlock' module instead; that path is also taken
+automatically when no gowl-lock binary can be found.
+
+This is also what Super+Shift+l and `gowl-msg lock' run, so locking
+works on any tag and whatever window has the keyboard -- an Emacs
+command alone needs Emacs focused.
+
+Unlock with your account password, or `M-x gowl-unlock' as an
+administrative override.  */)
   (void)
 {
   GowlModuleManager *mgr;
+  GowlConfig *config;
+  const gchar *cmd;
+  gboolean external;
   const char *pam_service;
   GHashTable *inner, *outer;
 
   GOWL_CHECK_RUNNING ();
 
   if (gowl_compositor_is_locked (cmacs_gowl_compositor))
+    return Qt;
+
+  /* The separate program, when there is one.  The compositor spawns it
+     and owns the locked state, so there is nothing to wait for here:
+     the lock is up when the client takes the session, and
+     `gowl-locked-p' (or `cmacs-gowl-lock-changed-functions') says so.
+
+     The config is read under the lock: the dispatch thread REPLACES the
+     object outright on a reload, so a read from this thread without it
+     can be reading one that is being released.
+
+     A plain lock/unlock rather than the scoped one, because nothing
+     between them can signal -- no Lisp is allocated, and spawning a
+     program does not longjmp -- and because a scoped lock here would
+     have to be unwound before the module fallback below, which is the
+     shape the `cmacs_gowl_lock_scoped' guard exists to forbid. */
+  cmacs_gowl_lock ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  cmd = config != NULL ? gowl_config_get_lock_command (config) : NULL;
+  external = cmd != NULL && cmd[0] != '\0';
+  if (external)
+    gowl_compositor_lock_session (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+
+  if (external)
     return Qt;
 
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
@@ -5441,35 +5550,131 @@ found in /etc/pam.d.  In the latter case install the profile with
   return Qt;
 }
 
-DEFUN ("gowl-unlock", Fgowl_unlock, Sgowl_unlock, 0, 0, 0,
+DEFUN ("gowl-unlock", Fgowl_unlock, Sgowl_unlock, 0, 0, "",
        doc: /* Unlock the session (administrative override; no password).
 
-Tears down the screenlock surfaces via the lock handler when one is
-active, then clears the compositor lock state.  Useful as an escape
-hatch while testing.  */)
+Takes down whatever holds the lock -- a lock client, the screenlock
+module, or nothing at all, which is the state a lock program that died
+leaves behind -- and opens the session.
+
+It bypasses PAM, so it is only reachable from inside the session that is
+already running: an Emacs command, `gowl-msg unlock', a keybind.  Never
+from the lock screen.
+
+This is the escape hatch for a lock program that is broken; the normal
+way out is your password.  */)
   (void)
 {
-  GowlModuleManager *mgr;
-  GowlModule *mod;
+  GOWL_CHECK_RUNNING ();
+
+  cmacs_gowl_lock ();
+  gowl_compositor_unlock_session (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  return Qt;
+}
+
+DEFUN ("gowl-lock-command", Fgowl_lock_command, Sgowl_lock_command, 0, 0, 0,
+       doc: /* Return the program that locks the screen, or nil for none.
+
+nil means the in-process `screenlock' module draws the prompt instead.
+See `gowl-set-lock-command'.  */)
+  (void)
+{
+  GowlConfig *config;
+  const gchar *cmd;
+  specpdl_ref count;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  /* Under the lock, and the string is COPIED under it too: the config
+     the dispatch thread replaces on a reload takes its strings with
+     it. */
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  cmd = config != NULL ? gowl_config_get_lock_command (config) : NULL;
+  if (cmd == NULL || cmd[0] == '\0')
+    return unbind_to (count, Qnil);
+  return unbind_to (count, build_string (cmd));
+}
+
+DEFUN ("gowl-set-lock-command", Fgowl_set_lock_command,
+       Sgowl_set_lock_command, 1, 1, 0,
+       doc: /* Set COMMAND as the program that locks the screen.
+
+COMMAND is a shell command line, e.g. "gowl-lock -i ~/Pictures/lock.png".
+It must speak ext-session-lock-v1 -- gowl-lock and swaylock both do.
+
+nil or "" falls back to the in-process `screenlock' module, which draws
+the prompt inside Emacs and runs PAM here.  That is the older
+arrangement and it works, but it puts your password and PAM's modules in
+the editor's address space; prefer a separate program.  */)
+  (Lisp_Object command)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  if (!NILP (command))
+    CHECK_STRING (command);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_lock_command (config,
+                                NILP (command) ? "" : SSDATA (command));
+  return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-lock-on-suspend-p", Fgowl_lock_on_suspend_p,
+       Sgowl_lock_on_suspend_p, 0, 0, 0,
+       doc: /* Return non-nil if the screen locks before the machine sleeps. */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gboolean on;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  on = config != NULL && gowl_config_get_lock_on_suspend (config);
+  return unbind_to (count, on ? Qt : Qnil);
+}
+
+DEFUN ("gowl-set-lock-on-suspend", Fgowl_set_lock_on_suspend,
+       Sgowl_set_lock_on_suspend, 1, 1, 0,
+       doc: /* Lock the screen before the machine sleeps when ENABLE is non-nil.
+
+gowl takes a logind delay inhibitor and locks while it holds it, so the
+lock is up before the screen goes dark -- merely listening for the
+suspend is a race with the kernel that the session loses.
+
+Takes effect immediately: the inhibitor is taken or released here, not
+only at the next `gowl-start'.  */)
+  (Lisp_Object enable)
+{
+  GowlConfig *config;
+  specpdl_ref count;
 
   GOWL_CHECK_RUNNING ();
 
-  mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
-  mod = (mgr != NULL)
-        ? gowl_module_manager_find_module (mgr, "screenlock") : NULL;
-
-  if (mod != NULL && GOWL_IS_LOCK_HANDLER (mod)
-      && gowl_module_get_is_active (mod))
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
     {
-      pthread_mutex_lock (&cmacs_gowl_mutex);
-      gowl_module_manager_dispatch_unlock (mgr,
-                                           (gpointer) cmacs_gowl_compositor);
-      pthread_mutex_unlock (&cmacs_gowl_mutex);
+      unbind_to (count, Qnil);
+      error ("No gowl config");
     }
-
-  /* Belt and suspenders: ensure the compositor lock state is cleared. */
-  gowl_compositor_set_locked (cmacs_gowl_compositor, FALSE);
-  return Qt;
+  gowl_config_set_lock_on_suspend (config, !NILP (enable));
+  gowl_compositor_apply_lock_config (cmacs_gowl_compositor);
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
@@ -6132,6 +6337,68 @@ Configures the wallpaper module and applies to all current monitors. */)
   g_free (cmacs_wallpaper_mode);
   cmacs_wallpaper_mode = g_strdup (mode_str);
 
+  return Qt;
+}
+
+DEFUN ("gowl-set-output-wallpaper", Fgowl_set_output_wallpaper,
+       Sgowl_set_output_wallpaper, 1, 3, 0,
+       doc: /* Give the screen OUTPUT a wallpaper of its own.
+
+OUTPUT names a display the way the monitor configuration does: a
+connector name ("DP-1"), "Make Model", "Make Model Serial", or "*" for
+anything unnamed.  IMAGE-PATH is the picture; optional MODE is that
+screen's scaling mode ("fill", "fit", "center", "stretch", "tile"),
+defaulting to the wallpaper module's.
+
+A nil IMAGE-PATH drops the entry, so the screen falls back to the tag's
+wallpaper or the plain one.
+
+This exists because a 21:9 desk monitor and a 16:9 laptop lid cannot
+honestly share one picture: "fill" centre-crops a third off the 16:9
+image to cover the ultrawide, and "fit" letterboxes it the other way
+round.  An output entry beats a per-tag wallpaper, because unlike the
+tag, the shape of a panel does not change.
+
+Applies immediately.  See `cmacs-gowl-wallpaper-outputs' to declare a
+whole set.  */)
+  (Lisp_Object output, Lisp_Object image_path, Lisp_Object mode)
+{
+  GowlModuleManager *mgr;
+  GowlConfig *config;
+  GList *monitors, *l;
+
+  CHECK_STRING (output);
+  if (!NILP (image_path))
+    CHECK_STRING (image_path);
+  if (!NILP (mode))
+    CHECK_STRING (mode);
+  GOWL_CHECK_RUNNING ();
+
+  cmacs_gowl_lock ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config != NULL)
+    {
+      gowl_config_set_wallpaper_output (config, SSDATA (output),
+                                        NILP (image_path)
+                                        ? NULL : SSDATA (image_path),
+                                        NILP (mode) ? NULL : SSDATA (mode));
+      /* Every monitor, not only the named one: a key may be a wildcard
+         or a make/model that more than one screen answers to, and the
+         module's own check makes a screen whose picture did not change
+         free. */
+      mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
+      if (mgr != NULL)
+        {
+          monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
+          for (l = monitors; l != NULL; l = l->next)
+            gowl_module_manager_dispatch_wallpaper_output (
+              mgr, cmacs_gowl_compositor, l->data);
+        }
+    }
+  cmacs_gowl_unlock ();
+
+  if (config == NULL)
+    error ("No gowl config");
   return Qt;
 }
 
@@ -9852,6 +10119,15 @@ cmacs_gowl_on_title_changed_dbus (GowlCompositor *comp, GowlClient *c,
 }
 
 static void
+cmacs_gowl_on_lock_changed_dbus (GowlCompositor *comp, gboolean locked,
+                                 gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "LockChanged", g_variant_new ("(b)", locked));
+}
+
+static void
 cmacs_gowl_on_output_power_dbus (GowlCompositor *comp, GowlMonitor *m,
                                  gboolean on, gpointer data)
 {
@@ -9890,6 +10166,8 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
                     G_CALLBACK (cmacs_gowl_on_monitor_hdr_dbus), NULL);
   g_signal_connect (comp, "client-title-changed",
                     G_CALLBACK (cmacs_gowl_on_title_changed_dbus), NULL);
+  g_signal_connect (comp, "lock-changed",
+                    G_CALLBACK (cmacs_gowl_on_lock_changed_dbus), NULL);
 }
 
 void
@@ -10071,6 +10349,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_lock);
   defsubr (&Sgowl_unlock);
   defsubr (&Sgowl_locked_p);
+  defsubr (&Sgowl_lock_command);
+  defsubr (&Sgowl_set_lock_command);
+  defsubr (&Sgowl_lock_on_suspend_p);
+  defsubr (&Sgowl_set_lock_on_suspend);
   defsubr (&Sgowl_reload_config);
   defsubr (&Sgowl_get_palette);
   defsubr (&Sgowl_set_palette);
@@ -10135,6 +10417,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   /* Wallpaper */
   defsubr (&Sgowl_set_wallpaper);
   defsubr (&Sgowl_wallpaper_info);
+  defsubr (&Sgowl_set_output_wallpaper);
   defsubr (&Sgowl_set_client_alpha);
   defsubr (&Sgowl_set_all_alpha);
   defsubr (&Sgowl_set_focused_alpha);

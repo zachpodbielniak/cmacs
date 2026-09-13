@@ -796,8 +796,45 @@ window, pinning, screens-off, and a resize key mode registered through
     (should (member '("l" set-mfact "+0.05" "resize") in-mode))
     (should (member '("Escape" mode "default" "resize") in-mode))
     (should (member '("Return" mode "default" "resize") in-mode))
+    ;; Locking is a COMPOSITOR bind.  `M-x gowl-lock' only reaches the
+    ;; session when Emacs has the keyboard, so on a tag showing a
+    ;; browser or a game there was no way to lock at all -- the C
+    ;; defaults have bound this since the beginning and the cmacs set
+    ;; never did.
+    (should (member '("Super+Shift+l" lock nil) captured))
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
+
+(ert-deftest cmacs-gowl-test-lock-command-defaults-to-the-bundled-binary ()
+  "`cmacs-gowl-lock-command' leaves the resolved gowl-lock alone.
+
+The C layer finds the gowl-lock this build ships with -- a path no
+Elisp default could know, since a tree built in place has none on PATH
+-- so the `default' value must not overwrite it.  Anything else is
+pushed through, including nil, which is how somebody asks for the
+in-process screenlock module back."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((pushed 'untouched)
+        (suspend nil))
+    (cl-letf (((symbol-function 'gowl-set-lock-command)
+               (lambda (cmd) (setq pushed cmd)))
+              ((symbol-function 'gowl-set-lock-on-suspend)
+               (lambda (on) (setq suspend on))))
+      (let ((cmacs-gowl-lock-command 'default)
+            (cmacs-gowl-lock-on-suspend t))
+        (cmacs-gowl--apply-lock)
+        (should (eq pushed 'untouched))
+        (should (eq suspend t)))
+      (let ((cmacs-gowl-lock-command "swaylock -f")
+            (cmacs-gowl-lock-on-suspend nil))
+        (cmacs-gowl--apply-lock)
+        (should (equal pushed "swaylock -f"))
+        (should (eq suspend nil)))
+      (let ((cmacs-gowl-lock-command nil))
+        (cmacs-gowl--apply-lock)
+        (should (eq pushed nil))))))
 
 (ert-deftest cmacs-gowl-test-default-keybinds-resize-mode-optional ()
   "`cmacs-gowl-resize-mode' nil installs no mode and no Super+r."

@@ -130,6 +130,8 @@ static const gchar *iface_xml =
   "    <arg type='s' name='output'/><arg type='b' name='on'/></signal>"
   "  <signal name='ClientTitleChanged'>"
   "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
+  "  <signal name='LockChanged'>"
+  "    <arg type='b' name='locked'/></signal>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"

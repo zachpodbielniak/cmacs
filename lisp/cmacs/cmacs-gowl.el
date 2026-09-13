@@ -102,6 +102,74 @@ runtime directory.  Set to nil to keep it closed."
                  (string :tag "Socket path"))
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-wallpaper-outputs nil
+  "Per-screen wallpapers, as an alist of (OUTPUT . PICTURE).
+
+OUTPUT names a display the way the monitor configuration does: a
+connector name (\"DP-1\"), \"Make Model\", \"Make Model Serial\", or
+\"*\" for anything unnamed.
+
+PICTURE is a path, or (PATH . MODE) to give that screen a scaling mode
+of its own -- \"fill\", \"fit\", \"center\", \"stretch\" or \"tile\".
+
+  (setq cmacs-gowl-wallpaper-outputs
+        \\='((\"DP-1\"  . \"~/Pictures/ultrawide.png\")
+          (\"eDP-1\" . (\"~/Pictures/laptop.png\" . \"fit\"))))
+
+A 21:9 desk monitor and a 16:9 laptop lid cannot honestly share one
+picture: \"fill\" centre-crops a third off the 16:9 image to cover the
+ultrawide, and \"fit\" letterboxes it the other way round.  An entry
+here beats a per-tag wallpaper and the plain `gowl-set-wallpaper',
+because unlike the tag, the shape of a panel does not change.
+
+Pushed on `cmacs-gowl-mode' enable; `cmacs-gowl-apply-output-wallpapers'
+re-pushes it."
+  :type '(alist :key-type (string :tag "Output")
+                :value-type (choice (string :tag "Image")
+                                    (cons (string :tag "Image")
+                                          (string :tag "Mode"))))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-lock-command 'default
+  "The program that locks the screen and takes your password.
+
+`default' keeps whatever the build resolved: the `gowl-lock' that ships
+with this cmacs, found next to the compositor's own modules.
+
+A string is a shell command line, e.g.
+
+  \"gowl-lock -i ~/Pictures/lock.png -m fill\"
+
+It has to speak ext-session-lock-v1; gowl-lock and swaylock both do.
+
+nil falls back to the in-process `screenlock' module, which draws the
+prompt inside Emacs.  That works, and it is what cmacs did for a long
+time, but it puts your password and PAM's modules in the editor's
+address space -- with an Elisp evaluator, an MCP server and a D-Bus
+interface beside them -- and a PAM module that crashes then takes the
+desktop and your unsaved buffers with it.  A separate program cannot:
+if it dies the compositor keeps the screen sealed and starts another.
+
+Everything that locks goes through this: \\[gowl-lock], Super+Shift+l,
+`gowl-msg lock', the idle timer, and a suspend."
+  :type '(choice (const :tag "The bundled gowl-lock" default)
+                 (const :tag "The in-process screenlock module" nil)
+                 (string :tag "Command line"))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-lock-on-suspend t
+  "Whether to lock the screen before the machine sleeps.
+
+gowl takes a logind delay inhibitor and locks while it holds it, so the
+lock screen is up before the display goes dark.  Merely listening for
+the suspend is a race with the kernel that the session loses, which is
+why closing the lid used to leave an unlocked desktop to wake up to.
+
+This also makes `loginctl lock-session' work, and reports the state back
+to logind so `loginctl show-session' agrees with the screen."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-output-profiles nil
   "Output profiles applied when `cmacs-gowl-mode' starts.
 
@@ -309,6 +377,7 @@ standalone gowl ships with (see
   Print               screenshot: whole screen
   Super+, / Super+.   focus previous / next monitor
   Super+Ctrl+Shift+, / . move focused client to previous / next monitor
+  Super+Shift+l       lock the session
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
   Super+/             show the keybind cheatsheet
@@ -780,7 +849,11 @@ authoritative and keeps re-runs idempotent."
             (ignore-errors
               (gowl-add-keybind-ex (nth 0 b) (nth 1 b) (nth 2 b) (nth 3 b)
                                    "resize"))))
-        ;; Session.
+        ;; Session.  Locking is a COMPOSITOR bind, not an Emacs one:
+        ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
+        ;; a tag showing a browser or a game there was no way to lock at
+        ;; all.  The action runs `cmacs-gowl-lock-command'.
+        (bind "Super+Shift+l" 'lock nil "Lock the session")
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
         (bind "Super+slash" 'custom "(cmacs-gowl-describe-keybinds)"
@@ -980,6 +1053,10 @@ thread is running and applies configuration."
   (cmacs-gowl--apply-dropdowns)
   ;; The scratchpad's size, from the `cmacs-gowl-scratchpad-*' options.
   (cmacs-gowl--apply-scratchpad)
+  ;; How the screen locks, and whether a suspend does it.
+  (cmacs-gowl--apply-lock)
+  ;; Per-screen wallpapers, for a desk with displays of different shapes.
+  (cmacs-gowl-apply-output-wallpapers)
   ;; Tell the dropdown module to adopt any newly-added config
   ;; entries so per-entry keybinds work for defcustom-driven
   ;; dropdowns after module startup.  The DEFUN is a no-op if
@@ -2247,6 +2324,12 @@ immediately afterwards, so keep its name, not the object.")
 Fires wherever the change came from: a keybind, the IPC socket, the
 bar's display panel, `gowl-set-monitor-hdr', or a config reload.")
 
+(defvar cmacs-gowl-lock-changed-functions nil
+  "Functions run with t or nil when the session locks or unlocks.
+Fires wherever it came from: the keybind, the idle timer, `loginctl
+lock-session', a suspend, or the lock program finishing.  A good place
+to put secrets away -- and to get them back out.")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -2302,7 +2385,9 @@ this runs from `cmacs-gowl-monitor-added-functions' as well."
                       ("monitor-removed"
                        . cmacs-gowl-monitor-removed-functions)
                       ("monitor-hdr-changed"
-                       . cmacs-gowl-monitor-hdr-changed-functions)))
+                       . cmacs-gowl-monitor-hdr-changed-functions)
+                      ("lock-changed"
+                       . cmacs-gowl-lock-changed-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))
@@ -2748,6 +2833,31 @@ the module's configure method."
         (cons "width" (number-to-string cmacs-gowl-scratchpad-width))
         (cons "height" (number-to-string cmacs-gowl-scratchpad-height))
         (cons "gap" (number-to-string cmacs-gowl-scratchpad-gap))))
+
+(defun cmacs-gowl-apply-output-wallpapers ()
+  "Push `cmacs-gowl-wallpaper-outputs' into the running compositor."
+  (interactive)
+  (when (fboundp 'gowl-set-output-wallpaper)
+    (dolist (entry cmacs-gowl-wallpaper-outputs)
+      (let* ((output (car entry))
+             (value  (cdr entry))
+             (path   (if (consp value) (car value) value))
+             (mode   (and (consp value) (cdr value))))
+        (ignore-errors
+          (gowl-set-output-wallpaper output path mode))))))
+
+(defun cmacs-gowl--apply-lock ()
+  "Push `cmacs-gowl-lock-command' and `cmacs-gowl-lock-on-suspend'.
+
+`default' leaves the lock command alone: the C layer already resolved
+the gowl-lock this build ships with, which is a path an Elisp default
+could not know (a tree built in place has no gowl-lock on PATH)."
+  (unless (eq cmacs-gowl-lock-command 'default)
+    (when (fboundp 'gowl-set-lock-command)
+      (ignore-errors (gowl-set-lock-command cmacs-gowl-lock-command))))
+  (when (fboundp 'gowl-set-lock-on-suspend)
+    (ignore-errors
+      (gowl-set-lock-on-suspend cmacs-gowl-lock-on-suspend))))
 
 (defun cmacs-gowl--apply-scratchpad ()
   "Push the `cmacs-gowl-scratchpad-*' options into gowl's scratchpad.

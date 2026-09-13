@@ -1081,8 +1081,20 @@ cmacs-gowl-dep-modules: $(CMACS_GOWL_STATIC_LIB)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl \
 	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
 	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) modules
+## gowl-lock: the screen lock, as a program of its own.  cmacs points
+## `lock-command' at the copy built here (see cmacs_gowl_find_tool), so
+## `emacs --gowl' gets the separate lock program rather than falling
+## back to running PAM inside the editor.  Best-effort: gowl skips it
+## where pam-devel is missing, and the fallback is the in-process
+## screenlock module.
+.PHONY: cmacs-gowl-dep-tools
+cmacs-gowl-dep-tools: $(CMACS_GOWL_STATIC_LIB)
+	-$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gowl \
+	  CRISPY_DIR=$(CMACS_CANON_CRISPY) \
+	  YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) gowl-lock
+
 ## --gowl must have its required module even when building just src/emacs.
-emacs$(EXEEXT) temacs$(EXEEXT): | cmacs-gowl-dep-modules
+emacs$(EXEEXT) temacs$(EXEEXT): | cmacs-gowl-dep-modules cmacs-gowl-dep-tools
 
 endif
 

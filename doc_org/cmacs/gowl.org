@@ -2353,6 +2353,44 @@ Each monitor is scaled independently, so a single large (e.g.
 multi-monitor panorama) image is zoomed to fit *each* display rather
 than tiled into a grid on the larger ones.
 
+*** Different screens, different pictures
+
+A 21:9 desk monitor and a 16:9 laptop lid cannot honestly share one
+image: =fill= centre-crops a third off the 16:9 picture to cover the
+ultrawide, and =fit= letterboxes it the other way round.  Give each
+screen a picture of its own:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-wallpaper-outputs
+      '(("DP-1"  . "~/Pictures/ultrawide.png")
+        ("eDP-1" . ("~/Pictures/laptop.png" . "fit"))
+        ("*"     . "~/Pictures/anything-else.png")))
+#+end_src
+
+Keys are the same output keys the monitor configuration takes: a
+connector name, ="Make Model"=, ="Make Model Serial"=, or =*=.  A value
+is a path, or =(PATH . MODE)= to give that screen a scaling mode of its
+own.  An output entry beats a per-tag wallpaper, which beats the plain
+=gowl-set-wallpaper=: unlike the tag, the shape of a panel does not
+change.
+
+=gowl-set-output-wallpaper= does the same thing at runtime, and
+=gowl-apply-output-wallpapers= re-pushes the variable.
+
+*** Plugging displays in and out
+
+Each monitor's picture is rendered at that output's *device* resolution
+--- its logical size times its scale --- so a HiDPI panel gets a sharp
+wallpaper rather than an upscaled one.
+
+Unplugging a display moves every display to the right of it.  The
+wallpaper follows: a monitor that only moved keeps its picture and has
+the node re-placed, with no decode and no rescale, and one whose size or
+scale changed gets a fresh picture at the new shape.  A monitor that
+leaves the layout --- disabled by the lid policy, or on its way out ---
+drops its wallpaper rather than keeping one at coordinates that no
+longer describe anything, and gets a new one when it comes back.
+
 *** Seeing the Wallpaper Through Emacs
 
 To make the Emacs frame transparent so the gowl wallpaper is visible
@@ -2907,23 +2945,120 @@ Configurable inner and outer gaps between tiled windows.
 | =gowl-set-gaps=                  | Configure gap sizes                      |
 | =gowl-gaps-info=                 | Query current gap values                 |
 
-** Screenlock
+** Locking the screen
+:PROPERTIES:
+:CUSTOM_ID: gowl-locking
+:END:
 
-Full-screen session locking with PAM authentication.  Each monitor
-gets a lock surface on the =BLOCK= scene layer; the password is verified
-against PAM before the session unlocks.
+=Super+Shift+l= locks the session, and so does =M-x gowl-lock=.
 
-=M-x gowl-lock= is the simplest entry point — it *loads and activates
-the screenlock module on demand*, points it at a working PAM service,
-and engages the lock so the password prompt is drawn:
+*** It is a separate program
+
+The lock is =gowl-lock=, a program of its own --- what =i3lock= is to
+i3 and =swaylock= is to sway --- and cmacs ships the copy built
+alongside its gowl modules.  It draws the prompt, holds the session
+through =ext-session-lock-v1=, and runs PAM *in its own process*.
+
+That last part is why it is not a module any more.  PAM dlopens
+whatever your system's stack names into the process that calls it, and
+under =emacs --gowl= that process is this Emacs: an Elisp evaluator, an
+MCP server and a D-Bus interface sharing memory with your password.  A
+PAM module that crashes there takes the desktop and every unsaved
+buffer with it.
+
+The protocol is what makes the split safe rather than merely tidy: the
+*compositor* owns the locked state.  If =gowl-lock= dies, the screen
+stays sealed behind gowl's own opaque backdrop and a new lock screen is
+started.  There is no moment at which a dead lock screen is an open
+desktop.
+
+*** The keybind, and why it is a compositor bind
+
+=Super+Shift+l= is registered with the *compositor*, not with Emacs.
+=M-x gowl-lock= only reaches the session when Emacs has the keyboard,
+so on a tag showing a browser, a game or a terminal there was no way to
+lock at all.  A compositor bind works on any tag and whatever window
+has focus.
+
+The same lock is reachable from a shell with =gowl-msg lock=.
+
+*** Settings
 
 #+begin_src emacs-lisp
-(gowl-lock)     ;; load screenlock if needed, then lock
+;; The default: the gowl-lock this build ships with, found the same way
+;; the gowl modules beside it are.
+(setq cmacs-gowl-lock-command 'default)
+
+;; Or a command line of your own.  Anything speaking
+;; ext-session-lock-v1 works; swaylock is a drop-in.
+(setq cmacs-gowl-lock-command "gowl-lock -i ~/Pictures/lock.png -m fill")
+
+;; Or nil, for the old in-process `screenlock' module.
+(setq cmacs-gowl-lock-command nil)
+
+;; Lock before the machine sleeps (default t).
+(setq cmacs-gowl-lock-on-suspend t)
 #+end_src
 
-To customise first (optional), enable + configure it explicitly:
+=gowl-lock= takes =--image= / =--mode= for a backdrop (the same five
+scaling modes the wallpaper has, from the same code, so it crops
+identically), =--color=, =--text-color=, =--indicator-color=,
+=--error-color=, =--font=, =--font-size=, =--show-failed-attempts= and
+=--pam-service=.  =gowl-lock --help= lists them.
+
+*** Locking before a suspend
+
+=cmacs-gowl-lock-on-suspend= is not a listener.  logind announces a
+suspend and then suspends, so a session that only listens is racing the
+kernel and loses --- which is why closing the lid used to leave an
+unlocked desktop to wake up to.  gowl takes a logind *delay inhibitor*
+at startup and holds it: the machine cannot sleep until the lock screen
+is actually up (or four seconds pass, so a broken lock program cannot
+wedge suspend).
+
+The same integration honours =loginctl lock-session= and
+=unlock-session=, and reports the state back so =loginctl show-session=
+agrees with the screen.
+
+*** Watching the state
 
 #+begin_src emacs-lisp
+(gowl-locked-p)                ;; t while the screen is covered
+(gowl-lock-command)            ;; the program that will be run, or nil
+(gowl-lock-on-suspend-p)
+
+(add-hook 'cmacs-gowl-lock-changed-functions
+          (lambda (locked)
+            (when locked (my/put-the-secrets-away))))
+#+end_src
+
+The hook fires wherever the change came from: the keybind, the idle
+timer, =loginctl lock-session=, a suspend, or the lock program
+finishing.  The same change is announced on D-Bus as =LockChanged=.
+
+*** PAM
+
+The lock authenticates against the first service that exists out of
+=gowl=, =cmacs=, =swaylock=, =system-auth=, =login=.  =gowl-lock=
+refuses to start when there is none, rather than putting up a screen
+nothing could open.  Install the bundled profile with:
+
+#+begin_example
+sudo make install-cmacs-pam      # or it runs as part of `sudo make install'
+#+end_example
+
+=M-x gowl-unlock= opens the session with no password: the administrative
+override, reachable only from inside the already-running session.  It is
+the escape hatch for a lock program that is broken, not a second door.
+
+*** The in-process module
+
+Setting =cmacs-gowl-lock-command= to nil goes back to gowl's
+=screenlock= module, which draws a lock surface per monitor on the
+=BLOCK= scene layer from inside Emacs:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-lock-command nil)
 (gowl-enable-module "screenlock")
 (gowl-configure-screenlock
   '(("pam-service" . "gowl")
@@ -2932,18 +3067,17 @@ To customise first (optional), enable + configure it explicitly:
 (gowl-lock)
 #+end_src
 
-*PAM is required to unlock.*  =gowl-lock= refuses to engage (signalling
-=gowl-error=) unless a usable service exists under =/etc/pam.d= — it
-never drops you onto a blank, unopenable screen.  It looks for
-=/etc/pam.d/gowl= first, then falls back to =system-auth= and =login=.
-Install the bundled profile system-wide with:
+This is also the automatic fallback when no =gowl-lock= binary can be
+found or started --- a lock that quietly does nothing is the one failure
+a lock must not have.
 
-#+begin_example
-sudo make install-cmacs-pam      # or it runs as part of `sudo make install'
-#+end_example
-
-=M-x gowl-unlock= force-unlocks (administrative override, no password) —
-useful as an escape hatch while testing.
+*Animated lock background.*  When the screensaver subsystem is built
+(=--with-cmacs-screensaver=) and =cmacs-screensaver-lock-config= names a
+config, the module shows that libregnum screensaver as the lock
+background, with the password box and typing indicator composited on top
+while the animation keeps running.  Leaving the variable =nil= keeps the
+ordinary static lock.  The animation stops automatically when the session
+unlocks.  See =doc_org/cmacs/cmacs-screensaver.org=.
 
 *Animated lock background.*  When the screensaver subsystem is built
 (=--with-cmacs-screensaver=) and =cmacs-screensaver-lock-config= names a
