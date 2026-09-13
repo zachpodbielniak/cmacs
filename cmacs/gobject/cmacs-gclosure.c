@@ -206,10 +206,14 @@ cmacs_gclosure_invoke (GClosure     *closure,
         args[i] = make_fixnum (g_value_get_int (&param_values[i]));
       else if (type == G_TYPE_UINT)
         args[i] = make_fixnum ((EMACS_INT)g_value_get_uint (&param_values[i]));
+      /* glong and gint64 are both EMACS_INT's own width on an LP64
+         build, so naming the cast is a -Wuseless-cast; the implicit
+         conversion is still correct where they differ.  G_TYPE_UINT
+         above keeps its cast because that one genuinely widens. */
       else if (type == G_TYPE_LONG)
-        args[i] = make_fixnum ((EMACS_INT)g_value_get_long (&param_values[i]));
+        args[i] = make_fixnum (g_value_get_long (&param_values[i]));
       else if (type == G_TYPE_INT64)
-        args[i] = make_fixnum ((EMACS_INT)g_value_get_int64 (&param_values[i]));
+        args[i] = make_fixnum (g_value_get_int64 (&param_values[i]));
       else if (type == G_TYPE_FLOAT)
         args[i] = make_float ((double)g_value_get_float (&param_values[i]));
       else if (type == G_TYPE_DOUBLE)

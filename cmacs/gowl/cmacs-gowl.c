@@ -1625,30 +1625,28 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                            "columns", "centeredmaster", "fibonacci",
                            "animation", "cube", "expo", "switcher",
                            "magnifier", "blur",
-                           /* The blur's alternative, and the default:
-                              the wallpaper refracted through the window
-                              rather than merely blurred behind it.  Both
-                              are loaded on purpose.  They draw into the
-                              same place in the same window's tree, so
-                              only one of them draws at a time --
-                              `window-backdrop' picks which, and
-                              Super+Shift+" cycles it.  Loading both is
-                              what makes that key instant instead of a
-                              module load. */
+                           /* The blur's alternative: the wallpaper
+                              refracted through the window rather than
+                              merely blurred behind it.  All four are
+                              loaded on purpose.  They draw into the same
+                              place in the same window's tree, so only one
+                              of them draws at a time -- `window-backdrop'
+                              picks which, and Super+" cycles it.  Loading
+                              all of them is what makes that key instant
+                              instead of a module load. */
                            "liquidglass",
-                           /* And the third of the set: the wallpaper seen
-                              through a moving water surface.  Unlike the
-                              other two it never settles -- it has a clock
-                              and a frame rate -- so it holds an output
-                              awake while a translucent window is on it.
-                              Only one of the three draws at a time. */
+                           /* The wallpaper seen through a moving water
+                              surface.  Unlike the blur and the glass it
+                              never settles -- it has a clock and a frame
+                              rate -- so it holds an output awake while a
+                              translucent window is on it. */
                            "liquidwater",
-                           /* And the fourth: the wallpaper through a
+                           /* And the default: the wallpaper through a
                               window that has been left out in the rain.
                               Animated like the water and throttled the
-                              same way, and one of the four the backdrop
-                              key steps through -- water, rain, glass,
-                              blur, off. */
+                              same way.  The key steps rain, water, glass,
+                              blur, off -- the two that move first, so one
+                              press from here is the other one. */
                            "liquidrain", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were

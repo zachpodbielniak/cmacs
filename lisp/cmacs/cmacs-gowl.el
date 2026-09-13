@@ -130,7 +130,7 @@ re-pushes it."
                                           (string :tag "Mode"))))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-backdrop 'water
+(defcustom cmacs-gowl-backdrop 'rain
   "What shows through a translucent window.
 
 `glass' refracts the wallpaper through the window, as though the window
@@ -139,13 +139,21 @@ straight through, and the rim bends what is behind the middle out
 towards it, splits it into colours, darkens where it magnifies and
 catches a line of light.
 
+`rain' shows it through a window somebody left out in the rain.  Drops
+collect on the glass and slide away when they get heavy; others run down
+it leaving beaded trails that clear the frost behind them.  Each drop is
+a lens, and a lens turns what is behind it upside down.
+`cmacs-gowl-rain-preset' says what kind, from a mist to a storm.  This
+is the default.
+
 `water' refracts it through a MOVING water surface -- a real height
 field, its normal and curvature taken per pixel, one ray bent through it
 at n = 1.333.  `cmacs-gowl-water-preset' says what kind of water, from a
-barely-disturbed pool to a storm.  Unlike the others this one never
-settles, so a screen showing it is a screen that is rendering; see
-`cmacs-gowl-water-fps'.  This is the default, as a `sea' at an intensity
-of 0.4 -- a swell you can read a terminal through.
+barely-disturbed pool to a storm.
+
+`rain' and `water' are the two that never settle, so a screen showing
+either is a screen that is rendering.  Both are throttled, by the YAML
+keys `rain-fps' and `water-fps' (30 each).
 
 `blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
@@ -153,14 +161,15 @@ of 0.4 -- a swell you can read a terminal through.
 
 Every backdrop module reads this and only one of them draws, so
 switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+\" step
-through the four, in the order water, glass, blur, nothing.
+through the five, in the order rain, water, glass, blur, nothing -- the
+two that move first, so one press from the default is the other one.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
 opaque window shows no backdrop of any kind."
-  :type '(choice (const :tag "Refracted through the window" glass)
+  :type '(choice (const :tag "Through a rained-on window" rain)
                  (const :tag "Through moving water" water)
-                 (const :tag "Through a rained-on window" rain)
+                 (const :tag "Refracted through the window" glass)
                  (const :tag "Blurred behind the window" blur)
                  (const :tag "Nothing" none))
   :group 'cmacs-gowl)
@@ -240,12 +249,17 @@ not give heavier rain, it would give the same rain on a smaller window.
 (defcustom cmacs-gowl-water-fps 30
   "How often the water surface is redrawn, per second.  0 means every frame.
 
-This is the only effect with a frame rate, because it is the only one
-that never settles.  Thirty is indistinguishable from sixty on something
+The water and the rain are the two effects with a frame rate, because
+they are the two that never settle; the rain's twin of this is the YAML
+key `rain-fps'.  Thirty is indistinguishable from sixty on something
 that moves as slowly as water, and it halves what the effect costs.
 
 While there is a translucent window on a screen, that screen is
-rendering.  There is no version of an animated backdrop that is not."
+rendering.  There is no version of an animated backdrop that is not.
+
+Note that this variable is not currently pushed to a running compositor:
+the frame rate is read from the YAML key `water-fps'.  See
+`cmacs-gowl--apply-backdrop'."
   :type 'integer
   :group 'cmacs-gowl)
 
@@ -972,7 +986,7 @@ authoritative and keeps re-runs idempotent."
         ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
         ;; a tag showing a browser or a game there was no way to lock at
         ;; all.  The action runs `cmacs-gowl-lock-command'.
-        ;; The window backdrop: water, rain, glass, blur, nothing.  A
+        ;; The window backdrop: rain, water, glass, blur, nothing.  A
         ;; compositor action rather than a `custom' one, so it works
         ;; whatever has the keyboard -- the same reason the lock below
         ;; is.  The key is Super+" ; the level-0 name for that is
@@ -3085,10 +3099,10 @@ same rain on a smaller window."
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)
   "Step to the next window backdrop.
 
-The order is water, rain, glass, blur, nothing, round again: the four
-that draw something come first and the two that MOVE are adjacent, so
-one press from the default lands on the other animated look rather than
-on nothing at all.
+The order is rain, water, glass, blur, nothing, round again: the four
+that draw something come first and the two that MOVE lead, so one press
+from the default lands on the other animated look rather than on nothing
+at all.
 
 With a prefix argument BACKWARDS, step the other way.
 
