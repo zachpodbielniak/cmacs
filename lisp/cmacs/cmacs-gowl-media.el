@@ -34,6 +34,9 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+(declare-function gowl-running-p "cmacs-gowl" ())
+(declare-function gowl-monitor-hdr-p "cmacs-gowl" (&optional monitor))
+
 (defgroup cmacs-gowl-media nil
   "Volume, brightness and media-player control for the gowl session."
   :group 'cmacs-gowl
@@ -291,19 +294,40 @@ The machine-readable form is
               (max (string-to-number (nth 4 fields))))
           (and (> max 0) (/ (float cur) max)))))))
 
+(defun cmacs-gowl-media--backlight-governs-p ()
+  "Return non-nil unless the focused output ignores its backlight.
+
+An output in HDR does.  It is driven in PQ, which carries absolute
+luminance, so the backlight write still succeeds, `actual_brightness'
+still tracks it, and nothing on screen changes.  Nothing reports this,
+so it has to be read off the output's state."
+  (not (and (fboundp 'gowl-monitor-hdr-p)
+            (fboundp 'gowl-running-p)
+            (gowl-running-p)
+            (gowl-monitor-hdr-p))))
+
 (defun cmacs-gowl-media--adjust-brightness (delta)
   "Move the backlight by DELTA percentage points, then show an OSD.
 Uses brightnessctl's -m form so the resulting level comes back on the
 same invocation --- there is no second read to race with a key held
-down."
-  (cmacs-gowl-media--run
-   cmacs-gowl-media-brightness-program
-   (list "-m" "set" (format "%d%%%s" (abs delta) (if (> delta 0) "+" "-")))
-   (lambda (out)
-     (let ((value (cmacs-gowl-media--parse-brightness out)))
-       (if value
-           (cmacs-gowl-media--osd "Brightness" value)
-         (cmacs-gowl-media--osd "Brightness" nil "changed"))))))
+down.
+
+On an HDR output the backlight is not what the eye sees, and this says
+so instead of moving a number nothing follows.  Software dimming there
+is the bar's display panel, which owns the gamma ramp it shares with
+the night light."
+  (if (not (cmacs-gowl-media--backlight-governs-p))
+      (cmacs-gowl-media--osd
+       "Brightness" nil
+       "HDR: the panel ignores the backlight -- dim it in the bar")
+    (cmacs-gowl-media--run
+     cmacs-gowl-media-brightness-program
+     (list "-m" "set" (format "%d%%%s" (abs delta) (if (> delta 0) "+" "-")))
+     (lambda (out)
+       (let ((value (cmacs-gowl-media--parse-brightness out)))
+         (if value
+             (cmacs-gowl-media--osd "Brightness" value)
+           (cmacs-gowl-media--osd "Brightness" nil "changed")))))))
 
 ;;;###autoload
 (defun cmacs-gowl-brightness-up (&optional step)

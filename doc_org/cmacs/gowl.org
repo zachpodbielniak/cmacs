@@ -1824,6 +1824,20 @@ suppress it entirely.
 the other two are separate packages.  A key whose backend is not
 installed says so *once* rather than failing silently on every press.
 
+*The brightness keys do nothing on an output in HDR, and say so.*  A
+panel driven in PQ takes its luminance from the signal: =brightnessctl=
+still succeeds, =actual_brightness= still follows it, and the screen
+does not change.  That is the display, not the backend --- so rather
+than moving a number nothing follows, the keys show
+
+#+begin_example
+Brightness: HDR: the panel ignores the backlight -- dim it in the bar
+#+end_example
+
+Software dimming there belongs to the bar's *display* panel, whose
+slider drives the gamma ramp through =gammastep= (floor 10%) and shares
+that ramp with the night light.  See [[file:../../deps/gowl/docs/configuration.org::#hdr][gowl's HDR notes]].
+
 Steps are =cmacs-gowl-media-volume-step= and
 =-brightness-step= (5 points each).  =cmacs-gowl-media-volume-max=
 (1.0) is the ceiling passed to wpctl, which keeps a held key from

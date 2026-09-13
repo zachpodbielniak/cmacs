@@ -150,6 +150,55 @@ No bar and no percentage, because there is nothing to measure."
     (should-not (cmacs-gowl-media-tests--capture-osd
                   (cmacs-gowl-media--osd "Volume" 0.5)))))
 
+;;; Brightness on an output that ignores its backlight
+
+(defmacro cmacs-gowl-media-tests--with-hdr (hdr &rest body)
+  "Run BODY with the focused output in HDR when HDR is non-nil.
+
+The two gowl predicates are C DEFUNs, so the stubs take `&rest' --- a
+fixed arity here passes under `emacs -Q' and fails only under the real
+build, where the callers supply the optional monitor argument."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'gowl-running-p)
+              (lambda (&rest _) t))
+             ((symbol-function 'gowl-monitor-hdr-p)
+              (lambda (&rest _) ,hdr)))
+     ,@body))
+
+(ert-deftest cmacs-gowl-media-test-backlight-governs-in-sdr ()
+  "In SDR the backlight is the brightness control."
+  (cmacs-gowl-media-tests--with-hdr nil
+    (should (cmacs-gowl-media--backlight-governs-p))))
+
+(ert-deftest cmacs-gowl-media-test-backlight-does-not-govern-in-hdr ()
+  "In HDR it is not: the panel takes its luminance from the signal."
+  (cmacs-gowl-media-tests--with-hdr t
+    (should-not (cmacs-gowl-media--backlight-governs-p))))
+
+(ert-deftest cmacs-gowl-media-test-brightness-key-runs-nothing-in-hdr ()
+  "The key does not spawn brightnessctl for a write that changes nothing.
+
+The write would succeed and the screen would not move, which is the
+failure being fixed rather than a cost worth paying."
+  (let ((ran nil))
+    (cmacs-gowl-media-tests--with-hdr t
+      (cl-letf (((symbol-function 'cmacs-gowl-media--run)
+                 (lambda (&rest _) (setq ran t))))
+        (let ((osd (cmacs-gowl-media-tests--capture-osd
+                     (cmacs-gowl-media--adjust-brightness 5))))
+          (should-not ran)
+          (should osd)
+          (should (string-match-p "HDR" (nth 2 osd))))))))
+
+(ert-deftest cmacs-gowl-media-test-brightness-key-runs-in-sdr ()
+  "In SDR the same key still goes to the backlight."
+  (let ((ran nil))
+    (cmacs-gowl-media-tests--with-hdr nil
+      (cl-letf (((symbol-function 'cmacs-gowl-media--run)
+                 (lambda (&rest _) (setq ran t))))
+        (cmacs-gowl-media--adjust-brightness 5)
+        (should ran)))))
+
 ;;; Missing backends
 
 (ert-deftest cmacs-gowl-media-test-missing-program-warns-once ()
