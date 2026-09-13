@@ -139,20 +139,75 @@ straight through, and the rim bends what is behind the middle out
 towards it, splits it into colours, darkens where it magnifies and
 catches a line of light.  This is the default.
 
-`blur' is the older look -- the wallpaper, blurred, behind the window.
+`water' refracts it through a MOVING water surface -- a real height
+field, its normal and curvature taken per pixel, one ray bent through it
+at n = 1.333.  `cmacs-gowl-water-preset' says what kind of water, from a
+barely-disturbed pool to a storm.  Unlike the others this one never
+settles, so a screen showing it is a screen that is rendering; see
+`cmacs-gowl-water-fps'.
+
+`blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
 `none' leaves the desktop showing straight through.
 
-Both the `liquidglass' and `blur' modules read this and only one of them
-draws, so switching is instant.  \[cmacs-gowl-cycle-backdrop] and
-Super+Shift+\" step through the three.
+Every backdrop module reads this and only one of them draws, so
+switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+Shift+\"
+step through the four.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
 opaque window shows no backdrop of any kind."
   :type '(choice (const :tag "Refracted through the window" glass)
+                 (const :tag "Through moving water" water)
                  (const :tag "Blurred behind the window" blur)
                  (const :tag "Nothing" none))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-water-preset 'pond
+  "What kind of water `cmacs-gowl-backdrop' shows when it is `water'.
+
+Each is a whole tuned set, not a single knob, because the numbers in one
+only mean anything together: a pool's wave height over a sea's
+wavelength is not a calmer sea, it is a flat pane with a slow wobble.
+
+  `pool'      barely disturbed; it is almost entirely its ripples
+  `fountain'  livelier, six ripple sources, quick
+  `pond'      a gentle swell with the odd ring (the default)
+  `sea'       a rolling swell, no ripples, a little foam
+  `storm'     choppy, fast, white-capped, running into the edges
+
+`cmacs-gowl-water-intensity' scales the roughness of whichever you pick."
+  :type '(choice (const :tag "Calm pool" pool)
+                 (const :tag "Fountain" fountain)
+                 (const :tag "Pond" pond)
+                 (const :tag "Open sea" sea)
+                 (const :tag "Storm" storm))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-water-intensity 1.0
+  "How rough the water is, over and above `cmacs-gowl-water-preset'.
+
+1.0 is the preset as tuned.  It scales the four things that together
+mean \"how rough is it\" -- the wave height, the choppiness, how far the
+water bends what is behind it, and the foam -- and nothing else.
+Scaling the wavelength with them would not make a rougher sea, it would
+make the same sea seen from further away.
+
+0.0 is a flat surface, which passes light straight through: still water,
+not a fixed distortion."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-water-fps 30
+  "How often the water surface is redrawn, per second.  0 means every frame.
+
+This is the only effect with a frame rate, because it is the only one
+that never settles.  Thirty is indistinguishable from sixty on something
+that moves as slowly as water, and it halves what the effect costs.
+
+While there is a translucent window on a screen, that screen is
+rendering.  There is no version of an animated backdrop that is not."
+  :type 'integer
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-lock-command 'default
@@ -2881,12 +2936,59 @@ the module's configure method."
           (gowl-set-output-wallpaper output path mode))))))
 
 (defun cmacs-gowl--apply-backdrop ()
-  "Push `cmacs-gowl-backdrop' to the compositor.
+  "Push the backdrop settings to the compositor.
 
-Silent when the DEFUN is missing, which is what a cmacs built without
+The water's own settings go first, so they are in place before anything
+asks it to draw.
+
+`cmacs-gowl-water-fps' is not pushed here: it is a YAML key
+\(`water-fps'), because a frame rate belongs with the rest of what the
+config says about cost rather than in a pair of DEFUNs.
+
+Silent when the DEFUNs are missing, which is what a cmacs built without
 the compositor looks like from here."
+  (when (fboundp 'gowl-set-water-preset)
+    (ignore-errors (gowl-set-water-preset cmacs-gowl-water-preset))
+    (ignore-errors (gowl-set-water-intensity cmacs-gowl-water-intensity)))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
+
+;;;###autoload
+(defun cmacs-gowl-set-water (preset)
+  "Set the kind of water shown behind translucent windows to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `water' if it is not there
+already: choosing a kind of water and then not seeing any is nobody's
+intent."
+  (interactive
+   (list (intern (completing-read
+                  "Water: "
+                  '("pool" "fountain" "pond" "sea" "storm")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-water-preset)))))
+  (unless (fboundp 'gowl-set-water-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-water-preset preset)
+  (gowl-set-water-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'water)
+    (setq cmacs-gowl-backdrop 'water)
+    (gowl-set-backdrop 'water))
+  (message "Water: %s (intensity %.2f)" preset cmacs-gowl-water-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-water-intensity (intensity)
+  "Set how rough the water is, over and above its preset.
+
+1.0 is the preset as tuned; 0.0 is a flat surface, which passes light
+straight through.  Scales the wave height, the choppiness, how far the
+water bends what is behind it and the foam -- and nothing else."
+  (interactive
+   (list (read-number "Water intensity (0-3): " cmacs-gowl-water-intensity)))
+  (unless (fboundp 'gowl-set-water-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-water-intensity
+        (gowl-set-water-intensity intensity))
+  (message "Water intensity: %.2f" cmacs-gowl-water-intensity))
 
 ;;;###autoload
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)

@@ -615,7 +615,9 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
-| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: glass, blur, nothing |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: glass, water, blur, nothing |
+| =cmacs-gowl-set-water=        | Pick a kind of water (pool … storm) and switch to it |
+| =cmacs-gowl-set-water-intensity= | How rough the water is, over its preset |
 
 * Tags and Workspaces
 
@@ -1127,10 +1129,11 @@ Two modules can fill the space behind a translucent window, and
 | Value    | What you see                                          |
 |----------+-------------------------------------------------------|
 | =glass=  | the wallpaper refracted through the window (default)  |
+| =water=  | refracted through a MOVING water surface               |
 | =blur=   | the wallpaper, blurred behind it                       |
 | =none=   | the desktop, straight through                          |
 
-=Super+Shift+"= cycles the three, and so does =M-x
+=Super+Shift+"= cycles the four, and so does =M-x
 cmacs-gowl-cycle-backdrop= (a prefix argument goes the other way).
 =(gowl-set-backdrop 'blur)= sets one outright; =(gowl-backdrop)= reads
 it. Every one of those changes the running compositor immediately --- no
@@ -1141,11 +1144,11 @@ every window is re-placed when it moves.
 (setq cmacs-gowl-backdrop 'glass)   ;; the default
 #+end_src
 
-*They are alternatives, not layers.* Both modules put a node in the same
-place in the same window's scene tree, so both drawing would mean one
+*They are alternatives, not layers.* Each module puts a node in the same
+place in the same window's scene tree, so two drawing would mean one
 hidden behind the other while both still paid for a capture and a blur on
-every tag switch. Loading both is deliberate: it is what makes the key
-instant.
+every tag switch. Loading all of them is deliberate: it is what makes the
+key instant.
 
 *How much of it you see is not this setting.* It is how transparent the
 window is --- =cmacs-gowl-focused-alpha=, a window rule, or the client's
@@ -1172,11 +1175,15 @@ it darkens, where the light sits and how wide the colour fringe is all
 fall out of that one ray, which is why it holds together at any window
 size and around the corners.
 
-The knobs are gowl config keys --- =glass-bevel=, =glass-thickness=,
-=glass-slope=, =glass-dispersion=, =glass-rim=, =glass-shade=,
-=glass-clarity= and the rest --- reachable with =gowl-config-get= and
-=gowl-set-config-value=, and documented in full in gowl's own
-[[file:../../deps/gowl/docs/configuration.org][configuration guide]]. Three are worth knowing before touching them:
+The knobs are gowl YAML config keys --- =glass-bevel=,
+=glass-thickness=, =glass-slope=, =glass-dispersion=, =glass-rim=,
+=glass-shade=, =glass-clarity= and the rest --- set in
+=~/.config/gowl/config.yaml= and applied with =M-x gowl-reload-config=.
+They are documented in full in gowl's own
+[[file:../../deps/gowl/docs/configuration.org][configuration guide]].
+There are no Elisp setters for them: unlike the water's preset, which
+somebody actually wants to change from a menu, these are a look you
+choose once. Three are worth knowing before touching them:
 
 - =glass-bevel= and =glass-thickness= are proportions of a window;
   =glass-dispersion= and =glass-edge-width= are fixed pixel counts,
@@ -1201,6 +1208,81 @@ last picture up rather than blinking.
 Under a renderer whose GL context it cannot borrow, or a driver that will
 not compile the refraction shader, it sits the session out --- and takes
 none of the other effect modules with it.
+
+*** Liquid water
+:PROPERTIES:
+:CUSTOM_ID: liquidwater
+:END:
+
+The wallpaper seen through a moving water surface. A real height field
+--- four octaves of two-dimensional wave plus up to six expanding ripples
+--- is built per pixel, its normal and its curvature taken from five
+samples, and one ray refracted through it at n = 1.333. Nothing is
+painted on: the glints sit on the crests because that is where a tilted
+surface points at the light, and the caustics are brightest where the
+surface is concave because that is what a caustic is.
+
+**** Choosing your water
+
+=cmacs-gowl-water-preset= names a whole tuned set, because the numbers in
+one only mean anything together --- a pool's wave height over a sea's
+wavelength is not a calmer sea, it is a flat pane with a slow wobble.
+
+| Preset      | What it is |
+|-------------+------------|
+| =pool=      | Barely disturbed; almost entirely its ripples |
+| =fountain=  | Livelier and quick: six ripple sources |
+| =pond=      | A gentle swell with the odd ring (the default) |
+| =sea=       | A rolling swell, no ripples, a little foam |
+| =storm=     | Choppy, fast, white-capped, running into the edges |
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-water-preset 'sea)
+(setq cmacs-gowl-water-intensity 1.0)   ;; 0 is a flat surface
+#+end_src
+
+=M-x cmacs-gowl-set-water= completes over the five and switches the
+backdrop to =water= at the same time --- choosing a kind of water and
+then not seeing any is nobody's intent. =M-x
+cmacs-gowl-set-water-intensity= prompts for the one knob over the whole
+preset.
+
+=cmacs-gowl-water-intensity= scales exactly the four things that together
+mean "how rough is it": the wave height, the choppiness, how far the
+water bends what is behind it, and the foam. It deliberately does NOT
+scale the wavelength --- that would not make a rougher sea, it would make
+the same sea seen from further away. At =0= the surface is flat, and a
+flat surface passes light straight through: still water rather than a
+fixed distortion.
+
+Every value a preset sets can be overridden individually from gowl's YAML
+config (=water-amplitude=, =water-depth=, =water-drops=, =water-foam=,
+=water-speed= and the rest); an override that is not named leaves the
+preset in charge, so =water-preset: sea= plus =water-foam: 0= is exactly
+that. The full list is in gowl's own
+[[file:../../deps/gowl/docs/configuration.org][configuration guide]].
+
+**** It never settles, and what that costs
+
+This is the only effect with a frame rate, because it is the only one
+that is stale the moment it is drawn. The blur and the glass are, between
+events, correct and free; the water is not.
+
+Per output, once per tag switch: one capture of the desktop with the
+windows hidden, and one blur of it --- exactly what the other two pay.
+Then one fragment pass per translucent window per tick, at half the
+window's size by default. On a 2880x1920 screen a maximised window is
+about a millisecond.
+
+*While a translucent window is on a screen, that screen is rendering.*
+The module asks for another frame for as long as it has water to draw,
+which is what keeps the surface moving --- an output with nothing else
+changing stops redrawing and would freeze it. It stops the moment there
+is nothing to draw: no translucent window on that output, the session
+locked, the style changed. There is no version of an animated backdrop
+that does not do this. =cmacs-gowl-water-fps= is 30 by default, which is
+half the cost of 60 for a difference nobody can see on something that
+moves as slowly as water.
 
 *** Frosted glass and shadows
 
@@ -1257,13 +1339,13 @@ core knowing that an overview exists. The same string works from a
 keybind (=@{ action: ipc_command, arg: "expo" @}=) and from the IPC
 socket.
 
-*** How seven effects share one compositor
+*** How eight effects share one compositor
 
-All seven --- animation, cube, expo, switcher, magnifier, blur,
-liquidglass --- are separate plugins implementing one interface, and
-CMacs loads all of them. The last two are the one pair that are
-alternatives rather than additions; see [[#window-backdrop][What shows through a translucent
-window]].
+All eight --- animation, cube, expo, switcher, magnifier, blur,
+liquidglass, liquidwater --- are separate plugins implementing one
+interface, and CMacs loads all of them. The last three are the set that
+are alternatives rather than additions; see [[#window-backdrop][What shows through a
+translucent window]].
 gowl decides who gets a given hook per event rather than handing the
 whole interface to one module: the hooks that decide where a window IS
 stop at the first module that claims them, and the per-frame and teardown

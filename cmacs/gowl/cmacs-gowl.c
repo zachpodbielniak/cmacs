@@ -1634,7 +1634,14 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               Super+Shift+" cycles it.  Loading both is
                               what makes that key instant instead of a
                               module load. */
-                           "liquidglass", "layout-indicator",
+                           "liquidglass",
+                           /* And the third of the set: the wallpaper seen
+                              through a moving water surface.  Unlike the
+                              other two it never settles -- it has a clock
+                              and a frame rate -- so it holds an output
+                              awake while a translucent window is on it.
+                              Only one of the three draws at a time. */
+                           "liquidwater", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were
                               left to the user's config, which meant a
@@ -5691,7 +5698,7 @@ only at the next `gowl-start'.  */)
 DEFUN ("gowl-backdrop", Fgowl_backdrop, Sgowl_backdrop, 0, 0, 0,
        doc: /* Return what shows through translucent windows.
 
-One of the symbols `glass', `blur' or `none'.  */)
+One of the symbols `glass', `water', `blur' or `none'.  */)
   (void)
 {
   GowlConfig *config;
@@ -5714,11 +5721,12 @@ DEFUN ("gowl-set-backdrop", Fgowl_set_backdrop, Sgowl_set_backdrop, 1, 1, 0,
        doc: /* Choose what shows through translucent windows.
 
 STYLE is `glass' (the wallpaper refracted through the window, the
-default), `blur' (the wallpaper blurred behind it), or `none'.  It may
-also be `next' or `prev' to step through those in order, which is what
-\[gowl-cycle-backdrop] and Super+Shift+\" do.
+default), `water' (refracted through a moving water surface), `blur'
+(the wallpaper blurred behind it), or `none'.  It may also be `next' or
+`prev' to step through those in order, which is what
+\[cmacs-gowl-cycle-backdrop] and Super+Shift+\" do.
 
-Both modules read this, so the change is immediate and needs no reload:
+Every backdrop module reads this, so the change is immediate and needs no reload:
 every window is re-placed here, which is how each of them hears to add
 or drop its node.  Returns the style now in force.  */)
   (Lisp_Object style)
@@ -5741,12 +5749,126 @@ or drop its node.  Returns the style now in force.  */)
   else
     {
       unbind_to (count, Qnil);
-      error ("Unknown backdrop style: %s (want glass, blur, none, next or prev)",
+      error ("Unknown backdrop style: %s "
+             "(want glass, water, blur, none, next or prev)",
              name);
     }
   return unbind_to (count,
     intern (gowl_config_backdrop_style_name (
       gowl_compositor_get_backdrop_style (cmacs_gowl_compositor))));
+}
+
+DEFUN ("gowl-water-preset", Fgowl_water_preset, Sgowl_water_preset, 0, 0, 0,
+       doc: /* Return what kind of water the `water' backdrop shows.
+
+One of the symbols `pool', `fountain', `pond', `sea' or `storm'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_water_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-water-preset", Fgowl_set_water_preset,
+       Sgowl_set_water_preset, 1, 1, 0,
+       doc: /* Set what kind of water the `water' backdrop shows.
+
+PRESET is `pool', `fountain', `pond', `sea' or `storm'.  Each is a whole
+tuned set rather than a single knob: a pool is almost entirely its
+ripples and a sea has none at all, and the numbers in one only mean
+anything together.
+
+Takes effect on the next frame the water draws; it does not need a
+reload, and it does not switch the backdrop on.  See
+`gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_water_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown water preset: %s "
+             "(want pool, fountain, pond, sea or storm)", name);
+    }
+  gowl_config_set_water_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-water-intensity", Fgowl_water_intensity, Sgowl_water_intensity,
+       0, 0, 0,
+       doc: /* Return how rough the water is, over and above its preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_water_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-water-intensity", Fgowl_set_water_intensity,
+       Sgowl_set_water_intensity, 1, 1, 0,
+       doc: /* Set how rough the water is, over and above its preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales the four things that together mean "how rough is it" -- the wave
+height, the choppiness, how far the water bends what is behind it, and
+the foam -- and nothing else.  Scaling the wavelength with them would
+not make a rougher sea, it would make the same sea seen from further
+away.
+
+0.0 is a flat surface, which passes light straight through: still water
+rather than a fixed distortion.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_water_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_water_intensity (config)));
 }
 
 DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
@@ -10423,6 +10545,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_locked_p);
   defsubr (&Sgowl_backdrop);
   defsubr (&Sgowl_set_backdrop);
+  defsubr (&Sgowl_water_preset);
+  defsubr (&Sgowl_set_water_preset);
+  defsubr (&Sgowl_water_intensity);
+  defsubr (&Sgowl_set_water_intensity);
   defsubr (&Sgowl_lock_command);
   defsubr (&Sgowl_set_lock_command);
   defsubr (&Sgowl_lock_on_suspend_p);
