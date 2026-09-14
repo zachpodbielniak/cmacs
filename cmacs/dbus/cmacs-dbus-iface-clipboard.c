@@ -74,9 +74,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
   else if (g_strcmp0 (m, "Put") == 0)
     {
       const gchar *text;
-      const gchar *args[1];
+      const gchar *args[2];
       g_variant_get (p, "(&s)", &text);
+      /* TEXT twice: the template names it once for the kill-ring and
+         again for the selection. */
       args[0] = text;
+      args[1] = text;
       /* Push to kill-ring; if the user has select-enable-clipboard
          set (the Emacs default for graphical sessions), this also
          pushes to the system CLIPBOARD selection.  Force-set the
@@ -89,7 +92,7 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         "     (gui-set-selection 'CLIPBOARD \"%s\")"
         "     (error nil)))"
         " \"ok\")",
-        (const gchar *[]) { text, text }, 2);
+        args, 2);
     }
   else if (g_strcmp0 (m, "PutSelection") == 0)
     {

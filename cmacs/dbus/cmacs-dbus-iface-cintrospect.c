@@ -64,13 +64,13 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     {
       const gchar *kind, *glob;
       gint32 limit;
-      const gchar *args[3];
       gchar lbuf[16];
       g_variant_get (p, "(&s&si)", &kind, &glob, &limit);
       g_snprintf (lbuf, sizeof lbuf, "%d", limit > 0 ? limit : 0);
-      args[0] = kind;
-      args[1] = glob;
-      args[2] = lbuf;
+      /* Five arguments, not three: an empty glob has to become a bare
+         nil rather than an empty string, so the quotes around it are
+         themselves substituted.  Spelled inline because the list is
+         conditional. */
       cmacs_dbus_eval_to_reply (iv,
         GUARD ("cmacs-c-list",
          "(format \"%%S\" (cmacs-c-list '%s %s%s%s %s))"),

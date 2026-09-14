@@ -95,7 +95,7 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       uptime = cmacs_dispatch_eval_string ("(emacs-uptime)", NULL);
 
       out = g_string_new ("{");
-      g_string_append_printf (out, "\"pid\":%d", (int) getpid ());
+      g_string_append_printf (out, "\"pid\":%ld", (long) getpid ());
 
       g_string_append (out, ",\"version\":");
       json_append_string (out, version != NULL ? version : PACKAGE_VERSION);

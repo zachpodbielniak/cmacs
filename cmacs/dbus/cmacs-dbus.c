@@ -690,9 +690,12 @@ cmacs_dbus_start_internal (GError **error)
       return NULL;
     }
 
-  /* Always claim per-PID. */
-  bus_name_per_pid = g_strdup_printf ("org.cmacs.Editor.Pid%d",
-                                      (int) getpid ());
+  /* Always claim per-PID.  Widened to long rather than cast to int:
+     pid_t IS int here, so (int) is a cast to itself, and a format that
+     only happens to match the platform's pid_t is the kind of thing
+     that breaks quietly somewhere else. */
+  bus_name_per_pid = g_strdup_printf ("org.cmacs.Editor.Pid%ld",
+                                      (long) getpid ());
   owner_id_per_pid = g_bus_own_name_on_connection (
     dbus_conn, bus_name_per_pid,
       G_BUS_NAME_OWNER_FLAGS_REPLACE
@@ -825,8 +828,9 @@ for this cmacs process, or nil if the service is stopped.  */)
   return name ? build_string (name) : Qnil;
 }
 
-extern void syms_of_cmacs_dbus_emit (void);
-extern void syms_of_cmacs_dbus_mpris (void);
+/* syms_of_cmacs_dbus_emit and syms_of_cmacs_dbus_mpris are declared in
+   cmacs-dbus-internal.h, which their own translation units include --- a
+   prototype only this file could see left those definitions unprototyped. */
 
 void
 syms_of_cmacs_dbus (void)

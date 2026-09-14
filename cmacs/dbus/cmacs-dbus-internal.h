@@ -261,6 +261,15 @@ void cmacs_dbus_emit_properties_changed (const gchar  *path,
                                          GVariant     *changed,
                                          const gchar **invalidated);
 
+/* ── Symbol registration for the sub-modules ─────────────────────────
+ *
+ * syms_of_cmacs_dbus in cmacs-dbus.c calls each of these once, from
+ * src/emacs.c's startup.  Declared here rather than beside the call so
+ * the defining translation unit sees the prototype too. */
+
+void syms_of_cmacs_dbus_emit  (void);
+void syms_of_cmacs_dbus_mpris (void);
+
 /* ── Common error helper ─────────────────────────────────────────── */
 
 void cmacs_dbus_return_gerror (GDBusMethodInvocation *invocation,

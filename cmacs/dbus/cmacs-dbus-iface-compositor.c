@@ -187,6 +187,10 @@ by_field (const gchar *by)
   return "app-id";
 }
 
+/* CALL_ is substituted INSIDE this block, so the `&err' every caller
+   writes binds to the err declared here -- one fresh NULL error per
+   invocation, consumed by the same expansion.  on_method therefore has
+   no err of its own; one there would only be shadowed. */
 #define RETURN_STR(call_)                                              \
   do {                                                                 \
     GError *err = NULL;                                                \
@@ -205,7 +209,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
            const gchar *i, const gchar *m, GVariant *p,
            GDBusMethodInvocation *iv, gpointer u)
 {
-  GError *err = NULL;
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
   if (g_strcmp0 (m, "ListClients") == 0)
