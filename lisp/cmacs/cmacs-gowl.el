@@ -151,9 +151,35 @@ field, its normal and curvature taken per pixel, one ray bent through it
 at n = 1.333.  `cmacs-gowl-water-preset' says what kind of water, from a
 barely-disturbed pool to a storm.
 
-`rain' and `water' are the two that never settle, so a screen showing
-either is a screen that is rendering.  Both are throttled, by
-`cmacs-gowl-rain-fps' and `cmacs-gowl-water-fps' (30 each).
+`snow' shows flakes falling past the window and settling on it.  A
+landed one sits as a bright scattering crystal -- snow does not refract,
+it SCATTERS -- then rounds off as it melts, collapses into a water bead
+about a third its size, and runs away down the pane leaving a beaded
+trail.  Frost creeps in from the edges while it happens.
+`cmacs-gowl-snow-preset' says how hard it falls and how cold the pane
+is, which are one setting here: a flurry melts almost at once and a
+blizzard keeps its crystals.
+
+`leaves' shows autumn falling past and collecting on the glass.  A
+falling leaf tumbles edge-on and back, which is the one thing on a
+screen that nothing else does; a landed one lies flat with a contact
+shadow under it and shivers when the wind gets up, and when a gust is
+strong enough it peels from one edge and goes.  Leaves are BACKLIT, so
+the wallpaper comes through them tinted and their veins show dark.
+`cmacs-gowl-leaves-preset' says how far into autumn and how hard it
+blows.
+
+`fizz' shows it through a glass of something carbonated: trains of
+bubbles streaming up from nucleation sites, growing and drawing apart as
+they rise, with a head of foam at the top.  A bubble is the INVERSE of a
+raindrop -- gas in liquid is a diverging lens, so it minifies rather
+than inverting, and its outer quarter is a mirror.
+`cmacs-gowl-fizz-preset' says how carbonated, from flat to champagne.
+
+`rain', `snow', `leaves', `fizz' and `water' are the five that never
+settle, so a screen showing any of them is a screen that is rendering.
+All five are throttled, by `cmacs-gowl-rain-fps' and its four siblings
+(30 each).
 
 `blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
@@ -161,13 +187,18 @@ either is a screen that is rendering.  Both are throttled, by
 
 Every backdrop module reads this and only one of them draws, so
 switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+\" step
-through the five, in the order rain, water, glass, blur, nothing -- the
-two that move first, so one press from the default is the other one.
+through all eight, in the order rain, snow, leaves, fizz, water, glass,
+blur, nothing -- everything that draws something first, and the three
+weathers leading, so one press from the default is the nearest relative
+of the rain.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
 opaque window shows no backdrop of any kind."
   :type '(choice (const :tag "Through a rained-on window" rain)
+                 (const :tag "Snow that settles and melts" snow)
+                 (const :tag "Falling autumn leaves" leaves)
+                 (const :tag "A carbonated drink" fizz)
                  (const :tag "Through moving water" water)
                  (const :tag "Refracted through the window" glass)
                  (const :tag "Blurred behind the window" blur)
@@ -244,6 +275,143 @@ not give heavier rain, it would give the same rain on a smaller window.
 
 0.0 is a clean, dry pane, which passes light straight through."
   :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-fizz-preset 'soda
+  "How carbonated `cmacs-gowl-backdrop' is when it is `fizz'.
+
+Each is a whole tuned set rather than a single knob, because what varies
+across them is not mainly how many bubbles there are: it is how FINE
+they are and how fast they go.  A champagne's bubble count at a cola's
+bubble size is neither drink.
+
+  `flat'       mostly what is left clinging to the glass
+  `sparkling'  a few slow trains and a thin head
+  `soda'       a glass of cola (the default)
+  `seltzer'    hard-carbonated water; it will not sit still
+  `champagne'  very fine, very fast, and a head that does not go down
+
+`cmacs-gowl-fizz-intensity' scales how carbonated whichever you pick is."
+  :type '(choice (const :tag "Flat" flat)
+                 (const :tag "Sparkling" sparkling)
+                 (const :tag "Soda" soda)
+                 (const :tag "Seltzer" seltzer)
+                 (const :tag "Champagne" champagne))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-fizz-intensity 1.0
+  "How carbonated it is, over and above `cmacs-gowl-fizz-preset'.
+
+1.0 is the preset as tuned.  It scales how many nucleation sites there
+are, how closely they emit, how many loose bubbles drift between them
+and how fast they rise -- and nothing else.
+
+It deliberately leaves the BUBBLE SIZE alone.  Scaling that as well
+would not give a fizzier drink, it would give the same drink in a
+smaller glass.
+
+0.0 is a still drink, which passes light straight through."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-fizz-fps 30
+  "How often the fizz is redrawn, per second.  0 means every frame.
+
+A THROTTLE rather than a target: the pane is redrawn no more often than
+this, however fast the output runs.  Lowering it is the cheapest way to
+make the effect cost less."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-leaves-preset 'autumn
+  "How far into autumn `cmacs-gowl-backdrop' is when it is `leaves'.
+
+Each is a whole tuned set rather than a single knob, and it carries a
+season and a wind at once: `gale' is not `peak' with more of them, it is
+the same tree in March where nothing stays on the glass.
+
+  `turning'   the first few coming down, in still air
+  `autumn'    a steady fall on a breezy day (the default)
+  `peak'      the week the tree empties
+  `blustery'  the same fall with the weather against it
+  `gale'      nothing holds the glass for more than a moment
+
+`cmacs-gowl-leaves-intensity' scales how heavy the fall is."
+  :type '(choice (const :tag "Just turning" turning)
+                 (const :tag "Autumn" autumn)
+                 (const :tag "Peak fall" peak)
+                 (const :tag "Blustery" blustery)
+                 (const :tag "Gale" gale))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-leaves-intensity 1.0
+  "How heavy the fall is, over and above `cmacs-gowl-leaves-preset'.
+
+1.0 is the preset as tuned.  It scales how many leaves are falling, how
+many are stuck to the glass, how fast they come down and how hard the
+wind blows -- and nothing else.
+
+It deliberately leaves the LEAF SIZE alone.  Bigger leaves are not a
+heavier fall, they are a closer tree -- and raising it would do nothing
+anyway, because a blade is capped against its own column so it cannot be
+sliced off at the column edge.
+
+0.0 is a bare window."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-leaves-fps 30
+  "How often the leaves are redrawn, per second.  0 means every frame.
+
+A THROTTLE rather than a target, as `cmacs-gowl-rain-fps' is."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-snow-preset 'steady
+  "How hard `cmacs-gowl-backdrop' snows when it is `snow'.
+
+Each is a whole tuned set rather than a single knob, and it carries TWO
+scales at once: left to right it snows harder, and left to right the
+pane gets COLDER.  A flurry is a warm window that turns what lands on it
+into water within seconds; a blizzard keeps its crystals and grows frost
+in from the edges.
+
+  `flurry'    a few flakes on a warm pane
+  `light'     a gentle fall; most of it still turns to water
+  `steady'    flakes sit for a while, then melt and run (the default)
+  `heavy'     coming down hard on a cold pane
+  `blizzard'  thick, fine and cold; it settles and stays
+
+`cmacs-gowl-snow-intensity' scales how hard it falls."
+  :type '(choice (const :tag "Flurry" flurry)
+                 (const :tag "Light" light)
+                 (const :tag "Steady" steady)
+                 (const :tag "Heavy" heavy)
+                 (const :tag "Blizzard" blizzard))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-snow-intensity 1.0
+  "How hard it snows, over and above `cmacs-gowl-snow-preset'.
+
+1.0 is the preset as tuned.  It scales how many flakes are falling, how
+many have settled on the glass and how fast they come down -- and
+nothing else.
+
+It deliberately leaves the FLAKE SIZE alone, and it leaves the melt and
+the frost alone too: those are the pane's TEMPERATURE, and turning the
+snow up should not also freeze the window.
+
+0.0 is a clear, warm pane."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-snow-fps 30
+  "How often the snow is redrawn, per second.  0 means every frame.
+
+A THROTTLE rather than a target, as `cmacs-gowl-rain-fps' is.  The snow
+is the dearest of the animated backdrops per pixel, so this is the one
+where lowering it buys the most."
+  :type 'integer
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-water-fps 30
@@ -1039,7 +1207,8 @@ authoritative and keeps re-runs idempotent."
         ;; `M-x gowl-lock' only works when Emacs has the keyboard, so on
         ;; a tag showing a browser or a game there was no way to lock at
         ;; all.  The action runs `cmacs-gowl-lock-command'.
-        ;; The window backdrop: rain, water, glass, blur, nothing.  A
+        ;; The window backdrop: rain, snow, leaves, fizz, water,
+        ;; glass, blur, nothing.  A
         ;; compositor action rather than a `custom' one, so it works
         ;; whatever has the keyboard -- the same reason the lock below
         ;; is.  The key is Super+" ; the level-0 name for that is
@@ -3090,21 +3259,32 @@ without it looks like from here."
 (defun cmacs-gowl--apply-backdrop ()
   "Push the backdrop settings to the compositor.
 
-The water's and the rain's own settings go first, so they are in place
-before anything asks either to draw.
+Each animated backdrop's own settings go first and the choice of
+backdrop goes LAST, so whichever one ends up drawing is already tuned
+before it is asked to draw a frame.
 
 Silent when the DEFUNs are missing, which is what a cmacs built without
-the compositor looks like from here."
-  (when (fboundp 'gowl-set-water-preset)
-    (ignore-errors (gowl-set-water-preset cmacs-gowl-water-preset))
-    (ignore-errors (gowl-set-water-intensity cmacs-gowl-water-intensity)))
-  (when (fboundp 'gowl-set-water-fps)
-    (ignore-errors (gowl-set-water-fps cmacs-gowl-water-fps)))
-  (when (fboundp 'gowl-set-rain-preset)
-    (ignore-errors (gowl-set-rain-preset cmacs-gowl-rain-preset))
-    (ignore-errors (gowl-set-rain-intensity cmacs-gowl-rain-intensity)))
-  (when (fboundp 'gowl-set-rain-fps)
-    (ignore-errors (gowl-set-rain-fps cmacs-gowl-rain-fps)))
+the compositor looks like from here -- and per backdrop rather than
+once, so a cmacs built against an older gowl still applies the settings
+it does have."
+  (dolist (spec `((gowl-set-water-preset    ,cmacs-gowl-water-preset
+                   gowl-set-water-intensity ,cmacs-gowl-water-intensity
+                   gowl-set-water-fps       ,cmacs-gowl-water-fps)
+                  (gowl-set-rain-preset     ,cmacs-gowl-rain-preset
+                   gowl-set-rain-intensity  ,cmacs-gowl-rain-intensity
+                   gowl-set-rain-fps        ,cmacs-gowl-rain-fps)
+                  (gowl-set-snow-preset     ,cmacs-gowl-snow-preset
+                   gowl-set-snow-intensity  ,cmacs-gowl-snow-intensity
+                   gowl-set-snow-fps        ,cmacs-gowl-snow-fps)
+                  (gowl-set-leaves-preset   ,cmacs-gowl-leaves-preset
+                   gowl-set-leaves-intensity ,cmacs-gowl-leaves-intensity
+                   gowl-set-leaves-fps      ,cmacs-gowl-leaves-fps)
+                  (gowl-set-fizz-preset     ,cmacs-gowl-fizz-preset
+                   gowl-set-fizz-intensity  ,cmacs-gowl-fizz-intensity
+                   gowl-set-fizz-fps        ,cmacs-gowl-fizz-fps)))
+    (cl-loop for (fn value) on spec by #'cddr
+             when (fboundp fn)
+             do (ignore-errors (funcall fn value))))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
 
@@ -3184,13 +3364,132 @@ same rain on a smaller window."
   (message "Rain intensity: %.2f" cmacs-gowl-rain-intensity))
 
 ;;;###autoload
+(defun cmacs-gowl-set-fizz (preset)
+  "Set how carbonated the drink behind translucent windows is, to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `fizz' if it is not there
+already: choosing a kind of drink and then not seeing one is nobody's
+intent."
+  (interactive
+   (list (intern (completing-read
+                  "Carbonation: "
+                  '("flat" "sparkling" "soda" "seltzer" "champagne")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-fizz-preset)))))
+  (unless (fboundp 'gowl-set-fizz-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-fizz-preset preset)
+  (gowl-set-fizz-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'fizz)
+    (setq cmacs-gowl-backdrop 'fizz)
+    (gowl-set-backdrop 'fizz))
+  (message "Carbonation: %s (intensity %.2f)" preset cmacs-gowl-fizz-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-fizz-intensity (intensity)
+  "Set how carbonated it is, over and above its preset.
+
+1.0 is the preset as tuned; 0.0 is a still drink, which passes light
+straight through.  Scales how many nucleation sites there are, how
+closely they emit, how many strays drift between them and how fast they
+rise -- and not the bubble size, which would only be the same drink in a
+smaller glass."
+  (interactive
+   (list (read-number "Carbonation intensity (0-3): "
+                      cmacs-gowl-fizz-intensity)))
+  (unless (fboundp 'gowl-set-fizz-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-fizz-intensity
+        (gowl-set-fizz-intensity intensity))
+  (message "Carbonation intensity: %.2f" cmacs-gowl-fizz-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-leaves (preset)
+  "Set how far into autumn the leaves behind translucent windows are.
+
+PRESET is the season and the wind together.  Also switches
+`cmacs-gowl-backdrop' to `leaves' if it is not there already: choosing a
+kind of fall and then not seeing one is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Leaves: "
+                  '("turning" "autumn" "peak" "blustery" "gale")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-leaves-preset)))))
+  (unless (fboundp 'gowl-set-leaves-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-leaves-preset preset)
+  (gowl-set-leaves-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'leaves)
+    (setq cmacs-gowl-backdrop 'leaves)
+    (gowl-set-backdrop 'leaves))
+  (message "Leaves: %s (intensity %.2f)" preset cmacs-gowl-leaves-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-leaves-intensity (intensity)
+  "Set how heavy the fall is, over and above its preset.
+
+1.0 is the preset as tuned; 0.0 is a bare window.  Scales how many
+leaves are falling, how many are stuck, how fast they come down and how
+hard the wind blows -- and not the leaf size, which the shader caps
+against the column spacing in any case."
+  (interactive
+   (list (read-number "Leaves intensity (0-3): "
+                      cmacs-gowl-leaves-intensity)))
+  (unless (fboundp 'gowl-set-leaves-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-leaves-intensity
+        (gowl-set-leaves-intensity intensity))
+  (message "Leaves intensity: %.2f" cmacs-gowl-leaves-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-snow (preset)
+  "Set how hard it snows behind translucent windows, to PRESET.
+
+PRESET carries how hard it falls and how cold the pane is together: a
+flurry melts almost at once, a blizzard settles and frosts.  Also
+switches `cmacs-gowl-backdrop' to `snow' if it is not there already."
+  (interactive
+   (list (intern (completing-read
+                  "Snow: "
+                  '("flurry" "light" "steady" "heavy" "blizzard")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-snow-preset)))))
+  (unless (fboundp 'gowl-set-snow-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-snow-preset preset)
+  (gowl-set-snow-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'snow)
+    (setq cmacs-gowl-backdrop 'snow)
+    (gowl-set-backdrop 'snow))
+  (message "Snow: %s (intensity %.2f)" preset cmacs-gowl-snow-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-snow-intensity (intensity)
+  "Set how hard it snows, over and above its preset.
+
+1.0 is the preset as tuned; 0.0 is a clear, warm pane.  Scales how many
+flakes are falling, how many have settled and how fast they come down --
+and not the melt or the frost, which are the pane's temperature rather
+than the weather's."
+  (interactive
+   (list (read-number "Snow intensity (0-3): " cmacs-gowl-snow-intensity)))
+  (unless (fboundp 'gowl-set-snow-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-snow-intensity
+        (gowl-set-snow-intensity intensity))
+  (message "Snow intensity: %.2f" cmacs-gowl-snow-intensity))
+
+;;;###autoload
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)
   "Step to the next window backdrop.
 
-The order is rain, water, glass, blur, nothing, round again: the four
-that draw something come first and the two that MOVE lead, so one press
-from the default lands on the other animated look rather than on nothing
-at all.
+The order is rain, snow, leaves, fizz, water, glass, blur, nothing,
+round again: everything that draws something comes first, grouped by
+what it is -- the three weathers, then the two that are liquid in a
+pane, then the two that settle.  So one press from the default lands on
+another LOOK rather than on nothing at all, and turning the backdrop off
+takes the full way round rather than a single press nobody meant.
 
 With a prefix argument BACKWARDS, step the other way.
 

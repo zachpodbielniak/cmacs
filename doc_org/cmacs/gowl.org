@@ -615,7 +615,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
-| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: rain, water, glass, blur, nothing |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop: rain, snow, leaves, fizz, water, glass, blur, nothing |
 | =cmacs-gowl-set-water=        | Pick a kind of water (pool … storm) and switch to it |
 | =cmacs-gowl-set-water-intensity= | How rough the water is, over its preset |
 
@@ -717,7 +717,7 @@ holds focus.
 | =Super+Shift+0=         | Tag focused client to all tags          |
 | =Super+,= / =Super+.=   | Focus previous / next monitor           |
 | =Super+Ctrl+Shift+,= / =.= | Move client to previous / next monitor  |
-| =Super+"=               | Cycle the window backdrop: rain, water, glass, blur, nothing |
+| =Super+"=               | Cycle the window backdrop: rain, snow, leaves, fizz, water, glass, blur, nothing |
 | =Super+Shift+l=         | Lock the session                        |
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
@@ -1125,27 +1125,47 @@ combination applications do not use.
 :CUSTOM_ID: window-backdrop
 :END:
 
-Two modules can fill the space behind a translucent window, and
-=cmacs-gowl-backdrop= says which one does. CMacs loads both.
+Seven modules can fill the space behind a translucent window, and
+=cmacs-gowl-backdrop= says which one does. CMacs loads all of them.
 
 | Value    | What you see                                          |
 |----------+-------------------------------------------------------|
 | =rain=   | through a rained-on window: drops, runs and streaks (the default) |
+| =snow=   | flakes that settle on the glass, melt into beads and run off |
+| =leaves= | autumn falling past and collecting, until the wind takes it |
+| =fizz=   | a glass of something carbonated, bubbles rising from the glass |
 | =water=  | refracted through a MOVING water surface               |
 | =glass=  | the wallpaper refracted through the window             |
 | =blur=   | the wallpaper, blurred behind it                       |
 | =none=   | the desktop, straight through                          |
 
-=Super+"= cycles the five --- rain, water, glass, blur, nothing --- and
-so does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the other
-way). The two that MOVE lead, so one press from the default lands on the
-other animated look rather than on nothing. Either
-way the layout indicator draws a brief toast naming what it landed on
---- "Liquid glass", "Liquid water", "Liquid rain", "Blur",
-"No backdrop" --- because
-over a busy wallpaper a calm water and a subtle glass can both look a
-great deal like the blur they replaced, and without one the honest
-reaction to pressing the key is "did that do anything?".
+=fizz= also answers to =carbonation=, =soda= and =bubbles=; =leaves= to
+=autumn=, =fall= and =leaf=. The short spelling is what the settings use
+--- =cmacs-gowl-fizz-preset= rather than =cmacs-gowl-carbonation-preset=
+--- and the long one is what the toast says, so both work.
+
+=Super+"= cycles all eight --- rain, snow, leaves, fizz, water, glass,
+blur, nothing --- and so does =M-x cmacs-gowl-cycle-backdrop= (a prefix
+argument goes the other way). Everything that draws something comes
+first, grouped by what it is: the three weathers, then the two that are
+liquid in a pane, then the two that settle. So one press from the
+default lands on another LOOK rather than on nothing, and turning the
+backdrop off takes the full way round rather than a single press nobody
+meant. Either way the layout indicator draws a brief toast naming what
+it landed on --- "Liquid rain", "Snow", "Falling leaves", "Carbonation",
+"Liquid water", "Liquid glass", "Blur", "No backdrop" --- because over a
+busy wallpaper a calm water and a subtle glass can both look a great
+deal like the blur they replaced, and without one the honest reaction to
+pressing the key is "did that do anything?".
+
+*Each of the five animated ones has a preset and an intensity of its
+own*, tuned in a whole set rather than one knob at a time:
+=cmacs-gowl-snow-preset= (=flurry= to =blizzard=, which is also a scale
+of how COLD the pane is), =cmacs-gowl-leaves-preset= (=turning= to
+=gale=, a season and a wind at once) and =cmacs-gowl-fizz-preset=
+(=flat= to =champagne=). =M-x cmacs-gowl-set-snow=, =...-set-leaves= and
+=...-set-fizz= pick one and switch the backdrop to it in the same
+breath.
 =(gowl-set-backdrop 'blur)= sets one outright; =(gowl-backdrop)= reads
 it. Every one of those changes the running compositor immediately --- no
 reload, no module load --- because both modules read the one setting and

@@ -1650,7 +1650,17 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               same way.  The key steps rain, water, glass,
                               blur, off -- the two that move first, so one
                               press from here is the other one. */
-                           "liquidrain", "layout-indicator",
+                           "liquidrain",
+                           /* And the three the same key reaches that are
+                              not liquid at all: snow that settles on the
+                              pane and melts off it, autumn leaves that
+                              stick until the wind takes them, and a
+                              glass of something carbonated.  Loaded for
+                              the same reason as the rest -- Super+"
+                              steps through eight looks now, and a look
+                              that needs a module load first is not a
+                              key press, it is a wait. */
+                           "snow", "leaves", "fizz", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were
                               left to the user's config, which meant a
@@ -5707,7 +5717,8 @@ only at the next `gowl-start'.  */)
 DEFUN ("gowl-backdrop", Fgowl_backdrop, Sgowl_backdrop, 0, 0, 0,
        doc: /* Return what shows through translucent windows.
 
-One of the symbols `glass', `water', `blur' or `none'.  */)
+One of the symbols `rain', `snow', `leaves', `fizz', `water', `glass',
+`blur' or `none'.  */)
   (void)
 {
   GowlConfig *config;
@@ -5729,11 +5740,22 @@ One of the symbols `glass', `water', `blur' or `none'.  */)
 DEFUN ("gowl-set-backdrop", Fgowl_set_backdrop, Sgowl_set_backdrop, 1, 1, 0,
        doc: /* Choose what shows through translucent windows.
 
-STYLE is `glass' (the wallpaper refracted through the window, the
-default), `water' (refracted through a moving water surface), `blur'
-(the wallpaper blurred behind it), or `none'.  It may also be `next' or
-`prev' to step through those in order, which is what
-\[cmacs-gowl-cycle-backdrop] and Super+Shift+\" do.
+STYLE is one of
+
+  `rain'    a window somebody left out in it: drops that collect, run
+            and streak (the CMacs default)
+  `snow'    flakes that settle on the glass, melt into beads and run off
+  `leaves'  autumn falling past and collecting, until the wind takes it
+  `fizz'    a glass of something carbonated, bubbles rising from the
+            glass.  `carbonation', `soda' and `bubbles' mean the same
+  `water'   refracted through a moving water surface
+  `glass'   refracted through the window, as a bevelled slab
+  `blur'    the wallpaper, blurred behind the window
+  `none'    the desktop, straight through
+
+It may also be `next' or `prev' to step through those in order, which is
+what \[cmacs-gowl-cycle-backdrop] and Super+Shift+\" do.  `leaves' also
+answers to `autumn', `fall' and `leaf'.
 
 Every backdrop module reads this, so the change is immediate and needs no reload:
 every window is re-placed here, which is how each of them hears to add
@@ -5759,7 +5781,8 @@ or drop its node.  Returns the style now in force.  */)
     {
       unbind_to (count, Qnil);
       error ("Unknown backdrop style: %s "
-             "(want glass, water, blur, none, next or prev)",
+             "(want rain, snow, leaves, fizz, water, glass, blur, "
+             "none, next or prev)",
              name);
     }
   return unbind_to (count,
@@ -6014,6 +6037,513 @@ not give heavier rain, it would give the same rain on a smaller window.
   gowl_config_set_rain_intensity (config, XFLOATINT (intensity));
   return unbind_to (count,
                     make_float (gowl_config_get_rain_intensity (config)));
+}
+
+DEFUN ("gowl-fizz-preset", Fgowl_fizz_preset, Sgowl_fizz_preset, 0, 0, 0,
+       doc: /* Return how carbonated the `fizz' backdrop is.
+
+One of the symbols `flat', `sparkling', `soda', `seltzer' or
+`champagne'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_fizz_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-fizz-preset", Fgowl_set_fizz_preset,
+       Sgowl_set_fizz_preset, 1, 1, 0,
+       doc: /* Set how carbonated the `fizz' backdrop is.
+
+PRESET is `flat', `sparkling', `soda', `seltzer' or `champagne'.  Each
+is a whole tuned set rather than a single knob: what varies across them
+is not mainly how many bubbles there are but how FINE they are and how
+fast they go, and a champagne's bubble count at a cola's bubble size is
+neither drink.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_fizz_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown fizz preset: %s (want flat, sparkling, soda, seltzer or champagne)", name);
+    }
+  gowl_config_set_fizz_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-fizz-intensity", Fgowl_fizz_intensity, Sgowl_fizz_intensity,
+       0, 0, 0,
+       doc: /* Return how carbonated it is, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_fizz_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-fizz-intensity", Fgowl_set_fizz_intensity,
+       Sgowl_set_fizz_intensity, 1, 1, 0,
+       doc: /* Set how carbonated it is, over and above the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how many nucleation sites there are, how closely they emit, how
+many loose bubbles drift between them and how fast they rise -- what
+together means "how carbonated is this" -- and nothing else.
+
+It deliberately leaves the BUBBLE SIZE alone.  Scaling that as well
+would not give a fizzier drink, it would give the same drink in a
+smaller glass.
+
+0.0 is a still drink, which passes light straight through.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_fizz_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_fizz_intensity (config)));
+}
+
+DEFUN ("gowl-fizz-fps", Fgowl_fizz_fps, Sgowl_fizz_fps, 0, 0, 0,
+       doc: /* Return how often the fizz is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_fizz_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-fizz-fps", Fgowl_set_fizz_fps, Sgowl_set_fizz_fps,
+       1, 1, 0,
+       doc: /* Set how often the fizz is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target: the pane is redrawn no more often than
+this, however fast the output runs.  Lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_fizz_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_fizz_fps (config)));
+}
+
+DEFUN ("gowl-leaves-preset", Fgowl_leaves_preset, Sgowl_leaves_preset, 0, 0, 0,
+       doc: /* Return how far into autumn the `leaves' backdrop is.
+
+One of the symbols `turning', `autumn', `peak', `blustery' or `gale'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_leaves_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-leaves-preset", Fgowl_set_leaves_preset,
+       Sgowl_set_leaves_preset, 1, 1, 0,
+       doc: /* Set how far into autumn the `leaves' backdrop is.
+
+PRESET is `turning', `autumn', `peak', `blustery' or `gale'.  Each is a
+whole tuned set rather than a single knob: it carries a season and a
+wind at once, so `gale' is not merely `peak' with more of them, it is
+the same tree in March where nothing stays on the glass.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_leaves_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown leaves preset: %s (want turning, autumn, peak, blustery or gale)", name);
+    }
+  gowl_config_set_leaves_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-leaves-intensity", Fgowl_leaves_intensity, Sgowl_leaves_intensity,
+       0, 0, 0,
+       doc: /* Return how heavy the fall is, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_leaves_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-leaves-intensity", Fgowl_set_leaves_intensity,
+       Sgowl_set_leaves_intensity, 1, 1, 0,
+       doc: /* Set how heavy the fall is, over and above the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how many leaves are falling, how many are stuck to the glass, how
+fast they come down and how hard the wind blows -- and nothing else.
+
+It deliberately leaves the LEAF SIZE alone.  Bigger leaves are not a
+heavier fall, they are a closer tree -- and raising the size would do
+nothing anyway, because a blade is capped against its own column so it
+cannot be sliced off at the column edge.
+
+0.0 is a bare window.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_leaves_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_leaves_intensity (config)));
+}
+
+DEFUN ("gowl-leaves-fps", Fgowl_leaves_fps, Sgowl_leaves_fps, 0, 0, 0,
+       doc: /* Return how often the leaves is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_leaves_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-leaves-fps", Fgowl_set_leaves_fps, Sgowl_set_leaves_fps,
+       1, 1, 0,
+       doc: /* Set how often the leaves is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target: the pane is redrawn no more often than
+this, however fast the output runs.  Lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_leaves_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_leaves_fps (config)));
+}
+
+DEFUN ("gowl-snow-preset", Fgowl_snow_preset, Sgowl_snow_preset, 0, 0, 0,
+       doc: /* Return how hard the `snow' backdrop is falling.
+
+One of the symbols `flurry', `light', `steady', `heavy' or `blizzard'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_snow_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-snow-preset", Fgowl_set_snow_preset,
+       Sgowl_set_snow_preset, 1, 1, 0,
+       doc: /* Set how hard the `snow' backdrop is falling.
+
+PRESET is `flurry', `light', `steady', `heavy' or `blizzard'.  Each is a
+whole tuned set rather than a single knob, and it carries TWO scales at
+once: left to right it snows harder, and left to right the pane gets
+colder.  A flurry is a warm window that turns what lands on it into
+water within seconds; a blizzard keeps its crystals and grows frost in
+from the edges.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_snow_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown snow preset: %s (want flurry, light, steady, heavy or blizzard)", name);
+    }
+  gowl_config_set_snow_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-snow-intensity", Fgowl_snow_intensity, Sgowl_snow_intensity,
+       0, 0, 0,
+       doc: /* Return how hard it is snowing, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_snow_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-snow-intensity", Fgowl_set_snow_intensity,
+       Sgowl_set_snow_intensity, 1, 1, 0,
+       doc: /* Set how hard it is snowing, over and above the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how many flakes are falling, how many have settled on the glass
+and how fast they come down -- and nothing else.
+
+It deliberately leaves the FLAKE SIZE alone, and it leaves the melt and
+the frost alone too: those are the pane's TEMPERATURE, and turning the
+snow up should not also freeze the window.
+
+0.0 is a clear, warm pane.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_snow_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_snow_intensity (config)));
+}
+
+DEFUN ("gowl-snow-fps", Fgowl_snow_fps, Sgowl_snow_fps, 0, 0, 0,
+       doc: /* Return how often the snow is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_snow_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-snow-fps", Fgowl_set_snow_fps, Sgowl_set_snow_fps,
+       1, 1, 0,
+       doc: /* Set how often the snow is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target: the pane is redrawn no more often than
+this, however fast the output runs.  Lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_snow_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_snow_fps (config)));
+}
+
+DEFUN ("gowl-rain-preset", Fgowl_rain_preset, Sgowl_rain_preset, 0, 0, 0,
+       doc: /* Return what kind of rain the `rain' backdrop shows.
+
+One of the symbols `mist', `drizzle', `shower', `downpour' or `storm'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_rain_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
 }
 
 DEFUN ("gowl-water-intensity", Fgowl_water_intensity, Sgowl_water_intensity,
@@ -10841,9 +11371,28 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_water_preset);
   defsubr (&Sgowl_water_intensity);
   defsubr (&Sgowl_set_water_intensity);
+  defsubr (&Sgowl_rain_preset);
   defsubr (&Sgowl_set_rain_preset);
   defsubr (&Sgowl_rain_intensity);
   defsubr (&Sgowl_set_rain_intensity);
+  defsubr (&Sgowl_fizz_preset);
+  defsubr (&Sgowl_set_fizz_preset);
+  defsubr (&Sgowl_fizz_intensity);
+  defsubr (&Sgowl_set_fizz_intensity);
+  defsubr (&Sgowl_fizz_fps);
+  defsubr (&Sgowl_set_fizz_fps);
+  defsubr (&Sgowl_leaves_preset);
+  defsubr (&Sgowl_set_leaves_preset);
+  defsubr (&Sgowl_leaves_intensity);
+  defsubr (&Sgowl_set_leaves_intensity);
+  defsubr (&Sgowl_leaves_fps);
+  defsubr (&Sgowl_set_leaves_fps);
+  defsubr (&Sgowl_snow_preset);
+  defsubr (&Sgowl_set_snow_preset);
+  defsubr (&Sgowl_snow_intensity);
+  defsubr (&Sgowl_set_snow_intensity);
+  defsubr (&Sgowl_snow_fps);
+  defsubr (&Sgowl_set_snow_fps);
   defsubr (&Sgowl_water_fps);
   defsubr (&Sgowl_set_water_fps);
   defsubr (&Sgowl_rain_fps);
