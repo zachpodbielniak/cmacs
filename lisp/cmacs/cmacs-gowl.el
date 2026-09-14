@@ -1741,7 +1741,19 @@ panel."
                                   (or monitor (gowl-focused-monitor))))))))
     (cond
      ((not (gowl-monitor-hdr-capable-p monitor))
-      (message "%s does not offer BT.2020 and PQ" (or name "This output")))
+      ;; Two ways to be refused, and they want different words.  Saying
+      ;; the display does not offer BT.2020 and PQ when it offers both
+      ;; and the renderer is the problem sends somebody to check their
+      ;; cable for an afternoon.
+      (if (and (fboundp 'gowl-monitor-hdr-display-capable-p)
+               (gowl-monitor-hdr-display-capable-p monitor))
+          (message
+           (concat "%s can do HDR but this renderer cannot convert "
+                   "colour for it; set `hdr-unmanaged: t' in "
+                   "~/.config/gowl/config.yaml to have it anyway")
+           (or name "This output"))
+        (message "%s does not offer BT.2020 and PQ"
+                 (or name "This output"))))
      ((gowl-set-monitor-hdr (not (gowl-monitor-hdr-p monitor)) monitor)
       (message "%s: HDR %s" (or name "Output")
                (if (gowl-monitor-hdr-p monitor) "on" "off")))

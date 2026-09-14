@@ -9407,14 +9407,20 @@ cmacs_gowl_parse_monitor_config (Lisp_Object alist, GowlMonitorConfig *mc)
 DEFUN ("gowl-monitor-hdr-capable-p", Fgowl_monitor_hdr_capable_p,
        Sgowl_monitor_hdr_capable_p, 0, 1, 0,
        doc: /* Return t if MONITOR can be driven as HDR.
-An output qualifies only when it advertises BT.2020 primaries AND the
-ST.2084 PQ transfer function; a display that claims one without the
-other cannot show HDR.  MONITOR is a monitor object or nil for the
-focused one.
+MONITOR is a monitor object or nil for the focused one.
 
-This is usually a property of the whole chain rather than the panel: an
-HDR monitor on a cable or port that cannot carry 10-bit at the current
-refresh rate reports nil.  */)
+TWO things have to be true, and a nil answer does not say which.  The
+DISPLAY has to advertise BT.2020 primaries AND the ST.2084 PQ transfer
+function -- usually a property of the whole chain rather than the panel,
+so an HDR monitor on a cable or port that cannot carry 10-bit at the
+current refresh rate reports nil.  And the RENDERER has to be able to
+convert colour, which wlroots implements in its Vulkan renderer alone;
+under the GLES2 renderer cmacs uses for its visual effects, SDR windows
+would reach the panel unconverted inside a PQ signal.
+
+`gowl-monitor-hdr-display-capable-p' answers the first half on its own,
+which is how to tell the two apart.  `hdr-unmanaged: true' in the gowl
+config overrides the second.  */)
   (Lisp_Object monitor)
 {
   GowlMonitor *mon;
@@ -9425,6 +9431,28 @@ refresh rate reports nil.  */)
   count = cmacs_gowl_lock_scoped ();
   mon = gowl_resolve_monitor (monitor);
   capable = mon != NULL && gowl_monitor_supports_hdr (mon);
+  return unbind_to (count, capable ? Qt : Qnil);
+}
+
+DEFUN ("gowl-monitor-hdr-display-capable-p",
+       Fgowl_monitor_hdr_display_capable_p,
+       Sgowl_monitor_hdr_display_capable_p, 0, 1, 0,
+       doc: /* Return t if MONITOR's DISPLAY advertises BT.2020 and PQ.
+MONITOR is a monitor object or nil for the focused one.
+
+Half of `gowl-monitor-hdr-capable-p', and the half somebody can do
+something about.  Where this is t and that is nil, the display is
+willing and the renderer is not.  */)
+  (Lisp_Object monitor)
+{
+  GowlMonitor *mon;
+  gboolean capable;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  mon = gowl_resolve_monitor (monitor);
+  capable = mon != NULL && gowl_monitor_hdr_display_capable (mon);
   return unbind_to (count, capable ? Qt : Qnil);
 }
 
@@ -10844,6 +10872,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_remove_output_profile);
   defsubr (&Sgowl_set_monitor_config);
   defsubr (&Sgowl_monitor_hdr_capable_p);
+  defsubr (&Sgowl_monitor_hdr_display_capable_p);
   defsubr (&Sgowl_monitor_hdr_p);
   defsubr (&Sgowl_set_monitor_hdr);
   defsubr (&Sgowl_apply_monitor_configs);
