@@ -1093,12 +1093,20 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+Return" 'zoom nil "Promote to master")
         ;; Layouts.
         (bind "Super+t" 'set-layout "tile" "Tile layout")
-        ;; Super+f is the window, not the layout: fullscreen is what
-        ;; you reach for mid-task, and switching the whole tag's layout
-        ;; by accident while looking for it is the more expensive
-        ;; mistake.  The float LAYOUT is on Super+Shift+f.
+        ;; Both f keys are the WINDOW, not the layout.  Fullscreen and
+        ;; floating are what you reach for mid-task; switching the whole
+        ;; tag's layout by accident while looking for either is the more
+        ;; expensive mistake, and a tag that has quietly gone to the
+        ;; float layout looks like the tiling broke.
+        ;;
+        ;; The float LAYOUT has no key of its own any more.  It is
+        ;; reached by cycling, like the eight other layouts that never
+        ;; had one -- scrolling, bstack, grid, deck and the rest -- and
+        ;; making every window float at once is a thing people want far
+        ;; less often than floating the one in front of them, which is
+        ;; the whole reason this key changed hands.
         (bind "Super+f" 'toggle-fullscreen nil "Fullscreen this window")
-        (bind "Super+Shift+f" 'set-layout "float" "Float layout")
+        (bind "Super+Shift+f" 'toggle-float nil "Float / unfloat this window")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
         (bind "Super+Shift+m" 'set-layout "tabbed" "Tabbed layout")
         ;; Super+s is the scratchpad (below).  The scrolling layout is
@@ -1115,6 +1123,8 @@ authoritative and keeps re-runs idempotent."
               "Scroll columns right")
         (bind "Super+v" 'set-split "vsplit" "Vertical split")
         (bind "Super+Shift+v" 'set-split "normal" "Horizontal split")
+        ;; The same toggle as Super+Shift+f, kept: it is the dwm/dwl
+        ;; muscle memory, and a second key for it costs nothing.
         (bind "Super+space" 'toggle-float nil "Toggle floating")
         (bind "Super+Shift+space" 'toggle-fullscreen nil "Toggle fullscreen")
         ;; Tags.  The compositor interprets every tag-action arg as a

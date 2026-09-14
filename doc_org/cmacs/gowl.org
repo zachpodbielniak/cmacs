@@ -691,8 +691,9 @@ holds focus.
 | =Super+i= / =Super+d=   | Increment / decrement master count      |
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+f=               | Fullscreen the focused window           |
+| =Super+Shift+f=         | Float / unfloat the focused window      |
+| =Super+space=           | The same toggle, dwm's key for it       |
 | =Super+t= / =m=         | Tile / monocle layout                   |
-| =Super+Shift+f=         | Float layout                            |
 | =Super+Shift+m=         | Tabbed layout                           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
@@ -707,7 +708,6 @@ holds focus.
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
 | =Super+Shift+v=         | Vsplit off (normal left/right split)    |
-| =Super+space=           | Toggle floating                         |
 | =Super+Shift+space=     | Toggle fullscreen                       |
 | =Super+1=..=9=          | View tag N                              |
 | =Super+Shift+1=..=9=    | Move focused client to tag N            |
@@ -887,9 +887,19 @@ per window on the tag, clickable; =Super+Shift+m= selects it.
 
 =Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
 forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
-aliases. =Super+t= selects tile, =Super+m= monocle and =Super+Shift+f= float --- =Super+f= fullscreens the focused *window* rather than changing the tag's layout; the
-scrolling layout is reached by cycling, since =Super+s= is the scratchpad
-(see [[#gowl-scratchpad][Scratchpad]]). Layout selection and scroll offset belong to the
+aliases. =Super+t= selects tile and =Super+m= monocle.
+
+*Both =f= keys are the WINDOW, not the layout.* =Super+f= fullscreens the
+focused window and =Super+Shift+f= floats or unfloats it. Floating one
+takes it out of the tiling and re-tiles what is left; unfloating puts it
+back into whatever layout the current tag is using, at wherever that
+layout decides --- not at the box it happened to be floating at.
+=Super+space= is the same toggle under dwm's key for it.
+
+The float LAYOUT --- every window on the tag floating at once --- has no
+key of its own. It is reached by cycling, like the eight other layouts
+that never had one, and so is the scrolling layout, since =Super+s= is
+the scratchpad (see [[#gowl-scratchpad][Scratchpad]]). Layout selection and scroll offset belong to the
 current tag view on the current monitor; changing one does not change
 another tag. A combined tag view keeps its own selection.
 
