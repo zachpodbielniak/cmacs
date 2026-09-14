@@ -277,7 +277,7 @@ not give heavier rain, it would give the same rain on a smaller window.
   :type 'number
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-fizz-preset 'soda
+(defcustom cmacs-gowl-fizz-preset 'seltzer
   "How carbonated `cmacs-gowl-backdrop' is when it is `fizz'.
 
 Each is a whole tuned set rather than a single knob, because what varies
@@ -287,9 +287,13 @@ bubble size is neither drink.
 
   `flat'       mostly what is left clinging to the glass
   `sparkling'  a few slow trains and a thin head
-  `soda'       a glass of cola (the default)
-  `seltzer'    hard-carbonated water; it will not sit still
+  `soda'       a glass of cola
+  `seltzer'    hard-carbonated water; it will not sit still (the default)
   `champagne'  very fine, very fast, and a head that does not go down
+
+The default is NOT the middle of that scale, on purpose: the effect is
+worth switching on for the bubbles, and a cola's worth of them reads as
+a slightly grubby pane until you know what you are looking at.
 
 `cmacs-gowl-fizz-intensity' scales how carbonated whichever you pick is."
   :type '(choice (const :tag "Flat" flat)
