@@ -152,8 +152,8 @@ at n = 1.333.  `cmacs-gowl-water-preset' says what kind of water, from a
 barely-disturbed pool to a storm.
 
 `rain' and `water' are the two that never settle, so a screen showing
-either is a screen that is rendering.  Both are throttled, by the YAML
-keys `rain-fps' and `water-fps' (30 each).
+either is a screen that is rendering.  Both are throttled, by
+`cmacs-gowl-rain-fps' and `cmacs-gowl-water-fps' (30 each).
 
 `blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
@@ -249,17 +249,25 @@ not give heavier rain, it would give the same rain on a smaller window.
 (defcustom cmacs-gowl-water-fps 30
   "How often the water surface is redrawn, per second.  0 means every frame.
 
-The water and the rain are the two effects with a frame rate, because
-they are the two that never settle; the rain's twin of this is the YAML
-key `rain-fps'.  Thirty is indistinguishable from sixty on something
-that moves as slowly as water, and it halves what the effect costs.
+The water and the rain are the two backdrops with a frame rate, because
+they are the two that never settle; `cmacs-gowl-rain-fps' is the twin of
+this.  Thirty is indistinguishable from sixty on something that moves as
+slowly as water, and it halves what the effect costs.
 
 While there is a translucent window on a screen, that screen is
-rendering.  There is no version of an animated backdrop that is not.
+rendering.  There is no version of an animated backdrop that is not."
+  :type 'integer
+  :group 'cmacs-gowl)
 
-Note that this variable is not currently pushed to a running compositor:
-the frame rate is read from the YAML key `water-fps'.  See
-`cmacs-gowl--apply-backdrop'."
+(defcustom cmacs-gowl-rain-fps 30
+  "How often the rainy pane is redrawn, per second.  0 means every frame.
+
+The rain is the dearer of the two animated backdrops per pixel -- it
+asks nine cells of each of two turned lattices and three columns of
+running drops, where the water takes five samples of one height field --
+so this is the knob that matters most for what it costs.
+
+Thirty is plenty: a drop crosses a window in seconds, not in frames."
   :type 'integer
   :group 'cmacs-gowl)
 
@@ -3002,21 +3010,21 @@ the module's configure method."
 (defun cmacs-gowl--apply-backdrop ()
   "Push the backdrop settings to the compositor.
 
-The water's own settings go first, so they are in place before anything
-asks it to draw.
-
-`cmacs-gowl-water-fps' is not pushed here: it is a YAML key
-\(`water-fps'), because a frame rate belongs with the rest of what the
-config says about cost rather than in a pair of DEFUNs.
+The water's and the rain's own settings go first, so they are in place
+before anything asks either to draw.
 
 Silent when the DEFUNs are missing, which is what a cmacs built without
 the compositor looks like from here."
   (when (fboundp 'gowl-set-water-preset)
     (ignore-errors (gowl-set-water-preset cmacs-gowl-water-preset))
     (ignore-errors (gowl-set-water-intensity cmacs-gowl-water-intensity)))
+  (when (fboundp 'gowl-set-water-fps)
+    (ignore-errors (gowl-set-water-fps cmacs-gowl-water-fps)))
   (when (fboundp 'gowl-set-rain-preset)
     (ignore-errors (gowl-set-rain-preset cmacs-gowl-rain-preset))
     (ignore-errors (gowl-set-rain-intensity cmacs-gowl-rain-intensity)))
+  (when (fboundp 'gowl-set-rain-fps)
+    (ignore-errors (gowl-set-rain-fps cmacs-gowl-rain-fps)))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
 

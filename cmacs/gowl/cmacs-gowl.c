@@ -5824,6 +5824,103 @@ reload, and it does not switch the backdrop on.  See
   return unbind_to (count, preset);
 }
 
+DEFUN ("gowl-water-fps", Fgowl_water_fps, Sgowl_water_fps, 0, 0, 0,
+       doc: /* Return how often the water surface is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_water_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-water-fps", Fgowl_set_water_fps, Sgowl_set_water_fps,
+       1, 1, 0,
+       doc: /* Set how often the water surface is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  The water is
+one of the two backdrops that never settle, so it is one of the two with
+a frame rate: thirty is indistinguishable from sixty on something that
+moves as slowly as water, and it halves what the effect costs.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_water_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_water_fps (config)));
+}
+
+DEFUN ("gowl-rain-fps", Fgowl_rain_fps, Sgowl_rain_fps, 0, 0, 0,
+       doc: /* Return how often the rainy pane is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_rain_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-rain-fps", Fgowl_set_rain_fps, Sgowl_set_rain_fps,
+       1, 1, 0,
+       doc: /* Set how often the rainy pane is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  The rain is the
+dearer of the two animated backdrops per pixel, so this is the knob that
+matters most for what it costs.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_rain_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_rain_fps (config)));
+}
+
 DEFUN ("gowl-set-rain-preset", Fgowl_set_rain_preset,
        Sgowl_set_rain_preset, 1, 1, 0,
        doc: /* Set what kind of rain the `rain' backdrop shows.
@@ -10716,6 +10813,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_rain_preset);
   defsubr (&Sgowl_rain_intensity);
   defsubr (&Sgowl_set_rain_intensity);
+  defsubr (&Sgowl_water_fps);
+  defsubr (&Sgowl_set_water_fps);
+  defsubr (&Sgowl_rain_fps);
+  defsubr (&Sgowl_set_rain_fps);
   defsubr (&Sgowl_lock_command);
   defsubr (&Sgowl_set_lock_command);
   defsubr (&Sgowl_lock_on_suspend_p);

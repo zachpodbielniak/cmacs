@@ -1371,6 +1371,16 @@ backdrop to =rain= at the same time --- choosing a kind of rain and then
 not seeing any is nobody's intent. =M-x cmacs-gowl-set-rain-intensity=
 prompts for the one knob over the whole preset.
 
+=cmacs-gowl-rain-fps= (30) is how often the pane is redrawn, and
+=(gowl-set-rain-fps N)= changes it on a running compositor;
+=(gowl-rain-fps)= reads it back. =cmacs-gowl-water-fps= and
+=gowl-set-water-fps= are its twin. The rain is the dearer of the two
+animated backdrops per pixel --- it asks nine cells of each of two
+turned lattices and three columns of running drops, where the water
+takes five samples of one height field --- so this is the knob that
+matters most for what it costs. Thirty is plenty: a drop crosses a
+window in seconds, not in frames.
+
 =cmacs-gowl-rain-intensity= scales exactly the three things that together
 mean "how hard is it raining": how many drops there are, how many of them
 are running, and how fast those fall. It deliberately does NOT scale the
@@ -1384,6 +1394,22 @@ config (=rain-cell=, =rain-density=, =rain-depth=, =rain-runs=,
 =rain-beads=, =rain-fog= and the rest); an override that is not named
 leaves the preset in charge. The full list is in gowl's own
 [[file:../../deps/gowl/docs/configuration.org][configuration guide]].
+
+**** Nothing stays where it is
+
+Only the CYCLE belongs to a column --- how fast it runs and where in the
+cycle it starts. Whether it runs at all this time round, where across
+its width, how big, how long a trail and which way it wanders are
+decided per RUN; the resting drops work the same way, with only the
+phase belonging to the cell.
+
+That is not a refinement. Pinning them to the column and the cell gives
+a field that never changes --- the same few columns running the same
+drop down the same line for as long as the session lasts, and the ones
+that drew a bad hand at startup never getting a drop at all. Measured
+across eighty seconds of a real window, a third of it had no running
+drop in it at any instant. gowl's [[file:../../deps/gowl/docs/configuration.org::#liquidrain][configuration guide]] has the rest of
+it, including what was wrong with the hash.
 
 **** What it costs
 

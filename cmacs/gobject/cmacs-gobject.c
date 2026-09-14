@@ -155,14 +155,18 @@ cmacs_gvalue_to_lisp (const GValue *val)
   if (type == G_TYPE_UINT)
     return make_fixnum ((EMACS_INT)g_value_get_uint (val));
 
+  /* glong and gint64 are EMACS_INT's own width on an LP64 build, so
+     naming the cast is a -Wuseless-cast; the implicit conversion is
+     still correct where they differ.  The UNSIGNED ones keep theirs --
+     those genuinely change signedness. */
   if (type == G_TYPE_LONG)
-    return make_fixnum ((EMACS_INT)g_value_get_long (val));
+    return make_fixnum (g_value_get_long (val));
 
   if (type == G_TYPE_ULONG)
     return make_fixnum ((EMACS_INT)g_value_get_ulong (val));
 
   if (type == G_TYPE_INT64)
-    return make_fixnum ((EMACS_INT)g_value_get_int64 (val));
+    return make_fixnum (g_value_get_int64 (val));
 
   if (type == G_TYPE_UINT64)
     return make_fixnum ((EMACS_INT)g_value_get_uint64 (val));
@@ -222,17 +226,19 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
       return TRUE;
     }
 
+  /* No casts, for the reason the reader above gives: XFIXNUM already
+     yields EMACS_INT, which is glong and gint64's own width here. */
   if (type == G_TYPE_LONG)
     {
       CHECK_FIXNUM (obj);
-      g_value_set_long (val, (glong)XFIXNUM (obj));
+      g_value_set_long (val, XFIXNUM (obj));
       return TRUE;
     }
 
   if (type == G_TYPE_INT64)
     {
       CHECK_FIXNUM (obj);
-      g_value_set_int64 (val, (gint64)XFIXNUM (obj));
+      g_value_set_int64 (val, XFIXNUM (obj));
       return TRUE;
     }
 
