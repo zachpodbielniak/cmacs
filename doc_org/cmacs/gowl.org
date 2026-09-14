@@ -692,7 +692,6 @@ holds focus.
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+f=               | Fullscreen the focused window           |
 | =Super+Shift+f=         | Float / unfloat the focused window      |
-| =Super+space=           | The same toggle, dwm's key for it       |
 | =Super+t= / =m=         | Tile / monocle layout                   |
 | =Super+Shift+m=         | Tabbed layout                           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
@@ -894,7 +893,10 @@ focused window and =Super+Shift+f= floats or unfloats it. Floating one
 takes it out of the tiling and re-tiles what is left; unfloating puts it
 back into whatever layout the current tag is using, at wherever that
 layout decides --- not at the box it happened to be floating at.
-=Super+space= is the same toggle under dwm's key for it.
+
+It is the only key that does it. =Super+space= used to as well, which
+also kept the =windowrules= module's own =Super+space= default shadowed;
+both are gone.
 
 The float LAYOUT --- every window on the tag floating at once --- has no
 key of its own. It is reached by cycling, like the eight other layouts

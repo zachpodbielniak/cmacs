@@ -715,7 +715,6 @@ standalone gowl ships with (see
   Super+< / Super+>   previous / next layout on this tag (scrolling too)
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
-  Super+space         toggle floating
   Super+Shift+space   toggle fullscreen
   Super+s             scratchpad: slide it up / roll it away
   Super+Alt+s         scratchpad: send the focused window to it
@@ -1123,9 +1122,6 @@ authoritative and keeps re-runs idempotent."
               "Scroll columns right")
         (bind "Super+v" 'set-split "vsplit" "Vertical split")
         (bind "Super+Shift+v" 'set-split "normal" "Horizontal split")
-        ;; The same toggle as Super+Shift+f, kept: it is the dwm/dwl
-        ;; muscle memory, and a second key for it costs nothing.
-        (bind "Super+space" 'toggle-float nil "Toggle floating")
         (bind "Super+Shift+space" 'toggle-fullscreen nil "Toggle fullscreen")
         ;; Tags.  The compositor interprets every tag-action arg as a
         ;; raw tag *bitmask* (atoi(arg) & TAGMASK), not a 1-based tag

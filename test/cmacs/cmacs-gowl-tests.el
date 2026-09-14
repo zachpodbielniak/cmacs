@@ -862,8 +862,11 @@ window, pinning, screens-off, and a resize key mode registered through
     (should (member '("Super+Shift+f" toggle-float nil) captured))
     (should-not (member '("Super+f" set-layout "float") captured))
     (should-not (member '("Super+Shift+f" set-layout "float") captured))
-    ;; And dwm's key for the same toggle is still there.
-    (should (member '("Super+space" toggle-float nil) captured))
+    ;; And exactly ONE key does it.  Super+space used to, and carrying
+    ;; both meant the windowrules module's own Super+space default --
+    ;; which only flips the flag -- was sitting behind it waiting for
+    ;; the day the config bind went away.
+    (should-not (member '("Super+space" toggle-float nil) captured))
     (should (member '("Super+Ctrl+o" output-power "off") captured))
     (should (member '("Super+r" mode "resize") captured))
     ;; The mode's binds carry the mode name, and both exits are bound.
