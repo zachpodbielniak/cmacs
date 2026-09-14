@@ -1076,6 +1076,14 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+c" 'kill-client nil "Close window")
         (bind "Super+j" 'focus-stack "+1" "Focus next window")
         (bind "Super+k" 'focus-stack "-1" "Focus previous window")
+        ;; Absolute focus, where the two above are relative.  Puts a
+        ;; letter on every visible window on every screen and focuses
+        ;; the one you press -- tmux's `C-b q', and the same argument:
+        ;; counting hops with Super+j is fine with three windows and
+        ;; useless with twelve, because the cost grows with distance
+        ;; and you have to count them by eye first.  A hint is one
+        ;; keystroke whichever corner of whichever screen it is in.
+        (bind "Super+q" 'ipc-command "hints" "Label the windows")
         (bind "Super+Shift+j" 'move-stack "+1" "Move window next in stack")
         (bind "Super+Shift+k" 'move-stack "-1" "Move window previous in stack")
         (bind "Super+h" 'set-mfact "-0.05" "Shrink master area")

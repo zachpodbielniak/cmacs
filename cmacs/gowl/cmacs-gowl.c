@@ -1660,7 +1660,15 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               steps through eight looks now, and a look
                               that needs a module load first is not a
                               key press, it is a wait. */
-                           "snow", "leaves", "fizz", "layout-indicator",
+                           "snow", "leaves", "fizz",
+                           /* A letter on every window, and pressing it
+                              focuses that window -- tmux's `C-b q'.
+                              Loaded by default because Super+q is bound
+                              to it by default, and a key bound to a
+                              module nobody loaded is a key that does
+                              nothing.  Costs nothing until it is
+                              pressed: no capture, no GL, no timer. */
+                           "hints", "layout-indicator",
                            /* The look, and the two providers the bar and
                               the keybinds expect to be there.  These were
                               left to the user's config, which meant a
