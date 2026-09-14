@@ -271,6 +271,51 @@ Thirty is plenty: a drop crosses a window in seconds, not in frames."
   :type 'integer
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-hdr-sdr-white 203.0
+  "Where SDR white lands in an HDR signal, in cd/m².
+
+This is the brightness control an HDR output has, and the only honest
+one: a PQ signal carries ABSOLUTE luminance, so the backlight decides
+nothing there and a slider that moves it is a slider that does nothing.
+
+203 is ITU-R BT.2408's reference white, which is what the rest of the
+industry grades against.  Lower it for a dimmer desktop, raise it for a
+brighter one.  40 to 600."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-hdr-encode t
+  "Whether gowl encodes the desktop for PQ itself on an HDR output.
+
+wlroots does that conversion in the renderer and only under Vulkan;
+cmacs runs GLES2 because that is the context every visual effect
+borrows, so gowl does it in a pass of its own.  Without it sRGB white
+reaches the panel as a request for ten thousand candelas instead of 203,
+which pins the backlight.
+
+Set it to nil to commit the scene unencoded.  That is the picture an HDR
+output gave before the encode existed -- far too bright, deliberately --
+and it is how to find out whether a wrong-looking HDR output is the
+encode's doing or the panel's."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-hdr-bpc 'auto
+  "What bit depth to drive HDR at.
+
+`auto' asks for ten bits per channel and settles for eight if the driver
+refuses.  `8' never asks.
+
+Ten bits is a quarter more display bandwidth, and on a marginal link
+that is the difference between a picture and a pattern of lines: the
+commit is ACCEPTED -- the driver cannot know what the cable will do with
+it -- and the panel makes a mess of the signal anyway.  Eight bands
+gradients visibly, and is the only way to find out whether the depth was
+the problem."
+  :type '(choice (const :tag "Ten bits, or eight if refused" auto)
+                 (const :tag "Eight bits only" 8))
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-lock-command 'default
   "The program that locks the screen and takes your password.
 
@@ -1207,6 +1252,7 @@ thread is running and applies configuration."
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.
   (cmacs-gowl--apply-backdrop)
+  (cmacs-gowl--apply-hdr)
   ;; Per-screen wallpapers, for a desk with displays of different shapes.
   (cmacs-gowl-apply-output-wallpapers)
   ;; Tell the dropdown module to adopt any newly-added config
@@ -3018,6 +3064,28 @@ the module's configure method."
              (mode   (and (consp value) (cdr value))))
         (ignore-errors
           (gowl-set-output-wallpaper output path mode))))))
+
+(defun cmacs-gowl--apply-hdr ()
+  "Push the HDR settings to the compositor.
+
+Through the property system rather than a pair of DEFUNs, because that
+is the door an embedder has: cmacs owns its own configuration and never
+reads ~/.config/gowl/config.yaml, so these are GObject properties on the
+config object and `gobject-set' is how they are reached.
+
+Silent when the compositor is missing, which is what a cmacs built
+without it looks like from here."
+  (when (and (fboundp 'gowl-config-object) (fboundp 'gobject-set))
+    (let ((cfg (ignore-errors (gowl-config-object))))
+      (when cfg
+        (ignore-errors
+          (gobject-set cfg "hdr-sdr-white"
+                       (float cmacs-gowl-hdr-sdr-white)))
+        (ignore-errors
+          (gobject-set cfg "hdr-encode" cmacs-gowl-hdr-encode))
+        (ignore-errors
+          (gobject-set cfg "hdr-bpc"
+                       (if (eq cmacs-gowl-hdr-bpc 8) 8 0)))))))
 
 (defun cmacs-gowl--apply-backdrop ()
   "Push the backdrop settings to the compositor.

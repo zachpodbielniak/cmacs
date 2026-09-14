@@ -2186,6 +2186,25 @@ An output qualifies only when it advertises *both* BT.2020 and PQ, which is a pr
 
 *And so does the RENDERER, which under =cmacs --gowl= is the catch.*  PQ carries absolute luminance, so every SDR window has to be re-encoded into it; wlroots implements that in its Vulkan renderer and nowhere else, and cmacs runs GLES2 because that is the context the blur, the glass, the water, the rain, the cube, the overview, the switcher and the magnifier all borrow.  On GLES2 an HDR output was being fed raw sRGB code values, so ordinary white asked the panel for ten thousand candelas --- which is one cause wearing three disguises: Electron applications looking dim (Chromium encodes itself correctly at 203 cd/m² and is then the only correctly scaled thing on screen), the battery going, and dark interfaces washing out enough to read as light mode.
 
+**** The HDR settings live on the config object, not in a file
+
+=~/.config/gowl/config.yaml= is *never read* under =cmacs --gowl= --- cmacs owns its own configuration, and gowl's own comment says so where it declines to load it. Every HDR setting is therefore a GObject property on the config object, and there are defcustoms that push them on mode enable:
+
+| Variable                     | Default | What it does |
+|------------------------------+---------+--------------|
+| =cmacs-gowl-hdr-sdr-white=   | =203.0= | Where SDR white lands, in cd/m². The brightness control an HDR output has |
+| =cmacs-gowl-hdr-encode=      | =t=     | Encode the desktop for PQ; nil passes it through uncorrected |
+| =cmacs-gowl-hdr-bpc=         | =auto=  | =auto= asks for ten bits and settles for eight; =8= never asks |
+
+Any of them can be changed on a running compositor without a restart:
+
+#+begin_src emacs-lisp
+(gobject-set (gowl-config-object) "hdr-encode" nil)
+(gobject-set (gowl-config-object) "hdr-bpc" 8)
+#+end_src
+
+*The last two exist to be turned off.* An HDR output that comes out wrong has two causes that look nothing alike in the code and identical on the glass: the encode getting it wrong, and the panel making a mess of a 10-bit link the driver nominally accepted. A commit the driver accepts is not a signal the cable carries, and neither the driver nor gowl can tell --- so taking each one out of the picture is the only way to find out which.
+
 *HDR is still offered*, because the missing piece is exactly one thing and the rest works. The KMS half is fine --- BT.2020 on the connector, the panel's own EDID metadata, a 10-bit framebuffer, and the display really does switch modes. What does not happen is the conversion of each SDR surface INTO that signal, which wlroots implements behind two renderer flags that only Vulkan sets. So the toggle works, the log says the renderer does not convert colour, and the bar's toast says to expect everything brighter and the panel at its peak. =hdr-unmanaged: false= in the gowl config makes it refuse instead.
 
 What is off by default is the ADVERTISEMENT. =hdr-advertise-pq= is whether to tell clients that PQ and BT.2020 content is accepted, and it has to stay off: a client that believes it --- Chromium does --- encodes itself correctly at 203 cd/m² and is then the only correctly scaled window on a screen where everything else is passed through at the panel's peak. Which is not a dim client, it is a bright everything else.

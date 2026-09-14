@@ -499,7 +499,10 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
   if (seat == NULL || surface == NULL)
     return FALSE;
 
-  time_ms = (uint32_t) (gdk_event_get_time (event) & 0xFFFFFFFF);
+  /* No cast: gdk_event_get_time() already returns guint32, and the mask
+     makes the intent explicit without naming a type the compiler then
+     flags as a -Wuseless-cast. */
+  time_ms = gdk_event_get_time (event) & 0xFFFFFFFF;
 
   switch (event->type)
     {
@@ -8415,7 +8418,7 @@ Returns t on success, signals `gowl-error' if the module is not loaded. */)
 
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
 
-  g_snprintf (radstr, sizeof (radstr), "%ld", (long) XFIXNAT (radius));
+  g_snprintf (radstr, sizeof (radstr), "%"pI"d", XFIXNAT (radius));
 
   inner = g_hash_table_new (g_str_hash, g_str_equal);
   g_hash_table_insert (inner, (gpointer) "radius", (gpointer) radstr);
@@ -8713,7 +8716,7 @@ Optional POSITION selects which slot (`top' default or `bottom'). */)
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNAT (height);
   pos = bar_position_str (position);
-  snprintf (buf, sizeof (buf), "%ld", (long) XFIXNAT (height));
+  snprintf (buf, sizeof (buf), "%"pI"d", XFIXNAT (height));
   bar_configure_slot (pos, "height", buf);
   return Qnil;
 }
@@ -8888,7 +8891,7 @@ Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
     src_stride = sw * 4;
     dst_stride = rw * 4;
     str = make_uninit_string (rh * dst_stride);
-    dst = (unsigned char *) SDATA (str);
+    dst = SDATA (str);
     STRING_SET_UNIBYTE (str);
 
     for (row = 0; row < rh; row++)
