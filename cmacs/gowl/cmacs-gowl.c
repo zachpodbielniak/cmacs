@@ -1668,10 +1668,18 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               the window, a view from under water, and
                               an orb web strung with dew.  Loaded for
                               the reason the rest are -- Super+" steps
-                              through fourteen looks now, and a look
+                              through fifteen looks now, and a look
                               that needs a module load first is not a
                               key press, it is a wait. */
                            "soapfilm", "embers", "submerged", "dew",
+                           /* The one effect here that is not behind a
+                              window: the whole screen on a cathode ray
+                              tube.  Loaded so the last stop on the
+                              Super+" tour works, and free until it is
+                              reached -- `crt' is false by default and
+                              the module holds no sheet, no texture and
+                              no frame while it is. */
+                           "crt",
                            /* A letter on every window, and pressing it
                               focuses that window -- tmux's `C-b q'.
                               Loaded by default because Super+q is bound
@@ -5771,6 +5779,11 @@ STYLE is one of
   `glass'   refracted through the window, as a bevelled slab
   `blur'    the wallpaper, blurred behind the window
   `none'    the desktop, straight through
+  `crt'     NOT a backdrop: nothing behind the windows, and the whole
+            screen on a cathode ray tube.  Landing here switches the
+            tube on and leaving switches it off; see `gowl-set-crt',
+            which is the independent switch and can be on beside any
+            backdrop
 
 It may also be `next' or `prev' to step through those in order, which is
 what \[cmacs-gowl-cycle-backdrop] and Super+Shift+\" do.  `leaves' also
@@ -5801,7 +5814,7 @@ or drop its node.  Returns the style now in force.  */)
       unbind_to (count, Qnil);
       error ("Unknown backdrop style: %s "
              "(want rain, snow, leaves, fizz, water, glass, blur, "
-             "none, next or prev)",
+             "none, crt, next or prev)",
              name);
     }
   return unbind_to (count,
@@ -6998,6 +7011,145 @@ nothing per frame.  */)
     gowl_config_set_bokeh_blades (config, (gint) XFIXNUM (blades));
   return unbind_to (count,
                     make_float (gowl_config_get_bokeh_radius (config)));
+}
+
+DEFUN ("gowl-crt-p", Fgowl_crt_p, Sgowl_crt_p, 0, 0, 0,
+       doc: /* Return non-nil while the whole screen is on a cathode ray tube.
+
+See `gowl-set-crt'.  */)
+  (void)
+{
+  specpdl_ref count;
+  bool on;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+  count = cmacs_gowl_lock_scoped ();
+  on = gowl_compositor_get_crt (cmacs_gowl_compositor);
+  return unbind_to (count, on ? Qt : Qnil);
+}
+
+DEFUN ("gowl-set-crt", Fgowl_set_crt, Sgowl_set_crt, 1, 1, 0,
+       doc: /* Put the whole screen through a cathode ray tube, or take it off.
+
+ON nil is off and the symbol `toggle' is the other one; anything else is
+on.  The argument is required rather than optional on purpose: Emacs
+hands a missing optional argument in as nil, so a bare call could only
+ever mean "off" and a key bound to it would not be a toggle.
+
+Unlike every other effect here this is not a backdrop: it captures the
+finished screen and draws the whole of it back through curved glass,
+scan lines, phosphor triads and halation.  It needs the `crt' module,
+which CMacs loads by default, and it costs one more render of the whole
+scene per frame on every output while it is on.
+
+THE POINTER IS NOT CURVED WITH THE REST.  It sits on a hardware plane
+rather than in the scene, so the shader never sees it and it stays where
+it really is while everything under it has moved -- about a dozen pixels
+at 1080p at the default curvature, worst two thirds of the way out.  Set
+`cmacs-gowl-crt-preset' to `flat', or the curvature to 0, to keep the
+phosphor without the parallax.
+
+Returns t when the tube is on afterwards.  */)
+  (Lisp_Object on)
+{
+  specpdl_ref count;
+  bool want;
+
+  GOWL_CHECK_RUNNING ();
+
+  count = cmacs_gowl_lock_scoped ();
+  if (NILP (on))
+    want = false;
+  else if (SYMBOLP (on) && !strcmp (SSDATA (SYMBOL_NAME (on)), "toggle"))
+    want = !gowl_compositor_get_crt (cmacs_gowl_compositor);
+  else
+    want = true;
+  gowl_compositor_set_crt (cmacs_gowl_compositor, want);
+  return unbind_to (count, want ? Qt : Qnil);
+}
+
+DEFUN ("gowl-set-crt-preset", Fgowl_set_crt_preset, Sgowl_set_crt_preset,
+       1, 1, 0,
+       doc: /* Choose which tube `gowl-set-crt' draws.
+
+PRESET is one of the symbols `flat', `trinitron', `consumer',
+`broadcast' or `arcade'.  They differ in more than one setting each,
+because the machines did: a Trinitron is a cylinder with an aperture
+grille and no vertical curvature, a studio monitor has a tighter spot
+and a nearly flat face, and an arcade tube is run hot enough that the
+whites bloom into the scan lines.
+
+Returns the preset now in force.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_crt_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown CRT preset: %s "
+             "(want flat, trinitron, consumer, broadcast or arcade)",
+             name);
+    }
+  gowl_config_set_crt_preset (config, name);
+  return unbind_to (count, intern (gowl_config_get_crt_preset (config)));
+}
+
+DEFUN ("gowl-set-crt-look", Fgowl_set_crt_look, Sgowl_set_crt_look, 1, 3, 0,
+       doc: /* Override three of the tube's settings on top of its preset.
+
+CURVATURE is 1/R of the faceplate with R in half screen widths: 0 is a
+flat panel and 0.9 is as curved as a tube can be.  SCANLINE, if given, is
+how deep the dark glass between scan lines cuts, 0 to 1.  MASK, if
+given, is the phosphor triad depth, 0 to 1.
+
+Neither the scan lines nor the mask costs any brightness at any setting:
+the beam is normalised to mean one over its own spacing and the mask is
+a raised cosine per channel, so both change the TEXTURE of the screen
+and not how bright it is.
+
+Everything else comes from `gowl-set-crt-preset'.  Returns the curvature
+now in force.  */)
+  (Lisp_Object curvature, Lisp_Object scanline, Lisp_Object mask)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (curvature);
+  if (!NILP (scanline))
+    CHECK_NUMBER (scanline);
+  if (!NILP (mask))
+    CHECK_NUMBER (mask);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_crt_curvature (config, XFLOATINT (curvature));
+  if (!NILP (scanline))
+    gowl_config_set_crt_scanline (config, XFLOATINT (scanline));
+  if (!NILP (mask))
+    gowl_config_set_crt_mask (config, XFLOATINT (mask));
+  return unbind_to (count,
+                    make_float (gowl_config_get_crt_curvature (config)));
 }
 
 DEFUN ("gowl-leaves-preset", Fgowl_leaves_preset, Sgowl_leaves_preset, 0, 0, 0,
@@ -12240,6 +12392,10 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_recording_active_p);
   defsubr (&Sgowl_config_get);
   defsubr (&Sgowl_config_generate_yaml);
+  defsubr (&Sgowl_crt_p);
+  defsubr (&Sgowl_set_crt);
+  defsubr (&Sgowl_set_crt_preset);
+  defsubr (&Sgowl_set_crt_look);
 
   /* Key modes, keyboard layouts, focus navigation, sticky, power */
   defsubr (&Sgowl_set_key_mode);

@@ -228,13 +228,24 @@ blur costs: one pass per tag switch and nothing per frame.
 
 `none' leaves the desktop showing straight through.
 
+`crt' is not a backdrop at all: nothing draws behind the windows and the
+whole SCREEN goes through a cathode ray tube.  It is a value here only
+so the key that tours the looks can reach it -- the tube is otherwise an
+independent switch (`cmacs-gowl-crt', \[cmacs-gowl-toggle-crt]) and can
+be on beside the rain.  So the tour switches it on when it lands on that stop and off
+when it leaves, and leaves it alone when it moves between backdrops: a
+tube switched on by hand survives a change of rain.
+
 Every backdrop module reads this and only one of them draws, so
 switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+\" step
-through all fourteen, in the order rain, storm, snow, leaves, fizz,
-submerged, embers, soap, dew, water, glass, bokeh, blur, nothing --
+through all fifteen, in the order rain, storm, snow, leaves, fizz,
+submerged, embers, soap, dew, water, glass, bokeh, blur, nothing, crt --
 everything that draws something first, grouped by what it is.  `storm'
 is deliberately second: it IS the rain with the lightning on, so the
-comparison anybody wants is with the press they just came from.
+comparison anybody wants is with the press they just came from.  `crt'
+is deliberately last: it is a different kind of thing and the most
+drastic of them, so stepping the key to see what is there meets it at
+the end rather than falling into it on the way past the rain.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
@@ -252,7 +263,8 @@ opaque window shows no backdrop of any kind."
                  (const :tag "Refracted through the window" glass)
                  (const :tag "Thrown out of focus by a lens" bokeh)
                  (const :tag "Blurred behind the window" blur)
-                 (const :tag "Nothing" none))
+                 (const :tag "Nothing" none)
+                 (const :tag "The whole screen on a CRT" crt))
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-no-fx-apps ""
@@ -444,6 +456,77 @@ count is `bokeh-samples' in the YAML config."
 turned the same way, which is one of the cues that says a lens did it.
 Under 3 is a circle, which is a lens wide open."
   :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-crt nil
+  "When non-nil, put the whole screen on a cathode ray tube.
+
+Not a backdrop: every other effect here draws what shows THROUGH a
+translucent window, and this draws what is in front of all of them --
+curved glass, scan lines, phosphor triads, halation, and three guns that
+do not quite agree at the corners.  It is the last stop on the Super+\"
+tour of looks -- see `cmacs-gowl-backdrop' -- and
+\[cmacs-gowl-toggle-crt] switches it on its own.
+
+THE POINTER IS NOT CURVED WITH THE REST.  The cursor sits on a hardware
+plane rather than in the scene, so the shader never sees it: it stays
+where it really is while everything under it has moved, by about a dozen
+pixels at 1080p at the default curvature and none at all in the middle
+or at the edges.  `cmacs-gowl-crt-preset' set to `flat' keeps the
+phosphor and takes the parallax away.
+
+It costs one more render of the whole scene per frame on every output,
+and holds those outputs awake.  While this is nil it costs nothing."
+  :type 'boolean
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-crt-preset 'consumer
+  "Which tube `cmacs-gowl-crt' draws.
+
+`flat' has the scan lines and the phosphor and no glass at all.
+`trinitron' is a cylinder -- curved across, dead flat down -- with an
+aperture grille.  `consumer' is the tube in the corner of the living
+room in 1998.  `broadcast' is a grade-1 studio monitor: nearly flat, a
+fine spot, as little character as the glass can manage.  `arcade' is a
+cabinet tube run hot, round and dark at the edges.
+
+They differ in more than one setting each, because the machines did."
+  :type '(choice (const flat) (const trinitron) (const consumer)
+                 (const broadcast) (const arcade))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-crt-curvature nil
+  "How curved the faceplate is, or nil for the preset's own.
+
+1/R with R in half screen widths, so 0 is a flat panel and 0.9 is as
+curved as a tube can be before its rim would pass the equator of its own
+sphere.  0.45 is a late flat-square consumer tube.
+
+The picture is scaled to FIT rather than cropped: the middle of each
+edge of the desktop lands on the middle of the matching edge of the
+screen, the corners come in from there and the tube shows black in the
+four corners.  A real tube overscanned instead, which on a desktop eats
+window buttons."
+  :type '(choice (const :tag "From the preset" nil) number)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-crt-scanline nil
+  "How deep the dark glass between scan lines cuts, or nil for the preset.
+
+0 to 1.  It costs no brightness at any setting: the beam is a Gaussian
+normalised to mean one over its own spacing, so this changes the texture
+of the screen and not how bright it is."
+  :type '(choice (const :tag "From the preset" nil) number)
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-crt-mask nil
+  "Phosphor triad depth, or nil for the preset's own.
+
+0 to 1.  Like the scan lines it costs no brightness -- each channel's
+gain is a raised cosine a third of a pitch behind the last, which has
+mean one.  Which KIND of mask is `crt-mask-kind' in the YAML config:
+none, grille (a Trinitron), shadow or slot."
+  :type '(choice (const :tag "From the preset" nil) number)
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-water-preset 'sea
@@ -3581,12 +3664,39 @@ it does have."
   (when (fboundp 'gowl-set-bokeh)
     (ignore-errors (gowl-set-bokeh (float cmacs-gowl-bokeh-radius)
                                    cmacs-gowl-bokeh-blades)))
+  ;; The tube, which is not a backdrop.  Its preset and its overrides go
+  ;; in first, so switching it on never shows one frame of the wrong
+  ;; tube; the SWITCH goes in last, after the backdrop, for the reason
+  ;; below.
+  (when (fboundp 'gowl-set-crt-preset)
+    (ignore-errors (gowl-set-crt-preset cmacs-gowl-crt-preset)))
+  (when (and (fboundp 'gowl-set-crt-look) cmacs-gowl-crt-curvature)
+    (ignore-errors (gowl-set-crt-look (float cmacs-gowl-crt-curvature)
+                                      (and cmacs-gowl-crt-scanline
+                                           (float cmacs-gowl-crt-scanline))
+                                      (and cmacs-gowl-crt-mask
+                                           (float cmacs-gowl-crt-mask)))))
   ;; Who gets nothing at all.  Before the choice of backdrop, so a
   ;; window mapping in the same tick as the switch is already excluded.
   (when (fboundp 'gowl-set-no-fx-apps)
     (ignore-errors (gowl-set-no-fx-apps (or cmacs-gowl-no-fx-apps ""))))
   (when (fboundp 'gowl-set-backdrop)
-    (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
+    (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop)))
+  ;; AFTER the backdrop, and reading both variables.
+  ;;
+  ;; `crt' is the last stop on the backdrop tour as well as a switch of
+  ;; its own, so setting the backdrop can move the tube: landing on
+  ;; `crt' switches it on and leaving switches it off.  Pushing the
+  ;; switch first would let the backdrop push undo it.
+  ;;
+  ;; And the two variables can be set to contradict each other --
+  ;; backdrop `crt' with `cmacs-gowl-crt' nil -- so the backdrop wins
+  ;; there: somebody who chose the tube as their look gets the tube.
+  (when (fboundp 'gowl-set-crt)
+    (ignore-errors
+      (gowl-set-crt (and (or cmacs-gowl-crt
+                             (eq cmacs-gowl-backdrop 'crt))
+                         t)))))
 
 ;;;###autoload
 (defun cmacs-gowl-set-water (preset)
@@ -3940,12 +4050,20 @@ than the weather's."
 (defun cmacs-gowl-cycle-backdrop (&optional backwards)
   "Step to the next window backdrop.
 
-The order is rain, snow, leaves, fizz, water, glass, blur, nothing,
-round again: everything that draws something comes first, grouped by
-what it is -- the three weathers, then the two that are liquid in a
-pane, then the two that settle.  So one press from the default lands on
-another LOOK rather than on nothing at all, and turning the backdrop off
-takes the full way round rather than a single press nobody meant.
+The order is rain, storm, snow, leaves, fizz, submerged, embers, soap,
+dew, water, glass, bokeh, blur, nothing, crt, round again: everything
+that draws something comes first, grouped by what it is -- the weathers,
+then the ones that are a medium rather than a pane, then the two that
+are quiet, then the two that are liquid in a pane, then the still ones.
+So one press from the default lands on another LOOK rather than on
+nothing at all, and turning the backdrop off takes the full way round
+rather than a single press nobody meant.
+
+`crt' is last and is not a backdrop: it draws nothing behind a window
+and puts the whole screen on a cathode ray tube.  Landing on it switches
+the tube on and leaving it switches it off; every other step leaves the
+tube alone, so one switched on with \[cmacs-gowl-toggle-crt] survives a
+change of backdrop.
 
 With a prefix argument BACKWARDS, step the other way.
 
@@ -3957,7 +4075,62 @@ and `cmacs-gowl-backdrop' together, so the choice survives the next
     (user-error "This cmacs has no compositor"))
   (setq cmacs-gowl-backdrop
         (gowl-set-backdrop (if backwards 'prev 'next)))
+  ;; Landing on `crt' switched the tube on and leaving it switched the
+  ;; tube off, so the other variable has moved under us.  Read it back
+  ;; rather than working it out: this is the only place the two settings
+  ;; touch and duplicating the rule here is how they drift apart.
+  (when (fboundp 'gowl-crt-p)
+    (setq cmacs-gowl-crt (and (gowl-crt-p) t)))
   (message "Window backdrop: %s" cmacs-gowl-backdrop))
+
+;;;###autoload
+(defun cmacs-gowl-toggle-crt ()
+  "Put the whole screen on a cathode ray tube, or take it back off.
+
+Not a backdrop: everything else draws behind a translucent window and
+this draws in front of all of them.  Curved glass, scan lines, phosphor
+triads and halation, from `cmacs-gowl-crt-preset'.
+
+The pointer is not curved with the rest of the picture -- it is on a
+hardware plane rather than in the scene -- so it sits where it really is
+while everything under it has moved.  The `flat' preset keeps the
+phosphor and takes that away.
+
+Nothing is bound to this by default: the tube is the last stop on the
+Super+\" tour, which is where anybody is going to find it.  Bind this,
+or gowl's own `toggle_crt' action, for a key of its own.
+
+It changes the running compositor and `cmacs-gowl-crt' together, so the
+choice survives the next `cmacs-gowl-mode'."
+  (interactive)
+  (unless (fboundp 'gowl-set-crt)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-crt (and (gowl-set-crt 'toggle) t))
+  ;; Switching the tube off while the tour was parked on its stop steps
+  ;; the tour off it, so read that back too -- for the same reason.
+  (when (fboundp 'gowl-backdrop)
+    (setq cmacs-gowl-backdrop (gowl-backdrop)))
+  (message "CRT: %s" (if cmacs-gowl-crt "on" "off")))
+
+;;;###autoload
+(defun cmacs-gowl-set-crt-preset (preset)
+  "Choose which tube PRESET the CRT effect draws.
+
+Also switches the effect on if it is not already: choosing a tube and
+then not seeing one is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Tube: "
+                  '("flat" "trinitron" "consumer" "broadcast" "arcade")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-crt-preset)))))
+  (unless (fboundp 'gowl-set-crt-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-crt-preset (gowl-set-crt-preset preset))
+  (unless cmacs-gowl-crt
+    (setq cmacs-gowl-crt t)
+    (gowl-set-crt t))
+  (message "CRT: %s" cmacs-gowl-crt-preset))
 
 (defun cmacs-gowl--apply-lock ()
   "Push `cmacs-gowl-lock-command' and `cmacs-gowl-lock-on-suspend'.

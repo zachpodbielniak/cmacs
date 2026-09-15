@@ -958,6 +958,81 @@ the table, where one backdrop\='s row pushes another\='s variable."
                      (list (float cmacs-gowl-bokeh-radius)
                            cmacs-gowl-bokeh-blades))))))
 
+(ert-deftest cmacs-gowl-test-the-crt-reaches-the-compositor ()
+  "The tube\='s preset, its overrides and its switch are all pushed.
+
+The CRT is not a backdrop, so it is not in the preset/intensity/fps
+table the test above walks -- which is exactly how a setting gets
+forgotten here.  cmacs never opens ~/.config/gowl/config.yaml, so a
+defcustom that is not pushed from `cmacs-gowl--apply-backdrop\=' does
+not exist for a `cmacs --gowl\=' session: Customize offers it, setting it
+does nothing, and nothing is logged.
+
+Also asserts the ORDER, which is load bearing twice over.  The preset
+and the overrides have to be in before the switch, or turning the tube
+on shows one frame of the previous one.  And the BACKDROP has to be in
+before the switch too: `crt\=' is the last stop on the backdrop tour as
+well as a switch of its own, so pushing the backdrop moves the tube, and
+pushing the switch first would let the backdrop push undo it."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'gowl-set-backdrop)
+               (lambda (b &rest _) (push (cons 'backdrop b) calls) b))
+              ((symbol-function 'gowl-set-no-fx-apps) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-water-preset) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-crt-preset)
+               (lambda (p &rest _) (push (cons 'preset p) calls) p))
+              ((symbol-function 'gowl-set-crt-look)
+               (lambda (c &optional s m)
+                 (push (cons 'look (list c s m)) calls) c))
+              ((symbol-function 'gowl-set-crt)
+               (lambda (on &rest _) (push (cons 'switch on) calls) on)))
+      (let ((cmacs-gowl-crt t)
+            (cmacs-gowl-crt-preset 'arcade)
+            (cmacs-gowl-crt-curvature 0.7)
+            (cmacs-gowl-crt-scanline 0.8)
+            (cmacs-gowl-crt-mask 0.4))
+        (setq calls nil)
+        (cmacs-gowl--apply-backdrop)
+        (setq calls (nreverse calls))
+        (should (equal (mapcar #'car calls)
+                       '(preset look backdrop switch)))
+        (should (eq (cdr (assq 'preset calls)) 'arcade))
+        (should (equal (cdr (assq 'look calls)) (list 0.7 0.8 0.4)))
+        (should (eq (cdr (assq 'switch calls)) t)))
+
+      ;; Left at nil, the overrides are not pushed at all: the preset
+      ;; decides, which is what "from the preset" has to mean.  Pushing
+      ;; nil as a number would be a type error on the C side.
+      (let ((cmacs-gowl-crt nil)
+            (cmacs-gowl-crt-preset 'consumer)
+            (cmacs-gowl-crt-curvature nil)
+            (cmacs-gowl-crt-scanline nil)
+            (cmacs-gowl-crt-mask nil))
+        (setq calls nil)
+        (cmacs-gowl--apply-backdrop)
+        (setq calls (nreverse calls))
+        (should (equal (mapcar #'car calls) '(preset backdrop switch)))
+        (should-not (cdr (assq 'switch calls))))
+
+      ;; And the two variables can be set to contradict each other.  A
+      ;; backdrop of `crt\=' IS the tube, so it wins over
+      ;; `cmacs-gowl-crt\=' nil: otherwise choosing the tube as the look
+      ;; and getting no tube is a setting that silently does nothing.
+      (let ((cmacs-gowl-crt nil)
+            (cmacs-gowl-backdrop 'crt)
+            (cmacs-gowl-crt-preset 'consumer)
+            (cmacs-gowl-crt-curvature nil)
+            (cmacs-gowl-crt-scanline nil)
+            (cmacs-gowl-crt-mask nil))
+        (setq calls nil)
+        (cmacs-gowl--apply-backdrop)
+        (setq calls (nreverse calls))
+        (should (eq (cdr (assq 'backdrop calls)) 'crt))
+        (should (eq (cdr (assq 'switch calls)) t))))))
+
 (ert-deftest cmacs-gowl-test-no-fx-apps-is-pushed-to-the-compositor ()
   "`cmacs-gowl-no-fx-apps' reaches the compositor, and nil is not an error.
 

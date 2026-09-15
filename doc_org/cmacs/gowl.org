@@ -615,7 +615,9 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-scale=        | Set monitor scale factor                  |
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
-| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop through all fourteen looks |
+| =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop through all fifteen looks |
+| =cmacs-gowl-toggle-crt=       | Put the whole screen on a cathode ray tube, or take it off |
+| =cmacs-gowl-set-crt-preset=   | Choose which tube: flat, trinitron, consumer, broadcast, arcade |
 | =cmacs-gowl-set-soap=         | Pick a soap film (fresh ... bubble) and switch to it |
 | =cmacs-gowl-set-embers=       | Pick a fire (dying ... wildfire) and switch to it |
 | =cmacs-gowl-set-submerged=    | Pick a depth of water (pool ... murk) and switch to it |
@@ -1154,6 +1156,77 @@ magnifying to inspect pixels actually wants. A scroll the magnifier
 claims never reaches the client, so =magnifier-modifier= has to name a
 combination applications do not use.
 
+*** The whole screen on a cathode ray tube
+:PROPERTIES:
+:CUSTOM_ID: crt
+:END:
+
+The last stop of the =Super+"= tour puts the desktop on a CRT, and so
+does =M-x cmacs-gowl-toggle-crt=: a curved
+faceplate, scan lines whose beam fattens with the signal, phosphor
+triads, halation in thick glass, and three guns that do not quite agree
+at the corners.
+
+*It is not a backdrop.* Everything in the next section draws what shows
+THROUGH a translucent window; this draws what is in front of all of them,
+so it is a whole-output filter --- it captures the finished screen and
+puts the whole of it back through a tube.
+
+=cmacs-gowl-crt-preset= picks which tube. They differ in more than one
+setting each, because the machines did.
+
+| Value       | What it is                                                  |
+|-------------+-------------------------------------------------------------|
+| =flat=      | scan lines and phosphor, no glass at all                     |
+| =trinitron= | a cylinder --- curved across, flat down --- with a grille    |
+| =consumer=  | the tube in the corner of the living room in 1998 (default)  |
+| =broadcast= | a grade-1 studio monitor: nearly flat, a fine spot           |
+| =arcade=    | a cabinet tube run hot, round and dark at the edges          |
+
+=cmacs-gowl-crt-curvature=, =cmacs-gowl-crt-scanline= and
+=cmacs-gowl-crt-mask= override three of the preset's settings; everything
+else is in the YAML config under =crt-*=, and
+[[file:../../deps/gowl/docs/configuration.org][gowl's own configuration
+guide]] lists all of it.
+
+**** The pointer is not curved
+
+Worth knowing before leaving it on for a working day. The cursor is on a
+hardware plane rather than in the scene, so the capture never contains it
+and the shader never sees it: it sits where it really is while everything
+under it has moved. At the default curvature that is about a dozen pixels
+at 1080p, worst two thirds of the way out from the middle and none at all
+in the centre or at the edges.
+
+Locking software cursors would put the pointer in the capture and curve
+it --- and would also leave wlroots drawing a second, flat one on top,
+because the real frame renders through the same path. So it is left
+alone. The =flat= preset, or =cmacs-gowl-crt-curvature= 0, keeps the
+phosphor and takes the parallax away.
+
+**** What it costs
+
+One extra render of the whole scene per frame it draws, on every output,
+plus a wide blur for the halation. It only draws when something under the
+glass has changed, so a still desktop costs what a still desktop always
+cost; nothing at all while =cmacs-gowl-crt= is nil, when the sheet and
+both textures go away.
+
+Its sheet cannot declare itself opaque, and that is not a detail: wlr_scene
+stops sending frame callbacks to surfaces it believes are hidden, so a
+permanently parked opaque full-screen sheet makes every window on the
+machine stop drawing. The screen holds the picture taken when the tube
+came on, at no CPU, with nothing logged --- which reads exactly like
+Emacs having hung while Emacs is perfectly fine, drawing into a scene
+nobody is compositing. The cost of not declaring it is that the scene
+below is composited rather than culled.
+
+It draws after every other effect --- the cube, the overview, the
+switcher and the magnifier --- because the glass is in front of whatever
+they put up, and its sheet is marked so that no capture ever sees it.
+Without that the tube would photograph its own last frame. The session
+lock stays above it, and it stops drawing while the session is locked.
+
 *** What shows through a translucent window
 :PROPERTIES:
 :CUSTOM_ID: window-backdrop
@@ -1192,10 +1265,10 @@ with the lightning switched on, and =bokeh= is the blur module with a
 different kernel over the same one output-sized picture. Neither costs
 anything extra to have available.
 
-=Super+"= cycles all fourteen --- rain, storm, snow, leaves, fizz,
-submerged, embers, soap, dew, water, glass, bokeh, blur, nothing --- and
-so does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the other
-way). Everything that draws something comes first, grouped by what it is:
+=Super+"= cycles all fifteen --- rain, storm, snow, leaves, fizz,
+submerged, embers, soap, dew, water, glass, bokeh, blur, nothing, crt ---
+and so does =M-x cmacs-gowl-cycle-backdrop= (a prefix argument goes the
+other way). Everything that draws something comes first, grouped by what it is:
 the weather at the window, then the three that are a MEDIUM rather than a
 pane, then the two that are quiet but not still, then liquid in a pane,
 then the settled ones. So one press from the default lands on another
@@ -1205,10 +1278,21 @@ way round rather than a single press nobody meant.
 =storm= is second on purpose: it IS the rain with the lightning on, so
 the comparison anybody wants is with the press they just came from.
 
+=crt= is last on purpose, and is the one stop that is not a backdrop: it
+draws nothing behind the windows and puts the whole SCREEN on a tube
+(see [[#crt][The whole screen on a cathode ray tube]]). It is a value
+here only so this key can reach it --- the tube is otherwise an
+independent switch, so it can be on beside the rain. The tour therefore
+switches it on when it lands on that stop and off when it leaves, and
+leaves it alone in between: a tube switched on with =M-x
+cmacs-gowl-toggle-crt= survives a change of backdrop. Switching the tube off by hand while the
+setting is =crt= steps the setting to =none=, because =crt= with no tube
+draws nothing anywhere.
+
 Either way the layout indicator draws a brief toast naming what it landed
 on --- "Liquid rain", "Thunderstorm", "Snow", "Falling leaves",
 "Carbonation", "Submerged", "Embers", "Soap film", "Dew on a web",
-"Liquid water", "Liquid glass", "Bokeh", "Blur", "No backdrop" ---
+"Liquid water", "Liquid glass", "Bokeh", "Blur", "No backdrop", "CRT" ---
 because over a busy wallpaper a calm water and a subtle glass can both
 look a great deal like the blur they replaced, and without one the honest
 reaction to pressing the key is "did that do anything?".
@@ -1622,13 +1706,16 @@ core knowing that an overview exists. The same string works from a
 keybind (=@{ action: ipc_command, arg: "expo" @}=) and from the IPC
 socket.
 
-*** How nine effects share one compositor
+*** How the effects share one compositor
 
-All nine --- animation, cube, expo, switcher, magnifier, blur,
-liquidglass, liquidwater, liquidrain --- are separate plugins
-implementing one interface, and CMacs loads all of them. The last four
-are the set that are alternatives rather than additions; see
-[[#window-backdrop][What shows through a translucent window]].
+Animation, cube, expo, switcher, magnifier, crt, blur, liquidglass,
+liquidwater, liquidrain, snow, leaves, fizz, soapfilm, embers, submerged
+and dew are separate plugins implementing one interface, and CMacs loads
+all of them. All but the first six are the set that are alternatives
+rather than additions; see [[#window-backdrop][What shows through a
+translucent window]]. =crt= is the odd one: not a backdrop at all, but a
+filter over the finished screen --- see [[#crt][The whole screen on a
+cathode ray tube]].
 gowl decides who gets a given hook per event rather than handing the
 whole interface to one module: the hooks that decide where a window IS
 stop at the first module that claims them, and the per-frame and teardown
