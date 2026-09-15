@@ -883,6 +883,30 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
 
+(ert-deftest cmacs-gowl-test-no-fx-apps-is-pushed-to-the-compositor ()
+  "`cmacs-gowl-no-fx-apps' reaches the compositor, and nil is not an error.
+
+cmacs never opens ~/.config/gowl/config.yaml, so a setting that is not
+pushed from here does not exist for a `cmacs --gowl' session at all --
+which is how five HDR settings came to be reachable only by standalone
+gowl.  The nil case is the one that bites: the defcustom is a string and
+somebody clearing it in Customize leaves nil behind, which must reach
+the C side as an empty string rather than as a type error."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((pushed 'untouched))
+    (cl-letf (((symbol-function 'gowl-set-no-fx-apps)
+               (lambda (apps &rest _) (setq pushed apps)))
+              ((symbol-function 'gowl-set-backdrop) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-water-preset) (lambda (&rest _) nil)))
+      (let ((cmacs-gowl-no-fx-apps "obs,vlc"))
+        (cmacs-gowl--apply-backdrop)
+        (should (equal pushed "obs,vlc")))
+      (let ((cmacs-gowl-no-fx-apps nil))
+        (cmacs-gowl--apply-backdrop)
+        (should (equal pushed ""))))))
+
 (ert-deftest cmacs-gowl-test-lock-command-defaults-to-the-bundled-binary ()
   "`cmacs-gowl-lock-command' leaves the resolved gowl-lock alone.
 

@@ -1199,6 +1199,55 @@ own background alpha (Emacs's own frames use =alpha-background=). An
 opaque window shows no backdrop of any kind, and neither module is at
 fault for that.
 
+*** Windows that get none of it
+:PROPERTIES:
+:CUSTOM_ID: no-fx
+:END:
+
+Some windows should have nothing drawn behind or around them. A game is
+paying for every frame it renders; bubbles behind it are a frame it does
+not get. A nested GNOME session already has a desktop of its own behind
+its windows, and rain running down one of them is somebody else's
+desktop showing through.
+
+*The one that needs no configuration* is =GOWL_NO_FX= in the
+environment. A process with it set to =1= or =true= --- any case ---
+gets no backdrop, no shadow and no animation on any window it maps, and
+neither does anything it launches, because that is what an exported
+variable does. =0=, =false= and an empty value all mean "leave them on",
+so a wrapper can turn them back on for one child of a process that has
+them off.
+
+#+begin_src sh
+GOWL_NO_FX=1 obs
+#+end_src
+
+or =Env=GOWL_NO_FX=1= in a =.desktop= file. It is read out of the
+client's own =/proc/PID/environ=, not out of the compositor's
+environment, which is what makes it inherited and immediate.
+
+*Steam, and anything Steam starts, is already excluded* --- by its
+environment (=SteamAppId= and friends, which Proton games keep too) and
+by the process ancestry, so the client's own windows are covered as well
+as the games. So is =mutter-devkit=, for the nested-GNOME case. None of
+those three can be configured away.
+
+*Anything else* goes in =cmacs-gowl-no-fx-apps=, a comma-separated
+string that ADDS to those. Each name is matched case-insensitively
+against the window's =app_id= and against the command name of its
+process and of every ancestor, so naming a launcher covers what it
+launches:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-no-fx-apps "obs,vlc")
+#+end_src
+
+=(gowl-set-no-fx-apps "obs,vlc")= sets it on a running compositor and
+=(gowl-no-fx-apps)= reads it back; it applies to windows mapped after
+the call. What a matching window loses is exactly what the =no-blur=,
+=no-shadow= and =no-anim= window rules take away, and a window covered
+by both is covered once.
+
 *** Liquid glass
 :PROPERTIES:
 :CUSTOM_ID: liquidglass

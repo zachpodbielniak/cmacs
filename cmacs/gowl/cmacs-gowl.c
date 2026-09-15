@@ -5798,6 +5798,72 @@ or drop its node.  Returns the style now in force.  */)
       gowl_compositor_get_backdrop_style (cmacs_gowl_compositor))));
 }
 
+DEFUN ("gowl-no-fx-apps", Fgowl_no_fx_apps, Sgowl_no_fx_apps, 0, 0, 0,
+       doc: /* Return the extra windows that get no effects, as a string.
+
+A comma-separated list of app_ids and process names.  Empty by default:
+the names that matter -- steam, steamwebhelper and mutter-devkit -- are
+built into the compositor and are not listed here.  See
+`gowl-set-no-fx-apps'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *apps;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  apps = gowl_config_get_no_fx_apps (config);
+  return unbind_to (count, build_string (apps != NULL ? apps : ""));
+}
+
+DEFUN ("gowl-set-no-fx-apps", Fgowl_set_no_fx_apps,
+       Sgowl_set_no_fx_apps, 1, 1, 0,
+       doc: /* Name APPS that get no window effects.
+
+APPS is a comma-separated string, e.g. "obs,vlc".  Each name is matched
+case-insensitively against a window's app_id AND against the command
+name of its process and every one of that process's ancestors -- so
+naming a launcher covers everything the launcher starts.
+
+A window that matches gets no backdrop, no shadow and no open or close
+animation: the same three things the `no-blur', `no-shadow' and
+`no-anim' window rules ask for.
+
+This ADDS to a built-in list -- steam, steamwebhelper, mutter-devkit --
+which cannot be removed, so games and a nested GNOME session are already
+covered.  It is also not the only way in: a process with `GOWL_NO_FX' set
+to 1 or true in its environment is covered along with everything it
+launches, which needs no configuration at all and is what to put in a
+.desktop file's Env= or in front of a command.
+
+Takes effect for windows mapped after this call.  nil or "" leaves only
+the built-in names.  */)
+  (Lisp_Object apps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  if (!NILP (apps))
+    CHECK_STRING (apps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_no_fx_apps (config, NILP (apps) ? "" : SSDATA (apps));
+  return unbind_to (count, Qt);
+}
+
 DEFUN ("gowl-water-preset", Fgowl_water_preset, Sgowl_water_preset, 0, 0, 0,
        doc: /* Return what kind of water the `water' backdrop shows.
 
@@ -11375,6 +11441,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_locked_p);
   defsubr (&Sgowl_backdrop);
   defsubr (&Sgowl_set_backdrop);
+  defsubr (&Sgowl_no_fx_apps);
+  defsubr (&Sgowl_set_no_fx_apps);
   defsubr (&Sgowl_water_preset);
   defsubr (&Sgowl_set_water_preset);
   defsubr (&Sgowl_water_intensity);

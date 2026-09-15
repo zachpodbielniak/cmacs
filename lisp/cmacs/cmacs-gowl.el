@@ -205,6 +205,38 @@ opaque window shows no backdrop of any kind."
                  (const :tag "Nothing" none))
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-no-fx-apps ""
+  "Extra windows that get no effects, as a comma-separated string.
+
+A window that matches gets no backdrop, no shadow and no open or close
+animation -- the same three things the `no-blur\=', `no-shadow\=' and
+`no-anim\=' window rules ask for.
+
+Each name is matched case-insensitively against the window\='s app_id AND
+against the command name of its process and every one of that process\='s
+ancestors, so naming a launcher covers everything the launcher starts.
+
+This ADDS to a built-in list -- steam, steamwebhelper, mutter-devkit --
+which cannot be configured away.  Games, the Steam client and a nested
+GNOME session are therefore already covered with nothing set here: a
+shader behind a game costs frames somebody paid a graphics card for, and
+a nested session has a desktop of its own behind its windows.
+
+It is also not the only way in, and usually not the convenient one.  A
+process with GOWL_NO_FX set to 1 or true in its ENVIRONMENT is covered
+along with everything it launches, which needs no configuration and no
+reload:
+
+  GOWL_NO_FX=1 obs
+
+or `Env=GOWL_NO_FX=1\=' in a .desktop file.  That is the option to reach
+for when the thing to exclude is a one-off or is launched from a script;
+this one is for something you always want excluded.
+
+Takes effect for windows mapped after it is set."
+  :type 'string
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-water-preset 'sea
   "What kind of water `cmacs-gowl-backdrop' shows when it is `water'.
 
@@ -3303,6 +3335,10 @@ it does have."
     (cl-loop for (fn value) on spec by #'cddr
              when (fboundp fn)
              do (ignore-errors (funcall fn value))))
+  ;; Who gets nothing at all.  Before the choice of backdrop, so a
+  ;; window mapping in the same tick as the switch is already excluded.
+  (when (fboundp 'gowl-set-no-fx-apps)
+    (ignore-errors (gowl-set-no-fx-apps (or cmacs-gowl-no-fx-apps ""))))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
 
