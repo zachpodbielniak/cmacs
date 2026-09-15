@@ -616,6 +616,7 @@ every payload, alongside =dropped= for the ring's own overflow.
 | =cmacs-gowl-set-transform=    | Set monitor rotation/flip                 |
 | =cmacs-gowl-toggle-monitor=   | Enable or disable a monitor               |
 | =cmacs-gowl-cycle-backdrop=   | Cycle the window backdrop through all fifteen looks |
+| =cmacs-tray=                  | Show the system tray as a buffer |
 | =cmacs-gowl-toggle-crt=       | Put the whole screen on a cathode ray tube, or take it off |
 | =cmacs-gowl-set-crt-preset=   | Choose which tube: flat, trinitron, consumer, broadcast, arcade |
 | =cmacs-gowl-set-soap=         | Pick a soap film (fresh ... bubble) and switch to it |
@@ -1155,6 +1156,55 @@ magnifies is live. At 1:1 it puts everything away and costs nothing.
 magnifying to inspect pixels actually wants. A scroll the magnifier
 claims never reaches the client, so =magnifier-modifier= has to name a
 combination applications do not use.
+
+*** The system tray
+:PROPERTIES:
+:CUSTOM_ID: tray
+:END:
+
+Zoom, Deskflow, the Proton Mail bridge, Solaar, Syncthing and Steam put
+their only always-available interface in a tray icon, and under gowl
+there was nowhere to put one. =cmacs-gowl-tray= (on by default) makes
+gowl the machine's StatusNotifierItem watcher and host, and the icons
+are drawn as a bar widget.
+
+*They go in the middle of the bottom bar*, which is deliberately not
+where most desktops put a tray. The corners of a screen are the easiest
+targets there are --- they are where a pointer lands by accident --- and
+a row of 22-pixel icons that open Zoom is the last thing that should be
+under a careless flick into a corner. The middle of the bottom edge is
+somewhere you have to mean to go. =cmacs-gowl-tray-widget= takes
+=bottom-center= (the default), =bottom-right=, =top-right= or nil.
+
+| Gesture | What happens |
+|---------+--------------|
+| Double left | Show the application's window |
+| Right | Its own menu, with submenus you can drill into |
+| Middle | Secondary activate |
+| Scroll | Forwarded to the application |
+
+Double left rather than single because the bar is also where you click
+to switch tags. Whatever window the application then shows is tiled like
+any other; one that should float is a =cmacs-gowl-float-rules= entry.
+
+***** cmacs-tray.el reads this register, it no longer keeps one
+
+=lisp/cmacs/cmacs-tray.el= was the tray: a watcher, a host and an item
+table in Elisp over =dbus.el=. The bus allows exactly one watcher per
+machine, and under =cmacs --gowl= the C one and the Elisp one would be
+the same process arguing with itself --- so when =gowl-tray-serving-p=
+is true, =M-x cmacs-tray= shows gowl's register and its keys act through
+it.
+
+The Elisp watcher is still there and still runs for the session it was
+written for: a cmacs with no gowl under it, on a stock GNOME with no
+AppIndicator extension, where nothing else is going to own the name
+either.
+
+From Lisp: =gowl-tray-items=, =gowl-tray-activate=,
+=gowl-tray-secondary-activate=, =gowl-tray-context-menu=,
+=gowl-tray-menu=, =gowl-tray-menu-refresh=, =gowl-tray-menu-click=,
+=gowl-tray-serving-p= and =gowl-set-tray=.
 
 *** The whole screen on a cathode ray tube
 :PROPERTIES:

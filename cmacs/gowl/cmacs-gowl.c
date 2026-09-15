@@ -7013,6 +7013,250 @@ nothing per frame.  */)
                     make_float (gowl_config_get_bokeh_radius (config)));
 }
 
+/* ── The system tray ─────────────────────────────────────────────── */
+
+/*
+ * gowl owns the StatusNotifierItem register (deps/gowl, src/tray) and
+ * these hand it to Lisp.  cmacs-tray.el used to BE the register --- the
+ * watcher, the host and the item table, in Elisp over dbus.el --- and is
+ * now a reader of this one, because the bus allows exactly one watcher
+ * per machine and a cmacs running inside gowl would otherwise have been
+ * two of them in one process.
+ */
+
+static Lisp_Object
+cmacs_gowl_tray_menu_to_lisp (const GowlTrayMenuItem *node)
+{
+  Lisp_Object kids = Qnil;
+  Lisp_Object plist = Qnil;
+  guint i;
+
+  if (node == NULL)
+    return Qnil;
+
+  if (node->children != NULL)
+    {
+      for (i = node->children->len; i > 0; i--)
+        {
+          const GowlTrayMenuItem *kid =
+            g_ptr_array_index (node->children, i - 1);
+
+          kids = Fcons (cmacs_gowl_tray_menu_to_lisp (kid), kids);
+        }
+    }
+
+  plist = Fcons (kids, plist);
+  plist = Fcons (intern_c_string (":children"), plist);
+  plist = Fcons (node->toggle_state == 1 ? Qt : Qnil, plist);
+  plist = Fcons (intern_c_string (":checked"), plist);
+  plist = Fcons (node->is_separator ? Qt : Qnil, plist);
+  plist = Fcons (intern_c_string (":separator"), plist);
+  plist = Fcons (node->enabled ? Qt : Qnil, plist);
+  plist = Fcons (intern_c_string (":enabled"), plist);
+  plist = Fcons (node->label != NULL ? build_string (node->label) : Qnil,
+                 plist);
+  plist = Fcons (intern_c_string (":label"), plist);
+  plist = Fcons (make_fixnum (node->id), plist);
+  plist = Fcons (intern_c_string (":id"), plist);
+  return plist;
+}
+
+DEFUN ("gowl-set-tray", Fgowl_set_tray, Sgowl_set_tray, 1, 1, 0,
+       doc: /* Make gowl the machine's tray register, or stop.
+
+ON nil stops; anything else starts.  Returns non-nil when gowl owns the
+register afterwards --- which is NOT the same as ON being non-nil: gowl
+never takes `org.kde.StatusNotifierWatcher' from another tray and never
+queues for it, so a desktop that already has one keeps it and this
+returns nil.  Two watchers on one bus is how applications end up
+registered with the one nobody is displaying.  */)
+  (Lisp_Object on)
+{
+  GOWL_CHECK_RUNNING ();
+  gowl_compositor_set_tray (cmacs_gowl_compositor, !NILP (on));
+  return gowl_tray_is_serving (gowl_tray_get_default ()) ? Qt : Qnil;
+}
+
+DEFUN ("gowl-tray-serving-p", Fgowl_tray_serving_p, Sgowl_tray_serving_p,
+       0, 0, 0,
+       doc: /* Return non-nil while gowl owns the tray register.
+
+gowl claims `org.kde.StatusNotifierWatcher' when `cmacs-gowl-tray' is
+on.  It never takes the name from another tray and never queues for it,
+so this is nil on a desktop that already has one -- a GNOME session with
+the AppIndicator extension, say -- and the items below belong to that
+one instead.  */)
+  (void)
+{
+  return gowl_tray_is_serving (gowl_tray_get_default ()) ? Qt : Qnil;
+}
+
+DEFUN ("gowl-tray-items", Fgowl_tray_items, Sgowl_tray_items, 0, 0, 0,
+       doc: /* Return the registered tray items, oldest first.
+
+Each is a plist:
+
+  :key      what every other function here takes to name this item
+  :id       the application's own short name
+  :title    its human-readable name
+  :status   "Active", "Passive" or "NeedsAttention"
+  :icon     the themed icon name, or nil
+  :tooltip  the tooltip's title, or nil
+  :menu     non-nil when the item offers a menu
+  :serial   bumped whenever anything above changes
+
+No icon PIXELS: an item's icon may be raw ARGB that only a renderer
+wants, and the point of this list is the half that is text.  */)
+  (void)
+{
+  GPtrArray  *items;
+  Lisp_Object result = Qnil;
+  guint       i;
+
+  items = gowl_tray_dup_items (gowl_tray_get_default ());
+  if (items == NULL)
+    return Qnil;
+
+  for (i = items->len; i > 0; i--)
+    {
+      const GowlTrayItem *it = g_ptr_array_index (items, i - 1);
+      Lisp_Object plist = Qnil;
+
+      plist = Fcons (make_uint (it->serial), plist);
+      plist = Fcons (intern_c_string (":serial"), plist);
+      plist = Fcons (it->menu_path != NULL ? Qt : Qnil, plist);
+      plist = Fcons (intern_c_string (":menu"), plist);
+      plist = Fcons (it->tooltip != NULL ? build_string (it->tooltip) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":tooltip"), plist);
+      plist = Fcons (it->icon_name != NULL ? build_string (it->icon_name)
+                                           : Qnil, plist);
+      plist = Fcons (intern_c_string (":icon"), plist);
+      plist = Fcons (it->status != NULL ? build_string (it->status) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":status"), plist);
+      plist = Fcons (it->title != NULL ? build_string (it->title) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":title"), plist);
+      plist = Fcons (it->id != NULL ? build_string (it->id) : Qnil, plist);
+      plist = Fcons (intern_c_string (":id"), plist);
+      plist = Fcons (it->key != NULL ? build_string (it->key) : Qnil, plist);
+      plist = Fcons (intern_c_string (":key"), plist);
+
+      result = Fcons (plist, result);
+    }
+  g_ptr_array_unref (items);
+  return result;
+}
+
+DEFUN ("gowl-tray-activate", Fgowl_tray_activate, Sgowl_tray_activate,
+       1, 3, 0,
+       doc: /* Activate the tray item KEY, as a click on its icon would.
+
+For nearly every application this means "show me your window".  X and Y,
+if given, are where on screen the click was; applications use them to
+place their own windows and menus.
+
+Returns immediately: the call is made on gowl's bus thread, because an
+application that has stopped answering must not be able to stall the
+editor.  */)
+  (Lisp_Object key, Lisp_Object x, Lisp_Object y)
+{
+  CHECK_STRING (key);
+  gowl_tray_activate (gowl_tray_get_default (), SSDATA (key),
+                      NILP (x) ? 0 : (gint) XFIXNUM (x),
+                      NILP (y) ? 0 : (gint) XFIXNUM (y));
+  return Qt;
+}
+
+DEFUN ("gowl-tray-secondary-activate", Fgowl_tray_secondary_activate,
+       Sgowl_tray_secondary_activate, 1, 3, 0,
+       doc: /* Secondary-activate the tray item KEY -- a middle click.
+
+What that means is entirely the application's business.  */)
+  (Lisp_Object key, Lisp_Object x, Lisp_Object y)
+{
+  CHECK_STRING (key);
+  gowl_tray_secondary_activate (gowl_tray_get_default (), SSDATA (key),
+                                NILP (x) ? 0 : (gint) XFIXNUM (x),
+                                NILP (y) ? 0 : (gint) XFIXNUM (y));
+  return Qt;
+}
+
+DEFUN ("gowl-tray-context-menu", Fgowl_tray_context_menu,
+       Sgowl_tray_context_menu, 1, 3, 0,
+       doc: /* Ask the tray item KEY to show its own context menu.
+
+Not the same as `gowl-tray-menu': this asks the APPLICATION to put a
+menu on screen itself, which most of them do not implement under
+Wayland.  `gowl-tray-menu' reads the menu and lets the caller draw
+it, which is what the bar widget does.  */)
+  (Lisp_Object key, Lisp_Object x, Lisp_Object y)
+{
+  CHECK_STRING (key);
+  gowl_tray_context_menu (gowl_tray_get_default (), SSDATA (key),
+                          NILP (x) ? 0 : (gint) XFIXNUM (x),
+                          NILP (y) ? 0 : (gint) XFIXNUM (y));
+  return Qt;
+}
+
+DEFUN ("gowl-tray-menu-refresh", Fgowl_tray_menu_refresh,
+       Sgowl_tray_menu_refresh, 1, 1, 0,
+       doc: /* Ask the tray item KEY for its menu.
+
+Asynchronous, and it has to happen before `gowl-tray-menu' has anything
+to return: dbusmenu's contract is that the host says it is about to show
+the menu, and an application that builds its menu on demand builds it
+then.  */)
+  (Lisp_Object key)
+{
+  CHECK_STRING (key);
+  gowl_tray_menu_refresh (gowl_tray_get_default (), SSDATA (key));
+  return Qt;
+}
+
+DEFUN ("gowl-tray-menu", Fgowl_tray_menu, Sgowl_tray_menu, 1, 1, 0,
+       doc: /* Return the tray item KEY's menu as it was last read.
+
+A tree.  Each row is a plist:
+
+  :id         what `gowl-tray-menu-click' takes
+  :label      the text, with GTK's mnemonic underscores removed
+  :enabled    nil for a greyed row, which must not be acted on
+  :separator  non-nil for a rule rather than a row
+  :checked    non-nil for a ticked checkbox or radio
+  :children   a list of the same, for a submenu
+
+nil when the item has no menu or none has been read yet; see
+`gowl-tray-menu-refresh'.  */)
+  (Lisp_Object key)
+{
+  GowlTrayMenuItem *root;
+  Lisp_Object       out;
+
+  CHECK_STRING (key);
+  root = gowl_tray_dup_menu (gowl_tray_get_default (), SSDATA (key));
+  if (root == NULL)
+    return Qnil;
+  out = cmacs_gowl_tray_menu_to_lisp (root);
+  gowl_tray_menu_item_free (root);
+  return out;
+}
+
+DEFUN ("gowl-tray-menu-click", Fgowl_tray_menu_click, Sgowl_tray_menu_click,
+       2, 2, 0,
+       doc: /* Tell the tray item KEY that its menu row ID was chosen.
+
+ID comes from `gowl-tray-menu'.  */)
+  (Lisp_Object key, Lisp_Object id)
+{
+  CHECK_STRING (key);
+  CHECK_FIXNUM (id);
+  gowl_tray_menu_clicked (gowl_tray_get_default (), SSDATA (key),
+                          (gint) XFIXNUM (id));
+  return Qt;
+}
+
 DEFUN ("gowl-crt-p", Fgowl_crt_p, Sgowl_crt_p, 0, 0, 0,
        doc: /* Return non-nil while the whole screen is on a cathode ray tube.
 
@@ -12392,6 +12636,15 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_recording_active_p);
   defsubr (&Sgowl_config_get);
   defsubr (&Sgowl_config_generate_yaml);
+  defsubr (&Sgowl_set_tray);
+  defsubr (&Sgowl_tray_serving_p);
+  defsubr (&Sgowl_tray_items);
+  defsubr (&Sgowl_tray_activate);
+  defsubr (&Sgowl_tray_secondary_activate);
+  defsubr (&Sgowl_tray_context_menu);
+  defsubr (&Sgowl_tray_menu_refresh);
+  defsubr (&Sgowl_tray_menu);
+  defsubr (&Sgowl_tray_menu_click);
   defsubr (&Sgowl_crt_p);
   defsubr (&Sgowl_set_crt);
   defsubr (&Sgowl_set_crt_preset);

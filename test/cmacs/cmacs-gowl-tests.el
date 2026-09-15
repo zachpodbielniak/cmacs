@@ -2069,3 +2069,43 @@ and that the socket and Lisp agree on which one is in force."
 
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here
+
+(ert-deftest cmacs-gowl-test-the-elisp-tray-defers-to-gowls-register ()
+  "`cmacs-tray\\=' reads gowl\\='s register instead of keeping its own.
+
+The bus allows exactly ONE owner of `org.kde.StatusNotifierWatcher\\=',
+and under `cmacs --gowl\\=' the C watcher in deps/gowl and the Elisp one
+in cmacs-tray.el are the same process.  Two of them is not a crash: it
+is applications registering with whichever answered first and their
+icons scattering between two trays, with nothing logged anywhere.
+
+So the switch is asserted from both sides -- that the item list comes
+from gowl while gowl is serving, and that it falls back to the Elisp
+table when gowl is not there at all, which is the session cmacs-tray.el
+was written for: a cmacs with no gowl under it, on a desktop with no
+tray of its own."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-tray)
+  (require 'cl-lib)
+  (cl-letf (((symbol-function 'gowl-tray-serving-p) (lambda () t))
+            ((symbol-function 'gowl-tray-items)
+             (lambda ()
+               (list (list :key "org.example.App/StatusNotifierItem"
+                           :id "app" :title "An App" :status "Active"
+                           :icon "an-app" :tooltip "tip" :menu t)))))
+    (let ((cmacs-tray--items '(("stale" . (:id "stale" :title "Stale")))))
+      (let ((items (cmacs-tray--all-items)))
+        (should (= (length items) 1))
+        ;; gowl's, not the stale Elisp table's.
+        (should (equal (car (car items))
+                       "org.example.App/StatusNotifierItem"))
+        (should (plist-get (cdr (car items)) :gowl))
+        (should (equal (plist-get (cdr (car items)) :title) "An App")))))
+
+  ;; And with no gowl in the picture the Elisp table is still the tray.
+  (cl-letf (((symbol-function 'gowl-tray-serving-p) (lambda () nil)))
+    (let ((cmacs-tray--items '(("mine" . (:id "mine" :title "Mine")))))
+      (let ((items (cmacs-tray--all-items)))
+        (should (= (length items) 1))
+        (should (equal (car (car items)) "mine"))
+        (should-not (plist-get (cdr (car items)) :gowl))))))

@@ -27,9 +27,22 @@
 ;; What it does not do: icons.  An item's icon arrives either as a
 ;; themed name or as raw ARGB pixmaps over D-Bus, and a list of
 ;; applications with their titles and statuses is more useful in a
-;; buffer than a row of 22-pixel images would be.  The icon *name* is
-;; kept, so a graphical renderer could be added without touching any of
-;; the protocol below.
+;; buffer than a row of 22-pixel images would be.
+;;
+;; THE GRAPHICAL RENDERER ARRIVED, and it brought the register with it.
+;; gowl now implements the watcher, the host and the menu client in C
+;; (deps/gowl, src/tray) so that a standalone gowl session -- one with
+;; no Emacs in it at all -- has a tray, and draws the icons as a bar
+;; widget.  The bus allows exactly ONE watcher per machine, and under
+;; `cmacs --gowl' the two would be the same process: so when gowl is
+;; serving, everything below reads ITS register rather than keeping a
+;; second one.
+;;
+;; The Elisp watcher is still here and still runs, for the session this
+;; was written for in the first place: a cmacs with no gowl under it, on
+;; a stock GNOME with no AppIndicator extension, where nothing else is
+;; going to own the name either.  `cmacs-tray--gowl-p' is the switch,
+;; and it is checked before anything claims anything.
 
 ;;; Code:
 
@@ -81,6 +94,42 @@ EVENT is `added', `removed' or `updated'; ITEM is the item plist."
 
 (defvar cmacs-tray--host-name nil
   "The host name this Emacs registered, if any.")
+
+;;; Where the register lives
+
+(defun cmacs-tray--gowl-p ()
+  "Non-nil when gowl owns the register and this is a reader of it.
+
+Checked before anything here claims a name or reads a property: two
+watchers on one bus means applications register with whichever answered
+first and the icons scatter between them, and inside `cmacs --gowl'
+those two would be one process arguing with itself."
+  (and (fboundp 'gowl-tray-serving-p)
+       (gowl-tray-serving-p)))
+
+(defun cmacs-tray--gowl-items ()
+  "gowl's register, in the shape the buffer below already draws.
+
+The keys differ: gowl addresses an item by a `:key' of its bus name and
+object path joined, where the Elisp watcher used the service string it
+was registered with.  Both are opaque to everything that reads them."
+  (mapcar
+   (lambda (it)
+     (cons (plist-get it :key)
+           (list :gowl t
+                 :key     (plist-get it :key)
+                 :id      (plist-get it :id)
+                 :title   (plist-get it :title)
+                 :status  (plist-get it :status)
+                 :tooltip (plist-get it :tooltip)
+                 :menu    (plist-get it :menu))))
+   (gowl-tray-items)))
+
+(defun cmacs-tray--all-items ()
+  "Every item, from whichever register is the live one."
+  (if (cmacs-tray--gowl-p)
+      (cmacs-tray--gowl-items)
+    cmacs-tray--items))
 
 ;;; Service strings
 
@@ -159,7 +208,7 @@ SERVICE carries only an object path."
      ((and title (not (string-empty-p title))) title)
      ((and tip (not (string-empty-p tip))) tip)
      ((and id (not (string-empty-p id))) id)
-     (t (plist-get item :bus)))))
+     (t (or (plist-get item :bus) (plist-get item :key) "?")))))
 
 ;;; The registry
 
@@ -275,18 +324,23 @@ Returns immediately and reads the item on the next idle turn; see
   (with-current-buffer (get-buffer-create cmacs-tray-buffer)
     (unless (derived-mode-p 'cmacs-tray-mode)
       (cmacs-tray-mode))
-    (let ((inhibit-read-only t)
-          (line (line-number-at-pos)))
+    (let* ((inhibit-read-only t)
+           (line (line-number-at-pos))
+           (gowl (cmacs-tray--gowl-p))
+           (items (cmacs-tray--all-items)))
       (erase-buffer)
-      (if (null cmacs-tray--items)
-          (insert (if cmacs-tray--registered
-                      "No tray items.\n\nThe tray is running; nothing has registered.\n"
-                    "Tray not running.  M-x cmacs-tray-mode-global\n"))
+      (if (null items)
+          (insert (cond
+                   (gowl "No tray items.\n\ngowl has the tray; nothing has registered.\n")
+                   (cmacs-tray--registered
+                    "No tray items.\n\nThe tray is running; nothing has registered.\n")
+                   (t "Tray not running.  M-x cmacs-tray-mode-global\n")))
         (insert (format "%d tray item%s   "
-                        (length cmacs-tray--items)
-                        (if (= (length cmacs-tray--items) 1) "" "s"))
-                "(RET activate, s secondary, m menu, g refresh)\n\n")
-        (dolist (entry cmacs-tray--items)
+                        (length items)
+                        (if (= (length items) 1) "" "s"))
+                "(RET activate, s secondary, m menu, g refresh)\n"
+                (if gowl "served by gowl\n\n" "\n"))
+        (dolist (entry items)
           (let* ((item (cdr entry))
                  (status (plist-get item :status))
                  (tip (plist-get item :tooltip)))
@@ -310,7 +364,7 @@ Returns immediately and reads the item on the next idle turn; see
   "The item plist on the current line, or nil."
   (let ((service (get-text-property (line-beginning-position)
                                     'cmacs-tray-service)))
-    (and service (cdr (assoc service cmacs-tray--items)))))
+    (and service (cdr (assoc service (cmacs-tray--all-items))))))
 
 (defun cmacs-tray--invoke (method)
   "Call METHOD on the item at point.
@@ -321,16 +375,30 @@ is no meaningful cursor position behind a buffer row.  Applications
 treat 0,0 as \"you pick\"."
   (let ((item (cmacs-tray--item-at-point)))
     (unless item (user-error "No tray item on this line"))
-    (condition-case err
+    (if (plist-get item :gowl)
+        ;; gowl makes the call on its own bus thread, so this returns
+        ;; at once and cannot report failure -- which is the point: an
+        ;; application that has stopped answering must not be able to
+        ;; stall the editor for the length of a timeout.
         (progn
-          (dbus-call-method :session (plist-get item :bus) (plist-get item :path)
-                            cmacs-tray-item-interface method
-                            :timeout cmacs-tray-call-timeout
-                            :int32 0 :int32 0)
+          (funcall (cond ((equal method "SecondaryActivate")
+                          #'gowl-tray-secondary-activate)
+                         ((equal method "ContextMenu")
+                          #'gowl-tray-context-menu)
+                         (t #'gowl-tray-activate))
+                   (plist-get item :key) 0 0)
           (message "%s: %s" (cmacs-tray--label item) method))
-      (error
-       (message "%s: %s failed: %s" (cmacs-tray--label item) method
-                (error-message-string err))))))
+      (condition-case err
+          (progn
+            (dbus-call-method :session (plist-get item :bus)
+                              (plist-get item :path)
+                              cmacs-tray-item-interface method
+                              :timeout cmacs-tray-call-timeout
+                              :int32 0 :int32 0)
+            (message "%s: %s" (cmacs-tray--label item) method))
+        (error
+         (message "%s: %s failed: %s" (cmacs-tray--label item) method
+                  (error-message-string err)))))))
 
 (defun cmacs-tray-activate ()
   "Activate the tray item at point, as a left click would."
@@ -413,29 +481,70 @@ walked, and every tray menu worth using is flat."
             (nreverse out))
         (error nil)))))
 
+(defun cmacs-tray--gowl-menu-entries (item)
+  "Flatten gowl's menu tree for ITEM into (LABEL . ID) pairs.
+
+A submenu becomes \"Parent / Child\": a completing-read has nowhere to
+put a tree, and flattening keeps every leaf reachable, which drilling
+in through repeated prompts would not."
+  (let ((key (plist-get item :key))
+        (out nil))
+    (gowl-tray-menu-refresh key)
+    ;; The answer comes back on gowl's bus thread.  Give it a moment
+    ;; rather than a callback: this is an interactive command and the
+    ;; alternative is a menu that is empty the first time it is opened.
+    (let ((deadline (+ (float-time) 1.5))
+          (menu nil))
+      (while (and (null menu) (< (float-time) deadline))
+        (setq menu (gowl-tray-menu key))
+        (unless menu (sit-for 0.05)))
+      (letrec ((walk
+                (lambda (rows prefix)
+                  (dolist (row rows)
+                    (let* ((label (plist-get row :label))
+                           (kids (plist-get row :children))
+                           (name (if (and prefix label)
+                                     (concat prefix " / " label)
+                                   label)))
+                      (cond
+                       ((plist-get row :separator) nil)
+                       ((and kids (> (length kids) 0))
+                        (funcall walk kids name))
+                       ((and label (not (string-empty-p (string-trim label)))
+                             (plist-get row :enabled))
+                        (push (cons name (plist-get row :id)) out))))))))
+        (funcall walk (plist-get menu :children) nil)))
+    (nreverse out)))
+
 (defun cmacs-tray-menu ()
   "Open the DBusMenu of the item at point and pick an entry."
   (interactive)
   (let* ((item (cmacs-tray--item-at-point)))
     (unless item (user-error "No tray item on this line"))
-    (let ((entries (cmacs-tray--menu-entries item)))
+    (let ((entries (if (plist-get item :gowl)
+                       (cmacs-tray--gowl-menu-entries item)
+                     (cmacs-tray--menu-entries item))))
       (unless entries
         (user-error "%s exposes no menu" (cmacs-tray--label item)))
       (let* ((choice (completing-read
                       (format "%s: " (cmacs-tray--label item))
                       (mapcar #'car entries) nil t))
              (id (cdr (assoc choice entries))))
-        (condition-case err
+        (if (plist-get item :gowl)
             (progn
-              (dbus-call-method
-               :session (plist-get item :bus) (plist-get item :menu)
-               cmacs-tray-menu-interface "Event"
-               :timeout cmacs-tray-call-timeout
-               :int32 id "clicked" '(:variant :string "")
-               :uint32 (truncate (float-time)))
+              (gowl-tray-menu-click (plist-get item :key) id)
               (message "%s: %s" (cmacs-tray--label item) choice))
-          (error (message "menu event failed: %s"
-                          (error-message-string err))))))))
+          (condition-case err
+              (progn
+                (dbus-call-method
+                 :session (plist-get item :bus) (plist-get item :menu)
+                 cmacs-tray-menu-interface "Event"
+                 :timeout cmacs-tray-call-timeout
+                 :int32 id "clicked" '(:variant :string "")
+                 :uint32 (truncate (float-time)))
+                (message "%s: %s" (cmacs-tray--label item) choice))
+            (error (message "menu event failed: %s"
+                            (error-message-string err)))))))))
 
 ;;; Registration
 
@@ -524,6 +633,10 @@ running with no visible interface at all."
   (if cmacs-tray-mode-global
       (let ((owner (cmacs-tray--owner)))
         (cond
+         ;; gowl has it, and inside `cmacs --gowl' gowl IS this process.
+         ;; Reading its register is the whole of the job here.
+         ((cmacs-tray--gowl-p)
+          (message "cmacs-tray: gowl owns the register; reading it"))
          (cmacs-tray--registered nil)
          (owner
           (setq cmacs-tray-mode-global nil)
