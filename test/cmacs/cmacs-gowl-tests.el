@@ -889,6 +889,75 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
 
+(ert-deftest cmacs-gowl-test-every-backdrop-is-pushed-to-the-compositor ()
+  "`cmacs-gowl--apply-backdrop\=' pushes EVERY backdrop\='s settings.
+
+cmacs never opens ~/.config/gowl/config.yaml, so a backdrop whose
+settings this function forgets is a backdrop that can only be tuned by
+somebody running standalone gowl.  That is a silent failure: the
+defcustom exists, Customize offers it, setting it does nothing, and
+there is no error anywhere.
+
+Asserted by stubbing every setter and checking that each was called with
+the value of its defcustom -- which is also what catches a copy-paste in
+the table, where one backdrop\='s row pushes another\='s variable."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((seen (make-hash-table :test 'eq))
+        (fns '(gowl-set-water-preset gowl-set-water-intensity
+               gowl-set-rain-preset gowl-set-rain-intensity
+               gowl-set-snow-preset gowl-set-snow-intensity
+               gowl-set-leaves-preset gowl-set-leaves-intensity
+               gowl-set-fizz-preset gowl-set-fizz-intensity
+               gowl-set-soap-preset gowl-set-soap-intensity
+               gowl-set-embers-preset gowl-set-embers-intensity
+               gowl-set-submerged-preset gowl-set-submerged-intensity
+               gowl-set-dew-preset gowl-set-dew-intensity)))
+    (cl-letf ((cmacs-gowl-soap-preset 'oil)
+              (cmacs-gowl-embers-preset 'forge)
+              (cmacs-gowl-submerged-preset 'deep)
+              (cmacs-gowl-dew-preset 'heavy)
+              ((symbol-function 'gowl-set-backdrop) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-no-fx-apps) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-set-lightning)
+               (lambda (rate &optional power)
+                 (puthash 'lightning (list rate power) seen)))
+              ((symbol-function 'gowl-set-bokeh)
+               (lambda (radius &optional blades)
+                 (puthash 'bokeh (list radius blades) seen))))
+      ;; cl-letf cannot rebind a list of symbols worked out at run time,
+      ;; so the stubs go on by hand and come off in the unwind.
+      (let ((saved (mapcar (lambda (fn)
+                             (cons fn (and (fboundp fn) (symbol-function fn))))
+                           fns)))
+        (unwind-protect
+            (progn
+              (dolist (fn fns)
+                (let ((this fn))
+                  (fset this (lambda (v &rest _) (puthash this v seen)))))
+              (cmacs-gowl--apply-backdrop))
+          (dolist (pair saved)
+            (if (cdr pair) (fset (car pair) (cdr pair)) (fmakunbound (car pair))))))
+
+      ;; Every setter was reached...
+      (dolist (fn fns)
+        (should (gethash fn seen 'missing))
+        (should-not (eq (gethash fn seen 'missing) 'missing)))
+      ;; ...and each with ITS OWN variable, not its neighbour's.
+      (should (eq (gethash 'gowl-set-soap-preset seen) 'oil))
+      (should (eq (gethash 'gowl-set-embers-preset seen) 'forge))
+      (should (eq (gethash 'gowl-set-submerged-preset seen) 'deep))
+      (should (eq (gethash 'gowl-set-dew-preset seen) 'heavy))
+      ;; The storm and the lens take two arguments each, so they are not
+      ;; in the table above and are the ones most likely to be left out.
+      (should (equal (gethash 'lightning seen)
+                     (list cmacs-gowl-lightning-rate
+                           cmacs-gowl-lightning-power)))
+      (should (equal (gethash 'bokeh seen)
+                     (list (float cmacs-gowl-bokeh-radius)
+                           cmacs-gowl-bokeh-blades))))))
+
 (ert-deftest cmacs-gowl-test-no-fx-apps-is-pushed-to-the-compositor ()
   "`cmacs-gowl-no-fx-apps' reaches the compositor, and nil is not an error.
 

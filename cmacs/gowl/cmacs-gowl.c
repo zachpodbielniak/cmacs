@@ -1661,6 +1661,17 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               that needs a module load first is not a
                               key press, it is a wait. */
                            "snow", "leaves", "fizz",
+                           /* And the four newest, which share one host
+                              (fx/gowl-fx-backdrop-host.c) rather than
+                              carrying four more copies of it: a soap
+                              film that drains and pops, a fire below
+                              the window, a view from under water, and
+                              an orb web strung with dew.  Loaded for
+                              the reason the rest are -- Super+" steps
+                              through fourteen looks now, and a look
+                              that needs a module load first is not a
+                              key press, it is a wait. */
+                           "soapfilm", "embers", "submerged", "dew",
                            /* A letter on every window, and pressing it
                               focuses that window -- tmux's `C-b q'.
                               Loaded by default because Super+q is bound
@@ -6274,6 +6285,719 @@ Takes effect on the next frame; it does not need a reload.  */)
   gowl_config_set_fizz_fps (config, (gint) XFIXNUM (fps));
   return unbind_to (count,
                     make_fixnum (gowl_config_get_fizz_fps (config)));
+}
+
+DEFUN ("gowl-soap-preset", Fgowl_soap_preset, Sgowl_soap_preset, 0, 0, 0,
+       doc: /* Return which preset the `soap' backdrop's film uses.
+
+One of the symbols `fresh', `drifting', `thin', `oil' or `bubble'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_soap_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-soap-preset", Fgowl_set_soap_preset,
+       Sgowl_set_soap_preset, 1, 1, 0,
+       doc: /* Set which preset the `soap' backdrop's film uses.
+
+PRESET is `fresh', `drifting', `thin', `oil' or `bubble'.
+
+Each is a whole tuned set rather than a single knob.  What varies across
+them is mostly the THICKNESS, which is what decides how many
+interference bands are stacked up the pane -- a fresh film has five or
+six and a thin one has two.  `oil' is the odd one: a higher refractive
+index, no drainage and no pop, which is a slick on water rather than a
+bubble.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_soap_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown soap preset: %s (want fresh, drifting, thin, oil or bubble)", name);
+    }
+  gowl_config_set_soap_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-soap-intensity", Fgowl_soap_intensity,
+       Sgowl_soap_intensity, 0, 0, 0,
+       doc: /* Return how much is happening, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_soap_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-soap-intensity", Fgowl_set_soap_intensity,
+       Sgowl_set_soap_intensity, 1, 1, 0,
+       doc: /* Set how much is happening in the soap film, over the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how hard the thin patches churn and how fast they rise.
+
+It deliberately leaves the THICKNESS alone.  Thickness is the colour of
+the film -- turning it up does not give a livelier film, it gives one
+whose bands are finer than a pixel, which aliases rather than
+shimmers.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_soap_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_soap_intensity (config)));
+}
+
+DEFUN ("gowl-soap-fps", Fgowl_soap_fps, Sgowl_soap_fps, 0, 0, 0,
+       doc: /* Return how often the soap film is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_soap_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-soap-fps", Fgowl_set_soap_fps, Sgowl_set_soap_fps,
+       1, 1, 0,
+       doc: /* Set how often the soap film is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target, and lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_soap_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_soap_fps (config)));
+}
+
+DEFUN ("gowl-embers-preset", Fgowl_embers_preset, Sgowl_embers_preset, 0, 0, 0,
+       doc: /* Return which preset the fire below the `embers' backdrop uses.
+
+One of the symbols `dying', `embers', `campfire', `forge' or `wildfire'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_embers_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-embers-preset", Fgowl_set_embers_preset,
+       Sgowl_set_embers_preset, 1, 1, 0,
+       doc: /* Set which preset the fire below the `embers' backdrop uses.
+
+PRESET is `dying', `embers', `campfire', `forge' or `wildfire'.
+
+Each is a whole tuned set.  What varies most is the TEMPERATURE, which
+is the palette: the colour of a spark is the Planckian locus at its
+current temperature and its brightness is the fourth power of it, so a
+forge at 2900 K is white-hot and a dying fire at 1500 K is a few dull
+red flecks.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_embers_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown embers preset: %s (want dying, embers, campfire, forge or wildfire)", name);
+    }
+  gowl_config_set_embers_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-embers-intensity", Fgowl_embers_intensity,
+       Sgowl_embers_intensity, 0, 0, 0,
+       doc: /* Return how much is happening, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_embers_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-embers-intensity", Fgowl_set_embers_intensity,
+       Sgowl_set_embers_intensity, 1, 1, 0,
+       doc: /* Set how much is happening in the embers, over the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how many columns carry sparks, how closely they let them go, and
+how fast they rise.
+
+It deliberately leaves the TEMPERATURE alone: that is the colour, not
+the amount, and scaling it with an intensity knob would turn a
+brightness control into a hue control.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_embers_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_embers_intensity (config)));
+}
+
+DEFUN ("gowl-embers-fps", Fgowl_embers_fps, Sgowl_embers_fps, 0, 0, 0,
+       doc: /* Return how often the embers is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_embers_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-embers-fps", Fgowl_set_embers_fps, Sgowl_set_embers_fps,
+       1, 1, 0,
+       doc: /* Set how often the embers is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target, and lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_embers_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_embers_fps (config)));
+}
+
+DEFUN ("gowl-submerged-preset", Fgowl_submerged_preset, Sgowl_submerged_preset, 0, 0, 0,
+       doc: /* Return which preset the water the `submerged' backdrop looks through uses.
+
+One of the symbols `pool', `reef', `lake', `deep' or `murk'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_submerged_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-submerged-preset", Fgowl_set_submerged_preset,
+       Sgowl_set_submerged_preset, 1, 1, 0,
+       doc: /* Set which preset the water the `submerged' backdrop looks through uses.
+
+PRESET is `pool', `reef', `lake', `deep' or `murk'.
+
+Each is a whole tuned set, and what varies is mostly the DEPTH and the
+three absorption coefficients.  There is no blue tint anywhere in the
+effect: water absorbs red about twenty times faster than blue, so the
+colour is what survives the trip and the preset is how far that trip
+is.  A pool is a metre and a bit of very clear water; `deep' is nine
+metres and almost nothing but blue.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_submerged_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown submerged preset: %s (want pool, reef, lake, deep or murk)", name);
+    }
+  gowl_config_set_submerged_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-submerged-intensity", Fgowl_submerged_intensity,
+       Sgowl_submerged_intensity, 0, 0, 0,
+       doc: /* Return how much is happening, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_submerged_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-submerged-intensity", Fgowl_set_submerged_intensity,
+       Sgowl_set_submerged_intensity, 1, 1, 0,
+       doc: /* Set how much is happening in the water, over the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  It
+scales how bright the caustic net is, how much is drifting in the
+water, and how fast the surface overhead moves.
+
+It deliberately leaves the DEPTH alone.  Depth is what the absorption
+is raised over -- it is the colour of the effect -- and scaling it here
+would make a brightness knob change the hue.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_submerged_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_submerged_intensity (config)));
+}
+
+DEFUN ("gowl-submerged-fps", Fgowl_submerged_fps, Sgowl_submerged_fps, 0, 0, 0,
+       doc: /* Return how often the water is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_submerged_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-submerged-fps", Fgowl_set_submerged_fps, Sgowl_set_submerged_fps,
+       1, 1, 0,
+       doc: /* Set how often the water is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target, and lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_submerged_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_submerged_fps (config)));
+}
+
+DEFUN ("gowl-dew-preset", Fgowl_dew_preset, Sgowl_dew_preset, 0, 0, 0,
+       doc: /* Return which preset the web the `dew' backdrop draws uses.
+
+One of the symbols `gossamer', `dawn', `heavy', `tattered' or `frostweb'.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  name = gowl_config_get_dew_preset (config);
+  return unbind_to (count, name != NULL ? intern (name) : Qnil);
+}
+
+DEFUN ("gowl-set-dew-preset", Fgowl_set_dew_preset,
+       Sgowl_set_dew_preset, 1, 1, 0,
+       doc: /* Set which preset the web the `dew' backdrop draws uses.
+
+PRESET is `gossamer', `dawn', `heavy', `tattered' or `frostweb'.
+
+Each is a whole tuned set: the number of radials, how far apart the
+turns of the capture spiral are, how big the beads are and how far the
+loaded thread sags all move together, because a web with heavy drops on
+a fine spiral is not a web.
+
+Takes effect on the next frame it draws; it does not need a reload, and
+it does not switch the backdrop on.  See `gowl-set-backdrop'.  */)
+  (Lisp_Object preset)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  const char *name;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_SYMBOL (preset);
+  name = SSDATA (SYMBOL_NAME (preset));
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  if (!gowl_config_dew_preset_valid (name))
+    {
+      unbind_to (count, Qnil);
+      error ("Unknown dew preset: %s (want gossamer, dawn, heavy, tattered or frostweb)", name);
+    }
+  gowl_config_set_dew_preset (config, name);
+  return unbind_to (count, preset);
+}
+
+DEFUN ("gowl-dew-intensity", Fgowl_dew_intensity,
+       Sgowl_dew_intensity, 0, 0, 0,
+       doc: /* Return how much is happening, over and above the preset.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gdouble v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_dew_intensity (config);
+  return unbind_to (count, make_float (v));
+}
+
+DEFUN ("gowl-set-dew-intensity", Fgowl_set_dew_intensity,
+       Sgowl_set_dew_intensity, 1, 1, 0,
+       doc: /* Set how much is happening in the web, over the preset.
+
+INTENSITY is a number from 0 to 3; 1.0 is the preset as tuned.  For a
+web it is the WIND: how far it breathes and how fast.
+
+There is nothing else a web does more or less of -- the number of drops
+is its structure, and scaling that would give a different web rather
+than a livelier one.  */)
+  (Lisp_Object intensity)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (intensity);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_dew_intensity (config, XFLOATINT (intensity));
+  return unbind_to (count,
+                    make_float (gowl_config_get_dew_intensity (config)));
+}
+
+DEFUN ("gowl-dew-fps", Fgowl_dew_fps, Sgowl_dew_fps, 0, 0, 0,
+       doc: /* Return how often the web is redrawn, per second.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  gint v;
+
+  if (cmacs_gowl_compositor == NULL)
+    return Qnil;
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    return unbind_to (count, Qnil);
+  v = gowl_config_get_dew_fps (config);
+  return unbind_to (count, make_fixnum (v));
+}
+
+DEFUN ("gowl-set-dew-fps", Fgowl_set_dew_fps, Sgowl_set_dew_fps,
+       1, 1, 0,
+       doc: /* Set how often the web is redrawn, per second.
+
+FPS is 0 to 144; 0 means every frame the output offers.  It is a
+THROTTLE rather than a target, and lowering it is the cheapest way to
+make an animated backdrop cost less.
+
+Takes effect on the next frame; it does not need a reload.  */)
+  (Lisp_Object fps)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_FIXNUM (fps);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_dew_fps (config, (gint) XFIXNUM (fps));
+  return unbind_to (count,
+                    make_fixnum (gowl_config_get_dew_fps (config)));
+}
+
+DEFUN ("gowl-set-lightning", Fgowl_set_lightning, Sgowl_set_lightning,
+       1, 2, 0,
+       doc: /* Set how often the `storm' backdrop flashes, and how hard.
+
+RATE is the MEAN seconds between strikes, from 0.5 to 300, and it is a
+mean rather than an interval: the gaps are exponential around it, so
+some come almost together and some leave a long wait.  A fixed interval
+is half of what gives a fake storm away.
+
+POWER, if given, is how bright a flash gets; 1.0 is the tuned strength
+and 0 switches the flash off while leaving the rain.
+
+The `storm' backdrop is the `rain' backdrop with this switched on, so
+these settings reach both.  */)
+  (Lisp_Object rate, Lisp_Object power)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (rate);
+  if (!NILP (power))
+    CHECK_NUMBER (power);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_rain_lightning_rate (config, XFLOATINT (rate));
+  if (!NILP (power))
+    gowl_config_set_rain_lightning_power (config, XFLOATINT (power));
+  return unbind_to (count,
+                    make_float (gowl_config_get_rain_lightning_rate (config)));
+}
+
+DEFUN ("gowl-set-bokeh", Fgowl_set_bokeh, Sgowl_set_bokeh, 1, 2, 0,
+       doc: /* Set the `bokeh' backdrop's lens.
+
+RADIUS is the defocus disc in pixels, 0 to 200.  BLADES, if given, is
+how many aperture blades the lens has: 3 to 12 makes every out-of-focus
+highlight that shape, and under 3 is a circle, which is a lens wide
+open.
+
+Bokeh is the blur module's other kernel, so it costs what the blur
+costs: one pass over one output-sized picture per tag switch, and
+nothing per frame.  */)
+  (Lisp_Object radius, Lisp_Object blades)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  CHECK_NUMBER (radius);
+  if (!NILP (blades))
+    CHECK_FIXNUM (blades);
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    {
+      unbind_to (count, Qnil);
+      error ("No gowl config");
+    }
+  gowl_config_set_bokeh_radius (config, XFLOATINT (radius));
+  if (!NILP (blades))
+    gowl_config_set_bokeh_blades (config, (gint) XFIXNUM (blades));
+  return unbind_to (count,
+                    make_float (gowl_config_get_bokeh_radius (config)));
 }
 
 DEFUN ("gowl-leaves-preset", Fgowl_leaves_preset, Sgowl_leaves_preset, 0, 0, 0,
@@ -11457,6 +12181,32 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_set_fizz_intensity);
   defsubr (&Sgowl_fizz_fps);
   defsubr (&Sgowl_set_fizz_fps);
+  defsubr (&Sgowl_soap_preset);
+  defsubr (&Sgowl_set_soap_preset);
+  defsubr (&Sgowl_soap_intensity);
+  defsubr (&Sgowl_set_soap_intensity);
+  defsubr (&Sgowl_soap_fps);
+  defsubr (&Sgowl_set_soap_fps);
+  defsubr (&Sgowl_embers_preset);
+  defsubr (&Sgowl_set_embers_preset);
+  defsubr (&Sgowl_embers_intensity);
+  defsubr (&Sgowl_set_embers_intensity);
+  defsubr (&Sgowl_embers_fps);
+  defsubr (&Sgowl_set_embers_fps);
+  defsubr (&Sgowl_submerged_preset);
+  defsubr (&Sgowl_set_submerged_preset);
+  defsubr (&Sgowl_submerged_intensity);
+  defsubr (&Sgowl_set_submerged_intensity);
+  defsubr (&Sgowl_submerged_fps);
+  defsubr (&Sgowl_set_submerged_fps);
+  defsubr (&Sgowl_dew_preset);
+  defsubr (&Sgowl_set_dew_preset);
+  defsubr (&Sgowl_dew_intensity);
+  defsubr (&Sgowl_set_dew_intensity);
+  defsubr (&Sgowl_dew_fps);
+  defsubr (&Sgowl_set_dew_fps);
+  defsubr (&Sgowl_set_lightning);
+  defsubr (&Sgowl_set_bokeh);
   defsubr (&Sgowl_leaves_preset);
   defsubr (&Sgowl_set_leaves_preset);
   defsubr (&Sgowl_leaves_intensity);

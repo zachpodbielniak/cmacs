@@ -176,10 +176,53 @@ raindrop -- gas in liquid is a diverging lens, so it minifies rather
 than inverting, and its outer quarter is a mirror.
 `cmacs-gowl-fizz-preset' says how carbonated, from flat to champagne.
 
-`rain', `snow', `leaves', `fizz' and `water' are the five that never
-settle, so a screen showing any of them is a screen that is rendering.
-All five are throttled, by `cmacs-gowl-rain-fps' and its four siblings
-(30 each).
+`storm' is the rain with the lightning switched on: a flash is three to
+five separate return strokes tens of milliseconds apart, the pane and
+every drop on it blaze, and the glints all jump towards wherever the
+bolt was.  The gaps between flashes are exponential around
+`cmacs-gowl-lightning-rate', not a fixed interval, because a storm is a
+Poisson process and a metronome is the thing that gives a fake one away.
+
+`soap' shows it through a soap film.  The colour is not a tint and not a
+palette: it is thin-film interference, computed from the local thickness
+of the film, so the bands are horizontal because gravity drains the film
+downward, thin patches RISE through it because thinner film is lighter,
+and the top loses its colour entirely before the whole thing pops and a
+new one is blown.  `cmacs-gowl-soap-preset' says how thick.
+
+`submerged' shows it from under water.  Water absorbs red about twenty
+times faster than blue, so the blue is not a filter -- it is what
+survives the trip, and turning `cmacs-gowl-submerged-preset' deeper
+walks the picture through the sequence a diver sees.  A caustic net from
+the surface above writhes over everything, shafts come down through it
+and marine snow drifts past.
+
+`embers' shows sparks rising from a fire below the window.  Their colour
+is the Planckian locus at their temperature and their brightness is its
+FOURTH power, so a spark that has cooled by half is sixteen times dimmer
+-- which is why real ones wink out so sharply.  Ash falls back down
+through them and the whole view shimmers in the hot air, which is a
+domain warp rather than a refraction.
+
+`dew' draws an orb web across the window, strung with water.  Each bead
+is the same ball lens a raindrop is, so it turns what is behind it
+upside down; they are evenly spaced because a coated fibre is unstable
+and breaks into regular drops, they are on the capture spiral rather
+than the radials because that is the sticky one, and the loaded thread
+sags between the spokes.
+
+`rain', `storm', `snow', `leaves', `fizz', `soap', `submerged',
+`embers', `dew' and `water' are the ten that never settle, so a screen
+showing any of them is a screen that is rendering.  All of them are
+throttled, by `cmacs-gowl-rain-fps' and its siblings (30 each).
+
+`bokeh' is what `blur' should probably have been: the same one
+output-sized picture of the wallpaper, softened with a DISC instead of a
+Gaussian.  An out-of-focus point of light becomes the shape of the
+aperture -- a hexagon at `cmacs-gowl-bokeh-blades' 6 -- evenly filled
+and hard-edged, which is the whole visible difference between a
+photograph's background and a blurred screenshot.  It costs what the
+blur costs: one pass per tag switch and nothing per frame.
 
 `blur' is the oldest look -- the wallpaper, blurred, behind the window.
 
@@ -187,20 +230,27 @@ All five are throttled, by `cmacs-gowl-rain-fps' and its four siblings
 
 Every backdrop module reads this and only one of them draws, so
 switching is instant.  \[cmacs-gowl-cycle-backdrop] and Super+\" step
-through all eight, in the order rain, snow, leaves, fizz, water, glass,
-blur, nothing -- everything that draws something first, and the three
-weathers leading, so one press from the default is the nearest relative
-of the rain.
+through all fourteen, in the order rain, storm, snow, leaves, fizz,
+submerged, embers, soap, dew, water, glass, bokeh, blur, nothing --
+everything that draws something first, grouped by what it is.  `storm'
+is deliberately second: it IS the rain with the lightning on, so the
+comparison anybody wants is with the press they just came from.
 
 How much of it you see is set by how transparent the window is --
 `cmacs-gowl-focused-alpha' and the client's own background alpha.  An
 opaque window shows no backdrop of any kind."
   :type '(choice (const :tag "Through a rained-on window" rain)
+                 (const :tag "The same, with lightning" storm)
                  (const :tag "Snow that settles and melts" snow)
                  (const :tag "Falling autumn leaves" leaves)
                  (const :tag "A carbonated drink" fizz)
+                 (const :tag "From under water" submerged)
+                 (const :tag "Sparks from a fire below" embers)
+                 (const :tag "An iridescent soap film" soap)
+                 (const :tag "An orb web strung with dew" dew)
                  (const :tag "Through moving water" water)
                  (const :tag "Refracted through the window" glass)
+                 (const :tag "Thrown out of focus by a lens" bokeh)
                  (const :tag "Blurred behind the window" blur)
                  (const :tag "Nothing" none))
   :group 'cmacs-gowl)
@@ -235,6 +285,165 @@ this one is for something you always want excluded.
 
 Takes effect for windows mapped after it is set."
   :type 'string
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-soap-preset 'drifting
+  "How thick the film is when `cmacs-gowl-backdrop' is `soap'.
+
+The thickness is the whole effect: the colour of a pixel is the
+interference of the two reflections off a film that thick, so this
+decides how many bands are stacked up the pane.
+
+  `fresh'     just blown; five or six orders, draining slowly
+  `drifting'  the default
+  `thin'      near the end of its life; two orders and a wide clear cap
+  `oil'       a higher index, no drainage and no pop --- a slick rather
+              than a bubble, which is the same physics on a different
+              liquid
+  `bubble'    thin and lively, popping often"
+  :type '(choice (const fresh) (const drifting) (const thin)
+                 (const oil) (const bubble))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-soap-intensity 1.0
+  "How hard the soap film churns, over and above its preset.
+
+1.0 is the preset as tuned.  Scales how much the rising thin patches
+disturb the bands and how fast they rise --- and deliberately not the
+thickness, which is the colour rather than the amount."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-soap-fps 30
+  "How often the soap film is redrawn, per second.  0 is every frame."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-embers-preset 'embers
+  "What kind of fire burns below the window for the `embers' backdrop.
+
+  `dying'     a few dull red flecks at 1500 K
+  `embers'    a hearth; the default
+  `campfire'  more of them, and more heat haze
+  `forge'     2900 K, dense, almost no ash
+  `wildfire'  most of everything
+
+The temperature is the palette: a spark's colour is the Planckian locus
+at its current temperature and its brightness is the fourth power of it,
+so these differ far more than the numbers suggest."
+  :type '(choice (const dying) (const embers) (const campfire)
+                 (const forge) (const wildfire))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-embers-intensity 1.0
+  "How fierce the fire is, over and above its preset.
+
+1.0 is the preset as tuned.  Scales how many sparks there are and how
+fast they rise --- not their temperature, which is the colour."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-embers-fps 30
+  "How often the embers are redrawn, per second.  0 is every frame."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-submerged-preset 'reef
+  "How deep the water is when `cmacs-gowl-backdrop' is `submerged'.
+
+  `pool'  a metre and a bit of very clear water; strong caustics
+  `reef'  a few metres; the default
+  `lake'  greener and siltier
+  `deep'  nine metres, and almost nothing left but blue
+  `murk'  silty enough that most of it is scattering
+
+Depth is the colour: water absorbs red about twenty times faster than
+blue, so what these really vary is how much of the trip is left."
+  :type '(choice (const pool) (const reef) (const lake)
+                 (const deep) (const murk))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-submerged-intensity 1.0
+  "How lively the water is, over and above its preset.
+
+1.0 is the preset as tuned.  Scales the caustics, the drifting
+particulate and how fast the surface overhead moves --- not the depth,
+which is the colour."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-submerged-fps 30
+  "How often the submerged view is redrawn, per second.  0 is every frame."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-dew-preset 'dawn
+  "What kind of web the `dew' backdrop draws.
+
+  `gossamer'  fine: many radials, a tight spiral, small beads
+  `dawn'      the default
+  `heavy'     big drops and a deep sag
+  `tattered'  fewer spokes, wider turns, sparser
+  `frostweb'  bright thread and tiny beads
+
+The numbers move together because a web with heavy drops on a fine
+spiral is not a web."
+  :type '(choice (const gossamer) (const dawn) (const heavy)
+                 (const tattered) (const frostweb))
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-dew-intensity 1.0
+  "How much air is moving past the web, over and above its preset.
+
+1.0 is the preset as tuned.  For a web the intensity is the wind: how
+far it breathes and how fast.  There is nothing else a web does more or
+less of."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-dew-fps 30
+  "How often the web is redrawn, per second.  0 is every frame."
+  :type 'integer
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-lightning-rate 9.0
+  "Mean seconds between flashes when `cmacs-gowl-backdrop' is `storm'.
+
+A MEAN and not an interval: the gaps are exponential around it, so some
+flashes come almost together and some leave a long wait.  That is what a
+Poisson process gives and what a storm sounds like; a fixed interval is
+half of what gives a fake one away.
+
+Nine seconds is a storm a mile or two off --- close enough to be a
+storm, far enough that a flash is an event rather than a strobe."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-lightning-power 1.0
+  "How bright a flash gets when `cmacs-gowl-backdrop' is `storm'.
+
+1.0 is the tuned strength.  0 leaves the rain and takes the lightning
+away, which is what the plain `rain' backdrop is."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-bokeh-radius 34.0
+  "The defocus disc, in pixels, when `cmacs-gowl-backdrop' is `bokeh'.
+
+Raising this wants more samples with it: a disc of radius R sampled N
+times has its taps about R/sqrt(N/pi) apart, and a highlight smaller
+than that spacing is drawn as a ring rather than a disc.  The sample
+count is `bokeh-samples' in the YAML config."
+  :type 'number
+  :group 'cmacs-gowl)
+
+(defcustom cmacs-gowl-bokeh-blades 6
+  "Aperture blades when `cmacs-gowl-backdrop' is `bokeh'.
+
+3 to 12 makes every out-of-focus highlight in the frame that shape, all
+turned the same way, which is one of the cues that says a lens did it.
+Under 3 is a circle, which is a lens wide open."
+  :type 'integer
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-water-preset 'sea
@@ -3347,10 +3556,31 @@ it does have."
                    gowl-set-leaves-fps      ,cmacs-gowl-leaves-fps)
                   (gowl-set-fizz-preset     ,cmacs-gowl-fizz-preset
                    gowl-set-fizz-intensity  ,cmacs-gowl-fizz-intensity
-                   gowl-set-fizz-fps        ,cmacs-gowl-fizz-fps)))
+                   gowl-set-fizz-fps        ,cmacs-gowl-fizz-fps)
+                  (gowl-set-soap-preset     ,cmacs-gowl-soap-preset
+                   gowl-set-soap-intensity  ,cmacs-gowl-soap-intensity
+                   gowl-set-soap-fps        ,cmacs-gowl-soap-fps)
+                  (gowl-set-embers-preset   ,cmacs-gowl-embers-preset
+                   gowl-set-embers-intensity ,cmacs-gowl-embers-intensity
+                   gowl-set-embers-fps      ,cmacs-gowl-embers-fps)
+                  (gowl-set-submerged-preset ,cmacs-gowl-submerged-preset
+                   gowl-set-submerged-intensity
+                   ,cmacs-gowl-submerged-intensity
+                   gowl-set-submerged-fps   ,cmacs-gowl-submerged-fps)
+                  (gowl-set-dew-preset      ,cmacs-gowl-dew-preset
+                   gowl-set-dew-intensity   ,cmacs-gowl-dew-intensity
+                   gowl-set-dew-fps         ,cmacs-gowl-dew-fps)))
     (cl-loop for (fn value) on spec by #'cddr
              when (fboundp fn)
              do (ignore-errors (funcall fn value))))
+  ;; The storm and the lens, which take two arguments each rather than
+  ;; the preset/intensity/fps shape the table above is written for.
+  (when (fboundp 'gowl-set-lightning)
+    (ignore-errors (gowl-set-lightning cmacs-gowl-lightning-rate
+                                       cmacs-gowl-lightning-power)))
+  (when (fboundp 'gowl-set-bokeh)
+    (ignore-errors (gowl-set-bokeh (float cmacs-gowl-bokeh-radius)
+                                   cmacs-gowl-bokeh-blades)))
   ;; Who gets nothing at all.  Before the choice of backdrop, so a
   ;; window mapping in the same tick as the switch is already excluded.
   (when (fboundp 'gowl-set-no-fx-apps)
@@ -3432,6 +3662,162 @@ same rain on a smaller window."
   (setq cmacs-gowl-rain-intensity
         (gowl-set-rain-intensity intensity))
   (message "Rain intensity: %.2f" cmacs-gowl-rain-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-soap (preset)
+  "Set the film behind windows to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `soap' if it is not there
+already: choosing one and then not seeing it is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Soap film: "
+                  '("fresh" "drifting" "thin" "oil" "bubble")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-soap-preset)))))
+  (unless (fboundp 'gowl-set-soap-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-soap-preset preset)
+  (gowl-set-soap-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'soap)
+    (setq cmacs-gowl-backdrop 'soap)
+    (gowl-set-backdrop 'soap))
+  (message "Soap film: %s (intensity %.2f)" preset
+           cmacs-gowl-soap-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-soap-intensity (intensity)
+  "Set how lively the soap film is, over its preset.
+
+INTENSITY of 1.0 is the preset as tuned; 0.0 is as still as it
+goes.  Scales how hard the thin patches churn and how fast they rise ---
+and nothing that decides what the effect IS rather than how much
+of it there is."
+  (interactive
+   (list (read-number "Intensity (0 to 3): "
+                      cmacs-gowl-soap-intensity)))
+  (unless (fboundp 'gowl-set-soap-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-soap-intensity (max 0.0 (min 3.0 (float intensity))))
+  (gowl-set-soap-intensity cmacs-gowl-soap-intensity)
+  (message "Soap film intensity: %.2f" cmacs-gowl-soap-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-embers (preset)
+  "Set the fire below the window to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `embers' if it is not there
+already: choosing one and then not seeing it is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Fire: "
+                  '("dying" "embers" "campfire" "forge" "wildfire")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-embers-preset)))))
+  (unless (fboundp 'gowl-set-embers-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-embers-preset preset)
+  (gowl-set-embers-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'embers)
+    (setq cmacs-gowl-backdrop 'embers)
+    (gowl-set-backdrop 'embers))
+  (message "Fire: %s (intensity %.2f)" preset
+           cmacs-gowl-embers-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-embers-intensity (intensity)
+  "Set how fierce the fire is, over its preset.
+
+INTENSITY of 1.0 is the preset as tuned; 0.0 is as still as it
+goes.  Scales how many sparks there are and how fast they rise ---
+and nothing that decides what the effect IS rather than how much
+of it there is."
+  (interactive
+   (list (read-number "Intensity (0 to 3): "
+                      cmacs-gowl-embers-intensity)))
+  (unless (fboundp 'gowl-set-embers-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-embers-intensity (max 0.0 (min 3.0 (float intensity))))
+  (gowl-set-embers-intensity cmacs-gowl-embers-intensity)
+  (message "Fire intensity: %.2f" cmacs-gowl-embers-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-submerged (preset)
+  "Set how deep the water is to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `submerged' if it is not there
+already: choosing one and then not seeing it is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Water: "
+                  '("pool" "reef" "lake" "deep" "murk")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-submerged-preset)))))
+  (unless (fboundp 'gowl-set-submerged-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-submerged-preset preset)
+  (gowl-set-submerged-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'submerged)
+    (setq cmacs-gowl-backdrop 'submerged)
+    (gowl-set-backdrop 'submerged))
+  (message "Water: %s (intensity %.2f)" preset
+           cmacs-gowl-submerged-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-submerged-intensity (intensity)
+  "Set how lively the water is, over its preset.
+
+INTENSITY of 1.0 is the preset as tuned; 0.0 is as still as it
+goes.  Scales the caustics, the drifting particulate and how fast
+the surface overhead moves --- and nothing that decides what the
+effect IS rather than how much of it there is."
+  (interactive
+   (list (read-number "Intensity (0 to 3): "
+                      cmacs-gowl-submerged-intensity)))
+  (unless (fboundp 'gowl-set-submerged-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-submerged-intensity (max 0.0 (min 3.0 (float intensity))))
+  (gowl-set-submerged-intensity cmacs-gowl-submerged-intensity)
+  (message "Water intensity: %.2f" cmacs-gowl-submerged-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-dew (preset)
+  "Set the web across the window to PRESET.
+
+Also switches `cmacs-gowl-backdrop' to `dew' if it is not there
+already: choosing one and then not seeing it is nobody's intent."
+  (interactive
+   (list (intern (completing-read
+                  "Web: "
+                  '("gossamer" "dawn" "heavy" "tattered" "frostweb")
+                  nil t nil nil
+                  (symbol-name cmacs-gowl-dew-preset)))))
+  (unless (fboundp 'gowl-set-dew-preset)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-dew-preset preset)
+  (gowl-set-dew-preset preset)
+  (unless (eq cmacs-gowl-backdrop 'dew)
+    (setq cmacs-gowl-backdrop 'dew)
+    (gowl-set-backdrop 'dew))
+  (message "Web: %s (intensity %.2f)" preset
+           cmacs-gowl-dew-intensity))
+
+;;;###autoload
+(defun cmacs-gowl-set-dew-intensity (intensity)
+  "Set how much wind reaches the web, over its preset.
+
+INTENSITY of 1.0 is the preset as tuned; 0.0 is as still as it
+goes.  Scales how far the web breathes and how fast ---
+and nothing that decides what the effect IS rather than how much
+of it there is."
+  (interactive
+   (list (read-number "Intensity (0 to 3): "
+                      cmacs-gowl-dew-intensity)))
+  (unless (fboundp 'gowl-set-dew-intensity)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-dew-intensity (max 0.0 (min 3.0 (float intensity))))
+  (gowl-set-dew-intensity cmacs-gowl-dew-intensity)
+  (message "Web intensity: %.2f" cmacs-gowl-dew-intensity))
 
 ;;;###autoload
 (defun cmacs-gowl-set-fizz (preset)
