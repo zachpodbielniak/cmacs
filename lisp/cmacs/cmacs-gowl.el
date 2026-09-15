@@ -752,6 +752,8 @@ standalone gowl ships with (see
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
   Super+Shift+space   toggle fullscreen
+  Super+Alt+b         this floating window behind the tiling (toggle)
+  Super+Ctrl+Alt+b    every floating window behind the tiling (toggle)
   Super+s             scratchpad: slide it up / roll it away
   Super+Alt+s         scratchpad: send the focused window to it
   Super+Ctrl+s        scratchpad: bring the focused window back
@@ -1142,6 +1144,20 @@ authoritative and keeps re-runs idempotent."
         ;; the whole reason this key changed hands.
         (bind "Super+f" 'toggle-fullscreen nil "Fullscreen this window")
         (bind "Super+Shift+f" 'toggle-float nil "Float / unfloat this window")
+        ;; A floating window sits ON TOP of the tiling -- that is what
+        ;; the float scene layer is.  These put one behind it instead,
+        ;; so the tiles underneath can be worked on without moving or
+        ;; closing it.  The window keeps the keyboard while it is down,
+        ;; which is what makes the same key bring it back.
+        ;;
+        ;; The Ctrl variant does every floating window on the output at
+        ;; once, and decides its direction from them: if any is still on
+        ;; top they all go down, and only once all of them are down does
+        ;; it bring them back.
+        (bind "Super+Alt+b" 'toggle-below nil
+              "This floating window behind the tiling")
+        (bind "Super+Ctrl+Alt+b" 'toggle-below-all nil
+              "All floating windows behind the tiling")
         (bind "Super+m" 'set-layout "monocle" "Monocle layout")
         (bind "Super+Shift+m" 'set-layout "tabbed" "Tabbed layout")
         ;; Super+s is the scratchpad (below).  The scrolling layout is

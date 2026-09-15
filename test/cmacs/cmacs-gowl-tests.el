@@ -880,6 +880,12 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; defaults have bound this since the beginning and the cmacs set
     ;; never did.
     (should (member '("Super+Shift+l" lock nil) captured))
+    ;; A floating window sits on top of the tiling; these put one
+    ;; behind it, and the Ctrl variant does every floating window on
+    ;; the screen at once.  Neither may become a layout key, which is
+    ;; the mistake the f keys made.
+    (should (member '("Super+Alt+b" toggle-below nil) captured))
+    (should (member '("Super+Ctrl+Alt+b" toggle-below-all nil) captured))
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
 

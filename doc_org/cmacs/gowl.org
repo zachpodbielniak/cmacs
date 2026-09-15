@@ -692,6 +692,8 @@ holds focus.
 | =Super+Shift+Return=    | Zoom (promote to master)                |
 | =Super+f=               | Fullscreen the focused window           |
 | =Super+Shift+f=         | Float / unfloat the focused window      |
+| =Super+Alt+b=           | This floating window behind the tiling, or back over it |
+| =Super+Ctrl+Alt+b=      | Every floating window on the screen behind the tiling, or back |
 | =Super+t= / =m=         | Tile / monocle layout                   |
 | =Super+Shift+m=         | Tabbed layout                           |
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
@@ -897,6 +899,22 @@ layout decides --- not at the box it happened to be floating at.
 It is the only key that does it. =Super+space= used to as well, which
 also kept the =windowrules= module's own =Super+space= default shadowed;
 both are gone.
+
+*A floating window can be sent BEHIND the tiling.* Floating means "on
+top" --- that is what the float scene layer is --- and =Super+Alt+b=
+is the way out of it for the focused floating window: it stays floating
+in every other respect, out of the layout and at its own size, but is
+drawn underneath every tiled window, so the tiles can be worked on
+without moving it or closing it. Press it again to bring it back. The
+window KEEPS THE KEYBOARD while it is down and focusing it does not
+raise it, which is what makes the second press work without hunting for
+the window first.
+
+=Super+Ctrl+Alt+b= does every floating window visible on the output at
+once, and takes its direction from them: if any is still on top they all
+go down, and only once every one of them is down does the key bring them
+all back. A tiled window, a fullscreen one and the scratchpad's windows
+are left alone, and taking a window out of floating forgets it.
 
 The float LAYOUT --- every window on the tag floating at once --- has no
 key of its own. It is reached by cycling, like the eight other layouts
