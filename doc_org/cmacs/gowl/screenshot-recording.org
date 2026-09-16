@@ -23,6 +23,23 @@ subprocess, producing MP4 (or any ffmpeg-supported format).
 Both modules are implemented as GObject-based gowl plugins with
 registered GTypes, signals, and GObject Introspection support.
 
+** Layout coordinates and device pixels
+
+A selection is made in *layout* coordinates --- the logical ones the cursor, a client's geometry and =gowl-list-monitors= all report --- and cropped out of the output's framebuffer, which is made of *device pixels*. A 3840x2160 panel at =scale: 2= is 1920x1080 of the first and 3840x2160 of the second, and a monitor that is not first in the layout differs by its origin as well.
+
+The compositor crosses between them, so =gowl-screenshot-region= and the area mode take layout coordinates. They used to do neither conversion, which on an unscaled single screen is indistinguishable from doing both --- the numbers are equal and the origin is zero --- and on a scaled one photographed a rectangle at half the distance in and half the size, silently.
+
+The image returned is in device pixels, so it is *larger than the region asked for* on a scaled output: a 400x300 selection at scale 2 is an 800x600 image. Read the size back:
+
+#+begin_src emacs-lisp
+;; WIDTH and HEIGHT are what came back, not what was asked for.
+(pcase-let ((`(,width ,height ,data)
+             (gowl-screenshot-region 200 150 400 300)))
+  (list width height (length data)))   ; => (800 600 1920000) at scale 2
+#+end_src
+
+The same goes for =gowl-screenshot-all=, whose canvas is device pixels at the highest scale any monitor runs.
+
 * Screenshot
 
 ** Enabling

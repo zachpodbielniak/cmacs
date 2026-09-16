@@ -10794,29 +10794,29 @@ of RGBA pixel data, or nil on failure. */)
 
 DEFUN ("gowl-screenshot-region", Fgowl_screenshot_region,
        Sgowl_screenshot_region, 4, 5, 0,
-       doc: /* Capture a region from a monitor screenshot.
-X, Y, W, H define the crop rectangle.  MONITOR is a GowlMonitor
-object or nil for the focused monitor.
-Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
+       doc: /* Capture a region of the desktop.
+X, Y, W, H define the rectangle in LAYOUT coordinates -- the same ones
+`gowl-list-monitors' and a client's geometry are in.  MONITOR is a
+GowlMonitor object naming the output to read, or nil to use the one the
+rectangle starts on.
+
+Returns a list (WIDTH HEIGHT DATA) of RGBA pixel data.  WIDTH and HEIGHT
+are in DEVICE pixels, so on a scaled output they are larger than W and H:
+a 400x300 region at scale 2 comes back 800x600.  Use the returned values
+rather than the ones passed in. */)
   (Lisp_Object x, Lisp_Object y, Lisp_Object w, Lisp_Object h,
    Lisp_Object monitor)
 {
   GError *err = NULL;
   GBytes *bytes;
-  gint sw, sh;
+  gint out_w = 0, out_h = 0;
   const gchar *name = NULL;
-  EMACS_INT rx, ry, rw, rh;
 
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNUM (x);
   CHECK_FIXNUM (y);
   CHECK_FIXNUM (w);
   CHECK_FIXNUM (h);
-
-  rx = XFIXNUM (x);
-  ry = XFIXNUM (y);
-  rw = XFIXNUM (w);
-  rh = XFIXNUM (h);
 
   if (!NILP (monitor))
     {
@@ -10826,8 +10826,16 @@ Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
         name = output->name;
     }
 
-  bytes = gowl_compositor_screenshot_output (cmacs_gowl_compositor,
-                                              name, &sw, &sh, &err);
+  /* The crop used to be open-coded here, against an image in device
+     pixels using coordinates in layout units -- so on a scaled output
+     it returned a picture of somewhere else.  gowl does the conversion
+     now; there is no second copy of that arithmetic to get wrong.  */
+  bytes = gowl_compositor_screenshot_region (cmacs_gowl_compositor, name,
+                                             (gint) XFIXNUM (x),
+                                             (gint) XFIXNUM (y),
+                                             (gint) XFIXNUM (w),
+                                             (gint) XFIXNUM (h),
+                                             &out_w, &out_h, &err);
   if (bytes == NULL)
     {
       if (err != NULL)
@@ -10839,38 +10847,15 @@ Returns a list (WIDTH HEIGHT DATA) with the cropped RGBA pixel data. */)
       return Qnil;
     }
 
-  /* Crop the region */
   {
     gsize size;
     const guint8 *src = g_bytes_get_data (bytes, &size);
-    EMACS_INT row, src_stride, dst_stride;
-    Lisp_Object str;
-    unsigned char *dst;
+    Lisp_Object str = make_uninit_string (size);
 
-    /* Clamp to screenshot bounds */
-    if (rx < 0) rx = 0;
-    if (ry < 0) ry = 0;
-    if (rx + rw > sw) rw = sw - rx;
-    if (ry + rh > sh) rh = ry - ry;
-    if (rw <= 0 || rh <= 0)
-      {
-        g_bytes_unref (bytes);
-        return Qnil;
-      }
-
-    src_stride = sw * 4;
-    dst_stride = rw * 4;
-    str = make_uninit_string (rh * dst_stride);
-    dst = SDATA (str);
+    memcpy (SDATA (str), src, size);
     STRING_SET_UNIBYTE (str);
-
-    for (row = 0; row < rh; row++)
-      memcpy (dst + row * dst_stride,
-              src + (ry + row) * src_stride + rx * 4,
-              dst_stride);
-
     g_bytes_unref (bytes);
-    return list3 (make_fixnum (rw), make_fixnum (rh), str);
+    return list3 (make_fixnum (out_w), make_fixnum (out_h), str);
   }
 }
 
