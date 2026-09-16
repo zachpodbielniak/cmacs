@@ -3844,6 +3844,83 @@ select the scrolling layout, which is now reached with =Super+<= /
 =Super+>= or =Super+Tab=. The module itself is documented in gowl's
 =docs/modules.org=, under /Scratchpad/.
 
+** The menu
+:PROPERTIES:
+:CUSTOM_ID: gowl-menu
+:END:
+
+One list of everything the session can be told to do --- power, audio,
+network, layouts, backdrops, the applications on the machine --- driven
+by typing. It is gowl's =menu= module, which CMacs loads by default;
+standalone gowl opts in with =modules.menu.enabled=.
+
+| Key                 | Action                                          |
+|---------------------+-------------------------------------------------|
+| =Super+space=       | The menu, drawn on screen by the compositor     |
+| =Super+Alt+space=   | The same, opened at Applications                |
+| =Super+Escape=      | The same tree, as a =completing-read=           |
+
+*Two front ends over one tree*, and that is the point of having both.
+The card is drawn by the compositor, so it sits over every window ---
+which is what you want when the thing you are about to change *is* a
+window. The =completing-read= runs inside Emacs, so it works in a
+terminal frame, over =emacsclient -nw= from another machine, and under
+=--lrg=, where nothing the compositor draws is reachable; and it composes
+with whatever completion framework you already have. Both read the same
+=menu.yaml=, so neither can drift from the other.
+
+Once the card is up: type to search the whole tree, arrows and Page
+Up/Down to move, Return or Right to choose, Backspace or Left to go back,
+Escape to clear the search and then to close. Hover selects, left click
+chooses, right click goes back, a click outside closes.
+
+=C-j= and =C-k= move down and up, =C-l= goes into a row and =C-h= backs
+out of one --- so a hand never leaves the home row. They carry a
+modifier because plain =h j k l= go into the search; left and right move
+across LEVELS, since what is being navigated is a tree.
+
+*The search covers your applications too*, with their real icons: typing
+=fire= finds Firefox without your knowing it lives under Apps, which is
+what makes this a launcher as well as a control surface. A menu row you
+declared always outranks an application that matched as well.
+
+*** Adding to it
+
+The tree is =~/.config/gowl/menu.yaml=, overlaid onto the shipped one by
+id --- so three lines add a row, and repeating a shipped id changes only
+the fields you name. See [[file:../../deps/gowl/docs/configuration.org][gowl's configuration guide]] for the
+format. A row can carry =elisp:=, which is how a menu entry runs an
+Emacs command:
+
+#+begin_src yaml
+menu:
+  - id: notes
+    icon: ""
+    label: Today's note
+    elisp: "(cmacs-notes-today)"
+#+end_src
+
+Such a row is guarded with ={embedder: true}= in the shipped tree so it
+appears only where it would work; your own additions need not bother if
+you only ever run CMacs.
+
+*** From Lisp
+
+| Function                     | Does                                        |
+|------------------------------+---------------------------------------------|
+| =cmacs-gowl-menu=            | The tree, as a =completing-read=            |
+| =cmacs-gowl-menu-search=     | Search the whole tree at once               |
+| =cmacs-gowl-menu-on-screen=  | Open the compositor's card                  |
+| =cmacs-gowl-menu-reload=     | Re-read =menu.yaml=                         |
+| =gowl-menu-items=            | The rows under a route, as plists           |
+| =gowl-menu-activate=         | Choose a row by route                       |
+| =gowl-menu-title=            | The header text for a route                 |
+| =gowl-menu-resolve=          | Turn an alias into a route                  |
+
+=cmacs-gowl-menu-tree= is still a defcustom and still the tree that runs
+when gowl is not --- a =--lrg= session, or a plain GUI Emacs. Set
+=cmacs-gowl-menu-prefer-compositor= to nil to use it even under gowl.
+
 ** Available Modules
 
 | Module          | Description                                    | Default |
@@ -3863,6 +3940,7 @@ select the scrolling layout, which is now reached with =Super+<= /
 | screenshot      | Screen capture with area selection              | off     |
 | recording       | Screen recording via ffmpeg                    | off     |
 | roundcorners    | Rounded corner window borders via cairo         | off     |
+| menu            | One list of what the session can do (Super+space) | on      |
 
 See [[file:gowl/screenshot-recording.org][Screenshot & Recording]] for
 full documentation on the screenshot and recording modules, including

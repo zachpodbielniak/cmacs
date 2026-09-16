@@ -1723,7 +1723,16 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                            /* The clipboard history store.  The bar
                               widget and cmacs both read what it keeps;
                               without it neither has anything to show. */
-                           "clipboard" };
+                           "clipboard",
+                           /* The menu: one list of everything the
+                              session can be told to do, on Super+Space.
+                              Standalone gowl opts in through
+                              modules.menu.enabled; here it is the
+                              control surface a session without one has
+                              nowhere to put -- no power menu, no
+                              network picker, no way to find the layout
+                              whose name you have forgotten. */
+                           "menu" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
@@ -7257,6 +7266,234 @@ ID comes from `gowl-tray-menu'.  */)
   return Qt;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * THE MENU
+ *
+ * gowl keeps one tree of everything the session can be told to do, read
+ * from menu.yaml, and draws it as a card with modules/menu.  These are
+ * the SAME tree from Lisp: `cmacs-gowl-menu' renders it with
+ * completing-read, which is the version that works in a terminal frame,
+ * over emacsclient from another machine and under --lrg, where a card
+ * drawn by the compositor is not reachable.
+ *
+ * Two front ends over one model is the only arrangement in which the two
+ * cannot disagree about what the menu contains.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+DEFUN ("gowl-menu-available-p", Fgowl_menu_available_p,
+       Sgowl_menu_available_p, 0, 0, 0,
+       doc: /* Return non-nil when gowl has a menu tree loaded.
+
+Nil means menu.yaml was not found, which is a machine gowl was not
+installed on rather than an error: the Lisp menu falls back to its own
+tree.  */)
+  (void)
+{
+  return gowl_menu_n_entries (gowl_menu_get_default ()) > 0 ? Qt : Qnil;
+}
+
+DEFUN ("gowl-menu-source", Fgowl_menu_source, Sgowl_menu_source, 0, 0, 0,
+       doc: /* Return the file or files the menu tree was read from.  */)
+  (void)
+{
+  const gchar *source = gowl_menu_get_source (gowl_menu_get_default ());
+
+  return source != NULL ? build_string (source) : Qnil;
+}
+
+DEFUN ("gowl-menu-reload", Fgowl_menu_reload, Sgowl_menu_reload, 0, 0, 0,
+       doc: /* Re-read menu.yaml and the user's overlay.
+
+Returns the number of entries now in the tree, or signals when neither
+file could be read.  */)
+  (void)
+{
+  GError *error = NULL;
+
+  if (!gowl_menu_load (gowl_menu_get_default (), &error))
+    {
+      Lisp_Object message
+        = build_string (error != NULL ? error->message : "no menu found");
+
+      g_clear_error (&error);
+      xsignal1 (Qerror, message);
+    }
+  return make_fixnum (gowl_menu_n_entries (gowl_menu_get_default ()));
+}
+
+DEFUN ("gowl-menu-resolve", Fgowl_menu_resolve, Sgowl_menu_resolve, 1, 1, 0,
+       doc: /* Return the route ROUTE names.
+
+Accepts an alias, any case, and underscores for dashes.  An unknown
+string comes back unchanged, so a caller can report what was asked for
+rather than silently opening the top of the menu.  */)
+  (Lisp_Object route)
+{
+  gchar      *resolved;
+  Lisp_Object result;
+
+  CHECK_STRING (route);
+  resolved = gowl_menu_resolve (gowl_menu_get_default (), SSDATA (route));
+  result = build_string (resolved != NULL ? resolved : "root");
+  g_free (resolved);
+  return result;
+}
+
+DEFUN ("gowl-menu-title", Fgowl_menu_title, Sgowl_menu_title, 0, 1, 0,
+       doc: /* Return the header text for ROUTE, or for the top of the menu.  */)
+  (Lisp_Object route)
+{
+  gchar      *title;
+  Lisp_Object result;
+
+  title = gowl_menu_get_title (gowl_menu_get_default (),
+                               NILP (route) ? NULL : SSDATA (route));
+  result = build_string (title != NULL ? title : "Menu");
+  g_free (title);
+  return result;
+}
+
+DEFUN ("gowl-menu-items", Fgowl_menu_items, Sgowl_menu_items, 0, 2, 0,
+       doc: /* Return the rows under ROUTE, or the top of the menu.
+
+With SEARCH, return every matching row in the whole tree instead, best
+first --- the same global search the on-screen card does, so typing
+finds the same thing in both.
+
+Each row is a plist:
+
+  :route     what `gowl-menu-activate' takes to choose this row
+  :label     what the row says
+  :icon      a glyph, or nil
+  :icon-name a themed icon name, for a row that has a real icon --- an
+             application's, from its desktop entry.  Not pixels: turning
+             one into an image needs an icon theme, which is what the
+             on-screen card does and a completing-read cannot
+  :detail    a second line: a description, or the path when searching
+  :value     a right-hand reading, such as a keybinding
+  :submenu   non-nil when choosing it opens another list
+  :runnable  non-nil when choosing it runs something
+  :checked   non-nil when it is the current choice
+  :disabled  non-nil when it is listed but cannot be chosen
+
+Guards are already evaluated and providers already run, so this is what
+would be on screen right now.  */)
+  (Lisp_Object route, Lisp_Object search)
+{
+  GowlCompositor *comp = cmacs_gowl_compositor;
+  GPtrArray      *rows;
+  Lisp_Object     result = Qnil;
+  guint           i;
+
+  if (!NILP (search))
+    {
+      CHECK_STRING (search);
+      rows = gowl_menu_search (gowl_menu_get_default (), comp,
+                               SSDATA (search));
+    }
+  else
+    {
+      rows = gowl_menu_list (gowl_menu_get_default (), comp,
+                             NILP (route) ? NULL : SSDATA (route));
+    }
+  if (rows == NULL)
+    return Qnil;
+
+  for (i = rows->len; i > 0; i--)
+    {
+      const GowlMenuRow *row = g_ptr_array_index (rows, i - 1);
+      Lisp_Object plist = Qnil;
+
+      plist = Fcons (row->disabled ? Qt : Qnil, plist);
+      plist = Fcons (intern_c_string (":disabled"), plist);
+      plist = Fcons (row->checked ? Qt : Qnil, plist);
+      plist = Fcons (intern_c_string (":checked"), plist);
+      plist = Fcons (row->runnable ? Qt : Qnil, plist);
+      plist = Fcons (intern_c_string (":runnable"), plist);
+      plist = Fcons (row->submenu ? Qt : Qnil, plist);
+      plist = Fcons (intern_c_string (":submenu"), plist);
+      plist = Fcons (row->value != NULL ? build_string (row->value) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":value"), plist);
+      plist = Fcons (row->detail != NULL ? build_string (row->detail) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":detail"), plist);
+      plist = Fcons (row->icon_name != NULL ? build_string (row->icon_name)
+                                            : Qnil, plist);
+      plist = Fcons (intern_c_string (":icon-name"), plist);
+      plist = Fcons (row->icon != NULL ? build_string (row->icon) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":icon"), plist);
+      plist = Fcons (row->label != NULL ? build_string (row->label) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":label"), plist);
+      plist = Fcons (row->route != NULL ? build_string (row->route) : Qnil,
+                     plist);
+      plist = Fcons (intern_c_string (":route"), plist);
+
+      result = Fcons (plist, result);
+    }
+  g_ptr_array_unref (rows);
+  return result;
+}
+
+DEFUN ("gowl-menu-activate", Fgowl_menu_activate, Sgowl_menu_activate, 1, 1, 0,
+       doc: /* Choose the menu row ROUTE names.
+
+Returns what happened:
+
+  a string   a submenu was opened; the string is the route to list next
+  `ran'      something ran and a menu should close
+  `stay'     something ran and a menu should stay up, which is what a
+             volume row wants
+  nil        the route named nothing that could be acted on
+
+The action runs through the compositor's keybind dispatcher, so a menu
+row does exactly what a key bound the same way would.  */)
+  (Lisp_Object route)
+{
+  GowlCompositor *comp = cmacs_gowl_compositor;
+  gchar          *next = NULL;
+  GowlMenuResult  result;
+  Lisp_Object     answer = Qnil;
+
+  CHECK_STRING (route);
+  result = gowl_menu_activate (gowl_menu_get_default (), comp,
+                               SSDATA (route), &next);
+  switch (result)
+    {
+    case GOWL_MENU_RESULT_OPEN:
+      answer = build_string (next != NULL ? next : "root");
+      break;
+    case GOWL_MENU_RESULT_RAN:
+      answer = intern_c_string ("ran");
+      break;
+    case GOWL_MENU_RESULT_RAN_OPEN:
+      answer = intern_c_string ("stay");
+      break;
+    case GOWL_MENU_RESULT_NONE:
+    default:
+      answer = Qnil;
+      break;
+    }
+  g_free (next);
+  return answer;
+}
+
+DEFUN ("gowl-menu-parent", Fgowl_menu_parent, Sgowl_menu_parent, 1, 1, 0,
+       doc: /* Return the route one level above ROUTE, or nil at the top.  */)
+  (Lisp_Object route)
+{
+  gchar      *up;
+  Lisp_Object result;
+
+  CHECK_STRING (route);
+  up = gowl_menu_get_parent (gowl_menu_get_default (), SSDATA (route));
+  result = up != NULL ? build_string (up) : Qnil;
+  g_free (up);
+  return result;
+}
+
 DEFUN ("gowl-crt-p", Fgowl_crt_p, Sgowl_crt_p, 0, 0, 0,
        doc: /* Return non-nil while the whole screen is on a cathode ray tube.
 
@@ -12645,6 +12882,14 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_tray_menu_refresh);
   defsubr (&Sgowl_tray_menu);
   defsubr (&Sgowl_tray_menu_click);
+  defsubr (&Sgowl_menu_available_p);
+  defsubr (&Sgowl_menu_source);
+  defsubr (&Sgowl_menu_reload);
+  defsubr (&Sgowl_menu_resolve);
+  defsubr (&Sgowl_menu_title);
+  defsubr (&Sgowl_menu_items);
+  defsubr (&Sgowl_menu_activate);
+  defsubr (&Sgowl_menu_parent);
   defsubr (&Sgowl_crt_p);
   defsubr (&Sgowl_set_crt);
   defsubr (&Sgowl_set_crt_preset);

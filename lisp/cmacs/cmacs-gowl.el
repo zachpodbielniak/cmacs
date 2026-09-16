@@ -1107,6 +1107,8 @@ standalone gowl ships with (see
   Super+Shift+r       reload config
   Super+/             show the keybind cheatsheet
   Super+Escape        control surface (power, audio, network, ...)
+  Super+space         the same menu, drawn on screen by the compositor
+  Super+Alt+space     that menu, opened at Applications
 
 Every bind is registered with a description, which is what
 `cmacs-gowl-describe-keybinds' renders.
@@ -1623,7 +1625,19 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+slash" 'custom "(cmacs-gowl-describe-keybinds)"
               "Show this cheatsheet")
         (bind "Super+Escape" 'custom "(cmacs-gowl-menu)"
-              "Control surface (power, audio, network, ...)"))
+              "Control surface (power, audio, network, ...)")
+        ;; The same menu, drawn by the compositor instead of by a
+        ;; completing-read.  Two keys for one tree on purpose: the card
+        ;; is over every window and is what you want when the thing you
+        ;; are about to change is a window, and the completing-read is
+        ;; what works in a terminal frame, over emacsclient from another
+        ;; machine and under --lrg, where nothing the compositor draws is
+        ;; reachable.  Reached by NAME through ipc_command, so it does
+        ;; nothing at all when the module is not loaded.
+        (bind "Super+space" 'ipc-command "menu"
+              "Menu (on screen)")
+        (bind "Super+Alt+space" 'ipc-command "menu-open apps"
+              "Menu: applications"))
       ;; Media, volume and brightness keys.  Bound to Elisp via gowl's
       ;; `custom' action rather than spawned, so each one can show the
       ;; resulting level.  Opt out with `cmacs-gowl-media-keybindings'.

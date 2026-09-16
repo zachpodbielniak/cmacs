@@ -11,18 +11,21 @@
 ;; `omarchy-menu.jsonc' -- a tree of entries with bash guards, rendered
 ;; by QML.
 ;;
-;; The tree is the good idea; QML is the wrong half to copy here.  A
-;; menu is a list of choices, and Emacs has had the best list-of-choices
-;; widget on the machine for forty years.  So this is the same
-;; data-driven tree, rendered by `completing-read', with its guards
-;; evaluated in-process as Elisp rather than forked as one bash process
-;; per open.
+;; The tree is the good idea.  gowl now keeps one: `menu.yaml', read by
+;; src/menu and drawn as a card by modules/menu, with its guards
+;; answered inside the compositor rather than forked.  THIS FILE IS THE
+;; OTHER FRONT END OVER THAT SAME TREE -- `completing-read' instead of a
+;; card -- and that is the half a compositor cannot do: the menu then
+;; works in a terminal frame, over `emacsclient -nw' from another
+;; machine, and under `emacs --lrg', where nothing the compositor draws
+;; is reachable.  It also composes with whatever completion framework is
+;; already configured, which no compositor-drawn list ever will.
 ;;
-;; What that buys beyond parity: the menu works identically in a GUI
-;; frame, in a terminal, over `emacsclient -nw' from another machine,
-;; and under `emacs --lrg'; it composes with whatever completion
-;; framework is already configured; and adding an entry is a line in
-;; `init.el' rather than a QML plugin.
+;; Two front ends, one model, so the two cannot disagree about what the
+;; menu contains.  `cmacs-gowl-menu-tree' below is still here and still
+;; a defcustom: it is what runs when gowl is not (a --lrg session, a
+;; plain GUI Emacs), and anything added to it is added to this front end
+;; only.  To add a row to BOTH, put it in ~/.config/gowl/menu.yaml.
 ;;
 ;; Bound to Super+Escape by default, through gowl's `custom' keybind
 ;; action -- so the compositor key runs Elisp instead of spawning a
@@ -461,6 +464,126 @@ how a `Float layout' entry that silently did tile survived."
     (special-mode)
     (display-buffer (current-buffer))))
 
+;;; The compositor's tree
+
+(declare-function gowl-menu-available-p "cmacs-gowl" ())
+(declare-function gowl-menu-items "cmacs-gowl" (&optional route search))
+(declare-function gowl-menu-activate "cmacs-gowl" (route))
+(declare-function gowl-menu-title "cmacs-gowl" (&optional route))
+(declare-function gowl-menu-parent "cmacs-gowl" (route))
+(declare-function gowl-menu-reload "cmacs-gowl" ())
+(declare-function gowl-menu-source "cmacs-gowl" ())
+
+(defcustom cmacs-gowl-menu-prefer-compositor t
+  "When non-nil, `cmacs-gowl-menu' shows the compositor's menu tree.
+
+That is the tree in `menu.yaml' -- the same rows the on-screen card
+shows on Super+Space, with the same guards and the same actions, so the
+two surfaces agree about what the session can do.
+
+Set this to nil to use `cmacs-gowl-menu-tree' even under gowl.  Either
+way the Elisp tree is what runs when gowl is not: a `--lrg' session or a
+plain GUI Emacs has no compositor to ask."
+  :type 'boolean
+  :group 'cmacs-gowl-menu)
+
+(defun cmacs-gowl-menu--compositor-p ()
+  "Return non-nil when the compositor has a menu tree to show."
+  (and cmacs-gowl-menu-prefer-compositor
+       (fboundp 'gowl-menu-available-p)
+       (ignore-errors (gowl-menu-available-p))))
+
+(defun cmacs-gowl-menu--annotate (row)
+  "Return the completion string for ROW, a plist from `gowl-menu-items'."
+  (let ((label (or (plist-get row :label) "?")))
+    (concat label
+            ;; The same two marks the card draws, for the same reasons:
+            ;; a tick says "this is what it is set to" and the chevron
+            ;; says pressing this opens another list rather than doing
+            ;; something.
+            (cond ((plist-get row :checked) " ✓")
+                  ((plist-get row :submenu) " ›")
+                  (t "")))))
+
+(defun cmacs-gowl-menu--read (route)
+  "Present the compositor's rows under ROUTE and act on the choice.
+Recurses into a submenu, so backing out of one level is
+\[keyboard-quit] and starting again --- which is what
+`completing-read' gives and a card has to implement."
+  (let* ((rows (cl-remove-if (lambda (r) (plist-get r :disabled))
+                             (gowl-menu-items route)))
+         (title (gowl-menu-title route)))
+    (unless rows
+      (user-error "Nothing available in %s" title))
+    (let* ((choices (mapcar (lambda (r)
+                              (cons (cmacs-gowl-menu--annotate r) r))
+                            rows))
+           (picked (completing-read (concat title ": ")
+                                    (mapcar #'car choices) nil t))
+           (row (cdr (assoc picked choices)))
+           (result (and row (gowl-menu-activate (plist-get row :route)))))
+      (cond
+       ;; A route back: the compositor opened a submenu and told us
+       ;; which one, rather than us deriving it from the row.
+       ((stringp result) (cmacs-gowl-menu--read result))
+       ;; `stay' is a row meant to be pressed again -- volume, a step
+       ;; through the backdrops -- so offer the same list once more.
+       ((eq result 'stay) (cmacs-gowl-menu--read route))
+       ((eq result 'ran) nil)
+       (t (user-error "Menu entry %s does nothing"
+                      (or (plist-get row :label) "?")))))))
+
+;;;###autoload
+(defun cmacs-gowl-menu-search (query)
+  "Search the compositor's whole menu tree for QUERY and run a match.
+
+The same global search the card does when you type into it: the word
+you know finds the row without your knowing which submenu it is in."
+  (interactive "sMenu search: ")
+  (unless (cmacs-gowl-menu--compositor-p)
+    (user-error "The compositor has no menu tree"))
+  (let* ((rows (cl-remove-if (lambda (r) (plist-get r :disabled))
+                             (gowl-menu-items nil query))))
+    (unless rows
+      (user-error "Nothing matches %s" query))
+    (let* ((choices (mapcar (lambda (r)
+                              (cons (concat (cmacs-gowl-menu--annotate r)
+                                            (let ((d (plist-get r :detail)))
+                                              (if d (format "  (%s)" d) "")))
+                                    r))
+                            rows))
+           (picked (completing-read (format "Menu (%s): " query)
+                                    (mapcar #'car choices) nil t))
+           (row (cdr (assoc picked choices)))
+           (result (and row (gowl-menu-activate (plist-get row :route)))))
+      (when (stringp result)
+        (cmacs-gowl-menu--read result)))))
+
+;;;###autoload
+(defun cmacs-gowl-menu-on-screen (&optional route)
+  "Open the compositor's own menu card, at ROUTE.
+
+The card is modules/menu drawing on the compositor: it appears over
+every window rather than inside a frame, which is what you want when
+the thing you are about to change is a window.  Interactively with a
+prefix argument, prompt for the route."
+  (interactive
+   (list (when current-prefix-arg
+           (read-string "Route: " nil nil "root"))))
+  (unless (fboundp 'gowl-run-command)
+    (user-error "Gowl is not available"))
+  (gowl-run-command (if route (format "menu-open %s" route) "menu")))
+
+;;;###autoload
+(defun cmacs-gowl-menu-reload ()
+  "Re-read the compositor's menu.yaml, and say what it read."
+  (interactive)
+  (unless (fboundp 'gowl-menu-reload)
+    (user-error "Gowl is not available"))
+  (let ((n (gowl-menu-reload)))
+    (message "Menu: %d entries from %s" n
+             (or (gowl-menu-source) "nowhere"))))
+
 ;;; Rendering
 
 (defun cmacs-gowl-menu--visible-p (entry)
@@ -511,10 +634,18 @@ A tree of power, audio, network, bluetooth, display and compositor
 actions, rendered with `completing-read' so it works in a GUI frame, a
 terminal, over `emacsclient -nw', and under `emacs --lrg' alike.
 
-Entries come from `cmacs-gowl-menu-tree', which is a defcustom: adding
-one is a line in `init.el'."
+Under gowl the entries are the COMPOSITOR\='s: the same `menu.yaml' the
+on-screen card shows, so this and Super+Space are two views of one
+thing.  Without gowl -- or with `cmacs-gowl-menu-prefer-compositor'
+nil -- they come from `cmacs-gowl-menu-tree', which is a defcustom:
+adding one is a line in `init.el'.
+
+`cmacs-gowl-menu-on-screen' opens the card instead, and
+`cmacs-gowl-menu-search' searches the whole tree at once."
   (interactive)
-  (cmacs-gowl-menu--level cmacs-gowl-menu-tree "Menu"))
+  (if (cmacs-gowl-menu--compositor-p)
+      (cmacs-gowl-menu--read nil)
+    (cmacs-gowl-menu--level cmacs-gowl-menu-tree "Menu")))
 
 (provide 'cmacs-gowl-menu)
 

@@ -2109,3 +2109,106 @@ tray of its own."
         (should (= (length items) 1))
         (should (equal (car (car items)) "mine"))
         (should-not (plist-get (cdr (car items)) :gowl))))))
+
+;;; The menu, from Lisp
+
+;; Declared so a `let' below binds the DYNAMIC variable: the defcustom
+;; lives in cmacs-gowl-menu, which is not loaded when this file is
+;; compiled, and a lexical binding of it would leave the function under
+;; test reading the global value.
+(defvar cmacs-gowl-menu-prefer-compositor)
+
+(ert-deftest cmacs-gowl-menu-reads-the-compositors-tree ()
+  "`cmacs-gowl-menu' shows gowl's rows, not its own tree, under gowl.
+
+The whole point of the C model is that the card on Super+space and this
+completing-read are two views of one list.  A front end that quietly
+fell back to `cmacs-gowl-menu-tree' would look identical and disagree
+about everything."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-menu)
+  (require 'cl-lib)
+  (let ((asked nil)
+        (activated nil))
+    (cl-letf (((symbol-function 'gowl-menu-available-p) (lambda (&rest _) t))
+              ((symbol-function 'gowl-menu-title)
+               (lambda (&rest _) "Menu"))
+              ((symbol-function 'gowl-menu-items)
+               (lambda (&rest _)
+                 (list (list :route "system" :label "System" :submenu t)
+                       (list :route "style.crt" :label "Tube" :checked t)
+                       (list :route "style.no" :label "Nope" :disabled t))))
+              ((symbol-function 'gowl-menu-activate)
+               (lambda (route) (setq activated route) 'ran))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _)
+                 (setq asked choices)
+                 (nth 1 choices))))
+      (cmacs-gowl-menu)
+      ;; A disabled row is not offered at all: a choice that does
+      ;; nothing when picked reads as a broken menu.
+      (should (= (length asked) 2))
+      ;; The same two marks the card draws.
+      (should (equal (nth 0 asked) "System ›"))
+      (should (equal (nth 1 asked) "Tube ✓"))
+      (should (equal activated "style.crt")))))
+
+(ert-deftest cmacs-gowl-menu-follows-a-submenu-by-route ()
+  "Choosing a submenu lists what the compositor says to list next.
+
+The route comes back from `gowl-menu-activate' rather than being
+derived from the row, so a link that points somewhere else is followed
+rather than re-opened where it sits."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-menu)
+  (require 'cl-lib)
+  (let ((listed nil)
+        (step 0))
+    (cl-letf (((symbol-function 'gowl-menu-available-p) (lambda (&rest _) t))
+              ((symbol-function 'gowl-menu-title) (lambda (&rest _) "Menu"))
+              ((symbol-function 'gowl-menu-items)
+               (lambda (&optional route &rest _)
+                 (push route listed)
+                 (list (list :route "shortcut" :label "Go" :submenu t))))
+              ((symbol-function 'gowl-menu-activate)
+               (lambda (_route)
+                 (setq step (1+ step))
+                 ;; First press opens `style'; the second runs.
+                 (if (= step 1) "style" 'ran)))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _) (car choices))))
+      (cmacs-gowl-menu)
+      (should (equal (nreverse listed) '(nil "style"))))))
+
+(ert-deftest cmacs-gowl-menu-falls-back-without-gowl ()
+  "Without a compositor tree the Elisp tree is still the menu.
+
+A --lrg session and a plain GUI Emacs have no compositor to ask, and
+the control surface must not simply vanish there."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-menu)
+  (require 'cl-lib)
+  (let ((prompted nil))
+    (cl-letf (((symbol-function 'gowl-menu-available-p) (lambda (&rest _) nil))
+              ((symbol-function 'completing-read)
+               (lambda (prompt _choices &rest _)
+                 (setq prompted prompt)
+                 ;; An error rather than a `quit': ERT counts a quit as
+                 ;; neither a pass nor a failure, so a test that ends
+                 ;; that way asserts nothing and says nothing about it.
+                 (error "stop here"))))
+      (should-error (cmacs-gowl-menu))
+      ;; The Elisp renderer prompts with a breadcrumb; the gowl one
+      ;; prompts with the compositor's title.
+      (should (equal prompted "Menu: ")))))
+
+(ert-deftest cmacs-gowl-menu-prefer-compositor-can-be-turned-off ()
+  "`cmacs-gowl-menu-prefer-compositor' nil uses the Elisp tree under gowl."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl-menu)
+  (require 'cl-lib)
+  (cl-letf (((symbol-function 'gowl-menu-available-p) (lambda (&rest _) t)))
+    (let ((cmacs-gowl-menu-prefer-compositor nil))
+      (should-not (cmacs-gowl-menu--compositor-p)))
+    (let ((cmacs-gowl-menu-prefer-compositor t))
+      (should (cmacs-gowl-menu--compositor-p)))))
