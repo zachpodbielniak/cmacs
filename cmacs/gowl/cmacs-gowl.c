@@ -8289,7 +8289,14 @@ DEFUN ("gowl-recording-active-p", Fgowl_recording_active_p,
 DEFUN ("gowl-config-get", Fgowl_config_get, Sgowl_config_get, 1, 1, 0,
        doc: /* Get a config property by name.
 Supported: border-width, terminal, menu, mfact, nmaster, tag-count,
-           repeat-rate, repeat-delay, sloppyfocus, log-level. */)
+           repeat-rate, repeat-delay, sloppyfocus, log-level, tray.
+
+`tray' is whether this session's system-tray register is turned ON,
+which is not `gowl-tray-serving-p' --- that says whether the bus has
+already handed over `org.kde.StatusNotifierWatcher', and the request
+for it is answered on a thread some time after the compositor starts.
+Anything deciding whether gowl is the tray for this session wants this
+one; anything reporting what is true right now wants the other.  */)
   (Lisp_Object property)
 {
   GowlConfig *config;
@@ -8332,6 +8339,8 @@ Supported: border-width, terminal, menu, mfact, nmaster, tag-count,
   if (g_strcmp0 (prop, "sloppyfocus") == 0)
     return unbind_to (count,
                       gowl_config_get_sloppyfocus (config) ? Qt : Qnil);
+  if (g_strcmp0 (prop, "tray") == 0)
+    return unbind_to (count, gowl_config_get_tray (config) ? Qt : Qnil);
   if (g_strcmp0 (prop, "log-level") == 0)
     return unbind_to (count,
                       build_string (gowl_config_get_log_level (config) ? : ""));

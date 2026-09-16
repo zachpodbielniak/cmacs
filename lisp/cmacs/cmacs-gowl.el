@@ -471,33 +471,47 @@ This makes gowl the StatusNotifierItem WATCHER and HOST: it owns
 somebody is willing to display them -- which several applications check
 before publishing an icon at all.
 
-It never takes the name from another tray and never queues for it, so a
-desktop that already has one (a GNOME session with the AppIndicator
-extension) keeps it and gowl stands down.  `gowl-tray-serving-p' says
-which happened.
+It never TAKES the name from another tray, so a desktop that already has
+one (a GNOME session with the AppIndicator extension) keeps it and gowl
+stands down.  It does queue, so logging out and back in --- a race with
+the outgoing session, which still holds the name --- costs a tray for
+half a second rather than for the rest of the session.
+`gowl-tray-serving-p' says which happened, and is asynchronous: it is
+still nil for a moment after this is turned on.
 
-Owning the register is not the same as drawing it: see
-`cmacs-gowl-tray-widget' for where the icons go."
+Owning the register is not the same as drawing it, though it no longer
+takes any configuration either: gowl ships the `tray' widget in the
+middle of the bottom bar.  See `cmacs-gowl-tray-widget' to move it."
   :type 'boolean
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-tray-widget 'bottom-center
+(defcustom cmacs-gowl-tray-widget 'shipped
   "Where the tray icons are drawn.
 
-`bottom-center' puts them in the middle of the bottom bar, which is
-deliberately not where most desktops put a tray.  The corners of a
-screen are where a pointer lands by accident -- they are the easiest
-targets there are -- and a row of 22-pixel icons that open Zoom is the
-last thing that should be under a careless flick into a corner.  The
+`shipped' leaves the widget where gowl puts it, which is the middle of
+the bottom bar -- deliberately not where most desktops put a tray.  The
+corners of a screen are where a pointer lands by accident, they are the
+easiest targets there are, and a row of 22-pixel icons that open Zoom is
+the last thing that should be under a careless flick into a corner.  The
 middle of the bottom edge is somewhere you have to mean to go.
 
-`bottom-right' and `top-right' are the conventional places.  nil draws
-nothing, leaving gowl owning the register without showing it, which is
-what somebody reading the tray from Emacs with \[cmacs-tray] wants."
-  :type '(choice (const :tag "Centre of the bottom bar" bottom-center)
+That is the default because a tray you have to configure a bar for is a
+tray most sessions do not have.  It is also the only value that touches
+nothing: gowl ships `tray' in that region itself, and the widget
+measures zero until an application registers an icon, so a session with
+no tray applications running looks exactly as it did.
+
+`bottom-right' and `top-right' are the conventional places, and moving
+it is non-destructive -- the widget is taken out of the region it is in
+and added to the one you named, rather than either region being
+rewritten.  nil takes it off the bar entirely, leaving gowl owning the
+register without drawing it, which is what somebody reading the tray
+from Emacs with \[cmacs-tray] wants."
+  :type '(choice (const :tag "Where gowl ships it (bottom centre)" shipped)
+                 (const :tag "Centre of the bottom bar" bottom-center)
                  (const :tag "Right of the bottom bar" bottom-right)
                  (const :tag "Right of the top bar" top-right)
-                 (const :tag "Do not draw it" nil))
+                 (const :tag "Do not draw it at all" nil))
   :group 'cmacs-gowl)
 
 (defcustom cmacs-gowl-crt nil
@@ -1790,12 +1804,6 @@ thread is running and applies configuration."
   (when cmacs-gowl-notification-daemon
     (require 'cmacs-notify-daemon)
     (ignore-errors (cmacs-notify-daemon-mode-global 1)))
-  ;; Serve the system tray.  Same reasoning as the notification daemon:
-  ;; nothing else on the machine does, so tray-only applications are
-  ;; running with no interface at all.
-  (when cmacs-gowl-tray
-    (require 'cmacs-tray)
-    (ignore-errors (cmacs-tray-mode-global 1)))
   ;; Follow the editor's theme.  Enabled last of the appearance hooks
   ;; because it repaints what the others just drew.
   (when cmacs-gowl-palette
@@ -1806,10 +1814,29 @@ thread is running and applies configuration."
   ;; before the applications in `cmacs-gowl-autostart' get far enough to
   ;; look for a watcher.  One that cannot find a host hides its icon and
   ;; does not look again.
+  ;;
+  ;; `gowl-set-tray' does not wait: it turns the register on and the
+  ;; name is asked for on a thread, so `gowl-tray-serving-p' stays nil
+  ;; for a moment afterwards.  What it DOES do immediately is record
+  ;; that this session's register is gowl's, which is what
+  ;; `cmacs-tray--gowl-p' reads -- so this has to run BEFORE
+  ;; `cmacs-tray-mode-global' below.  The other order is how one cmacs
+  ;; ended up arguing with itself: the Elisp watcher looked, saw a gowl
+  ;; that was not serving YET, claimed `org.kde.StatusNotifierWatcher'
+  ;; on Emacs's own bus connection, and the compositor then found its
+  ;; own process holding the name and stood down for the rest of the
+  ;; session -- one half of the process owning a register the other half
+  ;; would not draw.
   (when (and cmacs-gowl-tray (fboundp 'gowl-set-tray))
     (ignore-errors
       (unless (gowl-set-tray t)
         (message "cmacs-gowl: another tray already owns the register"))))
+  ;; And the reader: the tray buffer, and the Elisp watcher for a cmacs
+  ;; with no gowl under it.  Inside `cmacs --gowl' it claims nothing and
+  ;; reads gowl's register instead -- see `cmacs-tray--gowl-p'.
+  (when cmacs-gowl-tray
+    (require 'cmacs-tray)
+    (ignore-errors (cmacs-tray-mode-global 1)))
   ;; Enable the in-process status bar with its dwm-style tag
   ;; indicator.  Opt-out via `cmacs-gowl-bar-show-tags'.
   (when (and cmacs-gowl-bar-show-tags
@@ -3365,36 +3392,56 @@ prepended; useful as a symmetric counterpart to
 `cmacs-gowl-bar-configure-bottom'."
   (gowl-bar-configure (cons '("position" . "top") alist)))
 
-(defcustom cmacs-gowl-tray-widget-region-widgets "tray"
-  "The widget list `cmacs-gowl--apply-tray-widget' writes.
+(defvar cmacs-gowl-tray-widget-region-widgets nil
+  "Obsolete.  The tray no longer rewrites the region it lands in.")
+(make-obsolete-variable 'cmacs-gowl-tray-widget-region-widgets
+                        "the tray is added to a region, not written over it."
+                        "32.0.50")
 
-A bar region is configured wholesale -- the list handed over replaces
-whatever was there -- so this is the WHOLE contents of the region the
-tray lands in, not an addition to it.  Put other widget names in here
-to share the region with them."
-  :type 'string
-  :group 'cmacs-gowl)
+(defconst cmacs-gowl--tray-shipped-placement 'bottom-center
+  "Where gowl's own shipped layout puts the `tray' widget.
+
+Kept here so `cmacs-gowl--apply-tray-widget' knows which region to take
+it OUT of when it is moved.  It has to agree with `bottom_kv' in gowl's
+modules/bar/gowl-module-bar.c; the two are checked against each other by
+the tray placement test.")
 
 (defun cmacs-gowl--apply-tray-widget ()
   "Put the tray widget where `cmacs-gowl-tray-widget' says.
 
-SETS the region rather than adding to it, because that is what the bar
-offers: a widget list is taken wholesale.  In a stock cmacs session the
-region this writes is empty anyway -- the bottom bar is dormant until
-something configures it -- and anybody who wants to share the region
-says so in `cmacs-gowl-tray-widget-region-widgets'."
-  (when (and cmacs-gowl-tray cmacs-gowl-tray-widget
-             (fboundp 'gowl-bar-configure))
-    (let* ((bottom (memq cmacs-gowl-tray-widget
-                         '(bottom-center bottom-right)))
-           (key (if (eq cmacs-gowl-tray-widget 'bottom-center)
-                    "widgets-center"
-                  "widgets-right")))
-      (ignore-errors
-        (funcall (if bottom
-                     #'cmacs-gowl-bar-configure-bottom
-                   #'cmacs-gowl-bar-configure-top)
-                 (list (cons key cmacs-gowl-tray-widget-region-widgets)))))))
+`shipped' --- the default --- does nothing at all: gowl already ships
+`tray' in the middle of the bottom bar, so there is nothing to place and
+no bar to disturb.
+
+Any other value MOVES the widget, using the bar's amendment keys: the
+name is removed from the region it ships in and added to the one asked
+for.  Setting the region outright is what this used to do, and a region
+is taken wholesale, so one line naming `widgets-center' cost the bottom
+bar `user host git' and its whole status list and left an empty strip.
+Adding and removing by name touches nothing else in either region."
+  (when (and cmacs-gowl-tray (fboundp 'gowl-bar-configure))
+    (let* ((want cmacs-gowl-tray-widget)
+           (from cmacs-gowl--tray-shipped-placement)
+           (region (lambda (place)
+                     (if (eq place 'bottom-center)
+                         "widgets-center"
+                       "widgets-right")))
+           (bottomp (lambda (place)
+                      (and (memq place '(bottom-center bottom-right)) t)))
+           (send (lambda (place key widgets)
+                   (funcall (if (funcall bottomp place)
+                                #'cmacs-gowl-bar-configure-bottom
+                              #'cmacs-gowl-bar-configure-top)
+                            (list (cons key widgets))))))
+      (unless (eq want 'shipped)
+        (ignore-errors
+          ;; Out of the shipped region first, so that moving it within
+          ;; the same bar cannot re-add and then remove it.
+          (funcall send from
+                   (concat (funcall region from) "-remove") "tray")
+          (when want
+            (funcall send want
+                     (concat (funcall region want) "-add") "tray")))))))
 
 (defun cmacs-gowl-bar-configure-bottom (alist)
   "Configure the bottom gowl bar with ALIST (an alist of string pairs).

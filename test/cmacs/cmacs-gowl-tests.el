@@ -2110,6 +2110,104 @@ tray of its own."
         (should (equal (car (car items)) "mine"))
         (should-not (plist-get (cdr (car items)) :gowl))))))
 
+(ert-deftest cmacs-gowl-test-the-elisp-tray-does-not-race-the-register ()
+  "The Elisp watcher stands down for a gowl that has not acquired YET.
+
+`gowl-set-tray\=' turns the register on and the bus answers on a thread,
+so `gowl-tray-serving-p\=' is nil for a moment after the compositor
+starts.  A switch that only asked THAT lost the race inside one process:
+`cmacs-tray-mode-global\=' looked, saw a gowl that was not serving,
+claimed `org.kde.StatusNotifierWatcher\=' on Emacs\='s own bus
+connection, and the compositor then found its own process holding the
+name and stood down for the rest of the session.  What the desktop
+showed was a bar with an empty tray and a journal line reading
+`already served; standing down\='.
+
+So the question is whether the register is gowl\='s FOR THIS SESSION,
+which is a setting and settles immediately."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-tray)
+  (require 'cl-lib)
+  (cl-letf (((symbol-function 'gowl-tray-serving-p) (lambda () nil))
+            ((symbol-function 'gowl-running-p) (lambda () t))
+            ((symbol-function 'gowl-config-get)
+             (lambda (prop) (if (equal prop "tray") t nil))))
+    (should (cmacs-tray--gowl-p)))
+
+  ;; A gowl session with the register deliberately turned off is the
+  ;; one case where the Elisp watcher SHOULD claim the name.
+  (cl-letf (((symbol-function 'gowl-tray-serving-p) (lambda () nil))
+            ((symbol-function 'gowl-running-p) (lambda () t))
+            ((symbol-function 'gowl-config-get) (lambda (_prop) nil)))
+    (should-not (cmacs-tray--gowl-p)))
+
+  ;; And no compositor at all: `gowl-config-get' signals there, so
+  ;; reaching it would turn "no gowl" into an error.
+  (cl-letf (((symbol-function 'gowl-tray-serving-p) (lambda () nil))
+            ((symbol-function 'gowl-running-p) (lambda () nil))
+            ((symbol-function 'gowl-config-get)
+             (lambda (&rest _) (error "gowl is not running"))))
+    (should-not (cmacs-tray--gowl-p))))
+
+(ert-deftest cmacs-gowl-test-the-tray-widget-ships-where-it-is ()
+  "The default placement configures no bar at all.
+
+gowl ships `tray\=' in the middle of the bottom bar, so the out-of-the-box
+session needs nothing written.  Writing it anyway is what cost the bottom
+bar everything else it had: a bar region is taken WHOLESALE, so one line
+naming `widgets-center\=' dropped `user host git\=' and the whole status
+list and left an empty 26-pixel strip."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cl-lib)
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'gowl-bar-configure)
+               (lambda (alist) (push alist sent) t)))
+      (let ((cmacs-gowl-tray t)
+            (cmacs-gowl-tray-widget 'shipped))
+        (cmacs-gowl--apply-tray-widget)
+        (should-not sent)))))
+
+(ert-deftest cmacs-gowl-test-moving-the-tray-amends-both-regions ()
+  "Moving the widget adds and removes by NAME, rather than rewriting.
+
+Two calls, in that order: out of the region gowl ships it in, then into
+the one asked for.  Neither region is restated, so whatever else is in
+them stays."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cl-lib)
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'gowl-bar-configure)
+               (lambda (alist) (push alist sent) t)))
+      (let ((cmacs-gowl-tray t)
+            (cmacs-gowl-tray-widget 'top-right))
+        (cmacs-gowl--apply-tray-widget)
+        (setq sent (nreverse sent))
+        (should (= (length sent) 2))
+        ;; Out of the bottom centre, where it ships.
+        (should (equal (cdr (assoc "position" (nth 0 sent))) "bottom"))
+        (should (equal (cdr (assoc "widgets-center-remove" (nth 0 sent)))
+                       "tray"))
+        ;; And into the top bar's right region.
+        (should (equal (cdr (assoc "position" (nth 1 sent))) "top"))
+        (should (equal (cdr (assoc "widgets-right-add" (nth 1 sent)))
+                       "tray"))
+        ;; Nothing names a whole widget list.
+        (dolist (call sent)
+          (should-not (assoc "widgets-center" call))
+          (should-not (assoc "widgets-right" call))
+          (should-not (assoc "widgets-left" call))))))
+
+  ;; nil takes it off the bar without putting it anywhere.
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'gowl-bar-configure)
+               (lambda (alist) (push alist sent) t)))
+      (let ((cmacs-gowl-tray t)
+            (cmacs-gowl-tray-widget nil))
+        (cmacs-gowl--apply-tray-widget)
+        (should (= (length sent) 1))
+        (should (equal (cdr (assoc "widgets-center-remove" (car sent)))
+                       "tray"))))))
+
 ;;; The menu, from Lisp
 
 ;; Declared so a `let' below binds the DYNAMIC variable: the defcustom

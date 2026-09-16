@@ -1173,8 +1173,27 @@ where most desktops put a tray. The corners of a screen are the easiest
 targets there are --- they are where a pointer lands by accident --- and
 a row of 22-pixel icons that open Zoom is the last thing that should be
 under a careless flick into a corner. The middle of the bottom edge is
-somewhere you have to mean to go. =cmacs-gowl-tray-widget= takes
-=bottom-center= (the default), =bottom-right=, =top-right= or nil.
+somewhere you have to mean to go.
+
+That is where *gowl itself* ships the =tray= widget, so this needs no
+configuration at all: a =cmacs --gowl= session has a tray out of the
+box. The widget measures zero until an application registers an icon, so
+it costs that region nothing while there is nothing to show.
+
+=cmacs-gowl-tray-widget= takes =shipped= (the default: leave it where
+gowl puts it), =bottom-center=, =bottom-right=, =top-right= or nil.
+Anything but =shipped= *moves* the widget --- it is removed by name from
+the region it is in and added by name to the one you asked for, so
+neither region is rewritten.
+
+#+begin_quote
+*A bar region is configured wholesale.* Naming =widgets-center= replaces
+that region; it does not add to it. That is what this setting used to
+do, and one line naming the bottom bar's centre cost that bar =user host
+git= and its whole status list, leaving a 26-pixel empty strip. Use the
+=widgets-<region>-add= and =widgets-<region>-remove= keys to place a
+single widget on a bar you do not own.
+#+end_quote
 
 | Gesture | What happens |
 |---------+--------------|
@@ -1192,9 +1211,18 @@ any other; one that should float is a =cmacs-gowl-float-rules= entry.
 =lisp/cmacs/cmacs-tray.el= was the tray: a watcher, a host and an item
 table in Elisp over =dbus.el=. The bus allows exactly one watcher per
 machine, and under =cmacs --gowl= the C one and the Elisp one would be
-the same process arguing with itself --- so when =gowl-tray-serving-p=
-is true, =M-x cmacs-tray= shows gowl's register and its keys act through
-it.
+the same process arguing with itself --- so under gowl, =M-x cmacs-tray=
+shows gowl's register and its keys act through it.
+
+The switch is whether the register is gowl's *for this session*, not
+whether =gowl-tray-serving-p= is already true. Those differ by a moment:
+=gowl-set-tray= turns the register on and the bus answers on a thread of
+its own. Asking the second question lost that race inside one process
+--- the Elisp watcher saw a gowl that was not serving *yet*, claimed
+=org.kde.StatusNotifierWatcher= on Emacs's own bus connection, and the
+compositor then found its own process holding the name and stood down
+for the rest of the session. =cmacs-gowl-mode= turns the register on
+before it enables the reader, for the same reason.
 
 The Elisp watcher is still there and still runs for the session it was
 written for: a cmacs with no gowl under it, on a stock GNOME with no

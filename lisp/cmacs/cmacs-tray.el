@@ -103,9 +103,31 @@ EVENT is `added', `removed' or `updated'; ITEM is the item plist."
 Checked before anything here claims a name or reads a property: two
 watchers on one bus means applications register with whichever answered
 first and the icons scatter between them, and inside `cmacs --gowl'
-those two would be one process arguing with itself."
-  (and (fboundp 'gowl-tray-serving-p)
-       (gowl-tray-serving-p)))
+those two would be one process arguing with itself.
+
+The question is whether gowl is the register FOR THIS SESSION, which is
+a setting, not whether the bus has already said yes --- which is a race
+this lost.  gowl asks for `org.kde.StatusNotifierWatcher' from a thread
+of its own, so `gowl-tray-serving-p' is still nil for a moment after
+the compositor starts.  Turning this mode on inside that moment used to
+read \"gowl does not have it\", claim the name from Emacs, and leave the
+compositor standing down for the rest of the session: the process held
+the register on one connection while the half that draws it believed
+nobody did.  A bottom bar with an empty tray widget and a journal line
+saying `already served' is what that looked like."
+  (or
+   ;; Settled: the name is gowl's.
+   (and (fboundp 'gowl-tray-serving-p)
+        (gowl-tray-serving-p))
+   ;; Or asked for and not yet answered.  `gowl-set-tray' is what
+   ;; `cmacs-gowl-mode' calls, and it records this the moment it runs,
+   ;; where the name itself arrives on a bus thread some time later.
+   ;; `gowl-config-get' signals without a compositor, so the running
+   ;; check is a guard on reaching it rather than part of the question.
+   (and (fboundp 'gowl-running-p)
+        (gowl-running-p)
+        (fboundp 'gowl-config-get)
+        (ignore-errors (eq t (gowl-config-get "tray"))))))
 
 (defun cmacs-tray--gowl-items ()
   "gowl's register, in the shape the buffer below already draws.
