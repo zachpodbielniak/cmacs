@@ -112,9 +112,14 @@ cmacs_gowl_action_to_name (gint action)
   return nick;
 }
 
-/* TRUE while a keyboard-interactive layer-shell surface -- a launcher
-   such as wofi, an on-screen keyboard -- holds an exclusive keyboard
-   grab in the compositor.
+/* TRUE while something holds the keyboard that the compositor's own
+   focus gate would refuse to take it from: a keyboard-interactive
+   layer-shell surface -- a launcher such as wofi, an on-screen
+   keyboard -- or an X11 override-redirect popup that asked for the
+   keyboard -- Zoom's "Leave meeting" panel, a wine dialog.  Asking
+   about the layer alone, which is what this did until 2026-09, left
+   the popup grab unprotected: the panel lost the keyboard to the next
+   command Emacs ran, and Qt read that as a dismissal.
 
    Every cmacs path that moves seat keyboard focus does so by calling
    wlr_seat_keyboard_notify_enter() directly rather than going through
@@ -138,11 +143,10 @@ cmacs_gowl_action_to_name (gint action)
    `test/cmacs/cmacs-gowl-tests.el' asserts that no
    wlr_seat_keyboard_notify_enter call site in this file skips it.  */
 static gboolean
-cmacs_gowl_layer_owns_keyboard (void)
+cmacs_gowl_keyboard_is_grabbed (void)
 {
   return cmacs_gowl_compositor != NULL
-         && gowl_compositor_has_exclusive_keyboard_layer (
-              cmacs_gowl_compositor);
+         && gowl_compositor_keyboard_is_grabbed (cmacs_gowl_compositor);
 }
 
 /* Shared-object globals that user-written C configs declare as
@@ -299,22 +303,31 @@ gowl_embed_view_capture (struct gowl_embed_view *view)
   if (view->client == NULL)
     return;
 
+  /* Access pixel data directly from the buffer -- no EGL needed, so
+     the GTK main thread can do it.  Under the compositor's lock,
+     though, for the whole of the read: `surface->buffer' is the
+     buffer of the LAST commit, and the dispatch thread swaps it out
+     and drops its reference on the next one.  Unlocked, this was a
+     memcpy from a buffer that could be released halfway through.  */
+  cmacs_gowl_lock ();
   surface = gowl_client_get_wlr_surface (view->client);
   if (surface == NULL || surface->buffer == NULL)
-    return;
+    {
+      cmacs_gowl_unlock ();
+      return;
+    }
 
   buffer = &surface->buffer->base;
   tw = buffer->width;
   th = buffer->height;
 
-  /* Access pixel data directly from the buffer — no EGL needed.
-     This is safe to call from the GTK main thread because it uses
-     CPU-side access (SHM direct pointer or DMA-BUF CPU map),
-     avoiding the EGL context which belongs to the compositor thread. */
   if (!wlr_buffer_begin_data_ptr_access (buffer,
                                          WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                          &data, &fmt, &src_stride))
-    return;
+    {
+      cmacs_gowl_unlock ();
+      return;
+    }
 
   needed = src_stride * (size_t) th;
 
@@ -327,6 +340,7 @@ gowl_embed_view_capture (struct gowl_embed_view *view)
 
   memcpy (view->pixel_buf, data, needed);
   wlr_buffer_end_data_ptr_access (buffer);
+  cmacs_gowl_unlock ();
 
   /* Recreate Cairo surface if dimensions changed. */
   if (view->cr_surface != NULL
@@ -383,8 +397,12 @@ gowl_embed_view_idle_capture (gpointer data)
   if (view->client == NULL || !view->dirty || view->widget == NULL)
     return G_SOURCE_REMOVE;
 
-  /* Read pixels via wlr_buffer CPU access (no EGL needed).
-     Safe on the GTK main thread — avoids the compositor's EGL context. */
+  /* Read pixels via wlr_buffer CPU access (no EGL needed): no GL
+     context is touched, so the GTK main thread can do it.  Under the
+     compositor's lock, though: `surface->buffer' is the buffer of the
+     LAST commit, and the dispatch thread swaps it out and drops its
+     reference on the next one.  Reading it unlocked was a copy from a
+     buffer that could be released halfway through the memcpy.  */
   gowl_embed_view_capture (view);
   view->dirty = FALSE;
   gtk_widget_queue_draw (view->widget);
@@ -460,11 +478,16 @@ gowl_embed_view_on_surface_destroy (struct wl_listener *listener, void *data)
     wl_container_of (listener, view, destroy);
   (void) data;
 
-  /* Detach from the surface before wlroots frees it.  */
+  /* Detach from the surface before wlroots frees it.  This runs on
+     the dispatch thread, which already holds the lock; taking it
+     again (it is recursive) keeps every edit of these links under
+     the same rule, which is what the source guard checks.  */
+  cmacs_gowl_lock ();
   wl_list_remove (&view->commit.link);
   wl_list_init (&view->commit.link);
   wl_list_remove (&view->destroy.link);
   wl_list_init (&view->destroy.link);
+  cmacs_gowl_unlock ();
 
   /* Cancel any pending idle capture — the surface is gone and the
      view will be freed shortly.  g_source_remove is thread-safe for
@@ -560,7 +583,7 @@ gowl_embed_view_event (GtkWidget *widget, GdkEvent *event, gpointer data)
            there -- taking the keyboard would leave the launcher
            visible and deaf. */
         if (event->type == GDK_BUTTON_PRESS
-            && !cmacs_gowl_layer_owns_keyboard ())
+            && !cmacs_gowl_keyboard_is_grabbed ())
           {
             struct wlr_keyboard *kb = wlr_seat_get_keyboard (seat);
             if (kb)
@@ -670,8 +693,14 @@ gowl_embed_view_free (struct gowl_embed_view *view)
   if (view == direct_embed_kb_owner)
     direct_embed_kb_owner = NULL;
 
+  /* The listeners live on the surface's signal lists, which the
+     dispatch thread walks on every commit.  Freed from the main
+     thread (GTK teardown) as well as from a DEFUN, so the unlink is
+     locked here rather than at each caller; the lock is recursive.  */
+  cmacs_gowl_lock ();
   wl_list_remove (&view->commit.link);
   wl_list_remove (&view->destroy.link);
+  cmacs_gowl_unlock ();
 
   if (view->idle_id != 0)
     {
@@ -719,8 +748,8 @@ cmacs_gowl_xwidget_keyboard_enter (struct xwidget *xw)
 
   /* Focus-follows-mouse must not fight a launcher for the keyboard:
      the pointer crossing an xwidget while wofi is up is incidental,
-     not intent.  See cmacs_gowl_layer_owns_keyboard. */
-  if (cmacs_gowl_layer_owns_keyboard ())
+     not intent.  See cmacs_gowl_keyboard_is_grabbed. */
+  if (cmacs_gowl_keyboard_is_grabbed ())
     return;
 
   pthread_mutex_lock (&cmacs_gowl_mutex);
@@ -1389,7 +1418,7 @@ cmacs_gowl_wlr_focus_client (GowlCompositor *comp, GowlClient *target)
   if (seat == NULL || target == NULL)
     return;
 
-  if (cmacs_gowl_layer_owns_keyboard ())
+  if (cmacs_gowl_keyboard_is_grabbed ())
     return;
   surf = gowl_client_get_wlr_surface (target);
   if (surf == NULL)
@@ -2227,6 +2256,7 @@ keyboard-interactive layer surface currently holds the keyboard, or if
 there is no non-embedded client to focus.  */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlClient *emacs_target;
   GowlSeat   *seat_obj;
 
@@ -2235,20 +2265,20 @@ there is no non-embedded client to focus.  */)
   /* A launcher / on-screen keyboard holding an exclusive grab
      outranks even an explicit grant: taking the keyboard here would
      leave it visible on top of the output and deaf. */
-  if (cmacs_gowl_layer_owns_keyboard ())
-    return Qnil;
+  if (cmacs_gowl_keyboard_is_grabbed ())
+    return unbind_to (lock_count, Qnil);
 
   if (cmacs_gowl_active_focus_token != NULL)
     /* Already redirected — keep the existing token, just idempotent. */
-    return Qt;
+    return unbind_to (lock_count, Qt);
 
   emacs_target = cmacs_gowl_find_emacs_client (cmacs_gowl_compositor);
   if (emacs_target == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   seat_obj = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat_obj == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   cmacs_gowl_active_focus_token = gowl_seat_push_focus_redirect (
       seat_obj, emacs_target, GOWL_FOCUS_REASON_EXPLICIT);
@@ -2260,7 +2290,7 @@ there is no non-embedded client to focus.  */)
   wl_display_flush_clients (
     gowl_compositor_get_wl_display (cmacs_gowl_compositor));
 
-  return Qt;
+  return unbind_to (lock_count, Qt);
 }
 
 DEFUN ("gowl-return-focus-to-embed", Fgowl_return_focus_to_embed,
@@ -2279,20 +2309,21 @@ visible but deaf.
 Returns t if a token was popped, nil otherwise.  */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat   *seat_obj;
   gpointer    saved;
   GowlClient *target;
 
   if (cmacs_gowl_compositor == NULL
       || cmacs_gowl_active_focus_token == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   /* Keep the token: `post-command-hook' calls this after every
      command, so the pop happens on the first command after the
      launcher unmaps.  The grab is derived from live surface state,
      so it cannot wedge the redirect permanently. */
-  if (cmacs_gowl_layer_owns_keyboard ())
-    return Qnil;
+  if (cmacs_gowl_keyboard_is_grabbed ())
+    return unbind_to (lock_count, Qnil);
 
   seat_obj = gowl_compositor_get_seat (cmacs_gowl_compositor);
   saved = gowl_focus_token_get_saved_client (
@@ -2310,7 +2341,7 @@ Returns t if a token was popped, nil otherwise.  */)
   wl_display_flush_clients (
     gowl_compositor_get_wl_display (cmacs_gowl_compositor));
 
-  return Qt;
+  return unbind_to (lock_count, Qt);
 }
 
 DEFUN ("gowl-focus-redirect-active-p", Fgowl_focus_redirect_active_p,
@@ -2332,8 +2363,9 @@ command.  Regular prefix-key redirects (C-x etc) do auto-pop and
 return nil here.  Returns nil when no redirect is active.  */)
   (void)
 {
-  return (cmacs_gowl_active_focus_token != NULL
-          && cmacs_gowl_redirect_is_sticky) ? Qt : Qnil;
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
+  return unbind_to (lock_count, (cmacs_gowl_active_focus_token != NULL
+          && cmacs_gowl_redirect_is_sticky) ? Qt : Qnil);
 }
 
 /* -----------------------------------------------------------------
@@ -2533,21 +2565,22 @@ DEFUN ("gowl-workspace-current", Fgowl_workspace_current,
        doc: /* Return the active workspace id, or nil if none.  */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlWorkspaceProvider *provider;
   GowlWorkspace         *ws;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   provider = cmacs_gowl_provider_or_null ();
   if (provider == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   ws = gowl_workspace_provider_get_current (provider);
   if (ws == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
-  return make_uint (gowl_workspace_get_id (ws));
+  return unbind_to (lock_count, make_uint (gowl_workspace_get_id (ws)));
 }
 
 DEFUN ("gowl-workspace-list", Fgowl_workspace_list,
@@ -2727,16 +2760,17 @@ connect (e.g. "wayland-1").  Returns nil if the compositor is not
 running or the socket name is unavailable. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   const gchar *name;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   name = gowl_compositor_get_socket_name (cmacs_gowl_compositor);
   if (name == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
-  return build_string (name);
+  return unbind_to (lock_count, build_string (name));
 }
 
 
@@ -2781,13 +2815,14 @@ DEFUN ("gowl-module-manager", Fgowl_module_manager, Sgowl_module_manager,
        doc: /* Return the GowlModuleManager GObject. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
 
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (mgr));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (mgr)));
 }
 
 
@@ -2800,17 +2835,18 @@ DEFUN ("gowl-list-clients", Fgowl_list_clients, Sgowl_list_clients,
        doc: /* Return a list of managed window client objects. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *clients, *l;
   Lisp_Object result = Qnil;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
   for (l = clients; l != NULL; l = l->next)
     result = Fcons (cmacs_gobject_wrap (G_OBJECT (l->data)), result);
 
-  return Fnreverse (result);
+  return unbind_to (lock_count, Fnreverse (result));
 }
 
 DEFUN ("gowl-client-count", Fgowl_client_count, Sgowl_client_count,
@@ -2818,10 +2854,11 @@ DEFUN ("gowl-client-count", Fgowl_client_count, Sgowl_client_count,
        doc: /* Return the number of managed clients. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   if (cmacs_gowl_compositor == NULL)
-    return make_fixnum (0);
-  return make_fixnum (
-    (EMACS_INT)gowl_compositor_get_client_count (cmacs_gowl_compositor));
+    return unbind_to (lock_count, make_fixnum (0));
+  return unbind_to (lock_count, make_fixnum (
+    (EMACS_INT)gowl_compositor_get_client_count (cmacs_gowl_compositor)));
 }
 
 DEFUN ("gowl-focused-client", Fgowl_focused_client, Sgowl_focused_client,
@@ -2829,15 +2866,16 @@ DEFUN ("gowl-focused-client", Fgowl_focused_client, Sgowl_focused_client,
        doc: /* Return the currently focused client, or nil. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   c = gowl_compositor_get_focused_client (cmacs_gowl_compositor);
   if (c == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (c));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (c)));
 }
 
 DEFUN ("gowl-focus-client", Fgowl_focus_client, Sgowl_focus_client,
@@ -3253,6 +3291,7 @@ Optional second arg BY is a symbol: `app-id' (default), `title',
 or `pid' (PATTERN is a PID integer). */)
   (Lisp_Object pattern, Lisp_Object by)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlClient *c = NULL;
 
   GOWL_CHECK_RUNNING ();
@@ -3288,8 +3327,8 @@ or `pid' (PATTERN is a PID integer). */)
     }
 
   if (c == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (c));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (c)));
 }
 
 
@@ -3447,11 +3486,12 @@ first appears, instead of tiling it.  The registration is consumed
 on first match.  Used by `gowl-embed' to prevent a visual flash. */)
   (Lisp_Object pid)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GOWL_CHECK_RUNNING ();
   CHECK_FIXNUM (pid);
   gowl_compositor_prefloat_pid (cmacs_gowl_compositor,
                                 (pid_t) XFIXNUM (pid));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-pretag-pid", Fgowl_pretag_pid, Sgowl_pretag_pid,
@@ -3468,6 +3508,7 @@ registration is consumed on first match.  Used by
 tag (workspace) on its monitor. */)
   (Lisp_Object pid, Lisp_Object tagmask, Lisp_Object monitor)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   gint mon_idx = -1;
 
   GOWL_CHECK_RUNNING ();
@@ -3482,7 +3523,7 @@ tag (workspace) on its monitor. */)
                               (pid_t) XFIXNUM (pid),
                               (guint32) XFIXNAT (tagmask),
                               mon_idx);
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-reparent-client", Fgowl_reparent_client, Sgowl_reparent_client,
@@ -3523,6 +3564,7 @@ Matches by PID against the compositor's client list.
 Skips embedded clients to avoid returning a hijacked surface. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *clients;
   GList *l;
   pid_t self_pid;
@@ -3535,9 +3577,9 @@ Skips embedded clients to avoid returning a hijacked surface. */)
       GowlClient *c = (GowlClient *) l->data;
       if (gowl_client_get_pid (c) == self_pid
           && !gowl_client_get_embedded (c))
-        return cmacs_gobject_wrap (G_OBJECT (c));
+        return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (c)));
     }
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-embed-into", Fgowl_embed_into, Sgowl_embed_into,
@@ -3547,12 +3589,13 @@ CHILD's scene node becomes a child of PARENT's, so it renders
 as part of PARENT.  Positions are then parent-relative. */)
   (Lisp_Object child, Lisp_Object parent)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GOWL_CHECK_RUNNING ();
   gowl_compositor_reparent_client_to_client (
     cmacs_gowl_compositor,
     gowl_resolve_client (child),
     gowl_resolve_client (parent));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-position-embedded", Fgowl_position_embedded,
@@ -3595,6 +3638,7 @@ through the GTK widget.  Returns t on success. */)
   (Lisp_Object client, Lisp_Object x, Lisp_Object y,
    Lisp_Object w, Lisp_Object h)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
 #ifdef HAVE_PGTK
   GowlClient *c;
   struct gowl_embed_view *view;
@@ -3682,10 +3726,10 @@ through the GTK widget.  Returns t on success. */)
     }
 
   g_hash_table_insert (embed_views, c, view);
-  return Qt;
+  return unbind_to (lock_count, Qt);
 #else
   error ("gowl-embed-create-view requires PGTK build");
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 #endif
 }
 
@@ -3696,6 +3740,7 @@ Coordinates are frame-relative pixels. */)
   (Lisp_Object client, Lisp_Object x, Lisp_Object y,
    Lisp_Object w, Lisp_Object h)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
 #ifdef HAVE_PGTK
   GowlClient *c;
   struct gowl_embed_view *view;
@@ -3710,11 +3755,11 @@ Coordinates are frame-relative pixels. */)
   c = gowl_resolve_client (client);
 
   if (embed_views == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   view = g_hash_table_lookup (embed_views, c);
   if (view == NULL || view->widget == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   nw = (int) XFIXNUM (w);
   nh = (int) XFIXNUM (h);
@@ -3727,7 +3772,7 @@ Coordinates are frame-relative pixels. */)
          listener keeps capturing frames so content is ready when we
          show the widget again. */
       gtk_widget_hide (view->widget);
-      return Qt;
+      return unbind_to (lock_count, Qt);
     }
 
   view->view_w = nw;
@@ -3744,9 +3789,9 @@ Coordinates are frame-relative pixels. */)
   gowl_compositor_position_embedded (cmacs_gowl_compositor, c,
                                      0, 0, nw, nh);
 
-  return Qt;
+  return unbind_to (lock_count, Qt);
 #else
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 #endif
 }
 
@@ -3809,7 +3854,7 @@ would leave that launcher visible on top of the output and deaf. */)
   if (c == NULL)
     error ("Invalid client");
 
-  if (cmacs_gowl_layer_owns_keyboard ())
+  if (cmacs_gowl_keyboard_is_grabbed ())
     return Qnil;
 
   seat = gowl_compositor_get_wlr_seat (cmacs_gowl_compositor);
@@ -3880,17 +3925,18 @@ DEFUN ("gowl-list-monitors", Fgowl_list_monitors, Sgowl_list_monitors,
        doc: /* Return a list of connected monitor objects. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *monitors, *l;
   Lisp_Object result = Qnil;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
     result = Fcons (cmacs_gobject_wrap (G_OBJECT (l->data)), result);
 
-  return Fnreverse (result);
+  return unbind_to (lock_count, Fnreverse (result));
 }
 
 DEFUN ("gowl-monitor-count", Fgowl_monitor_count, Sgowl_monitor_count,
@@ -3898,10 +3944,11 @@ DEFUN ("gowl-monitor-count", Fgowl_monitor_count, Sgowl_monitor_count,
        doc: /* Return the number of connected monitors. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   if (cmacs_gowl_compositor == NULL)
-    return make_fixnum (0);
-  return make_fixnum (
-    (EMACS_INT)gowl_compositor_get_monitor_count (cmacs_gowl_compositor));
+    return unbind_to (lock_count, make_fixnum (0));
+  return unbind_to (lock_count, make_fixnum (
+    (EMACS_INT)gowl_compositor_get_monitor_count (cmacs_gowl_compositor)));
 }
 
 DEFUN ("gowl-focused-monitor", Fgowl_focused_monitor,
@@ -3909,15 +3956,16 @@ DEFUN ("gowl-focused-monitor", Fgowl_focused_monitor,
        doc: /* Return the currently focused monitor, or nil. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   mon = gowl_get_focused_monitor ();
   if (mon == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (mon));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (mon)));
 }
 
 DEFUN ("gowl-find-monitor", Fgowl_find_monitor, Sgowl_find_monitor,
@@ -3926,6 +3974,7 @@ DEFUN ("gowl-find-monitor", Fgowl_find_monitor, Sgowl_find_monitor,
 NAME is a string such as "eDP-1" or "HDMI-A-1". */)
   (Lisp_Object name)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *monitors, *l;
   const gchar *target;
 
@@ -3939,9 +3988,9 @@ NAME is a string such as "eDP-1" or "HDMI-A-1". */)
       GowlMonitor *mon = GOWL_MONITOR (l->data);
       const gchar *n = gowl_monitor_get_name (mon);
       if (n != NULL && strcmp (n, target) == 0)
-        return cmacs_gobject_wrap (G_OBJECT (mon));
+        return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (mon)));
     }
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-monitor-info", Fgowl_monitor_info, Sgowl_monitor_info,
@@ -4590,6 +4639,7 @@ DEFUN ("gowl-list-layouts", Fgowl_list_layouts, Sgowl_list_layouts,
 All layouts are provided by active plugins. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *names, *l;
   Lisp_Object result = Qnil;
 
@@ -4600,7 +4650,7 @@ All layouts are provided by active plugins. */)
     result = Fcons (build_string ((const char *) l->data), result);
   g_list_free (names);
 
-  return Fnreverse (result);
+  return unbind_to (lock_count, Fnreverse (result));
 }
 
 DEFUN ("gowl-cycle-layout", Fgowl_cycle_layout, Sgowl_cycle_layout,
@@ -7081,9 +7131,10 @@ returns nil.  Two watchers on one bus is how applications end up
 registered with the one nobody is displaying.  */)
   (Lisp_Object on)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GOWL_CHECK_RUNNING ();
   gowl_compositor_set_tray (cmacs_gowl_compositor, !NILP (on));
-  return gowl_tray_is_serving (gowl_tray_get_default ()) ? Qt : Qnil;
+  return unbind_to (lock_count, gowl_tray_is_serving (gowl_tray_get_default ()) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-tray-serving-p", Fgowl_tray_serving_p, Sgowl_tray_serving_p,
@@ -7380,6 +7431,7 @@ Guards are already evaluated and providers already run, so this is what
 would be on screen right now.  */)
   (Lisp_Object route, Lisp_Object search)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlCompositor *comp = cmacs_gowl_compositor;
   GPtrArray      *rows;
   Lisp_Object     result = Qnil;
@@ -7397,7 +7449,7 @@ would be on screen right now.  */)
                              NILP (route) ? NULL : SSDATA (route));
     }
   if (rows == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   for (i = rows->len; i > 0; i--)
     {
@@ -7434,7 +7486,7 @@ would be on screen right now.  */)
       result = Fcons (plist, result);
     }
   g_ptr_array_unref (rows);
-  return result;
+  return unbind_to (lock_count, result);
 }
 
 DEFUN ("gowl-menu-activate", Fgowl_menu_activate, Sgowl_menu_activate, 1, 1, 0,
@@ -7452,6 +7504,7 @@ The action runs through the compositor's keybind dispatcher, so a menu
 row does exactly what a key bound the same way would.  */)
   (Lisp_Object route)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlCompositor *comp = cmacs_gowl_compositor;
   gchar          *next = NULL;
   GowlMenuResult  result;
@@ -7477,7 +7530,7 @@ row does exactly what a key bound the same way would.  */)
       break;
     }
   g_free (next);
-  return answer;
+  return unbind_to (lock_count, answer);
 }
 
 DEFUN ("gowl-menu-parent", Fgowl_menu_parent, Sgowl_menu_parent, 1, 1, 0,
@@ -8034,9 +8087,10 @@ DEFUN ("gowl-locked-p", Fgowl_locked_p, Sgowl_locked_p, 0, 0, 0,
        doc: /* Return non-nil if the session is locked. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   if (cmacs_gowl_compositor == NULL)
-    return Qnil;
-  return gowl_compositor_is_locked (cmacs_gowl_compositor) ? Qt : Qnil;
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, gowl_compositor_is_locked (cmacs_gowl_compositor) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-run-command", Fgowl_run_command, Sgowl_run_command,
@@ -8401,6 +8455,7 @@ name (e.g. "recording") — in which case the standard search paths
 are used to locate the .so, same as `gowl-enable-module'. */)
   (Lisp_Object path)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   GError *err = NULL;
   g_autofree gchar *resolved = NULL;
@@ -8434,7 +8489,7 @@ are used to locate the .so, same as `gowl-enable-module'. */)
       xsignal1 (Qgowl_error, msg);
     }
 
-  return Qt;
+  return unbind_to (lock_count, Qt);
 }
 
 DEFUN ("gowl-list-modules", Fgowl_list_modules, Sgowl_list_modules,
@@ -8443,6 +8498,7 @@ DEFUN ("gowl-list-modules", Fgowl_list_modules, Sgowl_list_modules,
 Each element is ((name . NAME) (description . DESC) (version . VER)). */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   GList *modules, *l;
   Lisp_Object result = Qnil;
@@ -8450,7 +8506,7 @@ Each element is ((name . NAME) (description . DESC) (version . VER)). */)
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   modules = gowl_module_manager_get_modules (mgr);
   for (l = modules; l != NULL; l = l->next)
@@ -8467,7 +8523,7 @@ Each element is ((name . NAME) (description . DESC) (version . VER)). */)
     }
   g_list_free_full (modules, (GDestroyNotify) gowl_module_info_free);
 
-  return Fnreverse (result);
+  return unbind_to (lock_count, Fnreverse (result));
 }
 
 DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
@@ -8475,6 +8531,7 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
        doc: /* Load all gowl modules (.so files) from DIRECTORY. */)
   (Lisp_Object dir)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
 
   CHECK_STRING (dir);
@@ -8485,7 +8542,7 @@ DEFUN ("gowl-load-modules-from-dir", Fgowl_load_modules_from_dir,
     error ("No module manager");
 
   gowl_module_manager_load_from_directory (mgr, SSDATA (dir));
-  return Qt;
+  return unbind_to (lock_count, Qt);
 }
 
 /* Helper: find a loaded module by name. */
@@ -8812,6 +8869,7 @@ DEFUN ("gowl-set-all-alpha", Fgowl_set_all_alpha,
 Returns the number of clients affected. */)
   (Lisp_Object alpha)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *clients, *l;
   double val;
   int count = 0;
@@ -8832,7 +8890,7 @@ Returns the number of clients affected. */)
     build_string ("gowl: set alpha %.2f on %d clients"),
     alpha, make_fixnum (count))));
 
-  return make_fixnum (count);
+  return unbind_to (lock_count, make_fixnum (count));
 }
 
 DEFUN ("gowl-set-focused-alpha", Fgowl_set_focused_alpha,
@@ -9239,6 +9297,7 @@ Returns ((inner-h . N) (inner-v . N) (outer-h . N) (outer-v . N))
 or nil if no gap provider is active. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   GowlMonitor *mon;
   gint ih = 0, iv = 0, oh = 0, ov = 0;
@@ -9246,16 +9305,16 @@ or nil if no gap provider is active. */)
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   mon = gowl_get_focused_monitor ();
   if (!gowl_module_manager_get_gaps (mgr, mon, &ih, &iv, &oh, &ov))
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
-  return list4 (Fcons (intern ("inner-h"), make_fixnum (ih)),
+  return unbind_to (lock_count, list4 (Fcons (intern ("inner-h"), make_fixnum (ih)),
                 Fcons (intern ("inner-v"), make_fixnum (iv)),
                 Fcons (intern ("outer-h"), make_fixnum (oh)),
-                Fcons (intern ("outer-v"), make_fixnum (ov)));
+                Fcons (intern ("outer-v"), make_fixnum (ov))));
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -9356,6 +9415,7 @@ its geometry position plus border width.  Accounts for bar height
 and vanitygaps. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GList *clients, *l;
   gint x, y, bw;
 
@@ -9369,10 +9429,10 @@ and vanitygaps. */)
         {
           gowl_client_get_geometry (c, &x, &y, NULL, NULL);
           bw = (gint) gowl_client_get_border_width (c);
-          return Fcons (make_fixnum (x + bw), make_fixnum (y + bw));
+          return unbind_to (lock_count, Fcons (make_fixnum (x + bw), make_fixnum (y + bw)));
         }
     }
-  return Fcons (make_fixnum (0), make_fixnum (0));
+  return unbind_to (lock_count, Fcons (make_fixnum (0), make_fixnum (0)));
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -9768,14 +9828,18 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
   view->view_h = xw->height;
   view->xwidget_managed = TRUE;
 
-  /* Configure the client to render at widget size. */
+  /* Configure the client to render at widget size, and listen for
+     its commits.  Called from xwidget.c on the main thread: the
+     client's state and the surface's signal lists are the dispatch
+     thread's, so both halves go under the lock -- a wl_signal_add
+     racing an emit on the other thread is a corrupted wl_list.  */
+  cmacs_gowl_lock ();
   gowl_client_set_visible (c, FALSE);
   gowl_client_set_embedded (c, TRUE);
   gowl_client_set_border_width (c, 0);
   gowl_compositor_position_embedded (cmacs_gowl_compositor, c,
                                      0, 0, view->view_w, view->view_h);
 
-  /* Listen for surface commits to capture new frames. */
   surface = gowl_client_get_wlr_surface (c);
   if (surface != NULL)
     {
@@ -9789,6 +9853,7 @@ cmacs_gowl_xwidget_setup (struct xwidget *xw, GtkWidget *view_widget,
       wl_list_init (&view->commit.link);
       wl_list_init (&view->destroy.link);
     }
+  cmacs_gowl_unlock ();
 
   xw->gowl_view = view;
 
@@ -9946,13 +10011,14 @@ Signals: "focus-changed".
 Use gobject-connect to listen for focus changes. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (seat));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (seat)));
 }
 
 DEFUN ("gowl-cursor", Fgowl_cursor, Sgowl_cursor, 0, 0, 0,
@@ -9961,13 +10027,14 @@ Signals: "motion", "button", "axis".
 Properties accessible via gobject-get: "mode". */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlCursor *cursor;
 
   GOWL_CHECK_RUNNING ();
   cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
   if (cursor == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (cursor));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (cursor)));
 }
 
 DEFUN ("gowl-keyboard-group", Fgowl_keyboard_group,
@@ -9977,13 +10044,14 @@ Signals: "key", "modifiers".
 Properties: repeat-rate, repeat-delay. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlKeyboardGroup *kb;
 
   GOWL_CHECK_RUNNING ();
   kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
   if (kb == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (kb));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (kb)));
 }
 
 DEFUN ("gowl-idle-manager", Fgowl_idle_manager,
@@ -9993,13 +10061,14 @@ Signals: "idle", "resume".
 Properties: timeout, state. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlIdleManager *mgr;
 
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_idle_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (mgr));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (mgr)));
 }
 
 DEFUN ("gowl-bar", Fgowl_bar, Sgowl_bar, 0, 0, 0,
@@ -10008,13 +10077,14 @@ Signals: "render", "click".
 Properties: height, visible. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlBar *bar;
 
   GOWL_CHECK_RUNNING ();
   bar = gowl_compositor_get_bar (cmacs_gowl_compositor);
   if (bar == NULL)
-    return Qnil;
-  return cmacs_gobject_wrap (G_OBJECT (bar));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (bar)));
 }
 
 
@@ -10029,11 +10099,12 @@ Both arguments must be GowlClient GObjects.  The layout is
 re-arranged on affected monitors after the swap. */)
   (Lisp_Object client1, Lisp_Object client2)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GOWL_CHECK_RUNNING ();
   gowl_compositor_swap_clients (cmacs_gowl_compositor,
                                 gowl_resolve_client (client1),
                                 gowl_resolve_client (client2));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-zoom-client", Fgowl_zoom_client,
@@ -10044,13 +10115,14 @@ If CLIENT is nil, operate on the focused client.
 Floating clients are ignored. */)
   (Lisp_Object client)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlClient *c = NULL;
 
   GOWL_CHECK_RUNNING ();
   if (!NILP (client))
     c = gowl_resolve_client (client);
   gowl_compositor_zoom_client (cmacs_gowl_compositor, c);
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10064,13 +10136,14 @@ DEFUN ("gowl-cursor-mode", Fgowl_cursor_mode,
 0 = normal, 1 = move, 2 = resize. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlCursor *cursor;
 
   GOWL_CHECK_RUNNING ();
   cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
   if (cursor == NULL)
-    return Qnil;
-  return make_fixnum (gowl_cursor_get_mode (cursor));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, make_fixnum (gowl_cursor_get_mode (cursor)));
 }
 
 DEFUN ("gowl-set-cursor-mode", Fgowl_set_cursor_mode,
@@ -10079,6 +10152,7 @@ DEFUN ("gowl-set-cursor-mode", Fgowl_set_cursor_mode,
 0 = normal, 1 = move, 2 = resize. */)
   (Lisp_Object mode)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlCursor *cursor;
 
   GOWL_CHECK_RUNNING ();
@@ -10086,7 +10160,7 @@ DEFUN ("gowl-set-cursor-mode", Fgowl_set_cursor_mode,
   cursor = gowl_compositor_get_cursor (cmacs_gowl_compositor);
   if (cursor != NULL)
     gowl_cursor_set_mode (cursor, (gint) XFIXNUM (mode));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-keyboard-repeat-rate", Fgowl_keyboard_repeat_rate,
@@ -10094,13 +10168,14 @@ DEFUN ("gowl-keyboard-repeat-rate", Fgowl_keyboard_repeat_rate,
        doc: /* Return the keyboard repeat rate (keys per second). */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlKeyboardGroup *kb;
 
   GOWL_CHECK_RUNNING ();
   kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
   if (kb == NULL)
-    return Qnil;
-  return make_fixnum (gowl_keyboard_group_get_repeat_rate (kb));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, make_fixnum (gowl_keyboard_group_get_repeat_rate (kb)));
 }
 
 DEFUN ("gowl-set-keyboard-repeat-rate", Fgowl_set_keyboard_repeat_rate,
@@ -10108,6 +10183,7 @@ DEFUN ("gowl-set-keyboard-repeat-rate", Fgowl_set_keyboard_repeat_rate,
        doc: /* Set the keyboard repeat rate to RATE (keys per second). */)
   (Lisp_Object rate)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlKeyboardGroup *kb;
 
   GOWL_CHECK_RUNNING ();
@@ -10115,7 +10191,7 @@ DEFUN ("gowl-set-keyboard-repeat-rate", Fgowl_set_keyboard_repeat_rate,
   kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
   if (kb != NULL)
     gowl_keyboard_group_set_repeat_rate (kb, (gint) XFIXNAT (rate));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-keyboard-repeat-delay", Fgowl_keyboard_repeat_delay,
@@ -10123,13 +10199,14 @@ DEFUN ("gowl-keyboard-repeat-delay", Fgowl_keyboard_repeat_delay,
        doc: /* Return the keyboard repeat delay in milliseconds. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlKeyboardGroup *kb;
 
   GOWL_CHECK_RUNNING ();
   kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
   if (kb == NULL)
-    return Qnil;
-  return make_fixnum (gowl_keyboard_group_get_repeat_delay (kb));
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, make_fixnum (gowl_keyboard_group_get_repeat_delay (kb)));
 }
 
 DEFUN ("gowl-set-keyboard-repeat-delay", Fgowl_set_keyboard_repeat_delay,
@@ -10137,6 +10214,7 @@ DEFUN ("gowl-set-keyboard-repeat-delay", Fgowl_set_keyboard_repeat_delay,
        doc: /* Set the keyboard repeat delay to DELAY milliseconds. */)
   (Lisp_Object delay)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlKeyboardGroup *kb;
 
   GOWL_CHECK_RUNNING ();
@@ -10144,7 +10222,7 @@ DEFUN ("gowl-set-keyboard-repeat-delay", Fgowl_set_keyboard_repeat_delay,
   kb = gowl_compositor_get_keyboard_group (cmacs_gowl_compositor);
   if (kb != NULL)
     gowl_keyboard_group_set_repeat_delay (kb, (gint) XFIXNAT (delay));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10158,6 +10236,7 @@ DEFUN ("gowl-ipc-push-event", Fgowl_ipc_push_event,
 The string is sent as-is on the IPC event channel. */)
   (Lisp_Object event_string)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlIpc *ipc;
 
   GOWL_CHECK_RUNNING ();
@@ -10165,7 +10244,7 @@ The string is sent as-is on the IPC event channel. */)
   ipc = gowl_compositor_get_ipc (cmacs_gowl_compositor);
   if (ipc != NULL)
     gowl_ipc_push_event (ipc, "%s", SSDATA (event_string));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10178,6 +10257,7 @@ DEFUN ("gowl-send-key", Fgowl_send_key, Sgowl_send_key, 2, 2, 0,
 KEYCODE is the XKB keycode.  PRESSED is non-nil for press, nil for release. */)
   (Lisp_Object keycode, Lisp_Object pressed)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10185,7 +10265,7 @@ KEYCODE is the XKB keycode.  PRESSED is non-nil for press, nil for release. */)
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_send_key (seat, (guint32) XFIXNAT (keycode), !NILP (pressed));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-send-mouse-move", Fgowl_send_mouse_move,
@@ -10193,6 +10273,7 @@ DEFUN ("gowl-send-mouse-move", Fgowl_send_mouse_move,
        doc: /* Move the cursor to absolute coordinates X, Y. */)
   (Lisp_Object x, Lisp_Object y)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10201,7 +10282,7 @@ DEFUN ("gowl-send-mouse-move", Fgowl_send_mouse_move,
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_send_mouse_move (seat, XFLOATINT (x), XFLOATINT (y));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-send-mouse-button", Fgowl_send_mouse_button,
@@ -10210,6 +10291,7 @@ DEFUN ("gowl-send-mouse-button", Fgowl_send_mouse_button,
 BUTTON is the button code.  PRESSED is non-nil for press, nil for release. */)
   (Lisp_Object button, Lisp_Object pressed)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10218,7 +10300,7 @@ BUTTON is the button code.  PRESSED is non-nil for press, nil for release. */)
   if (seat != NULL)
     gowl_seat_send_mouse_button (seat, (guint32) XFIXNAT (button),
                                   !NILP (pressed));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-send-scroll", Fgowl_send_scroll,
@@ -10226,6 +10308,7 @@ DEFUN ("gowl-send-scroll", Fgowl_send_scroll,
        doc: /* Send a synthetic scroll event with deltas DX, DY. */)
   (Lisp_Object dx, Lisp_Object dy)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10234,7 +10317,7 @@ DEFUN ("gowl-send-scroll", Fgowl_send_scroll,
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_send_scroll (seat, XFLOATINT (dx), XFLOATINT (dy));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10250,6 +10333,7 @@ Returns a list (WIDTH HEIGHT DATA) where DATA is a unibyte string
 of RGBA pixel data, or nil on failure. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GError *err = NULL;
   GBytes *bytes;
   gint w, h;
@@ -10275,7 +10359,7 @@ of RGBA pixel data, or nil on failure. */)
           g_error_free (err);
           xsignal1 (Qgowl_error, msg);
         }
-      return Qnil;
+      return unbind_to (lock_count, Qnil);
     }
 
   {
@@ -10283,7 +10367,7 @@ of RGBA pixel data, or nil on failure. */)
     const guint8 *data = g_bytes_get_data (bytes, &size);
     Lisp_Object str = make_unibyte_string ((const char *) data, size);
     g_bytes_unref (bytes);
-    return list3 (make_fixnum (w), make_fixnum (h), str);
+    return unbind_to (lock_count, list3 (make_fixnum (w), make_fixnum (h), str));
   }
 }
 
@@ -10299,12 +10383,21 @@ DEFUN ("gowl-clipboard-get", Fgowl_clipboard_get,
 {
   GowlSeat *seat;
   gchar *text;
+  gint fd;
 
   GOWL_CHECK_RUNNING ();
+  /* The lock covers asking the owner and flushing the request; the
+     read that follows waits on the owning client, which can only
+     answer while the dispatch thread is free to run it.  Holding the
+     lock across the read is a deadlock; holding it across nothing is
+     the race.  A plain lock rather than the scoped one: nothing
+     between the two lines can signal, and the release has to come
+     BEFORE the read, not at the end of the call.  */
+  cmacs_gowl_lock ();
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
-  if (seat == NULL)
-    return Qnil;
-  text = gowl_seat_get_clipboard (seat);
+  fd = seat != NULL ? gowl_seat_open_clipboard (seat) : -1;
+  cmacs_gowl_unlock ();
+  text = gowl_seat_read_selection_fd (fd);
   if (text == NULL)
     return Qnil;
   {
@@ -10319,6 +10412,7 @@ DEFUN ("gowl-clipboard-set", Fgowl_clipboard_set,
        doc: /* Set the Wayland clipboard to TEXT. */)
   (Lisp_Object text)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10326,7 +10420,7 @@ DEFUN ("gowl-clipboard-set", Fgowl_clipboard_set,
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_set_clipboard (seat, SSDATA (text));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 DEFUN ("gowl-primary-selection-get", Fgowl_primary_selection_get,
@@ -10336,12 +10430,15 @@ DEFUN ("gowl-primary-selection-get", Fgowl_primary_selection_get,
 {
   GowlSeat *seat;
   gchar *text;
+  gint fd;
 
   GOWL_CHECK_RUNNING ();
+  /* As `gowl-clipboard-get': lock the ask, not the wait.  */
+  cmacs_gowl_lock ();
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
-  if (seat == NULL)
-    return Qnil;
-  text = gowl_seat_get_primary_selection (seat);
+  fd = seat != NULL ? gowl_seat_open_primary_selection (seat) : -1;
+  cmacs_gowl_unlock ();
+  text = gowl_seat_read_selection_fd (fd);
   if (text == NULL)
     return Qnil;
   {
@@ -10356,6 +10453,7 @@ DEFUN ("gowl-primary-selection-set", Fgowl_primary_selection_set,
        doc: /* Set the Wayland primary selection to TEXT. */)
   (Lisp_Object text)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10363,7 +10461,7 @@ DEFUN ("gowl-primary-selection-set", Fgowl_primary_selection_set,
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_set_primary_selection (seat, SSDATA (text));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10418,6 +10516,7 @@ DEFUN ("gowl-corner-radius", Fgowl_corner_radius,
 module is not active. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   GowlModule *mod;
 
@@ -10426,11 +10525,11 @@ module is not active. */)
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   mod = gowl_module_manager_find_module (mgr, "roundcorners");
   if (mod == NULL || !GOWL_IS_CLIENT_DECORATOR (mod))
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
-  return make_fixnum (
+  return unbind_to (lock_count, make_fixnum (
       gowl_client_decorator_get_corner_radius (
-          GOWL_CLIENT_DECORATOR (mod)));
+          GOWL_CLIENT_DECORATOR (mod))));
 }
 
 
@@ -10546,16 +10645,17 @@ kill-ring via `cmacs-gowl--on-clipboard-changed'.
 Returns t if watching started, nil if already watching. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
 
   if (cmacs_clipboard_handler_id != 0)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   cmacs_clipboard_handler_id =
     g_signal_connect (seat, "clipboard-changed",
@@ -10564,7 +10664,7 @@ Returns t if watching started, nil if already watching. */)
     g_signal_connect (seat, "primary-selection-changed",
                       G_CALLBACK (on_primary_selection_changed), NULL);
 
-  return Qt;
+  return unbind_to (lock_count, Qt);
 }
 
 DEFUN ("gowl-clipboard-unwatch", Fgowl_clipboard_unwatch,
@@ -10660,18 +10760,19 @@ is not configured or has been hidden, or nil if the bar module
 has no active provider. */)
   (Lisp_Object position)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   gint top = 0, bottom = 0;
 
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   gowl_module_manager_get_bar_insets (mgr, NULL, &top, &bottom);
   if (EQ (position, intern ("bottom")))
-    return make_fixnum (bottom);
-  return make_fixnum (top);
+    return unbind_to (lock_count, make_fixnum (bottom));
+  return unbind_to (lock_count, make_fixnum (top));
 }
 
 DEFUN ("gowl-set-bar-height", Fgowl_set_bar_height,
@@ -10698,6 +10799,7 @@ POSITION is `top' (default) or `bottom'.  A slot is visible iff
 its inset is greater than zero. */)
   (Lisp_Object position)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   gint top = 0, bottom = 0;
   gint v;
@@ -10705,11 +10807,11 @@ its inset is greater than zero. */)
   GOWL_CHECK_RUNNING ();
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   if (mgr == NULL)
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
   gowl_module_manager_get_bar_insets (mgr, NULL, &top, &bottom);
   v = EQ (position, intern ("bottom")) ? bottom : top;
-  return v > 0 ? Qt : Qnil;
+  return unbind_to (lock_count, v > 0 ? Qt : Qnil);
 }
 
 DEFUN ("gowl-set-bar-visible", Fgowl_set_bar_visible,
@@ -10740,6 +10842,7 @@ and injected as a press/release pair.
 Note: currently a stub that logs a warning; requires XKB keycode lookup. */)
   (Lisp_Object text)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlSeat *seat;
 
   GOWL_CHECK_RUNNING ();
@@ -10747,7 +10850,7 @@ Note: currently a stub that logs a warning; requires XKB keycode lookup. */)
   seat = gowl_compositor_get_seat (cmacs_gowl_compositor);
   if (seat != NULL)
     gowl_seat_send_text (seat, SSDATA (text));
-  return Qnil;
+  return unbind_to (lock_count, Qnil);
 }
 
 
@@ -10762,6 +10865,7 @@ Returns a list (WIDTH HEIGHT DATA) where DATA is a unibyte string
 of RGBA pixel data, or nil on failure. */)
   (Lisp_Object client)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
   GError *err = NULL;
   GBytes *bytes;
@@ -10780,7 +10884,7 @@ of RGBA pixel data, or nil on failure. */)
           g_error_free (err);
           xsignal1 (Qgowl_error, msg);
         }
-      return Qnil;
+      return unbind_to (lock_count, Qnil);
     }
 
   {
@@ -10788,7 +10892,7 @@ of RGBA pixel data, or nil on failure. */)
     const guint8 *data = g_bytes_get_data (bytes, &size);
     Lisp_Object str = make_unibyte_string ((const char *) data, size);
     g_bytes_unref (bytes);
-    return list3 (make_fixnum (w), make_fixnum (h), str);
+    return unbind_to (lock_count, list3 (make_fixnum (w), make_fixnum (h), str));
   }
 }
 
@@ -10807,6 +10911,7 @@ rather than the ones passed in. */)
   (Lisp_Object x, Lisp_Object y, Lisp_Object w, Lisp_Object h,
    Lisp_Object monitor)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GError *err = NULL;
   GBytes *bytes;
   gint out_w = 0, out_h = 0;
@@ -10844,7 +10949,7 @@ rather than the ones passed in. */)
           g_error_free (err);
           xsignal1 (Qgowl_error, msg);
         }
-      return Qnil;
+      return unbind_to (lock_count, Qnil);
     }
 
   {
@@ -10855,7 +10960,7 @@ rather than the ones passed in. */)
     memcpy (SDATA (str), src, size);
     STRING_SET_UNIBYTE (str);
     g_bytes_unref (bytes);
-    return list3 (make_fixnum (out_w), make_fixnum (out_h), str);
+    return unbind_to (lock_count, list3 (make_fixnum (out_w), make_fixnum (out_h), str));
   }
 }
 
@@ -11183,6 +11288,7 @@ DEFUN ("gowl-recording-p", Fgowl_recording_p, Sgowl_recording_p,
        doc: /* Return non-nil if a screen recording is in progress. */)
   (void)
 {
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
   GowlModuleManager *mgr;
   GowlModule *mod;
 
@@ -11191,10 +11297,10 @@ DEFUN ("gowl-recording-p", Fgowl_recording_p, Sgowl_recording_p,
   mgr = gowl_compositor_get_module_manager (cmacs_gowl_compositor);
   mod = gowl_module_manager_find_module (mgr, "recording");
   if (mod == NULL || !GOWL_IS_RECORDING_PROVIDER (mod))
-    return Qnil;
+    return unbind_to (lock_count, Qnil);
 
-  return gowl_recording_provider_is_recording (
-             GOWL_RECORDING_PROVIDER (mod)) ? Qt : Qnil;
+  return unbind_to (lock_count, gowl_recording_provider_is_recording (
+             GOWL_RECORDING_PROVIDER (mod)) ? Qt : Qnil);
 }
 
 

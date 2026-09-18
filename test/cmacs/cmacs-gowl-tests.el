@@ -1260,7 +1260,7 @@ monitor for a monitor signal, and an empty hook is a no-op."
 ;; directly rather than going through `gowl_compositor_focus_client'
 ;; -- embedded clients are deliberately invisible to the compositor's
 ;; focus stack -- so the compositor's own guards do NOT cover these
-;; paths.  `cmacs_gowl_layer_owns_keyboard' is the only thing that
+;; paths.  `cmacs_gowl_keyboard_is_grabbed' is the only thing that
 ;; does, and the source-shape test below is what keeps it that way: a
 ;; new seat-focus path that forgets the check reintroduces the bug,
 ;; and no runtime test can catch that without a live compositor, a
@@ -1329,7 +1329,7 @@ call?\" without parsing C."
 
 This is the regression guard for the deaf-launcher bug: a path that
 calls `wlr_seat_keyboard_notify_enter' without first checking
-`cmacs_gowl_layer_owns_keyboard' can take the keyboard away from a
+`cmacs_gowl_keyboard_is_grabbed' can take the keyboard away from a
 mapped launcher, leaving it visible, on top, and unable to receive a
 single keystroke."
   (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
@@ -1340,23 +1340,34 @@ single keystroke."
       ;; A zero here would make the assertion below vacuously true.
       (should (>= (length bodies) 4))
       (dolist (body bodies)
-        (should (string-match-p "cmacs_gowl_layer_owns_keyboard" body))))))
+        (should (string-match-p "cmacs_gowl_keyboard_is_grabbed" body))))))
 
 (ert-deftest cmacs-gowl-test-layer-grab-helper-uses-compositor-api ()
-  "`cmacs_gowl_layer_owns_keyboard' delegates to the compositor.
+  "`cmacs_gowl_keyboard_is_grabbed' asks the compositor about BOTH grabs.
 
 The grab must be derived from live compositor state rather than
 cached in cmacs: a surface that unmaps or stops asking for the
 keyboard releases it immediately, so a stale cmacs-side copy could
-wedge keyboard focus with no way out."
+wedge keyboard focus with no way out.
+
+And it must be `gowl_compositor_keyboard_is_grabbed', not
+`gowl_compositor_has_exclusive_keyboard_layer': the latter answers for
+the launcher grab alone, and an X11 override-redirect popup that wants
+the keyboard -- Zoom's \"Leave meeting\" panel -- holds a grab of its
+own that the compositor's focus gate refuses for.  Asking only about
+the layer let `gowl-return-focus-to-embed' take the keyboard from that
+panel on the next command, and Qt read the FocusOut as a dismissal."
   (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
     (skip-unless source)
     (with-temp-buffer
       (insert-file-contents source)
       (cmacs-gowl-tests--strip-c-comments)
       (should (string-match-p
-               "gowl_compositor_has_exclusive_keyboard_layer"
-               (buffer-string))))))
+               "gowl_compositor_keyboard_is_grabbed"
+               (buffer-string)))
+      (should-not (string-match-p
+                   "gowl_compositor_has_exclusive_keyboard_layer"
+                   (buffer-string))))))
 
 (ert-deftest cmacs-gowl-test-grant-focus-requires-running ()
   "`gowl-grant-focus-to-emacs' errors when the compositor is not running."
@@ -1869,6 +1880,124 @@ the dispatch thread runs for a real key press."
                                "cmacs_gowl_lock ()"
                                "pthread_mutex_lock (&cmacs_gowl_mutex)"))
                        body)))))))))
+
+(defun cmacs-gowl-tests--defun-chunks (source)
+  "Return (NAME . TEXT) for every DEFUN in SOURCE, comments stripped.
+TEXT runs from the DEFUN line to the next DEFUN or end of file, which
+is the whole body plus whatever static helpers sit between -- a
+superset, so a guard found in it may belong to a helper; the tests
+that use this accept that in exchange for needing no C parser."
+  (with-temp-buffer
+    (insert-file-contents source)
+    (cmacs-gowl-tests--strip-c-comments)
+    (goto-char (point-min))
+    (let ((starts nil))
+      (while (re-search-forward "^DEFUN (\"\\([^\"]+\\)\"" nil t)
+        (push (cons (match-string 1) (match-beginning 0)) starts))
+      (setq starts (nreverse starts))
+      (let ((chunks nil))
+        (while starts
+          (let* ((this (pop starts))
+                 (end (if starts (cdar starts) (point-max))))
+            (push (cons (car this)
+                        (buffer-substring-no-properties (cdr this) end))
+                  chunks)))
+        (nreverse chunks)))))
+
+(ert-deftest cmacs-gowl-test-compositor-defuns-take-the-lock ()
+  "Every DEFUN that reaches the compositor holds the gowl lock.
+
+The dispatch thread holds `cmacs_gowl_mutex' across every
+`wl_event_loop_dispatch', mutating the client and focus lists, the
+seat, the scene graph and the module set as it goes.  A DEFUN runs on
+Emacs's thread.  One that walks `gowl_compositor_get_clients' -- the
+live list, not a copy -- while a window unmaps is reading freed links;
+one that hands the seat a key while the dispatch thread is inside
+wlroots is two threads in a library written for one.  Sixty of them
+did, in 2026-09; `gowl-list-clients' was the first.
+
+The one exception is `gowl-stop', which joins the dispatch thread: a
+lock held across that join is a deadlock, and once the thread is gone
+there is nobody to race."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c"))
+        ;; `GOWL_CHECK_RUNNING (' is not a call into gowl.
+        (case-fold-search nil))
+    (skip-unless source)
+    (let ((checked 0))
+      (dolist (chunk (cmacs-gowl-tests--defun-chunks source))
+        (let ((name (car chunk))
+              (text (cdr chunk)))
+          (when (and (not (equal name "gowl-stop"))
+                     (string-match-p "cmacs_gowl_compositor" text)
+                     (string-match-p "\\_<gowl_[a-z_]+[[:space:]]*(" text))
+            (setq checked (1+ checked))
+            (ert-info ((format "%s reaches the compositor" name))
+              (should (string-match-p
+                       (rx (or "cmacs_gowl_lock_scoped ()"
+                               "cmacs_gowl_lock ()"
+                               "pthread_mutex_lock (&cmacs_gowl_mutex)"))
+                       text))))))
+      ;; Sanity: the walk found the DEFUNs.  A zero here would make
+      ;; the assertion above vacuously true.
+      (should (> checked 100)))))
+
+(ert-deftest cmacs-gowl-test-clipboard-read-is-not-under-the-lock ()
+  "`gowl-clipboard-get' locks the ask and not the wait.
+
+The owning client can only answer while the dispatch thread is free to
+run it, so a lock held across the read is a deadlock -- and no lock at
+all is the race the test above closes.  The split is
+`gowl_seat_open_clipboard' under the lock, `unbind_to' to release it,
+then `gowl_seat_read_selection_fd' with nothing held.  A plain
+`cmacs_gowl_lock' / `cmacs_gowl_unlock' pair rather than the scoped
+lock, because the release has to come before the read and not at the
+end of the call; nothing between the two can signal."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (dolist (name '("gowl-clipboard-get" "gowl-primary-selection-get"))
+      (let ((text (cdr (assoc name (cmacs-gowl-tests--defun-chunks source)))))
+        (should text)
+        (ert-info ((format "%s" name))
+          (should (string-match-p
+                   (rx "cmacs_gowl_lock ();"
+                       (* anything)
+                       (or "gowl_seat_open_clipboard"
+                           "gowl_seat_open_primary_selection")
+                       (* anything)
+                       "cmacs_gowl_unlock ();"
+                       (* anything)
+                       "gowl_seat_read_selection_fd")
+                   text))
+          (should-not (string-match-p
+                       (or "gowl_seat_get_clipboard (" "gowl_seat_get_primary_selection (")
+                       text)))))))
+
+(ert-deftest cmacs-gowl-test-embed-view-main-thread-paths-take-the-lock ()
+  "The embed view's main-thread touches of compositor state are locked.
+
+Three of them are not DEFUNs, so the DEFUN test above never sees them:
+the idle capture reads `surface->buffer' -- the buffer of the LAST
+commit, which the dispatch thread swaps out and releases on the next
+one -- through `wlr_buffer_begin_data_ptr_access'; `cmacs_gowl_xwidget_setup'
+(called from xwidget.c) adds listeners to the surface's signal lists
+with `wl_signal_add'; and the view's teardown unlinks them.  A
+wl_list edited on one thread while the other walks it is a corrupted
+list, and a buffer released under a memcpy is a crash on the next
+frame of the embed."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c")))
+    (skip-unless source)
+    (dolist (symbol '("wlr_buffer_begin_data_ptr_access"
+                      "wl_signal_add"
+                      "wl_list_remove"))
+      (let ((bodies (cmacs-gowl-tests--defun-bodies source symbol)))
+        (should (>= (length bodies) 1))
+        (dolist (body bodies)
+          (ert-info ((format "a body reaching %s" symbol))
+            (should (string-match-p
+                     (rx (or "cmacs_gowl_lock_scoped ()"
+                             "cmacs_gowl_lock ()"
+                             "pthread_mutex_lock (&cmacs_gowl_mutex)"))
+                     body))))))))
 
 (ert-deftest cmacs-gowl-test-scoped-lock-releases-through-specpdl ()
   "The scoped gowl lock releases via the specpdl, not a written unlock.

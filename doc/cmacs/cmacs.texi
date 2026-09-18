@@ -2888,7 +2888,8 @@ going through the compositor's
 @code{gowl_compositor_focus_client()}---embedded clients are
 deliberately absent from the compositor's focus stack.  That bypasses
 the compositor's own guards, so each of these paths consults
-@code{gowl_compositor_has_exclusive_keyboard_layer()} itself.
+@code{gowl_compositor_keyboard_is_grabbed()} itself---which answers
+for both grabs the gate refuses for, a launcher's and an X11 popup's.
 
 Without those checks the launcher loses the keyboard within
 milliseconds of mapping, and ends up visible, on top of the whole

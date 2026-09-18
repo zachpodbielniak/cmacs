@@ -2723,8 +2723,20 @@ This matters because cmacs moves seat focus *directly*, without going
 through the compositor's =gowl_compositor_focus_client()= -- embedded
 clients are deliberately absent from the compositor's focus stack.
 That bypasses the compositor's own guards, so each of these paths
-checks the grab itself, via
-=gowl_compositor_has_exclusive_keyboard_layer()=.
+checks the grab itself, via =gowl_compositor_keyboard_is_grabbed()= --
+which answers for both grabs the gate refuses for, the launcher's and
+an X11 popup's.  Until 2026-09 it asked only about the launcher
+(=gowl_compositor_has_exclusive_keyboard_layer()=), so an
+override-redirect that wants the keyboard -- Zoom's "Leave meeting"
+panel -- lost it to the next command Emacs ran.
+
+Every DEFUN that reaches the compositor -- its client lists, the seat,
+the scene, the modules -- does so under =cmacs_gowl_lock_scoped()=, the
+same lock the dispatch thread holds across every
+=wl_event_loop_dispatch=; =cmacs-gowl-test-compositor-defuns-take-the-lock=
+refuses a new one that does not.  The exception is =gowl-stop=, which
+joins the thread.  =gowl-clipboard-get= locks the ask and not the wait:
+the owning client can only answer while the dispatch thread is free.
 
 Without those checks the launcher loses the keyboard within
 milliseconds of mapping (=post-command-hook= restoring embed focus is
