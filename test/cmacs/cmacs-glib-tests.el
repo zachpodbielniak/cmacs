@@ -212,5 +212,114 @@ FEATURE is a symbol: glib, gobject, gi, crispy, bacon, gowl, org-ex."
         (r2 (cmacs-glib-context-p)))
     (should (eq r1 r2))))
 
+;;; Regression guards: the source that pumps the loop
+
+(defvar cmacs-glib-tests--this-file (or load-file-name buffer-file-name)
+  "Where this test file was loaded from, to find the C sources beside it.")
+
+(defun cmacs-glib-tests--source-file (relative)
+  "Return the absolute path of RELATIVE inside the cmacs source tree, or nil."
+  (let* ((here (or cmacs-glib-tests--this-file
+                   (locate-library "cmacs-glib-tests")))
+         (root (and here
+                    (expand-file-name "../.." (file-name-directory here))))
+         (file (and root (expand-file-name relative root))))
+    (and file (file-readable-p file) file)))
+
+(defun cmacs-glib-tests--file-string (file)
+  "The contents of FILE as a string."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(ert-deftest cmacs-glib-test-timer-callback-survives-gc ()
+  "A closure handed to `cmacs-glib-timeout-add' stays alive until it fires.
+
+The source's only reference to the callback used to be a Lisp_Object
+in a g_malloc'd struct -- no GC root.  A fresh lambda passed as the
+callback was collected on the next GC, and when the timer fired the
+source called whatever now lived at that address.  Nothing else here
+refers to the closure once the let exits, so the source's own root is
+the only thing standing between the callback and the collector."
+  (skip-unless (cmacs-feature-p 'glib))
+  (let* ((witness (make-string 64 ?w))
+         (seen nil)
+         (id (cmacs-glib-timeout-add
+              10 (let ((w (copy-sequence witness)))
+                   (lambda () (setq seen w) nil)))))
+    (unwind-protect
+        (progn
+          (dotimes (_ 3) (garbage-collect))
+          (let ((deadline (+ (float-time) 5.0)))
+            (while (and (not seen) (< (float-time) deadline))
+              (sit-for 0.05)))
+          (should (equal seen witness)))
+      (cmacs-glib-source-remove id))))
+
+(ert-deftest cmacs-glib-test-shared-timer-callback-outlives-its-partner ()
+  "Two sources sharing one callback object each keep their own root.
+
+The protection list holds a cell per SOURCE, not per function, so
+removing one source must not strip the other's protection.  The first
+timer is removed and the collector run before the second fires."
+  (skip-unless (cmacs-feature-p 'glib))
+  (let* ((witness (make-string 48 ?s))
+         (seen nil)
+         (fn (let ((w (copy-sequence witness)))
+               (lambda () (setq seen w) nil)))
+         (id1 (cmacs-glib-timeout-add 5000 fn))
+         (id2 (cmacs-glib-timeout-add 10 fn)))
+    (setq fn nil)
+    (unwind-protect
+        (progn
+          (cmacs-glib-source-remove id1)
+          (dotimes (_ 3) (garbage-collect))
+          (let ((deadline (+ (float-time) 5.0)))
+            (while (and (not seen) (< (float-time) deadline))
+              (sit-for 0.05)))
+          (should (equal seen witness)))
+      (cmacs-glib-source-remove id2))))
+
+(ert-deftest cmacs-glib-test-loop-polls-write-readiness ()
+  "GLib sources waiting to WRITE are polled and told when they may.
+
+`cmacs_glib_prepare' put G_IO_OUT fds into the write set, but the
+write set only reached pselect on rounds where Emacs had a connecting
+process of its own to watch, and `cmacs_glib_dispatch' never mapped
+write readiness back into revents at all.  A GSocket source blocked on
+a full socket buffer therefore never fired.  Checked as source: it
+needs a full socket and a reader in another process to observe."
+  (let ((loop (cmacs-glib-tests--source-file "cmacs/glib/cmacs-glib-loop.c"))
+        (proc (cmacs-glib-tests--source-file "src/process.c")))
+    (skip-unless (and loop proc))
+    (let* ((loop-src (cmacs-glib-tests--file-string loop))
+           (proc-src (cmacs-glib-tests--file-string proc))
+           (dispatch (substring loop-src
+                                (string-match "^cmacs_glib_dispatch" loop-src))))
+      ;; Each check is named and reduced to a boolean first, so a
+      ;; failure reports which invariant broke rather than printing
+      ;; the whole of process.c into the log.
+      (dolist (check
+               `(("dispatch takes the write set"
+                  . ,(string-match-p
+                      "^cmacs_glib_dispatch (fd_set \\*readable, fd_set \\*writeable"
+                      loop-src))
+                 ("dispatch reads write readiness"
+                  . ,(string-match-p "FD_ISSET (fd, writeable)" dispatch))
+                 ("dispatch maps G_IO_OUT into revents"
+                  . ,(string-match-p
+                      "revents |= (poll_fds\\[i\\]\\.events & G_IO_OUT)"
+                      dispatch))
+                 ("process.c polls the write set when GLib asked"
+                  . ,(string-match-p
+                      "if (cmacs_glib_wants_write ())[[:space:]\n]*check_write = true;"
+                      proc-src))
+                 ("process.c hands the polled write set back"
+                  . ,(string-match-p
+                      "cmacs_glib_dispatch (&Available, check_write \\? &Writeok : NULL"
+                      proc-src))))
+        (ert-info ((car check))
+          (should (cdr check)))))))
+
 (provide 'cmacs-glib-tests)
 ;;; cmacs-glib-tests.el ends here

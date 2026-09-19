@@ -5802,10 +5802,19 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 #ifdef HAVE_CMACS_GLIB
 	  int saved_max_desc = max_desc;
 	  {
+	    /* With no connecting process of Emacs's own to watch, Writeok
+	       still holds whatever an earlier round left in it; start it
+	       clean so only GLib's write fds reach pselect below.  */
+	    if (!check_write)
+	      FD_ZERO (&Writeok);
 	    int glib_max_fd = cmacs_glib_prepare (&Available, &Writeok,
 						  &timeout);
 	    if (glib_max_fd > max_desc)
 	      max_desc = glib_max_fd;
+	    /* A GLib source waiting for G_IO_OUT needs the write set
+	       polled on this round too, or it never fires.  */
+	    if (cmacs_glib_wants_write ())
+	      check_write = true;
 	  }
 #endif
 
@@ -5844,7 +5853,8 @@ wait_reading_process_output (intmax_t time_limit, int nsecs, int read_kbd,
 #endif /* HAVE_ANDROID && !ANDROID_STUBIFY */
 
 #ifdef HAVE_CMACS_GLIB
-	  cmacs_glib_dispatch (&Available, nfds);
+	  cmacs_glib_dispatch (&Available, check_write ? &Writeok : NULL,
+			       nfds);
 	  max_desc = saved_max_desc;
 #endif
 

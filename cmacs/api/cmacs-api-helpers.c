@@ -33,20 +33,29 @@ cmacs_api_lisp_escape (const gchar *s)
     return g_string_free (q, FALSE);
 }
 
+/* TRUE for text the Lisp reader would read as a number.  At least one
+   digit is required: the old test accepted any run of the characters a
+   number may contain, so the single words "e", "E" and "." were passed
+   through unquoted and read back as symbols -- a search for the letter
+   e became a void-variable error. */
 static gboolean
 looks_like_number (const gchar *s)
 {
+    gboolean digit = FALSE;
+
     if (*s == '-' || *s == '+')
         s++;
     if (*s == '\0')
         return FALSE;
     while (*s != '\0')
     {
-        if (!g_ascii_isdigit (*s) && *s != '.' && *s != 'e' && *s != 'E')
+        if (g_ascii_isdigit (*s))
+            digit = TRUE;
+        else if (*s != '.' && *s != 'e' && *s != 'E')
             return FALSE;
         s++;
     }
-    return TRUE;
+    return digit;
 }
 
 gchar *

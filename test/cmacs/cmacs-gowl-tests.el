@@ -2196,6 +2196,80 @@ and that the socket and Lisp agree on which one is in force."
       (should (eql status 0))
       (should (string-search "cmacs-gowl-ipc-and-profiles: ok" output)))))
 
+
+;;; The RPC dispatch functions are Emacs-thread entry points too
+
+(defun cmacs-gowl-tests--c-function-chunks (source prefix)
+  "Return (NAME . TEXT) for every top-level C function in SOURCE named PREFIX*.
+Comments are stripped first.  TEXT runs from the definition line to the
+next `}' in column 0 -- the function's own body, since the sources put
+the closing brace of every top-level function at column 0."
+  (with-temp-buffer
+    (insert-file-contents source)
+    (cmacs-gowl-tests--strip-c-comments)
+    (goto-char (point-min))
+    (let ((chunks nil))
+      (while (re-search-forward
+              (concat "^\\(" (regexp-quote prefix) "[a-z0-9_]*\\) (")
+              nil t)
+        (let ((name (match-string 1))
+              (start (match-beginning 0)))
+          (when (re-search-forward "^}" nil t)
+            (push (cons name (buffer-substring-no-properties start (point)))
+                  chunks))))
+      (nreverse chunks))))
+
+(ert-deftest cmacs-gowl-test-dispatch-functions-take-the-lock ()
+  "Every gowl RPC dispatch function holds the compositor lock.
+
+The DEFUN audit covered cmacs-gowl.c; the `cmacs_dispatch_gowl_*'
+functions in cmacs-eval-dispatch.c are the same thing under another
+name -- D-Bus, MCP and bacon reach the compositor through them, on
+Emacs's thread, from a GLib dispatch -- and most of them walked the
+live client and monitor lists with nothing held.  `gowl_list_clients'
+over MCP raced every window unmap.  Same rule, same guard: a body that
+calls into gowl takes `cmacs_gowl_lock ()'."
+  (let ((source (cmacs-gowl-tests--source-file
+                 "cmacs/glib/cmacs-eval-dispatch.c"))
+        (case-fold-search nil))
+    (skip-unless source)
+    (let ((checked 0))
+      (dolist (chunk (cmacs-gowl-tests--c-function-chunks
+                      source "cmacs_dispatch_gowl_"))
+        (when (string-match-p "\\_<gowl_[a-z_]+[[:space:]]*(" (cdr chunk))
+          (setq checked (1+ checked))
+          (ert-info ((format "%s reaches the compositor" (car chunk)))
+            (should (string-match-p "cmacs_gowl_lock ()" (cdr chunk))))))
+      ;; Sanity: the walk found the dispatch functions.
+      (should (>= checked 20)))))
+
+(ert-deftest cmacs-gowl-test-dispatch-lock-and-unlock-balance ()
+  "Each locked dispatch function unlocks on every return.
+A plain lock/unlock pair is used there (nothing signals), so a return
+between them is a lock held forever: the next dispatch-thread event
+waits on it and the desktop freezes."
+  (let ((source (cmacs-gowl-tests--source-file
+                 "cmacs/glib/cmacs-eval-dispatch.c")))
+    (skip-unless source)
+    (dolist (chunk (cmacs-gowl-tests--c-function-chunks
+                    source "cmacs_dispatch_gowl_"))
+      (let ((text (cdr chunk)))
+        (when (string-match-p "cmacs_gowl_lock ()" text)
+          (ert-info ((format "%s" (car chunk)))
+            ;; Walk the body: after a lock, every `return' must be
+            ;; preceded by an unlock that is closer than the lock.
+            (with-temp-buffer
+              (insert text)
+              (goto-char (point-min))
+              (let ((locked nil))
+                (while (re-search-forward
+                        "cmacs_gowl_lock ()\\|cmacs_gowl_unlock ()\\|\\_<return\\_>"
+                        nil t)
+                  (pcase (match-string 0)
+                    ("cmacs_gowl_lock ()" (setq locked t))
+                    ("cmacs_gowl_unlock ()" (setq locked nil))
+                    (_ (should-not locked))))))))))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here
 

@@ -17,6 +17,7 @@
 
 #include <glib.h>
 #include <sys/select.h>
+#include <stdbool.h>
 
 /* Call before pselect(): query GMainContext for fds and adjust timeout.
  * Adds GLib's file descriptors to READABLE and WRITEABLE, and reduces
@@ -26,10 +27,17 @@
 extern int cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
                                struct timespec *timeout);
 
+/* True when the last cmacs_glib_prepare added an fd to WRITEABLE, so
+ * the caller must hand that set to pselect even on a round it has no
+ * connecting process of its own to watch. */
+extern bool cmacs_glib_wants_write (void);
+
 /* Call after pselect(): dispatch any ready GLib sources.
  * NFDS is the return value from pselect; if < 0, releases the context
- * without dispatching. */
-extern void cmacs_glib_dispatch (fd_set *readable, int nfds);
+ * without dispatching.  WRITEABLE is the set pselect filled, or NULL
+ * when none was passed (then G_IO_OUT readiness is simply unknown). */
+extern void cmacs_glib_dispatch (fd_set *readable, fd_set *writeable,
+                                 int nfds);
 
 /* Return the CMacs-owned GMainContext. */
 extern GMainContext *cmacs_glib_get_context (void);

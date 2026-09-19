@@ -44,6 +44,22 @@ static gint     poll_fds_alloc = 0;
 static gint     poll_fds_count = 0;
 static gint     poll_max_priority = 0;
 
+/* TRUE when the last cmacs_glib_prepare put at least one fd in the
+ * WRITEABLE set.  wait_reading_process_output only hands its write set
+ * to pselect when it has a connecting process of its own to watch; a
+ * GLib source waiting for G_IO_OUT on a round when it had none was
+ * never polled, and never fired. */
+static bool poll_wants_write = false;
+
+/* Every Lisp callback handed to cmacs-glib-timeout-add /
+ * cmacs-glib-idle-add, one cons cell per live source, on a staticpro'd
+ * list.  A Lisp_Object stored only in a g_malloc'd struct has no GC
+ * root: a fresh lambda passed as a timer callback was collected on the
+ * next GC and the source then called whatever now lived at that
+ * address.  The cell, not the function, is what gets removed, so two
+ * sources sharing one function object keep each other's protection. */
+static Lisp_Object cmacs_glib_live_callbacks;
+
 /* TRUE when cmacs_glib_prepare successfully acquired the context.
  * Guards cmacs_glib_prepare against re-entrant calls (a GLib
  * callback may eval Lisp that re-enters wait_reading_process_output
@@ -119,6 +135,7 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
                                          poll_fds, poll_fds_alloc);
 
   /* Merge GLib fds into Emacs fd_sets. */
+  poll_wants_write = false;
   for (i = 0; i < poll_fds_count; i++)
     {
       gint fd = poll_fds[i].fd;
@@ -129,7 +146,10 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
         FD_SET (fd, readable);
 
       if (poll_fds[i].events & G_IO_OUT)
-        FD_SET (fd, writeable);
+        {
+          FD_SET (fd, writeable);
+          poll_wants_write = true;
+        }
 
       if (fd > max_glib_fd)
         max_glib_fd = fd;
@@ -150,8 +170,14 @@ cmacs_glib_prepare (fd_set *readable, fd_set *writeable,
   return max_glib_fd;
 }
 
+bool
+cmacs_glib_wants_write (void)
+{
+  return cmacs_context_acquired && poll_wants_write;
+}
+
 void
-cmacs_glib_dispatch (fd_set *readable, int nfds)
+cmacs_glib_dispatch (fd_set *readable, fd_set *writeable, int nfds)
 {
   gint i;
 
@@ -203,6 +229,12 @@ cmacs_glib_dispatch (fd_set *readable, int nfds)
 
       if (FD_ISSET (fd, readable))
         poll_fds[i].revents |= (poll_fds[i].events & (G_IO_IN | G_IO_HUP));
+
+      /* WRITEABLE is NULL when the caller did not hand its write set
+       * to pselect; then nothing can be said about G_IO_OUT and the
+       * source is asked again next round. */
+      if (writeable != NULL && FD_ISSET (fd, writeable))
+        poll_fds[i].revents |= (poll_fds[i].events & G_IO_OUT);
     }
 
   /* Let GLib check and dispatch ready sources.
@@ -324,11 +356,23 @@ DEFUN ("cmacs-glib-pending-p", Fcmacs_glib_pending_p,
   return g_main_context_pending (cmacs_context) ? Qt : Qnil;
 }
 
-/* Callback data for cmacs-glib-timeout-add. */
+/* Callback data for cmacs-glib-timeout-add and cmacs-glib-idle-add.
+ * CELL is the (CALLBACK) cons this source owns on
+ * cmacs_glib_live_callbacks; the function is read through it. */
 typedef struct
 {
-  Lisp_Object callback;
+  Lisp_Object cell;
 } CmacsGlibTimerData;
+
+static CmacsGlibTimerData *
+cmacs_glib_timer_data_new (Lisp_Object callback)
+{
+  CmacsGlibTimerData *data = g_new0 (CmacsGlibTimerData, 1);
+
+  data->cell = Fcons (callback, Qnil);
+  cmacs_glib_live_callbacks = Fcons (data->cell, cmacs_glib_live_callbacks);
+  return data;
+}
 
 static gboolean
 cmacs_glib_timer_cb (gpointer user_data)
@@ -343,7 +387,7 @@ cmacs_glib_timer_cb (gpointer user_data)
    * cmacs-eval-dispatch.c for the full account. */
   specpdl_ref timer_count = SPECPDL_INDEX ();
   specbind (intern ("inhibit-interaction"), Qt);
-  result = safe_calln (data->callback);
+  result = safe_calln (XCAR (data->cell));
   unbind_to (timer_count, Qnil);
   return !NILP (result);
 }
@@ -352,8 +396,11 @@ static void
 cmacs_glib_timer_destroy (gpointer user_data)
 {
   CmacsGlibTimerData *data = (CmacsGlibTimerData *)user_data;
-  /* Allow GC to collect the callback. */
-  (void)data;
+
+  /* This source's own cell and no other: the callback may still be
+   * live under a second source.  Runs on the Lisp thread -- sources on
+   * cmacs_context are only ever destroyed from it. */
+  cmacs_glib_live_callbacks = Fdelq (data->cell, cmacs_glib_live_callbacks);
   g_free (data);
 }
 
@@ -374,8 +421,7 @@ Returns a source ID (integer) that can be used to remove it. */)
   if (cmacs_context == NULL)
     error ("CMacs GLib context not initialized");
 
-  data = g_new0 (CmacsGlibTimerData, 1);
-  data->callback = callback;
+  data = cmacs_glib_timer_data_new (callback);
 
   source = g_timeout_source_new ((guint)XFIXNAT (ms));
   g_source_set_callback (source, cmacs_glib_timer_cb, data,
@@ -421,8 +467,7 @@ Returns a source ID. */)
   if (cmacs_context == NULL)
     error ("CMacs GLib context not initialized");
 
-  data = g_new0 (CmacsGlibTimerData, 1);
-  data->callback = callback;
+  data = cmacs_glib_timer_data_new (callback);
 
   source = g_idle_source_new ();
   g_source_set_callback (source, cmacs_glib_timer_cb, data,
@@ -491,6 +536,9 @@ syms_of_cmacs_glib (void)
   defsubr (&Scmacs_glib_source_remove);
   defsubr (&Scmacs_glib_idle_add);
   defsubr (&Scmacs_setenv);
+
+  cmacs_glib_live_callbacks = Qnil;
+  staticpro (&cmacs_glib_live_callbacks);
 
   /* Frame Cairo screenshot DEFUNs (cmacs-glib-screenshot.c) live in
      a sibling translation unit; pull their symbols into the same

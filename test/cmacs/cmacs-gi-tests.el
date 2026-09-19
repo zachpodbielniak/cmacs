@@ -178,14 +178,14 @@
 (ert-deftest cmacs-gi-test-method-requires-gobject ()
   "Test that `gi-method' errors when given a non-GObject."
   (skip-unless (cmacs-feature-p 'gi))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (should-error (gi-method 42 "some_method")
                 :type 'error))
 
 (ert-deftest cmacs-gi-test-method-requires-string-method ()
   "Test that `gi-method' requires string method name."
   (skip-unless (cmacs-feature-p 'gi))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (let ((obj (gobject-new "GObject")))
     (should-error (gi-method obj 42)
                   :type 'wrong-type-argument)))
@@ -235,6 +235,46 @@
       (should (assq 'name info))
       (should (assq 'args info))
       (should (assq 'return-type info)))))
+
+;;; Boxed returns and ownership
+
+(ert-deftest cmacs-gi-test-boxed-return-is-usable ()
+  "A function returning a boxed struct hands back a value with methods.
+
+`g_main_context_default' returns a GMainContext, a registered boxed
+type.  The return marshaller knew objects, enums and scalars and gave
+nil for every struct, so nothing that produced a GDateTime, a GBytes
+or a GMainContext could be used from Lisp."
+  (skip-unless (cmacs-feature-p 'gi))
+  (gi-require "GLib" "2.0")
+  (let ((ctx (gi-call "GLib" "main_context_default")))
+    (should ctx)
+    (should-not (gobject-p ctx))
+    (should (memq (gi-method ctx "pending") '(t nil)))))
+
+(ert-deftest cmacs-gi-test-boxed-value-passes-as-argument ()
+  "A boxed value goes back in as a struct parameter.
+`g_main_context_is_owner' takes the context as its instance; a
+top-level function taking a struct goes through the same
+INTERFACE/STRUCT branch of the argument marshaller."
+  (skip-unless (cmacs-feature-p 'gi))
+  (gi-require "GLib" "2.0")
+  (let ((ctx (gi-call "GLib" "main_context_default")))
+    (should (memq (gi-method ctx "is_owner") '(t nil)))))
+
+(ert-deftest cmacs-gi-test-owned-returns-still-arrive ()
+  "Strings and objects the callee gives away are released, not lost.
+The leak itself is not observable from Lisp; this pins the values
+still arriving intact after the release was added."
+  (skip-unless (cmacs-feature-p 'gi))
+  (gi-require "GLib" "2.0")
+  (gi-require "Gio" "2.0")
+  (let ((dir (gi-call "GLib" "get_current_dir"))
+        (icon (gi-call "Gio" "content_type_get_icon" "text/plain")))
+    (should (stringp dir))
+    (should (> (length dir) 0))
+    (should (gobject-p icon))
+    (should (equal (gobject-type-name icon) "GThemedIcon"))))
 
 (provide 'cmacs-gi-tests)
 ;;; cmacs-gi-tests.el ends here

@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 
 /* ── Request queue entry ──────────────────────────────────────────── */
 
@@ -65,7 +66,22 @@ struct _CmacsBaconIpc
 
 /* ── Wire protocol helpers ─────────────────────────────────────────── */
 
-/* Write exactly N bytes to fd.  Returns TRUE on success. */
+/* How long one reply may wait for the child to drain the socket before
+   the frame is abandoned.  The child is a synchronous caller blocked on
+   this very reply, so in practice it drains at once; the bound is for a
+   child that has been stopped or has wandered off, so the editor is not
+   parked behind it. */
+#define IPC_WRITE_TIMEOUT_MS (5000)
+
+/* Write exactly N bytes to fd.  Returns TRUE on success.
+
+   The fd is non-blocking (cmacs_bacon_ipc_new sets O_NONBLOCK so the
+   READ side never stalls the main loop), so a reply larger than the
+   socket buffer -- a buffer's contents, a long listing -- gets EAGAIN
+   part way through.  That used to be treated as an error: the frame
+   went out truncated, the child read a length prefix promising bytes
+   that never came, and every later reply on the connection was
+   misframed.  Wait for POLLOUT and carry on instead. */
 static gboolean
 write_exact (int fd, const guint8 *buf, gsize n)
 {
@@ -77,6 +93,20 @@ write_exact (int fd, const guint8 *buf, gsize n)
         {
           if (errno == EINTR)
             continue;
+          if (errno == EAGAIN)
+            {
+              struct pollfd pfd;
+              int rc;
+
+              pfd.fd = fd;
+              pfd.events = POLLOUT;
+              do
+                rc = poll (&pfd, 1, IPC_WRITE_TIMEOUT_MS);
+              while (rc < 0 && errno == EINTR);
+              if (rc <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                return FALSE;
+              continue;
+            }
           return FALSE;
         }
       off += (gsize)w;
@@ -84,7 +114,8 @@ write_exact (int fd, const guint8 *buf, gsize n)
   return TRUE;
 }
 
-/* Write a length-prefixed JSON response. */
+/* Write a length-prefixed JSON response.  All or nothing: a header
+   with no body behind it would desynchronise every frame after it. */
 static void
 ipc_write_response (int fd, JsonNode *root)
 {
@@ -99,8 +130,10 @@ ipc_write_response (int fd, JsonNode *root)
   g_object_unref (gen);
 
   net_len = GUINT32_TO_BE ((guint32)len);
-  write_exact (fd, (const guint8 *)&net_len, 4);
-  write_exact (fd, (const guint8 *)json, len);
+  if (!write_exact (fd, (const guint8 *)&net_len, 4)
+      || !write_exact (fd, (const guint8 *)json, len))
+    g_warning ("cmacs-bacon-ipc: reply of %" G_GSIZE_FORMAT
+               " bytes not delivered: %s", len, g_strerror (errno));
   g_free (json);
 }
 

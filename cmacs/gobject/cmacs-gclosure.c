@@ -35,6 +35,7 @@
 #include "cmacs-gclosure.h"
 #include "cmacs-gobject.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-eval-dispatch.h"
 
 #include <glib-object.h>
 
@@ -43,9 +44,13 @@
 /* ──────────────────────────────────────────────────────────────────── */
 
 /* All live Elisp closures are held on this list so the Emacs GC does
-   not collect the lambda while GLib still references it.  Entries are
-   added in cmacs_gclosure_new and removed in the invalidate
-   notifier when the GClosure is freed.  */
+   not collect the lambda while GLib still references it.  Each entry
+   is a (FUNC) cons owned by exactly one GClosure -- added in
+   cmacs_gclosure_new, removed in the invalidate notifier when that
+   closure is freed.  The cons, not FUNC, is what is delq'd: the same
+   function object connected to two signals used to lose BOTH roots
+   when either handler was disconnected, and the survivor then ran a
+   collected lambda.  */
 static Lisp_Object cmacs_gclosure_prevent_gc_list;
 
 /* ──────────────────────────────────────────────────────────────────── */
@@ -56,10 +61,9 @@ typedef struct
 {
   GClosure closure;
   Lisp_Object func;
+  /* This closure's own entry on cmacs_gclosure_prevent_gc_list. */
+  Lisp_Object cell;
 } CmacsElispClosure;
-
-/* Forward-declared from cmacs-gobject.c */
-extern Lisp_Object cmacs_gvalue_to_lisp_external (const GValue *val);
 
 /* One deferred closure call: everything needed to run it later, owning
    a reference to all of it.  The GValue copies matter -- a signal's
@@ -194,65 +198,32 @@ cmacs_gclosure_invoke (GClosure     *closure,
 
   args[0] = eclosure->func;
 
-  /* Marshal signal parameters to elisp.
-   * Skip param_values[0] which is the instance (already known). */
+  /* Marshal signal parameters to elisp through the one converter
+   * gobject-get also uses, so a handler sees the same Lisp value for a
+   * type that a property read gives.  This used to keep its own table,
+   * which tested `type == G_TYPE_ENUM': an enum parameter has a
+   * DERIVED type, so every enum a signal carried arrived as nil.
+   * Skip param_values[0], the instance (already known). */
   for (i = 1; i < n_param_values; i++)
-    {
-      GType type = G_VALUE_TYPE (&param_values[i]);
-
-      if (type == G_TYPE_BOOLEAN)
-        args[i] = g_value_get_boolean (&param_values[i]) ? Qt : Qnil;
-      else if (type == G_TYPE_INT)
-        args[i] = make_fixnum (g_value_get_int (&param_values[i]));
-      else if (type == G_TYPE_UINT)
-        args[i] = make_fixnum ((EMACS_INT)g_value_get_uint (&param_values[i]));
-      /* glong and gint64 are both EMACS_INT's own width on an LP64
-         build, so naming the cast is a -Wuseless-cast; the implicit
-         conversion is still correct where they differ.  G_TYPE_UINT
-         above keeps its cast because that one genuinely widens. */
-      else if (type == G_TYPE_LONG)
-        args[i] = make_fixnum (g_value_get_long (&param_values[i]));
-      else if (type == G_TYPE_INT64)
-        args[i] = make_fixnum (g_value_get_int64 (&param_values[i]));
-      else if (type == G_TYPE_FLOAT)
-        args[i] = make_float ((double)g_value_get_float (&param_values[i]));
-      else if (type == G_TYPE_DOUBLE)
-        args[i] = make_float (g_value_get_double (&param_values[i]));
-      else if (type == G_TYPE_STRING)
-        {
-          const gchar *str = g_value_get_string (&param_values[i]);
-          args[i] = str != NULL ? build_string (str) : Qnil;
-        }
-      else if (type == G_TYPE_ENUM)
-        args[i] = make_fixnum (g_value_get_enum (&param_values[i]));
-      else if (g_type_is_a (type, G_TYPE_OBJECT))
-        args[i] = cmacs_gobject_wrap (g_value_get_object (&param_values[i]));
-      else if (g_type_is_a (type, G_TYPE_BOXED))
-        {
-          gpointer boxed = g_value_get_boxed (&param_values[i]);
-          args[i] = boxed ? cmacs_boxed_wrap (type, boxed) : Qnil;
-        }
-      else
-        args[i] = Qnil;
-    }
+    args[i] = cmacs_gvalue_to_lisp (&param_values[i]);
 
   /* Call the elisp function.
    *
    * GLib may dispatch this closure while Emacs is in input-wait
    * (e.g. xg_select → g_main_context_dispatch).  If waiting_for_input
    * is set and the Elisp code signals an error, signal_or_quit aborts
-   * unconditionally.  Temporarily clear the flag so errors are handled
-   * normally by safe_funcall's condition-case wrapper.  */
-  {
-    bool was_waiting = waiting_for_input;
-    if (was_waiting)
-      waiting_for_input = false;
-    result = safe_funcall ((ptrdiff_t)n_param_values, args);
-    if (was_waiting)
-      waiting_for_input = true;
-  }
+   * unconditionally.  cmacs_dispatch_safe_callN_value clears the flag
+   * around the call so errors stay inside safe_funcall's
+   * condition-case, and binds `inhibit-interaction': a handler that
+   * reached a minibuffer prompt from inside a GLib dispatch entered a
+   * recursive edit underneath it and wedged the editor (see
+   * cmacs-eval-dispatch.c).  */
+  result = cmacs_dispatch_safe_callN_value (args[0],
+                                            (ptrdiff_t) n_param_values - 1,
+                                            args + 1);
 
-  /* If the signal expects a return value, marshal it back. */
+  /* If the signal expects a return value, marshal it back.  Only
+   * non-signalling conversions: this is a GLib callback frame. */
   if (return_value != NULL && G_VALUE_TYPE (return_value) != G_TYPE_NONE)
     {
       GType rtype = G_VALUE_TYPE (return_value);
@@ -261,6 +232,14 @@ cmacs_gclosure_invoke (GClosure     *closure,
         g_value_set_boolean (return_value, !NILP (result));
       else if (rtype == G_TYPE_INT && FIXNUMP (result))
         g_value_set_int (return_value, (gint)XFIXNUM (result));
+      else if (rtype == G_TYPE_UINT && FIXNATP (result))
+        g_value_set_uint (return_value, (guint)XFIXNAT (result));
+      else if (rtype == G_TYPE_DOUBLE && NUMBERP (result))
+        g_value_set_double (return_value, XFLOATINT (result));
+      else if (G_TYPE_IS_ENUM (rtype) && FIXNUMP (result))
+        g_value_set_enum (return_value, (gint)XFIXNUM (result));
+      else if (G_TYPE_IS_FLAGS (rtype) && FIXNATP (result))
+        g_value_set_flags (return_value, (guint)XFIXNAT (result));
       else if (rtype == G_TYPE_STRING && STRINGP (result))
         g_value_set_string (return_value, SSDATA (result));
     }
@@ -304,16 +283,17 @@ cmacs_gclosure_invalidate (gpointer data, GClosure *closure)
   if (cmacs_glib_on_main_thread ())
     {
       cmacs_gclosure_prevent_gc_list =
-        Fdelq (eclosure->func, cmacs_gclosure_prevent_gc_list);
+        Fdelq (eclosure->cell, cmacs_gclosure_prevent_gc_list);
       return;
     }
 
   {
     /* The Lisp_Object is copied by value: the closure is being torn down
-       and must not be read from the idle. */
+       and must not be read from the idle.  The cell stays reachable
+       from the list until the idle runs, so the copy is a live root. */
     Lisp_Object *held = g_malloc (sizeof *held);
 
-    *held = eclosure->func;
+    *held = eclosure->cell;
     cmacs_glib_invoke_on_main (cmacs_gclosure_unprotect_idle, held,
                                cmacs_gclosure_unprotect_free);
   }
@@ -329,9 +309,11 @@ cmacs_gclosure_new (Lisp_Object func)
   eclosure = (CmacsElispClosure *)closure;
   eclosure->func = func;
 
-  /* Protect the function from GC while the closure is alive. */
+  /* Protect the function from GC while the closure is alive, through a
+     cell that belongs to this closure alone. */
+  eclosure->cell = Fcons (func, Qnil);
   cmacs_gclosure_prevent_gc_list =
-    Fcons (func, cmacs_gclosure_prevent_gc_list);
+    Fcons (eclosure->cell, cmacs_gclosure_prevent_gc_list);
 
   g_closure_set_marshal (closure, cmacs_gclosure_marshal);
   g_closure_add_invalidate_notifier (closure, NULL,

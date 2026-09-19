@@ -16,6 +16,7 @@
 
 #include "lisp.h"
 #include "keyboard.h"
+#include "coding.h"
 #include "cmacs-eval-dispatch.h"
 #ifdef HAVE_CMACS_GOWL
 #include "cmacs-gowl.h"
@@ -288,6 +289,39 @@ dispatch_result_is_error (Lisp_Object result)
 
 #define CMACS_DISPATCH_ERROR_DOMAIN (g_quark_from_static_string ("cmacs-dispatch"))
 
+gchar *
+cmacs_dispatch_string_to_utf8 (Lisp_Object str)
+{
+  Lisp_Object enc;
+
+  if (!STRINGP (str))
+    return g_strdup ("");
+
+  /* Emacs's internal encoding is UTF-8 for every Unicode character,
+     but not for the rest of what a string can hold: a raw byte from a
+     binary buffer is stored as a two-byte sequence starting 0xC0/0xC1,
+     and a unibyte string carries its bytes as they are.  Handed to
+     g_variant_new ("(s)") or a JSON generator as-is, such a string is
+     rejected on the way out and the client sits on an answer that
+     never comes.  Encode to UTF-8 first, then replace whatever still
+     is not UTF-8 -- the raw bytes -- with U+FFFD, which is a visible
+     answer rather than a stalled one.  */
+  enc = STRING_MULTIBYTE (str) ? ENCODE_UTF_8 (str) : str;
+  return g_utf8_make_valid (SSDATA (enc), SBYTES (enc));
+}
+
+/* The error message of a (error . MSG) dispatch result as valid
+   UTF-8, or a placeholder.  Caller g_frees.  */
+static gchar *
+dispatch_error_message (Lisp_Object result)
+{
+  Lisp_Object msg = XCDR (result);
+
+  return STRINGP (msg)
+    ? cmacs_dispatch_string_to_utf8 (msg)
+    : g_strdup ("unknown error");
+}
+
 /* ── Public API ────────────────────────────────────────────────────── */
 
 gchar *
@@ -299,14 +333,13 @@ cmacs_dispatch_eval (const gchar *expression, GError **error)
 
   if (dispatch_result_is_error (result))
     {
-      Lisp_Object msg = XCDR (result);
-      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
-                   "%s", STRINGP (msg) ? SSDATA (msg) : "unknown error");
+      g_autofree gchar *msg = dispatch_error_message (result);
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1, "%s", msg);
       return NULL;
     }
 
   printed = Fprin1_to_string (result, Qnil, Qnil);
-  return g_strdup (SSDATA (printed));
+  return cmacs_dispatch_string_to_utf8 (printed);
 }
 
 gchar *
@@ -318,19 +351,18 @@ cmacs_dispatch_eval_string (const gchar *expression, GError **error)
 
   if (dispatch_result_is_error (result))
     {
-      Lisp_Object msg = XCDR (result);
-      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
-                   "%s", STRINGP (msg) ? SSDATA (msg) : "unknown error");
+      g_autofree gchar *msg = dispatch_error_message (result);
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1, "%s", msg);
       return NULL;
     }
 
   /* Strings are returned verbatim so callers get raw text; any other
      value type falls back to its printed representation. */
   if (STRINGP (result))
-    return g_strdup (SSDATA (result));
+    return cmacs_dispatch_string_to_utf8 (result);
 
   printed = Fprin1_to_string (result, Qnil, Qnil);
-  return g_strdup (SSDATA (printed));
+  return cmacs_dispatch_string_to_utf8 (printed);
 }
 
 /* ── String quoting for generated Lisp and JSON ───────────────────────
@@ -726,9 +758,8 @@ cmacs_dispatch_gi_require (const gchar *ns, const gchar *ver,
 
   if (dispatch_result_is_error (result))
     {
-      Lisp_Object msg = XCDR (result);
-      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
-                   "%s", STRINGP (msg) ? SSDATA (msg) : "unknown error");
+      g_autofree gchar *msg = dispatch_error_message (result);
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1, "%s", msg);
       return FALSE;
     }
 
@@ -775,14 +806,13 @@ cmacs_dispatch_gi_call (const gchar *ns, const gchar *func,
 
   if (dispatch_result_is_error (result))
     {
-      Lisp_Object msg = XCDR (result);
-      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
-                   "%s", STRINGP (msg) ? SSDATA (msg) : "unknown error");
+      g_autofree gchar *msg = dispatch_error_message (result);
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1, "%s", msg);
       return NULL;
     }
 
   printed = Fprin1_to_string (result, Qnil, Qnil);
-  return g_strdup (SSDATA (printed));
+  return cmacs_dispatch_string_to_utf8 (printed);
 }
 
 gchar **
@@ -802,7 +832,7 @@ cmacs_dispatch_gi_list_functions (const gchar *ns)
         {
           Lisp_Object s = XCAR (tail);
           if (STRINGP (s))
-            g_ptr_array_add (arr, g_strdup (SSDATA (s)));
+            g_ptr_array_add (arr, cmacs_dispatch_string_to_utf8 (s));
           tail = XCDR (tail);
         }
     }
@@ -848,6 +878,10 @@ cmacs_dispatch_gowl_list_clients (GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  /* The live client list, which the dispatch thread edits on every
+     map and unmap; walked under the lock like every other reader on
+     Emacs's thread (see the DEFUN audit in cmacs-gowl.c).  */
+  cmacs_gowl_lock ();
   buf = g_string_new ("[");
   clients = gowl_compositor_get_clients (cmacs_gowl_compositor);
   for (l = clients; l != NULL; l = l->next)
@@ -874,6 +908,7 @@ cmacs_dispatch_gowl_list_clients (GError **error)
         x, y, w, h);
     }
   g_string_append_c (buf, ']');
+  cmacs_gowl_unlock ();
   return g_string_free (buf, FALSE);
 }
 
@@ -883,17 +918,22 @@ cmacs_dispatch_gowl_focused_client (GError **error)
   GowlClient *c;
   gint x, y, w, h;
   g_autofree gchar *jt = NULL, *ja = NULL;
+  gchar *out;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   c = gowl_compositor_get_focused_client (cmacs_gowl_compositor);
   if (c == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
   gowl_client_get_geometry (c, &x, &y, &w, &h);
   jt = cmacs_dispatch_json_escape (gowl_client_get_title (c));
   ja = cmacs_dispatch_json_escape (gowl_client_get_app_id (c));
-  return g_strdup_printf (
+  out = g_strdup_printf (
     "{\"id\":%u,\"title\":\"%s\",\"app-id\":\"%s\","
     "\"tags\":%u,\"floating\":%s,\"pid\":%d,"
     "\"geometry\":[%d,%d,%d,%d]}",
@@ -902,12 +942,15 @@ cmacs_dispatch_gowl_focused_client (GError **error)
     gowl_client_get_floating (c) ? "true" : "false",
     gowl_client_get_pid (c),
     x, y, w, h);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 gchar *
 cmacs_dispatch_gowl_spawn (const gchar *command, GError **error)
 {
   GPid pid = 0;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
@@ -917,7 +960,10 @@ cmacs_dispatch_gowl_spawn (const gchar *command, GError **error)
      g_spawn_command_line_async never worked -- that function does not
      use a shell, so it tried to exec a program named WAYLAND_DISPLAY=x
      and every Spawn over bacon, D-Bus and MCP failed.  */
-  if (!cmacs_gowl_spawn_command (command, &pid, error))
+  cmacs_gowl_lock ();
+  ok = cmacs_gowl_spawn_command (command, &pid, error);
+  cmacs_gowl_unlock ();
+  if (!ok)
     return NULL;
 
   return g_strdup_printf ("%ld", (long) pid);
@@ -931,6 +977,7 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   buf = g_string_new ("[");
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   for (l = monitors; l != NULL; l = l->next)
@@ -976,6 +1023,7 @@ cmacs_dispatch_gowl_list_monitors (GError **error)
         x, y, w, h);
     }
   g_string_append_c (buf, ']');
+  cmacs_gowl_unlock ();
   return g_string_free (buf, FALSE);
 }
 
@@ -1131,13 +1179,18 @@ cmacs_dispatch_gowl_set_mfact (gdouble mfact, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   if (monitors == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
   /* Set on the first (focused) monitor. */
   mon = GOWL_MONITOR (monitors->data);
   gowl_monitor_set_mfact (mon, mfact);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1149,12 +1202,17 @@ cmacs_dispatch_gowl_set_nmaster (gint n, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   if (monitors == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
   mon = GOWL_MONITOR (monitors->data);
   gowl_monitor_set_nmaster (mon, n);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1166,12 +1224,17 @@ cmacs_dispatch_gowl_view_tags (guint32 tagmask, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   monitors = gowl_compositor_get_monitors (cmacs_gowl_compositor);
   if (monitors == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
   mon = GOWL_MONITOR (monitors->data);
   gowl_monitor_set_tags (mon, tagmask);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1179,7 +1242,9 @@ gchar *
 cmacs_dispatch_gowl_lock (GError **error)
 {
   GOWL_DISPATCH_CHECK ();
+  cmacs_gowl_lock ();
   gowl_compositor_set_locked (cmacs_gowl_compositor, TRUE);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1187,7 +1252,9 @@ gchar *
 cmacs_dispatch_gowl_unlock (GError **error)
 {
   GOWL_DISPATCH_CHECK ();
+  cmacs_gowl_lock ();
   gowl_compositor_set_locked (cmacs_gowl_compositor, FALSE);
+  cmacs_gowl_unlock ();
   return g_strdup ("t");
 }
 
@@ -1233,7 +1300,9 @@ dispatch_recorder (GError **error)
       return NULL;
     }
 
+  cmacs_gowl_lock ();
   rec = gowl_compositor_get_input_recorder (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
   if (rec == NULL)
     g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                  "Gowl has no input recorder");
@@ -1248,55 +1317,77 @@ cmacs_dispatch_gowl_start_recording (guint max_seconds,
 {
   GowlInputRecorder *rec;
   g_autofree gchar *token = NULL;
+  gchar *out;
 
   rec = dispatch_recorder (error);
   if (rec == NULL)
     return NULL;
 
+  /* The recorder is fed by the dispatch thread on every input event
+   * and has no lock of its own; the compositor lock is the one that
+   * serialises these calls against it. */
+  cmacs_gowl_lock ();
   token = gowl_input_recorder_start (rec, max_seconds, max_events, error);
   if (token == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
   /* The status payload carries the token along with the limits and the
    * standing caveat about what suppression can and cannot see, so the
    * caller gets the handle and the guard's reach in one reply. */
-  return gowl_input_recorder_status (rec);
+  out = gowl_input_recorder_status (rec);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 gchar *
 cmacs_dispatch_gowl_drain_recording (const gchar *token, GError **error)
 {
   GowlInputRecorder *rec;
+  gchar *out;
 
   rec = dispatch_recorder (error);
   if (rec == NULL)
     return NULL;
 
-  return gowl_input_recorder_drain (rec, token, error);
+  cmacs_gowl_lock ();
+  out = gowl_input_recorder_drain (rec, token, error);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 gchar *
 cmacs_dispatch_gowl_stop_recording (const gchar *token, GError **error)
 {
   GowlInputRecorder *rec;
+  gchar *out;
 
   rec = dispatch_recorder (error);
   if (rec == NULL)
     return NULL;
 
-  return gowl_input_recorder_stop (rec, token, error);
+  cmacs_gowl_lock ();
+  out = gowl_input_recorder_stop (rec, token, error);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 gchar *
 cmacs_dispatch_gowl_recording_status (GError **error)
 {
   GowlInputRecorder *rec;
+  gchar *out;
 
   rec = dispatch_recorder (error);
   if (rec == NULL)
     return NULL;
 
-  return gowl_input_recorder_status (rec);
+  cmacs_gowl_lock ();
+  out = gowl_input_recorder_status (rec);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 gchar *
@@ -1342,9 +1433,11 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
   GowlClient *c;
   gint x, y, w, h;
   g_autofree gchar *jt = NULL, *ja = NULL;
+  gchar *out;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   if (g_strcmp0 (by, "title") == 0)
     c = gowl_compositor_find_client_by_title (cmacs_gowl_compositor,
                                                pattern);
@@ -1353,17 +1446,22 @@ cmacs_dispatch_gowl_find_client (const gchar *pattern, const gchar *by,
                                                 pattern);
 
   if (c == NULL)
-    return g_strdup ("nil");
+    {
+      cmacs_gowl_unlock ();
+      return g_strdup ("nil");
+    }
 
   gowl_client_get_geometry (c, &x, &y, &w, &h);
   jt = cmacs_dispatch_json_escape (gowl_client_get_title (c));
   ja = cmacs_dispatch_json_escape (gowl_client_get_app_id (c));
-  return g_strdup_printf (
+  out = g_strdup_printf (
     "{\"id\":%u,\"title\":\"%s\",\"app-id\":\"%s\","
     "\"tags\":%u,\"geometry\":[%d,%d,%d,%d]}",
     gowl_client_get_id (c), jt, ja,
     gowl_client_get_tags (c),
     x, y, w, h);
+  cmacs_gowl_unlock ();
+  return out;
 }
 
 /* ── Monitor management dispatch ─────────────────────────────────── */
@@ -1385,9 +1483,13 @@ cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
   gowl_monitor_get_geometry (m, &x, &y, &w, &h);
 
@@ -1437,6 +1539,7 @@ cmacs_dispatch_gowl_monitor_info (const gchar *name, GError **error)
   g_list_free (modes);
   g_string_append (buf, "]}");
 
+  cmacs_gowl_unlock ();
   return g_string_free (buf, FALSE);
 }
 
@@ -1449,9 +1552,13 @@ cmacs_dispatch_gowl_monitor_modes (const gchar *name, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
   buf = g_string_new ("[");
   modes = gowl_monitor_get_modes (m);
@@ -1466,6 +1573,7 @@ cmacs_dispatch_gowl_monitor_modes (const gchar *name, GError **error)
     }
   g_list_free (modes);
   g_string_append_c (buf, ']');
+  cmacs_gowl_unlock ();
   return g_string_free (buf, FALSE);
 }
 
@@ -1474,14 +1582,21 @@ cmacs_dispatch_gowl_set_monitor_mode (const gchar *name, gint w, gint h,
                                        gint refresh_mhz, GError **error)
 {
   GowlMonitor *m;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
-  if (!gowl_monitor_set_mode (m, w, h, refresh_mhz))
+  ok = gowl_monitor_set_mode (m, w, h, refresh_mhz);
+  cmacs_gowl_unlock ();
+  if (!ok)
     {
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Failed to set mode %dx%d@%d on \"%s\"",
@@ -1500,11 +1615,16 @@ cmacs_dispatch_gowl_monitor_position (const gchar *name, GError **error)
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
   gowl_monitor_get_position (m, &x, &y);
+  cmacs_gowl_unlock ();
   return g_strdup_printf ("{\"x\":%d,\"y\":%d}", x, y);
 }
 
@@ -1513,14 +1633,21 @@ cmacs_dispatch_gowl_set_monitor_pos (const gchar *name, gint x, gint y,
                                       GError **error)
 {
   GowlMonitor *m;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
-  if (!gowl_monitor_set_position (m, x, y))
+  ok = gowl_monitor_set_position (m, x, y);
+  cmacs_gowl_unlock ();
+  if (!ok)
     {
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Failed to set position (%d,%d) on \"%s\"",
@@ -1536,14 +1663,21 @@ cmacs_dispatch_gowl_set_monitor_enabled (const gchar *name, gboolean en,
                                           GError **error)
 {
   GowlMonitor *m;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
-  if (!gowl_monitor_set_enabled (m, en))
+  ok = gowl_monitor_set_enabled (m, en);
+  cmacs_gowl_unlock ();
+  if (!ok)
     {
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Failed to %s monitor \"%s\"",
@@ -1559,14 +1693,21 @@ cmacs_dispatch_gowl_set_monitor_scale (const gchar *name, gdouble scale,
                                         GError **error)
 {
   GowlMonitor *m;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
-  if (!gowl_monitor_set_scale (m, scale))
+  ok = gowl_monitor_set_scale (m, scale);
+  cmacs_gowl_unlock ();
+  if (!ok)
     {
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Failed to set scale %.2f on \"%s\"",
@@ -1582,21 +1723,29 @@ cmacs_dispatch_gowl_set_monitor_transform (const gchar *name, gint xform,
                                             GError **error)
 {
   GowlMonitor *m;
+  gboolean ok;
 
   GOWL_DISPATCH_CHECK ();
 
+  cmacs_gowl_lock ();
   m = dispatch_resolve_monitor (name, error);
   if (m == NULL)
-    return NULL;
+    {
+      cmacs_gowl_unlock ();
+      return NULL;
+    }
 
   if (xform < 0 || xform > 7)
     {
+      cmacs_gowl_unlock ();
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Invalid transform %d (must be 0-7)", xform);
       return NULL;
     }
 
-  if (!gowl_monitor_set_transform (m, xform))
+  ok = gowl_monitor_set_transform (m, xform);
+  cmacs_gowl_unlock ();
+  if (!ok)
     {
       g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
                    "Failed to set transform %d on \"%s\"",

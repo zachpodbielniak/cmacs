@@ -187,6 +187,15 @@ Low-level IPC functions (normally you don't call these directly):
 |--------------------------------------------------+--------------------------------------|
 | =(cmacs-bacon-ipc-send METHOD PARAMS)=           | Send an IPC request to bacon         |
 | =(cmacs-bacon-ipc-connected-p)=                  | Return =t= if IPC is active         |
+| =(bacon-ipc-start)=                              | Create the socketpair; returns the child-side fd |
+| =(bacon-ipc-release-child-fd)=                   | Close the parent's copy of that fd once the child has forked |
+| =(bacon-ipc-stop)=                               | Tear the IPC handler down            |
+
+The parent keeps the child's end open only until the shell has been spawned; =M-x bacon= releases it right after =vterm= starts.  While the parent still held it the connection could never read as closed -- the parent was its own live peer -- and every shell start leaked a descriptor.
+
+Replies are written on a non-blocking descriptor (so reading can never stall the editor) and wait for the socket to drain when a reply is larger than the kernel buffer: a buffer's contents or a long listing goes out whole.  A frame that cannot be delivered within five seconds is dropped and logged rather than sent truncated, since a length prefix with fewer bytes behind it would misframe every reply after it.
+
+Every string that leaves the editor over this channel, D-Bus or MCP passes through =cmacs_dispatch_string_to_utf8=: multibyte text is encoded, and a raw byte -- which Emacs stores in a form that is not UTF-8 -- becomes U+FFFD, because the JSON and GVariant layers reject invalid UTF-8 and the reply would otherwise never arrive.
 
 * Files
 

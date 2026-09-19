@@ -136,12 +136,12 @@ cmacs_boxed_p (Lisp_Object obj)
 /* GValue ↔ elisp marshaling                                           */
 /* ──────────────────────────────────────────────────────────────────── */
 
-static Lisp_Object
+Lisp_Object
 cmacs_gvalue_to_lisp (const GValue *val)
 {
   GType type;
 
-  if (val == NULL)
+  if (val == NULL || !G_IS_VALUE (val))
     return Qnil;
 
   type = G_VALUE_TYPE (val);
@@ -183,14 +183,31 @@ cmacs_gvalue_to_lisp (const GValue *val)
       return str != NULL ? build_string (str) : Qnil;
     }
 
-  if (type == G_TYPE_ENUM)
+  if (type == G_TYPE_CHAR)
+    return make_fixnum (g_value_get_schar (val));
+
+  if (type == G_TYPE_UCHAR)
+    return make_fixnum (g_value_get_uchar (val));
+
+  /* Every enum and flags value has its own registered GType derived
+     from G_TYPE_ENUM / G_TYPE_FLAGS; comparing against the fundamental
+     type never matched one.  Enum properties therefore fell through to
+     the string fallback below and read back as "GTK_ALIGN_FILL", while
+     gobject-set on the same property demanded an integer.  */
+  if (G_TYPE_IS_ENUM (type))
     return make_fixnum (g_value_get_enum (val));
 
-  if (type == G_TYPE_FLAGS)
+  if (G_TYPE_IS_FLAGS (type))
     return make_fixnum ((EMACS_INT)g_value_get_flags (val));
 
   if (g_type_is_a (type, G_TYPE_OBJECT))
     return cmacs_gobject_wrap (g_value_get_object (val));
+
+  if (g_type_is_a (type, G_TYPE_BOXED))
+    {
+      gpointer boxed = g_value_get_boxed (val);
+      return boxed != NULL ? cmacs_boxed_wrap (type, boxed) : Qnil;
+    }
 
   /* Fallback: return string representation. */
   {
@@ -242,10 +259,28 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
       return TRUE;
     }
 
+  if (type == G_TYPE_ULONG)
+    {
+      CHECK_FIXNAT (obj);
+      g_value_set_ulong (val, (gulong)XFIXNAT (obj));
+      return TRUE;
+    }
+
+  if (type == G_TYPE_UINT64)
+    {
+      CHECK_FIXNAT (obj);
+      g_value_set_uint64 (val, (guint64)XFIXNAT (obj));
+      return TRUE;
+    }
+
+  /* XFLOATINT, not XFLOAT_DATA: CHECK_NUMBER admits a fixnum, and
+     XFLOAT_DATA on one reads the integer's tagged bits as a double --
+     (gobject-set obj "opacity" 1) stored garbage.  The double case
+     below already special-cased fixnums; this one did not. */
   if (type == G_TYPE_FLOAT)
     {
       CHECK_NUMBER (obj);
-      g_value_set_float (val, (gfloat)XFLOAT_DATA (obj));
+      g_value_set_float (val, (gfloat)XFLOATINT (obj));
       return TRUE;
     }
 
@@ -291,6 +326,22 @@ cmacs_lisp_to_gvalue (Lisp_Object obj, GValue *val)
     {
       GObject *gobj = cmacs_gobject_unwrap (obj);
       g_value_set_object (val, gobj);
+      return TRUE;
+    }
+
+  if (g_type_is_a (type, G_TYPE_BOXED))
+    {
+      CmacsBoxedValue *bv;
+
+      if (NILP (obj))
+        {
+          g_value_set_boxed (val, NULL);
+          return TRUE;
+        }
+      bv = cmacs_boxed_unwrap (obj);
+      if (bv == NULL || !g_type_is_a (bv->type, type))
+        return FALSE;
+      g_value_set_boxed (val, bv->data);
       return TRUE;
     }
 
@@ -405,7 +456,9 @@ Returns a handler ID (integer) for disconnecting. */)
 
 DEFUN ("gobject-disconnect", Fgobject_disconnect, Sgobject_disconnect,
        2, 2, 0,
-       doc: /* Disconnect a signal handler from OBJECT by HANDLER-ID. */)
+       doc: /* Disconnect a signal handler from OBJECT by HANDLER-ID.
+Return t when a handler was disconnected, nil when HANDLER-ID names
+none (already disconnected, or never valid).  */)
   (Lisp_Object object, Lisp_Object handler_id)
 {
   GObject *obj;
@@ -416,8 +469,13 @@ DEFUN ("gobject-disconnect", Fgobject_disconnect, Sgobject_disconnect,
 
   CHECK_FIXNAT (handler_id);
 
+  /* An unknown id is a GLib CRITICAL from g_signal_handler_disconnect,
+     not a Lisp error; answer the question quietly instead. */
+  if (!g_signal_handler_is_connected (obj, (gulong)XFIXNAT (handler_id)))
+    return Qnil;
+
   g_signal_handler_disconnect (obj, (gulong)XFIXNAT (handler_id));
-  return Qnil;
+  return Qt;
 }
 
 DEFUN ("gobject-new", Fgobject_new, Sgobject_new, 1, MANY, 0,
@@ -460,12 +518,20 @@ usage: (gobject-new TYPE &rest PROPERTIES) */)
               const char *ns = loaded[i];
               size_t ns_len = strlen (ns);
               const char *short_name = ctype;
+              const gchar *c_prefix = g_irepository_get_c_prefix (repo, ns);
 
-              /* Strip namespace prefix: "GtkButton" → "Button".
-                 Also handle namespaces with trailing version digits
-                 that don't appear in C type names, e.g.
-                 namespace "WebKit2" → C prefix "WebKit". */
-              if (strncmp (ctype, ns, ns_len) == 0)
+              /* Strip the namespace's C prefix: "GtkButton" → "Button".
+                 The typelib says what that prefix is, and it is not
+                 always the namespace name: Gio, GLib and GObject all
+                 use "G", so stripping "Gio" from "GSocketClient" found
+                 nothing and no Gio type could ever be created here.
+                 The name-based strip stays as a fallback for a typelib
+                 without a c:prefix, including the trailing-digits case
+                 (namespace "WebKit2" → C prefix "WebKit"). */
+              if (c_prefix != NULL && *c_prefix != '\0'
+                  && strncmp (ctype, c_prefix, strlen (c_prefix)) == 0)
+                short_name = ctype + strlen (c_prefix);
+              else if (strncmp (ctype, ns, ns_len) == 0)
                 short_name = ctype + ns_len;
               else
                 {

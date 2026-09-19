@@ -18,7 +18,7 @@ finalizes a user-ptr, =g_object_unref()= is called automatically.
 | =(gobject-get OBJECT PROPERTY)=                       | Get a GObject property value                   |
 | =(gobject-set OBJECT PROPERTY VALUE)=                 | Set a GObject property                         |
 | =(gobject-connect OBJECT SIGNAL CALLBACK)=            | Connect a Lisp function to a GObject signal    |
-| =(gobject-disconnect OBJECT HANDLER-ID)=              | Disconnect a signal handler                    |
+| =(gobject-disconnect OBJECT HANDLER-ID)=              | Disconnect a signal handler; =t= if one was, =nil= if the id names none |
 | =(gobject-list-properties OBJECT-OR-TYPE)=            | List all property names                        |
 | =(gobject-list-signals OBJECT-OR-TYPE)=               | List all signal names                          |
 
@@ -51,25 +51,29 @@ Conversion between Emacs Lisp types and GValue types:
 | GType           | Lisp type        | Notes                              |
 |-----------------+------------------+------------------------------------|
 | =G_TYPE_BOOLEAN= | =t= / =nil=     |                                    |
-| =G_TYPE_INT=    | integer          |                                    |
-| =G_TYPE_UINT=   | integer          | Negative values signal error       |
-| =G_TYPE_INT64=  | integer          |                                    |
-| =G_TYPE_UINT64= | integer          |                                    |
-| =G_TYPE_FLOAT=  | float            |                                    |
-| =G_TYPE_DOUBLE= | float            |                                    |
-| =G_TYPE_STRING= | string           |                                    |
-| =G_TYPE_ENUM=   | integer or symbol |                                   |
+| =G_TYPE_INT=, =G_TYPE_LONG=, =G_TYPE_INT64=, =G_TYPE_CHAR= | integer |                          |
+| =G_TYPE_UINT=, =G_TYPE_ULONG=, =G_TYPE_UINT64=, =G_TYPE_UCHAR= | integer | Negative values signal error |
+| =G_TYPE_FLOAT=  | float            | An integer is accepted on set      |
+| =G_TYPE_DOUBLE= | float            | An integer is accepted on set      |
+| =G_TYPE_STRING= | string           | =nil= sets NULL                    |
+| any enum type   | integer          | Matched by =G_TYPE_IS_ENUM=, so every registered enum, not just the fundamental type |
+| any flags type  | integer          | Likewise =G_TYPE_IS_FLAGS=         |
 | =G_TYPE_OBJECT= | user-ptr         | Ref'd on wrap, unref'd on finalize |
+| any boxed type  | boxed user-ptr   | Copied on wrap, freed on finalize; usable with =gi-method= |
+
+One converter, =cmacs_gvalue_to_lisp=, serves both property reads and signal parameters, so a handler sees the same Lisp value for a type that =gobject-get= returns.  Anything the table does not name comes back as its printed contents.
 
 * GClosure Integration
 
 When you connect a Lisp function as a signal handler via
 =gobject-connect=, CMacs wraps it in a =GClosure=.  The closure:
 
-- Holds a GC-protected reference to the Lisp function
-- Marshals GValue arguments to Lisp values on invocation
-- Marshals the Lisp return value back to a GValue
+- Holds a GC-protected reference to the Lisp function, through a cell that belongs to that closure alone -- the same function connected to two signals stays rooted until /both/ handlers are gone
+- Marshals GValue arguments to Lisp values on invocation, with the table above
+- Runs the function under the same guard as every other GLib-dispatched Lisp call: =waiting_for_input= cleared so an error stays inside the condition-case, and =inhibit-interaction= bound so a handler that reaches a prompt signals instead of entering a recursive edit underneath the dispatch
+- Marshals the Lisp return value back to a GValue (booleans, integers, doubles, enums, flags, strings)
 - Is invalidated (Lisp ref released) on =gobject-disconnect=
+- Always runs on the Lisp thread: an emission from another thread is queued to the CMacs context with its parameters copied
 
 * Files
 

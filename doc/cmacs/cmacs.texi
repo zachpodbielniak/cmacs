@@ -235,6 +235,13 @@ Add an idle source.  Returns a source ID.
 Remove a GLib source by its ID.
 @end table
 
+A callback handed to either constructor is rooted for the life of its
+source -- one cell per source on a @code{staticpro}'d list -- so a
+fresh lambda with no other reference survives garbage collection until
+the source is destroyed.  The loop also polls GLib's write descriptors
+on every round (@code{cmacs_glib_wants_write}) and maps write readiness
+back, so a source waiting for a full socket to drain fires.
+
 @section Files
 
 @table @file
@@ -280,7 +287,8 @@ Connect @var{CALLBACK} (an elisp function) to @var{SIGNAL}.  Returns a
 handler ID.  The callback receives signal arguments marshalled to elisp.
 
 @item gobject-disconnect OBJECT HANDLER-ID
-Disconnect a signal handler.
+Disconnect a signal handler.  Returns @code{t} when one was
+disconnected, @code{nil} when @var{HANDLER-ID} names none.
 
 @item gobject-list-properties OBJECT
 Return a list of property names.
@@ -299,16 +307,26 @@ The bridge automatically converts between GValues and elisp:
 @item @code{G_TYPE_INT} etc. @tab fixnum @tab All integer types
 @item @code{G_TYPE_FLOAT/DOUBLE} @tab float @tab
 @item @code{G_TYPE_STRING} @tab string @tab
-@item @code{G_TYPE_ENUM/FLAGS} @tab fixnum @tab
+@item any enum or flags type @tab fixnum @tab Matched by @code{G_TYPE_IS_ENUM}/@code{G_TYPE_IS_FLAGS}
 @item @code{G_TYPE_OBJECT} @tab user-ptr @tab Wrapped GObject
+@item any boxed type @tab boxed user-ptr @tab Copied on wrap; usable with @code{gi-method}
 @end multitable
+
+One converter serves property reads and signal parameters, so a
+handler sees the same value @code{gobject-get} returns.  An integer is
+accepted where a float or double property is set.
 
 @section GClosure Integration
 
 Elisp functions can be used anywhere GLib expects a @code{GClosure}.
 The @code{gobject-connect} primitive creates a closure that marshals
 signal parameters to elisp, calls the function, and marshals any
-return value back.
+return value back.  Each closure roots its function through a cell of
+its own, so one function connected to several signals stays alive
+until the last handler is gone; the call runs with
+@code{inhibit-interaction} bound and @code{waiting_for_input} cleared,
+like every other Lisp call made from a GLib dispatch; and an emission
+from another thread is queued to the CMacs context.
 
 @section Files
 
@@ -344,7 +362,11 @@ Call a GI function.  Arguments are marshalled based on GI type info.
 @end example
 
 @item gi-method OBJECT METHOD &rest ARGS
-Call a method on a GObject instance.
+Call a method on a GObject instance or a wrapped boxed value.
+Registered boxed structs returned by GI calls (@code{GMainContext},
+@code{GDateTime}, @code{GBytes}) arrive as boxed values and go back in
+as struct parameters.  Returns the callee gives away (@code{transfer
+full}) are released once the Lisp wrapper holds its own reference.
 
 @item gi-enum NAMESPACE ENUM MEMBER
 Resolve an enum value.
@@ -560,9 +582,18 @@ is invoked with @option{--bacon}.
 @item bacon-ipc-start
 Create a Unix socketpair for parent--child IPC.  Attaches the parent-side
 fd to the CMacs GMainContext and returns the child-side fd number.
+@item bacon-ipc-release-child-fd
+Close the parent's copy of the child-side fd once the child has been
+spawned.  Until then it must stay open for the child to inherit; after
+that it only keeps the connection from ever reading as closed.
 @item bacon-ipc-stop
 Destroy the IPC handler and close the parent-side fd.
 @end table
+
+Replies larger than the socket buffer wait for the child to drain it
+rather than going out truncated, and every string leaving the editor
+over IPC, D-Bus or MCP is made valid UTF-8 first (raw bytes become
+U+FFFD), since the JSON and GVariant layers refuse anything else.
 
 @section Files
 

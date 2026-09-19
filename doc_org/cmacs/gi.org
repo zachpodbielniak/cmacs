@@ -38,7 +38,19 @@ functions with =gi-call=.
 ;; Use Gtk
 (gi-require "Gtk" "4.0")
 (gi-call "Gtk" "init")
+
+;; A boxed struct comes back usable, with its methods a gi-method away
+(let ((ctx (gi-call "GLib" "main_context_default")))
+  (gi-method ctx "pending"))
+;; => nil
 #+end_src
+
+** Values crossing the bridge
+
+- Objects and interfaces are wrapped GObjects; registered boxed structs (=GMainContext=, =GDateTime=, =GBytes=, ...) are wrapped boxed values that =gi-method= accepts as an instance and any GI function accepts as a struct parameter.  A plain C struct with no GType stays =nil=.
+- Enums and flags are integers; =GType= parameters and returns are type-name strings; =gunichar= is a character.
+- Ownership follows the annotation.  A =transfer full= return -- every constructor's -- is released once the Lisp wrapper holds its own reference, and a returned string's buffer is freed after it is copied.  Before this, every object a GI call returned kept one reference for the life of the process.
+- =gobject-new= and =gi-method= find a type's typelib entry by stripping the namespace's own C prefix (=g_irepository_get_c_prefix=), which is =G= for Gio, GLib and GObject rather than the namespace name; the name-based strip remains a fallback.
 
 * High-Level Elisp Interface
 

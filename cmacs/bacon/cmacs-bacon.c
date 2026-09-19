@@ -31,6 +31,24 @@ static BaconShell *cmacs_bacon_shell = NULL;
 /* Active IPC handler for the bacon child socketpair. */
 static CmacsBaconIpc *cmacs_bacon_ipc = NULL;
 
+/* The child's end of that socketpair, held open in this process until
+   the child has inherited it.  -1 when none is outstanding.  */
+static int cmacs_bacon_ipc_child_fd = -1;
+
+/* Drop this process's copy of the child's end.  While the parent also
+   holds it, the child's exit never reads as EOF on the parent side --
+   the parent is itself a live peer -- so the IPC source outlived every
+   shell, and each `bacon' start leaked one descriptor.  */
+static void
+cmacs_bacon_ipc_close_child_fd (void)
+{
+  if (cmacs_bacon_ipc_child_fd >= 0)
+    {
+      close (cmacs_bacon_ipc_child_fd);
+      cmacs_bacon_ipc_child_fd = -1;
+    }
+}
+
 /* ── Direct dispatch for in-process cmacsgi ─────────────────────────── */
 
 /* Mirror the CmacsApiDirectDispatch layout from cmacs-api.h so we
@@ -424,8 +442,8 @@ Each element is (NAME . VALUE). */)
 
   {
     gint last_rc = bacon_shell_get_last_exit_code (cmacs_bacon_shell);
-    result = Fcons (Fcons (build_string ("?"),
-                           build_string (g_strdup_printf ("%d", last_rc))),
+    g_autofree gchar *rc_str = g_strdup_printf ("%d", last_rc);
+    result = Fcons (Fcons (build_string ("?"), build_string (rc_str)),
                     result);
   }
 
@@ -506,12 +524,14 @@ The child fd has FD_CLOEXEC cleared so it survives exec.  */)
   int flags;
   GMainContext *ctx;
 
-  /* Destroy any previous IPC session. */
+  /* Destroy any previous IPC session, and the child fd of one whose
+     child was never spawned. */
   if (cmacs_bacon_ipc != NULL)
     {
       cmacs_bacon_ipc_destroy (cmacs_bacon_ipc);
       cmacs_bacon_ipc = NULL;
     }
+  cmacs_bacon_ipc_close_child_fd ();
 
   if (socketpair (AF_UNIX, SOCK_STREAM, 0, fds) < 0)
     xsignal1 (Qbacon_error,
@@ -537,8 +557,25 @@ The child fd has FD_CLOEXEC cleared so it survives exec.  */)
     }
 
   cmacs_bacon_ipc = cmacs_bacon_ipc_new (fds[0], ctx);
+  cmacs_bacon_ipc_child_fd = fds[1];
 
   return make_fixnum (fds[1]);
+}
+
+DEFUN ("bacon-ipc-release-child-fd", Fbacon_ipc_release_child_fd,
+       Sbacon_ipc_release_child_fd, 0, 0, 0,
+       doc: /* Close this process's copy of the bacon child's IPC fd.
+Call once the child has been spawned and has inherited the descriptor
+`bacon-ipc-start' returned.  Until then the parent must keep it open, or
+there is nothing for the child to inherit; after that the parent's copy
+only keeps the connection from ever reading as closed.  Returns t if a
+descriptor was closed, nil if none was outstanding.  */)
+  (void)
+{
+  if (cmacs_bacon_ipc_child_fd < 0)
+    return Qnil;
+  cmacs_bacon_ipc_close_child_fd ();
+  return Qt;
 }
 
 DEFUN ("bacon-ipc-stop", Fbacon_ipc_stop, Sbacon_ipc_stop, 0, 0, 0,
@@ -550,6 +587,7 @@ DEFUN ("bacon-ipc-stop", Fbacon_ipc_stop, Sbacon_ipc_stop, 0, 0, 0,
       cmacs_bacon_ipc_destroy (cmacs_bacon_ipc);
       cmacs_bacon_ipc = NULL;
     }
+  cmacs_bacon_ipc_close_child_fd ();
   return Qnil;
 }
 
@@ -751,6 +789,7 @@ syms_of_cmacs_bacon (void)
   defsubr (&Sbacon_running_p);
   defsubr (&Sbacon_get_prompt);
   defsubr (&Sbacon_ipc_start);
+  defsubr (&Sbacon_ipc_release_child_fd);
   defsubr (&Sbacon_ipc_stop);
 }
 

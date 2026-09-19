@@ -94,7 +94,13 @@ the child uses this socketpair to call back into CMacs."
         (kill-buffer buf))
       (let ((vterm-buffer-name bacon-buffer-name)
             (vterm-shell (format "%s --bacon" bacon-shell-program)))
-        (vterm)))))
+        (vterm))))
+  ;; The child has forked and holds its own copy of the socketpair end
+  ;; now; ours only kept the connection from ever closing.  A
+  ;; still-running child from an earlier `bacon' shares nothing with
+  ;; this one, so this is safe on the pop-to-buffer path too.
+  (when (fboundp 'bacon-ipc-release-child-fd)
+    (bacon-ipc-release-child-fd)))
 
 ;;; Programmatic interface
 

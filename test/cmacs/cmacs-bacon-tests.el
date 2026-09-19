@@ -270,5 +270,108 @@
   (should-error (bacon-eval-c 42))
   (should-error (bacon-eval-c nil)))
 
+
+;;; IPC: the socketpair between the editor and its shell child
+
+(ert-deftest cmacs-bacon-test-ipc-child-fd-is-released ()
+  "The parent's copy of the child's socket end can be dropped.
+
+`bacon-ipc-start' hands the child-side fd to the shell through the
+environment; the parent kept its own copy of that fd for ever, so the
+connection never read as closed when the shell exited and every start
+leaked a descriptor.  `bacon-ipc-release-child-fd' closes it once the
+child has forked."
+  (skip-unless (cmacs-feature-p 'bacon))
+  (skip-unless (fboundp 'bacon-ipc-release-child-fd))
+  (let ((fd (bacon-ipc-start)))
+    (unwind-protect
+        (let ((link (format "/proc/self/fd/%d" fd)))
+          (should (file-symlink-p link))
+          (should (eq t (bacon-ipc-release-child-fd)))
+          (should-not (file-symlink-p link))
+          (should (null (bacon-ipc-release-child-fd))))
+      (bacon-ipc-stop))))
+
+(defconst cmacs-bacon-tests--ipc-client "
+import json, socket, struct, sys
+fd = int(sys.argv[1])
+s = socket.socket(fileno=fd)
+s.settimeout(20)
+req = json.dumps({'id': 7, 'method': 'Eval',
+                  'params': {'expression': '(make-string 600000 ?x)'}}).encode()
+s.sendall(struct.pack('>I', len(req)) + req)
+def read_exact(n):
+    buf = b''
+    while len(buf) < n:
+        chunk = s.recv(n - len(buf))
+        if not chunk:
+            raise EOFError('peer closed after %d of %d bytes' % (len(buf), n))
+        buf += chunk
+    return buf
+try:
+    (n,) = struct.unpack('>I', read_exact(4))
+    body = json.loads(read_exact(n))
+    print('OK', len(body['result']))
+except Exception as e:
+    print('FAIL', type(e).__name__, e)
+"
+  "A synchronous IPC client, run in a child that inherits the child fd.")
+
+(ert-deftest cmacs-bacon-test-ipc-reply-larger-than-the-socket-buffer ()
+  "A reply bigger than the socket buffer arrives whole.
+
+The parent's fd is non-blocking so reading never stalls the editor,
+but the reply writer treated EAGAIN as a failure: a reply larger than
+the kernel buffer went out truncated, the child read a length prefix
+promising bytes that never came, and every later frame was misread.
+The writer now waits for the socket to drain.  A 600 kB answer is
+asked for by a separate process that inherits the child end, as the
+shell does, and reads until the promised length arrives."
+  (skip-unless (cmacs-feature-p 'bacon))
+  (skip-unless (fboundp 'bacon-ipc-release-child-fd))
+  (skip-unless (executable-find "python3"))
+  (let* ((fd (bacon-ipc-start))
+         (buf (generate-new-buffer " *bacon-ipc-client*"))
+         proc)
+    (unwind-protect
+        (progn
+          (setq proc (make-process
+                      :name "bacon-ipc-client"
+                      :command (list "python3" "-c"
+                                     cmacs-bacon-tests--ipc-client
+                                     (number-to-string fd))
+                      :buffer buf
+                      :noquery t))
+          ;; The child has the fd now; our copy would only keep the
+          ;; connection open after it exits.
+          (bacon-ipc-release-child-fd)
+          (let ((deadline (+ (float-time) 30.0)))
+            (while (and (process-live-p proc) (< (float-time) deadline))
+              (accept-process-output proc 0.1)
+              (sit-for 0.05)))
+          (should-not (process-live-p proc))
+          (let ((out (with-current-buffer buf (buffer-string))))
+            ;; prin1 of the string: 600000 x's plus the two quotes.
+            (should (string-match-p "^OK 600002" out))))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (kill-buffer buf)
+      (bacon-ipc-stop))))
+
+(ert-deftest cmacs-bacon-test-cmacsgi-quotes-a-bare-letter ()
+  "A cmacsgi argument that is a lone letter is a string, not a symbol.
+
+The quoting heuristic passed anything made only of digits, signs, dots
+and the letter e through unquoted as a number -- which made the single
+word \"e\" a symbol, and `void-variable e' the answer to any command
+that took it.  A number now needs a digit in it."
+  (skip-unless (cmacs-feature-p 'bacon))
+  (skip-unless (cmacs-feature-p 'gi))
+  (skip-unless (= 0 (car (bacon-eval "cmacsgi --help"))))
+  (gi-require "GLib" "2.0")
+  (let ((rc (bacon-eval "cmacsgi call GLib utf8_strup e -1")))
+    (should (= 0 (car rc)))
+    (should (string-match-p "\"E\"" (cdr rc)))))
+
 (provide 'cmacs-bacon-tests)
 ;;; cmacs-bacon-tests.el ends here

@@ -48,6 +48,14 @@ and restore it after.  Failing to do this causes non-deterministic
   (message "GLib integration is running"))
 #+end_src
 
+** Lifetime of a callback
+
+A callback handed to =cmacs-glib-timeout-add= or =cmacs-glib-idle-add= is rooted for the life of its source: each source owns one cell on a =staticpro='d list, added when the source is created and removed when GLib destroys it.  A fresh =lambda= passed straight in, with nothing else referring to it, therefore survives every garbage collection until the source is gone.  The root is per /source/, not per function, so the same function object under two sources keeps its protection until the last of them is removed.
+
+** Write readiness
+
+=cmacs_glib_prepare= merges GLib's descriptors into both of Emacs's =pselect= sets, and =cmacs_glib_dispatch= maps readiness back for both directions.  =wait_reading_process_output= only hands its write set to =pselect= when it has a connecting process of its own to watch; when GLib has asked for =G_IO_OUT= on a round where Emacs has not, =cmacs_glib_wants_write= makes it pass the set anyway.  Without that, a source waiting for a full socket to drain never fired.
+
 * Files
 
 | File                            | Purpose                                     |

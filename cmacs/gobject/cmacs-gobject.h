@@ -49,5 +49,13 @@ extern CmacsBoxedValue *cmacs_boxed_unwrap (Lisp_Object obj);
 /* Check if an elisp value is a wrapped boxed value. */
 extern bool cmacs_boxed_p (Lisp_Object obj);
 
+/* Convert a GValue to the Lisp value gobject-get would return for it:
+ * booleans to t/nil, every integer and enum/flags type to a fixnum,
+ * floats to a float, strings to a string, objects and boxed values to
+ * wrapped user-ptrs, and anything else to its printed contents.  Shared
+ * by property reads and signal-parameter marshalling so the two never
+ * disagree about a type.  Never signals.  */
+extern Lisp_Object cmacs_gvalue_to_lisp (const GValue *val);
+
 #endif /* HAVE_CMACS_GLIB */
 #endif /* CMACS_GOBJECT_H */

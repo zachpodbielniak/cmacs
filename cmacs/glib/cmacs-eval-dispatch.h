@@ -79,6 +79,15 @@ gchar *cmacs_dispatch_lisp_escape (const gchar *s);
    as "".  Caller g_frees. */
 gchar *cmacs_dispatch_json_escape (const gchar *s);
 
+/* STR (a Lisp string) as a freshly allocated, always-valid UTF-8 C
+   string: multibyte text is encoded, and any byte sequence that is not
+   UTF-8 afterwards -- raw bytes from a binary buffer, a unibyte string's
+   high bytes -- becomes U+FFFD.  Every string that leaves the editor
+   over D-Bus, JSON or MCP must pass through this: GVariant and the JSON
+   parsers reject invalid UTF-8 outright, and the reply then never
+   arrives.  A non-string yields "".  Caller g_frees. */
+gchar *cmacs_dispatch_string_to_utf8 (Lisp_Object str);
+
 /* Evaluate EXPRESSION as elisp.  On success, return the printed
    result (caller must g_free).  On error -- including a reader error
    in EXPRESSION itself -- set *ERROR and return NULL. */

@@ -344,6 +344,31 @@ hang the request (and the editor) until a human answered the prompt."
   (should-not cmacs-dbus-events-mode)
   (should-not (member #'cmacs-dbus-events--on-find-file find-file-hook)))
 
+
+(ert-deftest cmacs-dbus-raw-bytes-in-a-reply-still-reach-the-caller ()
+  "A Lisp string that is not valid UTF-8 crosses D-Bus as U+FFFD.
+
+Emacs stores a raw byte in a multibyte string as a two-byte sequence
+that is not UTF-8.  `g_variant_new (\"(s)\")' refuses such a string,
+so a method whose answer contained one produced no reply at all and
+the caller sat on the call until its timeout.  *Messages* is the
+easiest place to plant one: RecentMessages returns it verbatim."
+  (skip-unless (cmacs-feature-p 'glib))
+  (skip-unless (executable-find "gdbus"))
+  (message "%s" (concat "cmacs-dbus-raw-marker-"
+                        (string-to-multibyte (unibyte-string 255))
+                        "-end"))
+  (cmacs-dbus-tests--with-service
+    (let* ((dest (cmacs-dbus-per-pid-name))
+           (out  (cmacs-dbus-tests--gdbus
+                  "call" "--session" "--timeout" "10"
+                  "--dest" dest
+                  "--object-path" "/org/cmacs/Editor"
+                  "--method" "org.cmacs.Editor1.Log.RecentMessages"
+                  "5")))
+      (should (string-match-p "cmacs-dbus-raw-marker-" out))
+      (should-not (string-match-p "Timeout\\|Error" out)))))
+
 (provide 'cmacs-dbus-tests)
 
 ;;; cmacs-dbus-tests.el ends here

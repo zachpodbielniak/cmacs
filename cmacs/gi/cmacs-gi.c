@@ -18,6 +18,7 @@
 #ifdef HAVE_CMACS_GI
 
 #include "lisp.h"
+#include "character.h"
 #include "cmacs-gobject.h"
 
 #include <girepository.h>
@@ -114,6 +115,22 @@ cmacs_gi_lisp_to_arg (Lisp_Object obj, GITypeInfo *type_info,
         }
       return TRUE;
 
+    case GI_TYPE_TAG_UNICHAR:
+      CHECK_CHARACTER (obj);
+      arg->v_uint32 = (guint32)XFIXNAT (obj);
+      return TRUE;
+
+    case GI_TYPE_TAG_GTYPE:
+      /* A type name string, or nil for G_TYPE_INVALID / "none". */
+      if (NILP (obj))
+        arg->v_size = G_TYPE_INVALID;
+      else
+        {
+          CHECK_STRING (obj);
+          arg->v_size = g_type_from_name (SSDATA (obj));
+        }
+      return TRUE;
+
     case GI_TYPE_TAG_INTERFACE:
       {
         GIBaseInfo *iface_info = g_type_info_get_interface (type_info);
@@ -136,6 +153,20 @@ cmacs_gi_lisp_to_arg (Lisp_Object obj, GITypeInfo *type_info,
             return TRUE;
           }
 
+        /* A struct parameter takes a wrapped boxed value (or nil),
+           the same currency gi-method's own instance argument uses. */
+        if (iface_type == GI_INFO_TYPE_STRUCT
+            || iface_type == GI_INFO_TYPE_BOXED
+            || iface_type == GI_INFO_TYPE_UNION)
+          {
+            CmacsBoxedValue *bv = NILP (obj) ? NULL : cmacs_boxed_unwrap (obj);
+            g_base_info_unref (iface_info);
+            if (!NILP (obj) && bv == NULL)
+              return FALSE;
+            arg->v_pointer = bv != NULL ? bv->data : NULL;
+            return TRUE;
+          }
+
         g_base_info_unref (iface_info);
         return FALSE;
       }
@@ -145,10 +176,22 @@ cmacs_gi_lisp_to_arg (Lisp_Object obj, GITypeInfo *type_info,
     }
 }
 
+/* Convert a returned GIArgument to Lisp and release what TRANSFER
+   says the caller now owns.
+
+   The release is the point.  A constructor's return is
+   GI_TRANSFER_EVERYTHING: the object arrives with one reference that is
+   ours, and cmacs_gobject_wrap takes another for the user-ptr, whose
+   finalizer drops exactly one -- so every object a GI call returned
+   leaked a reference for the life of the process, and every returned
+   string its buffer.  Boxed structs, which GI also hands back owned, are
+   copied into the wrapper and the original freed the same way.  */
 static Lisp_Object
-cmacs_gi_arg_to_lisp (GIArgument *arg, GITypeInfo *type_info)
+cmacs_gi_arg_to_lisp (GIArgument *arg, GITypeInfo *type_info,
+                      GITransfer transfer)
 {
   GITypeTag tag = g_type_info_get_tag (type_info);
+  gboolean owned = (transfer == GI_TRANSFER_EVERYTHING);
 
   switch (tag)
     {
@@ -180,9 +223,22 @@ cmacs_gi_arg_to_lisp (GIArgument *arg, GITypeInfo *type_info)
     case GI_TYPE_TAG_DOUBLE:
       return make_float (arg->v_double);
 
+    case GI_TYPE_TAG_UNICHAR:
+      return make_fixnum (arg->v_uint32);
+
+    case GI_TYPE_TAG_GTYPE:
+      return arg->v_size != G_TYPE_INVALID
+        ? build_string (g_type_name ((GType) arg->v_size)) : Qnil;
+
     case GI_TYPE_TAG_UTF8:
     case GI_TYPE_TAG_FILENAME:
-      return arg->v_string ? build_string (arg->v_string) : Qnil;
+      {
+        Lisp_Object result =
+          arg->v_string ? build_string (arg->v_string) : Qnil;
+        if (owned)
+          g_free (arg->v_string);
+        return result;
+      }
 
     case GI_TYPE_TAG_INTERFACE:
       {
@@ -193,10 +249,40 @@ cmacs_gi_arg_to_lisp (GIArgument *arg, GITypeInfo *type_info)
         if ((iface_type == GI_INFO_TYPE_OBJECT
              || iface_type == GI_INFO_TYPE_INTERFACE)
             && arg->v_pointer != NULL)
-          result = cmacs_gobject_wrap (G_OBJECT (arg->v_pointer));
+          {
+            GObject *obj = G_OBJECT (arg->v_pointer);
+            /* A floating return (GInitiallyUnowned constructors) is
+               ours whatever the annotation says once it is sunk. */
+            if (g_object_is_floating (obj))
+              {
+                g_object_ref_sink (obj);
+                owned = TRUE;
+              }
+            result = cmacs_gobject_wrap (obj);
+            if (owned)
+              g_object_unref (obj);
+          }
         else if (iface_type == GI_INFO_TYPE_ENUM
                  || iface_type == GI_INFO_TYPE_FLAGS)
           result = make_fixnum (arg->v_int32);
+        else if ((iface_type == GI_INFO_TYPE_STRUCT
+                  || iface_type == GI_INFO_TYPE_BOXED
+                  || iface_type == GI_INFO_TYPE_UNION)
+                 && arg->v_pointer != NULL)
+          {
+            /* Only a registered boxed type can be copied and freed
+               generically; a plain C struct has no GType and stays
+               nil rather than becoming a pointer nothing can free. */
+            GType gtype = g_registered_type_info_get_g_type (
+              (GIRegisteredTypeInfo *) iface_info);
+            if (gtype != G_TYPE_NONE && gtype != G_TYPE_INVALID
+                && G_TYPE_IS_BOXED (gtype))
+              {
+                result = cmacs_boxed_wrap (gtype, arg->v_pointer);
+                if (owned)
+                  g_boxed_free (gtype, arg->v_pointer);
+              }
+          }
 
         g_base_info_unref (iface_info);
         return result;
@@ -358,10 +444,11 @@ usage: (gi-call NAMESPACE FUNCTION &rest ARGS) */)
       xsignal1 (Qgi_error, msg);
     }
 
-  /* Marshal return value. */
+  /* Marshal return value, releasing it when the callee gave it away. */
   {
     GITypeInfo *ret_type = g_callable_info_get_return_type (callable);
-    result = cmacs_gi_arg_to_lisp (&retval, ret_type);
+    result = cmacs_gi_arg_to_lisp (&retval, ret_type,
+                                   g_callable_info_get_caller_owns (callable));
     g_base_info_unref ((GIBaseInfo *)ret_type);
   }
 
@@ -425,10 +512,17 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
             const char *ns = loaded[i];
             size_t ns_len = strlen (ns);
             const char *short_name = type_name;
+            const gchar *c_prefix = g_irepository_get_c_prefix (repo, ns);
 
-            /* Strip namespace prefix: "GtkButton" → "Button".
-               Also handle version digits: "WebKit2" → "WebKit". */
-            if (strncmp (type_name, ns, ns_len) == 0)
+            /* Strip the namespace's C prefix ("GtkButton" → "Button");
+               the typelib's own c:prefix first, since Gio/GLib/GObject
+               use "G" rather than their namespace name, then the
+               namespace name, with or without version digits
+               ("WebKit2" → "WebKit"). */
+            if (c_prefix != NULL && *c_prefix != '\0'
+                && strncmp (type_name, c_prefix, strlen (c_prefix)) == 0)
+              short_name = type_name + strlen (c_prefix);
+            else if (strncmp (type_name, ns, ns_len) == 0)
               short_name = type_name + ns_len;
             else
               {
@@ -582,10 +676,11 @@ usage: (gi-method OBJECT METHOD &rest ARGS) */)
       xsignal1 (Qgi_error, msg);
     }
 
-  /* Marshal return value. */
+  /* Marshal return value, releasing it when the callee gave it away. */
   {
     GITypeInfo *ret_type = g_callable_info_get_return_type (callable);
-    result = cmacs_gi_arg_to_lisp (&retval, ret_type);
+    result = cmacs_gi_arg_to_lisp (&retval, ret_type,
+                                   g_callable_info_get_caller_owns (callable));
     g_base_info_unref ((GIBaseInfo *)ret_type);
   }
 
