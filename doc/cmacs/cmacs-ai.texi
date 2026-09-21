@@ -153,9 +153,11 @@ resolved through them would be the same server twice.
 
 @code{grok} and @code{grok-build} are two different backends, not two
 names for one.  @code{grok} is xAI's HTTP API and takes API model ids;
-@code{grok-build} wraps the agentic CLI and takes @emph{its} model ids
-(@samp{grok-4.6}, @samp{grok-4.5}), which the API rejects and vice
-versa.  Run @command{grok models} to see what the installed CLI offers.
+@code{grok-build} wraps the agentic CLI and takes @emph{its} model ids.
+Both default to @samp{grok-4.7}.  @samp{grok-4.6} and @samp{grok-4.5}
+are valid on either.  @samp{grok-4.7-build-fast} is CLI-only (the same
+model on faster infrastructure) and the API rejects it.  Run
+@command{grok models} to see what the installed CLI offers.
 
 Three things about @code{grok-build} differ from the other CLI
 providers:

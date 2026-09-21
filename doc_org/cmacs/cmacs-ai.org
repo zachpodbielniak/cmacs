@@ -94,7 +94,7 @@ fallback chain, and that is the point: the environment and =AiConfig=
 hold *one* URL between them, so two endpoints resolved through them
 would be the same server twice.
 
-=grok= and =grok-build= are two different backends, not two names for one. =grok= is xAI's HTTP API and takes API model ids; =grok-build= wraps the agentic =grok= CLI and takes /its/ model ids (=grok-4.6=, =grok-4.5=), which the API rejects and vice versa. Run =grok models= to see what the installed CLI offers.
+=grok= and =grok-build= are two different backends, not two names for one. =grok= is xAI's HTTP API and takes API model ids; =grok-build= wraps the agentic =grok= CLI and takes /its/ model ids. Both default to =grok-4.7=. =grok-4.6= and =grok-4.5= are valid on either. =grok-4.7-build-fast= is CLI-only (same model, faster infrastructure) and the API rejects it. Run =grok models= to see what the installed CLI offers.
 
 Three things about =grok-build= differ from the other CLI providers:
 

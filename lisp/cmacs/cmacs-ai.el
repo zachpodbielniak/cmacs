@@ -67,8 +67,8 @@ One of: claude openai gemini grok ollama openai-compatible claude-code
 opencode claude-tmux grok-build antigravity cursor codex-cli, or any
 name you defined in `cmacs-ai-openai-compatible-endpoints'.
 
-`grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.  They
-take different model ids and are not interchangeable.
+`grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.
+Both default to grok-4.7.  grok-4.7-build-fast is CLI-only.
 
 `antigravity' wraps Google's `agy' CLI, `cursor' wraps Cursor's
 `cursor-agent' CLI, and `codex-cli' wraps OpenAI's `codex exec'.  All

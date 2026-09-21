@@ -65,9 +65,8 @@ cmacs_ai_provider_type_from_symbol (Lisp_Object sym)
   if (EQ (sym, intern ("opencode")))    return AI_PROVIDER_OPENCODE;
   if (EQ (sym, intern ("claude-tmux")))  return AI_PROVIDER_CLAUDE_TMUX;
   /* grok-build is the agentic `grok' CLI; `grok' above is the xAI
-   * HTTP API.  Two different backends, deliberately two symbols --
-   * ai-glib keeps them as separate AiProviderType values for the
-   * same reason (its model ids are not interchangeable).  */
+   * HTTP API.  Two different backends, deliberately two symbols.
+   * grok-4.7 is valid on both; grok-4.7-build-fast is CLI-only.  */
   if (EQ (sym, intern ("grok-build")))   return AI_PROVIDER_GROK_BUILD;
   if (EQ (sym, intern ("antigravity")))  return AI_PROVIDER_ANTIGRAVITY;
   if (EQ (sym, intern ("cursor")))       return AI_PROVIDER_CURSOR;
