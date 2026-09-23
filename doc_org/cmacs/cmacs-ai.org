@@ -39,9 +39,9 @@ with =--with-cmacs-libreclaw= when both are enabled.
 ai-glib. Run =codex login= once; there is no API key to set here.
 
 Its models are codex's own ids --- =gpt-6-astra= (the default),
-=gpt-5.6-sol=, =gpt-5.6-terra=, =gpt-5.6-luna=, =gpt-5.5=,
-=gpt-5.4-mini=, =gpt-5.3-codex-spark= --- and =cmacs-ai-list-models=
-returns them without a network round trip.
+=gpt-6-sol=, =gpt-6-luna=, =gpt-5.6-sol=, =gpt-5.6-terra=,
+=gpt-5.6-luna=, =gpt-5.5=, =gpt-5.4-mini=, =gpt-5.3-codex-spark= ---
+and =cmacs-ai-list-models= returns them without a network round trip.
 
 Codex is the one CLI here that enforces a *sandbox* rather than asking
 for approval: =read-only=, =workspace-write= or =danger-full-access=,
@@ -1473,7 +1473,7 @@ Past =-max-bytes= the file is skipped rather than truncated: half a document of 
 
 Every provider prompt is followed by a model prompt, completing on what that provider actually offers:
 
-- =claude-code= and =claude-tmux= offer =haiku=, =sonnet=, =opus= and =fable=, plus the full model ids — and additionally accept =ollama/NAME=, which runs a local model through the CLI (see below).
+- =claude-code= and =claude-tmux= offer =haiku=, =sonnet=, =opus= and =fable=, plus the pinned ids =claude-fable-5=, =claude-opus-5-5=, =claude-opus-5= and =claude-sonnet-5= — and additionally accept =ollama/NAME=, which runs a local model through the CLI (see below).
 - =opencode= offers its =vendor/model= names, =ollama= whatever you have pulled, and the HTTP providers their catalogues.
 
 It is not a closed list — every provider ships new model names between cmacs releases, and requiring a match would make the newest model the one thing the prompt cannot express. An empty answer takes the provider's own default.

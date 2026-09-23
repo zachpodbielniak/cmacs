@@ -85,8 +85,9 @@ Any server speaking OpenAI's Chat Completions protocol.  Reads
 
 Run @command{codex login} once; there is no API key to set here.  The
 models are codex's own ids --- @code{gpt-6-astra} (the default),
-@code{gpt-5.6-sol}, @code{gpt-5.6-terra}, @code{gpt-5.6-luna},
-@code{gpt-5.5}, @code{gpt-5.4-mini}, @code{gpt-5.3-codex-spark} --- and
+@code{gpt-6-sol}, @code{gpt-6-luna}, @code{gpt-5.6-sol},
+@code{gpt-5.6-terra}, @code{gpt-5.6-luna}, @code{gpt-5.5},
+@code{gpt-5.4-mini}, @code{gpt-5.3-codex-spark} --- and
 @code{cmacs-ai-list-models} returns them without a network round trip.
 
 Codex is the one CLI here that enforces a @dfn{sandbox} rather than
