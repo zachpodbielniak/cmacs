@@ -52,6 +52,12 @@ static const gchar *iface_xml =
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ListKeybinds'>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* A gowl macro by name, with arguments.  Loads the opt-in macro
+     module on first use, as every cmacs-gowl-macro- function does. */
+  "  <method name='RunMacro'>"
+  "    <arg type='s' name='name' direction='in'/>"
+  "    <arg type='as' name='args' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='AddRule'>"
   "    <arg type='s' name='app_id' direction='in'/>"
   "    <arg type='s' name='title' direction='in'/>"
@@ -247,6 +253,13 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     }
   else if (g_strcmp0 (m, "ListKeybinds") == 0)
     RETURN_STR (cmacs_dispatch_gowl_list_keybinds (&err));
+  else if (g_strcmp0 (m, "RunMacro") == 0)
+    {
+      const gchar *name;
+      g_autofree const gchar **args = NULL;
+      g_variant_get (p, "(&s^a&s)", &name, &args);
+      RETURN_STR (cmacs_dispatch_gowl_run_macro (name, args, &err));
+    }
   else if (g_strcmp0 (m, "AddRule") == 0)
     {
       const gchar *app_id, *title;

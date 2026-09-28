@@ -28,9 +28,11 @@
 ;; action, so nothing at all is sent to the game.
 ;;
 ;; Every input maps to exactly ONE output and the release mirrors the
-;; press.  The module refuses macros, sequences, delays and repeats; so
-;; does this file, before anything is sent.  The one exception is a
-;; FUNCTION target: arbitrary Elisp, run on the press.  It runs on the
+;; press.  The module refuses sequences, delays and repeats; so does this
+;; file, before anything is sent.  Two targets are exceptions, on purpose:
+;; a MACRO target, (macro NAME [ARGS]), runs a gowl macro on the press
+;; (see cmacs-gowl-macro.el), and a FUNCTION target runs arbitrary Elisp
+;; on the press.  It runs on the
 ;; main thread, never the compositor's -- the module fires a `custom'
 ;; action whose form calls back in here through the same idle dispatch
 ;; every custom keybind uses.  What that code does is your business.
@@ -52,6 +54,7 @@
 (declare-function gowl-enable-module "cmacs-gowl")
 (declare-function gowl-disable-module "cmacs-gowl")
 (declare-function gowl-configure-module "cmacs-gowl")
+(declare-function cmacs-gowl-macro-ensure "cmacs-gowl-macro" ())
 
 (defgroup cmacs-gowl-input-remap nil
   "Per-device input remapping in gowl."
@@ -105,7 +108,7 @@ and `input' (the input name, such as \"KEY_A\")."
   "The gowl module this file drives.")
 
 (defconst cmacs-gowl-input-remap--forbidden
-  '(:sequence :macro :delay :repeat :keys :then :chain :times)
+  '(:sequence :delay :repeat :keys :then :chain :times)
   "Keys that would make a target more than one output.  Refused.")
 
 (defvar cmacs-gowl-input-remap--defined nil
@@ -199,6 +202,8 @@ TARGET is one of:
   (button middle)                     one pointer button at the cursor
   (action ACTION [ARG])               one compositor action, on press
   (command \"LINE\")                    one module command, on press
+  (macro NAME [ARGS])                 a gowl macro, on press (loads the
+                                      macro module; outside one-to-one)
   a function                          Elisp, called on the press
 Anything holding more than one output is refused."
   (cond
@@ -209,7 +214,7 @@ Anything holding more than one output is refused."
           (args (cdr target)))
       (when (cl-some (lambda (a) (memq a cmacs-gowl-input-remap--forbidden))
                      args)
-        (user-error "Input remap %s/%s: one input maps to one output -- no sequences, macros, delays or repeats"
+        (user-error "Input remap %s/%s: one input maps to one output -- no sequences, delays or repeats"
                     rule input))
       (pcase kind
         ('action
@@ -226,6 +231,19 @@ Anything holding more than one output is refused."
            (user-error "Input remap %s/%s: %s is a list; one input maps to one output"
                        rule input kind))
          (list (cons kind (cmacs-gowl-input-remap--name (car args))))))))
+   ((and (consp target) (eq (car target) 'macro))
+    ;; The one declarative target outside one-to-one: the press runs a
+    ;; macro, whatever that macro does.  The macro module is loaded now,
+    ;; so the first press does not find it missing.
+    (let ((args (cdr target)))
+      (unless (and args (<= (length args) 2)
+                   (not (consp (car args))))
+        (user-error "Input remap %s/%s: (macro NAME [ARGS])" rule input))
+      (when (fboundp 'cmacs-gowl-macro-ensure)
+        (cmacs-gowl-macro-ensure))
+      (append (list (cons 'macro (cmacs-gowl-input-remap--name (car args))))
+              (and (cdr args)
+                   (list (cons 'args (format "%s" (cadr args))))))))
    ((functionp target)
     ;; Elisp runs on the main thread: the module fires a `custom' action
     ;; and cmacs evaluates its form from the idle dispatch.  Only string

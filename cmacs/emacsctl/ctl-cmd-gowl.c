@@ -50,6 +50,9 @@ static const CtlMethodSpec gowl_specs[] = {
     "(e.g. \"Super+Return\"); not the same as injecting the key, "
     "which goes to the focused client",
     CTL_IFACE_COMPOSITOR, "RunKeybind", "s:key", CTL_REPLY_STRING },
+  { "compositor macro", "Run a gowl macro by name or path with its "
+    "arguments (loads the opt-in macro module on first use)",
+    CTL_IFACE_COMPOSITOR, "RunMacro", "s:name A:args", CTL_REPLY_STRING },
   { "compositor mfact", "Set the master area factor",
     CTL_IFACE_COMPOSITOR, "SetMfact", "d:mfact", CTL_REPLY_STRING },
   { "compositor nmaster", "Set the number of master windows",

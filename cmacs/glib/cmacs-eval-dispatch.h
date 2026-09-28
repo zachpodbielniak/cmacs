@@ -205,6 +205,13 @@ gchar *cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error);
 /* List keybinds as JSON array string. */
 gchar *cmacs_dispatch_gowl_list_keybinds (GError **error);
 
+/* Run gowl macro NAME with ARGS (NULL-terminated, may be NULL) through
+   the macro module, loading it on first use.  Returns the module's
+   reply line, "OK ..." or "ERROR ...". */
+gchar *cmacs_dispatch_gowl_run_macro (const gchar *name,
+                                      const gchar * const *args,
+                                      GError **error);
+
 /* Add a window rule. */
 gchar *cmacs_dispatch_gowl_add_rule (const gchar *app_id,
                                       const gchar *title,

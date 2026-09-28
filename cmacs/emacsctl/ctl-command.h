@@ -107,6 +107,7 @@ typedef enum
  *   d:name      double       d?:name   optional (default 0)
  *   b:name      bool ("true"/"false"/"t"/"1")   b?:name (default false)
  *   D:name      a{ss} dict consuming remaining KEY=VALUE args
+ *   A:name      as array consuming the remaining args (possibly none)
  * NULL or "" means the method takes no arguments. */
 typedef struct
 {

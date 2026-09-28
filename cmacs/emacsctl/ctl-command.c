@@ -282,6 +282,18 @@ build_params (const gchar *argspec, CtlInvocation *inv, GError **error)
           continue;
         }
 
+      if (type == 'A')
+        {
+          /* Remaining args, as one string array (possibly empty). */
+          GVariantBuilder array;
+          g_variant_builder_init (&array, G_VARIANT_TYPE ("as"));
+          for (; argi < argc; argi++)
+            g_variant_builder_add (&array, "s", argv[argi]);
+          g_variant_builder_add_value (&builder,
+                                       g_variant_builder_end (&array));
+          continue;
+        }
+
       if (value == NULL && !optional)
         {
           g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,

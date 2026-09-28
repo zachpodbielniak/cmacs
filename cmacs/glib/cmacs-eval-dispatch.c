@@ -1092,6 +1092,48 @@ cmacs_dispatch_gowl_run_keybind (const gchar *key, GError **error)
   return g_strdup (ran ? "t" : "nil");
 }
 
+/* A macro by name, through Elisp rather than straight at the module:
+   `cmacs-gowl-macro-rpc-run' loads the opt-in module on first use,
+   pushes the cmacs settings and installs the Elisp macros -- exactly
+   what any other first use does -- and only then runs NAME.  No gowl
+   call is made from here, so there is no lock to take: the Lisp side
+   reaches the compositor through `gowl-run-command', which holds it.
+   Every argument is spliced into the form through
+   cmacs_dispatch_lisp_escape, and the reply is the module's line, never
+   a signal.  */
+gchar *
+cmacs_dispatch_gowl_run_macro (const gchar *name,
+                               const gchar * const *args,
+                               GError **error)
+{
+  g_autoptr (GString) form = NULL;
+  g_autofree gchar *e_name = NULL;
+  guint i;
+
+  GOWL_DISPATCH_CHECK ();
+  if (name == NULL || name[0] == '\0')
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "RunMacro needs a macro name");
+      return NULL;
+    }
+
+  e_name = cmacs_dispatch_lisp_escape (name);
+  form = g_string_new (NULL);
+  g_string_append_printf (form,
+                          "(progn (require 'cmacs-gowl-macro)"
+                          " (cmacs-gowl-macro-rpc-run \"%s\" \"dbus\" (list",
+                          e_name);
+  for (i = 0; args != NULL && args[i] != NULL; i++)
+    {
+      g_autofree gchar *e_arg = cmacs_dispatch_lisp_escape (args[i]);
+
+      g_string_append_printf (form, " \"%s\"", e_arg);
+    }
+  g_string_append (form, ")))");
+  return cmacs_dispatch_eval_string (form->str, error);
+}
+
 gchar *
 cmacs_dispatch_gowl_list_keybinds (GError **error)
 {

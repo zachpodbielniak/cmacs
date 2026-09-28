@@ -46,6 +46,9 @@
 (declare-function cmacs-gowl-menu "cmacs-gowl-menu" ())
 (declare-function cmacs-gowl-input-remap--on-start "cmacs-gowl-input-remap" ())
 (defvar cmacs-gowl-input-remap-rules)
+(declare-function cmacs-gowl-macro--on-start "cmacs-gowl-macro" ())
+(defvar cmacs-gowl-macro-definitions)
+(defvar cmacs-gowl-macro-triggers)
 (declare-function cmacs-tray-mode-global "cmacs-tray" (&optional arg))
 (declare-function cmacs-gowl-palette-follow-theme-mode
                   "cmacs-gowl-palette" (&optional arg))
@@ -1877,6 +1880,14 @@ thread is running and applies configuration."
     (require 'cmacs-gowl-input-remap))
   (when (fboundp 'cmacs-gowl-input-remap--on-start)
     (cmacs-gowl-input-remap--on-start))
+  ;; Macros (cmacs-gowl-macro.el).  Opt-in the same way: the module is
+  ;; loaded here only when an Elisp macro or a trigger is configured,
+  ;; and otherwise on the first use of any cmacs-gowl-macro- function.
+  (when (or (bound-and-true-p cmacs-gowl-macro-definitions)
+            (bound-and-true-p cmacs-gowl-macro-triggers))
+    (require 'cmacs-gowl-macro))
+  (when (fboundp 'cmacs-gowl-macro--on-start)
+    (cmacs-gowl-macro--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.
