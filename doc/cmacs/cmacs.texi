@@ -2800,6 +2800,106 @@ the static @file{libgowl.a} now calls @code{libinput_device_config_*}
 directly, cmacs links @code{libinput} (the @code{CMACS_GOWL_DEPS}
 pkg-config list in @file{configure.ac}).
 
+@section Per-device Input Remapping
+@cindex input remapping
+@cindex foot pedal
+@cindex remap, per device
+
+gowl's @code{inputremap} module remaps keys, buttons and wheel notches
+on @emph{one physical device}---a foot pedal, a macro pad, one
+particular mouse---without touching any other device that sends the
+same codes.  @file{lisp/cmacs/cmacs-gowl-input-remap.el} is its Elisp
+surface.
+
+@strong{Nothing is on by default.}  cmacs ships no rule, binds no key
+and loads no module for this.  The module is loaded the first time a
+rule is defined, @code{cmacs-gowl-input-remap-rules} is set, or
+@code{cmacs-gowl-input-remap-enable} is called; until then the
+compositor's input path is unchanged.
+
+@subsection The WoW foot pedal
+
+A 2-pedal USB switch presenting itself as a HID keyboard: pedal A is
+one middle-mouse click at the cursor (a fishing addon's single
+keybind), pedal B views the tag World of Warcraft is on and focuses
+it---a compositor action, so nothing is sent to the game.
+
+Find the pedal with @kbd{M-x cmacs-gowl-input-remap-identify} and a
+press: the echo area names the device, its vendor:product and the key
+it sent, and a @code{:match} plist for it goes on the kill ring.
+@kbd{M-x cmacs-gowl-input-remap-devices} lists every keyboard and
+pointer.  Then:
+
+@lisp
+(with-eval-after-load 'cmacs-gowl
+  (cmacs-gowl-input-remap-define "wow-pedals"
+    :match '(:id "1a86:e026" :type keyboard)
+    :unmatched 'drop
+    :log t
+    :map '((KEY_A . (button middle))
+           (KEY_B . (action focus-client "title:World of Warcraft*")))))
+@end lisp
+
+A rule defined before the compositor starts is kept and installed
+when @code{cmacs-gowl-mode} starts it.  @code{cmacs-gowl-input-remap-rules}
+holds the same rules as data.
+
+@subsection Running Elisp from a pedal
+
+A target can be a function.  It runs on the press, on Emacs's main
+thread---never the compositor's: the module fires a @code{custom}
+action which cmacs evaluates from the idle dispatch every custom
+keybind uses.  A function of two arguments gets the rule name and the
+input.
+
+@lisp
+(cmacs-gowl-input-remap-define "wow-pedals"
+  :match '(:id "1a86:e026" :type keyboard)
+  :map `((KEY_A . (button middle))
+         (KEY_B . ,(lambda () (gowl-spawn "lutris lutris:rungame/world-of-warcraft")))))
+@end lisp
+
+@subsection Rules
+
+@table @code
+@item :match
+@code{:name} glob, @code{:id} @samp{VVVV:PPPP}, @code{:vendor} /
+@code{:product}, @code{:sysname} glob, @code{:type} @code{keyboard} /
+@code{pointer} / @code{any}.  One of the first five is required.
+@item :map
+@code{(INPUT . TARGET)} pairs.  INPUT is a @code{KEY_*} or
+@code{BTN_*} name, @code{left}/@code{middle}/@code{right}/@code{side}/@code{extra},
+or @code{WHEEL_UP}/@code{DOWN}/@code{LEFT}/@code{RIGHT}.
+@item :unmatched
+@code{pass} (default) or @code{drop}.
+@item :log
+Non-nil to log every remap the rule makes.
+@end table
+
+A TARGET is @code{pass}, @code{drop}, @code{(key "Super+9")},
+@code{(key KEY_F13)}, @code{(button middle)},
+@code{(action ACTION [ARG])}, @code{(command "LINE")}, or a function.
+
+@strong{One input, one output.}  Each input maps to exactly one target
+and the release mirrors the press.  Lists of targets, two values, a
+@code{:delay}/@code{:repeat}/@code{:macro}/@code{:sequence} key, or an
+input mapped twice are refused before anything is sent, and the module
+refuses them again.  A function target is the exception.  Remapped keys
+and clicks go through the compositor's own decisions, and Super+Escape
+on a claimed keyboard always reaches the escape hatches.
+
+@subsection Commands and options
+
+@code{cmacs-gowl-input-remap-define}, @code{-remove}, @code{-clear},
+@code{-list}, @code{-devices}, @code{-identify}, @code{-status},
+@code{-enable}, @code{-disable} and @code{-rule-json}; options
+@code{cmacs-gowl-input-remap-rules}, @code{-log}, @code{-log-file},
+@code{-identify-timeout} and @code{-identified-functions}.  Everything
+goes through @code{gowl-run-command} and the module's
+@code{inputremap-} words, which the IPC socket, D-Bus
+(@code{RunCommand}) and MCP reach too.  The schema and lifecycle are in
+@file{deps/gowl/docs/input-remap.org}.
+
 @section Client Embedding
 
 Wayland clients can render @emph{inside} Emacs buffer windows.  The

@@ -783,6 +783,131 @@ gowl's =modes:=, =mousebinds:=, =gestures:= and =input:= sections (see =deps/gow
 (gowl-add-rule-entry '((app-id . "signal") (tags . 16) (focus . t)))
 #+end_src
 
+** Per-device input remapping
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap
+:END:
+
+gowl's =inputremap= module remaps keys, buttons and wheel notches on *one physical device* --- a foot pedal, a macro pad, one particular mouse --- without touching any other device that sends the same codes.  =lisp/cmacs/cmacs-gowl-input-remap.el= is its Elisp surface.
+
+*Nothing is on by default.*  cmacs ships no rule, binds no key and loads no module for this.  The module is loaded the first time you define a rule, set =cmacs-gowl-input-remap-rules=, or call =cmacs-gowl-input-remap-enable=; until then the compositor's input path is exactly what it was.
+
+*** The WoW foot pedal
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap-wow
+:END:
+
+A 2-pedal USB switch that presents itself as a HID keyboard, used with World of Warcraft:
+
+- *pedal A* → one middle-mouse click at the cursor.  A fishing addon binds middle click to "cast, or loot the bobber", so one press is one action;
+- *pedal B* → view the tag WoW is on and focus it.  A compositor action: nothing is sent to the game.
+
+Find the pedal first.  =M-x cmacs-gowl-input-remap-identify=, then press a pedal: the echo area names the device, its vendor:product and the key it sent, and a =:match= plist for it is on the kill ring.  =M-x cmacs-gowl-input-remap-devices= lists every keyboard and pointer (=w= on a line copies its =:match=).
+
+Then, in the init file:
+
+#+begin_src elisp
+(with-eval-after-load 'cmacs-gowl
+  (cmacs-gowl-input-remap-define "wow-pedals"
+    :match '(:id "1a86:e026" :type keyboard)   ; from identify / devices
+    :unmatched 'drop                            ; anything else it sends
+    :log t
+    :map '((KEY_A . (button middle))
+           (KEY_B . (action focus-client "title:World of Warcraft*")))))
+#+end_src
+
+A rule defined before the compositor is up is kept and installed when =cmacs-gowl-mode= starts it, and reinstalled after a restart.  The same rules as data, for =customize=:
+
+#+begin_src elisp
+(setq cmacs-gowl-input-remap-rules
+      '(("wow-pedals"
+         :match (:id "1a86:e026" :type keyboard)
+         :unmatched drop
+         :map ((KEY_A . (button middle))
+               (KEY_B . (action focus-client "title:World of Warcraft*"))))))
+#+end_src
+
+*** Running Elisp from a pedal
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap-elisp
+:END:
+
+A target can be a function.  It runs on the *press*, on Emacs's main thread --- never the compositor's: the module fires a =custom= action and cmacs evaluates it from the same idle dispatch every custom keybind uses.  A function of two arguments gets the rule name and the input.
+
+#+begin_src elisp
+(defun my/wow-pedal-b ()
+  "Jump to WoW; start it if it is not running."
+  (if-let ((wow (seq-find (lambda (c)
+                            (string-match-p
+                             "World of Warcraft"
+                             (or (alist-get 'title (gowl-client-info c)) "")))
+                          (gowl-list-clients))))
+      (gowl-focus-client wow)
+    (gowl-spawn "lutris lutris:rungame/world-of-warcraft")))
+
+(cmacs-gowl-input-remap-define "wow-pedals"
+  :match '(:id "1a86:e026" :type keyboard)
+  :map '((KEY_A . (button middle))
+         (KEY_B . my/wow-pedal-b)))
+#+end_src
+
+*** Rules
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap-rules
+:END:
+
+=(cmacs-gowl-input-remap-define NAME &rest PLIST)=, replacing a rule of the same name:
+
+| Key          | Value                                                                   |
+|--------------+-------------------------------------------------------------------------|
+| =:match=     | =:name= GLOB, =:id= "VVVV:PPPP", =:vendor= / =:product= (integers or hex strings), =:sysname= GLOB, =:type= =keyboard= / =pointer= / =any=.  One of the first five is required. |
+| =:map=       | =(INPUT . TARGET)= pairs                                                |
+| =:unmatched= | =pass= (default) or =drop=: inputs the map leaves out                   |
+| =:log=       | non-nil to log every remap this rule makes                              |
+
+INPUT is a =KEY_*= or =BTN_*= name, =left= / =middle= / =right= / =side= / =extra=, or =WHEEL_UP= / =WHEEL_DOWN= / =WHEEL_LEFT= / =WHEEL_RIGHT=, as a symbol or a string.
+
+| TARGET                        | One press does                                      |
+|-------------------------------+-----------------------------------------------------|
+| =pass= / =drop=               | delivers the input unchanged / swallows it          |
+| =(key "Super+9")=             | one key to the focused window, modifiers held for it |
+| =(key KEY_F13)=               | one key by keycode, whatever the layout             |
+| =(button middle)=             | one pointer button where the cursor is              |
+| =(action ACTION [ARG])=       | one compositor action (=tag-view=, =focus-client=, ...) |
+| =(command "LINE")=            | one module IPC command line                         |
+| a function                    | Elisp, on the press, on the main thread             |
+
+*One input, one output.*  Each input maps to exactly one target and the release mirrors the press.  A list of targets, a target with two values, a =:delay= / =:repeat= / =:macro= / =:sequence= key, or an input mapped twice is refused with a =user-error= before anything is sent --- and the module refuses the same things again on its side.  This is what keeps a pedal a hardware remap rather than automation (WoW's "one keypress, one action").  A function target is the exception: what it does is up to it.
+
+Remapped keys and clicks go through the compositor's own decisions, so keybinds, the Emacs key intercept and InputCapture see them, and =Super+Escape= on a claimed keyboard always reaches the escape hatches.
+
+*** Commands and options
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap-commands
+:END:
+
+| Command / function                        | What it does                                            |
+|-------------------------------------------+---------------------------------------------------------|
+| =cmacs-gowl-input-remap-define=           | Define or replace a rule                                |
+| =cmacs-gowl-input-remap-remove=           | Remove one (=M-x= completes over the rules in force)    |
+| =cmacs-gowl-input-remap-clear=            | Remove every runtime rule                               |
+| =cmacs-gowl-input-remap-list=             | The rules in force, as alists                           |
+| =cmacs-gowl-input-remap-devices=          | Buffer of every keyboard and pointer, claimed or not    |
+| =cmacs-gowl-input-remap-identify=         | Report the next device pressed; =:match= to kill ring   |
+| =cmacs-gowl-input-remap-status=           | Enabled, rule and claim counts                          |
+| =cmacs-gowl-input-remap-enable= / =-disable= | Load / release without losing the rules             |
+| =cmacs-gowl-input-remap-rule-json=        | The text a rule becomes (what the module reads)         |
+
+| Option                                          | Default | Meaning                                  |
+|-------------------------------------------------+---------+------------------------------------------|
+| =cmacs-gowl-input-remap-rules=                  | nil     | Rules installed at every compositor start |
+| =cmacs-gowl-input-remap-log=                    | =claim= | =none=, =claim=, =match= or =all=         |
+| =cmacs-gowl-input-remap-log-file=               | nil     | A file, or nil for stderr                 |
+| =cmacs-gowl-input-remap-identify-timeout=       | 10      | Seconds identify waits                    |
+| =cmacs-gowl-input-remap-identified-functions=   | nil     | Hook run with what identify caught        |
+
+Everything goes through =gowl-run-command= and the module's =inputremap-= words, so the same rules are reachable from the socket (=gowl-msg inputremap-devices=), from D-Bus (=RunCommand= on =org.cmacs.Editor1.Compositor=), from MCP (gowl's =input_remap_*= tools, or =eval= on cmacs's), and from a script.  The rule schema, the claim/release lifecycle and the C side are in =deps/gowl/docs/input-remap.org=; standalone gowl's YAML and C versions of the WoW example are =deps/gowl/data/example-input-remap.{yaml,c}=.
+
 ** Hooks
 :PROPERTIES:
 :CUSTOM_ID: gowl-hooks
