@@ -12068,7 +12068,10 @@ DEFUN ("gowl-client-sticky-p", Fgowl_client_sticky_p, Sgowl_client_sticky_p,
 DEFUN ("gowl-set-client-sticky", Fgowl_set_client_sticky,
        Sgowl_set_client_sticky, 2, 2, 0,
        doc: /* Pin CLIENT to every tag of its monitor (STICKY non-nil) or unpin it.
-The window keeps its own tags, so unpinning puts it back where it was. */)
+The window keeps its own tags, so unpinning puts it back where it was.
+Only a floating window is pinned: pinning a tiled one floats it in place,
+since a tile on every tag would be tiled into every tag's layout, and
+tiling it again unpins it. */)
   (Lisp_Object client, Lisp_Object sticky)
 {
   GowlClient *c = gowl_resolve_client (client);

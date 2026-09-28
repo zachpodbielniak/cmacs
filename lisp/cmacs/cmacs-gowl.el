@@ -3303,7 +3303,8 @@ WHICH is \"next\", \"prev\" or an index; with a single layout in
     (message "No previous window")))
 
 (defun cmacs-gowl-toggle-sticky ()
-  "Pin the focused window to every tag of its monitor, or unpin it."
+  "Pin the focused window to every tag of its monitor, or unpin it.
+Pinning a tiled window floats it in place; only floating windows pin."
   (interactive)
   (let ((c (gowl-focused-client)))
     (if (null c)
