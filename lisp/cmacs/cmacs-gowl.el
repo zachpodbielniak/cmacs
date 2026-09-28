@@ -44,6 +44,8 @@
 ;; Autoloaded, but declared so the byte compiler knows the arity of the
 ;; command the Super+Escape bind names.
 (declare-function cmacs-gowl-menu "cmacs-gowl-menu" ())
+(declare-function cmacs-gowl-input-remap--on-start "cmacs-gowl-input-remap" ())
+(defvar cmacs-gowl-input-remap-rules)
 (declare-function cmacs-tray-mode-global "cmacs-tray" (&optional arg))
 (declare-function cmacs-gowl-palette-follow-theme-mode
                   "cmacs-gowl-palette" (&optional arg))
@@ -1868,6 +1870,13 @@ thread is running and applies configuration."
   (cmacs-gowl--apply-dropdowns)
   ;; The scratchpad's size, from the `cmacs-gowl-scratchpad-*' options.
   (cmacs-gowl--apply-scratchpad)
+  ;; Per-device input remapping (cmacs-gowl-input-remap.el).  Opt-in:
+  ;; nothing is loaded unless `cmacs-gowl-input-remap-rules' is set or a
+  ;; rule was defined, which is what loads that file.
+  (when (bound-and-true-p cmacs-gowl-input-remap-rules)
+    (require 'cmacs-gowl-input-remap))
+  (when (fboundp 'cmacs-gowl-input-remap--on-start)
+    (cmacs-gowl-input-remap--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.

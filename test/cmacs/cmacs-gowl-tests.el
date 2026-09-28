@@ -2270,6 +2270,63 @@ waits on it and the desktop freezes."
                     ("cmacs_gowl_unlock ()" (setq locked nil))
                     (_ (should-not locked))))))))))))
 
+;;; Per-device input remapping, through the real module
+
+(defconst cmacs-gowl-tests--input-remap-form
+  '(progn
+     (gowl-start)
+     (require 'cmacs-gowl-input-remap)
+     ;; Opt-in: starting the compositor loads no remapper.
+     (when (gowl-run-command "inputremap-status")
+       (error "The inputremap module was loaded before anyone asked"))
+     (cmacs-gowl-input-remap-enable)
+     (unless (string-prefix-p "enabled=1" (cmacs-gowl-input-remap-status))
+       (error "Not enabled: %s" (cmacs-gowl-input-remap-status)))
+     ;; A rule from Elisp, a function target among its outputs
+     (cmacs-gowl-input-remap-define
+      "pedal" :match '(:name "No Such Pedal" :type keyboard)
+      :map `((KEY_A . (button middle))
+             (KEY_B . (action focus-client "title:World of Warcraft*"))
+             (KEY_C . ,(lambda () (message "pedal C")))))
+     (let ((rules (cmacs-gowl-input-remap-list)))
+       (unless (and (= (length rules) 1)
+                    (equal (alist-get 'name (car rules)) "pedal")
+                    (equal (alist-get 'source (car rules)) "runtime")
+                    (= (alist-get 'mappings (car rules)) 3))
+         (error "Rules after define: %S" rules)))
+     (unless (listp (cmacs-gowl-input-remap-list-devices))
+       (error "The device listing is not a list"))
+     ;; The module refuses a macro over the raw IPC path too
+     (let ((reply (gowl-run-command
+                   "inputremap-add {name: m, match: {name: x}, map: {KEY_A: {key: a, delay: 5}}}")))
+       (unless (string-prefix-p "ERROR" reply)
+         (error "A delayed key was accepted: %s" reply)))
+     (cmacs-gowl-input-remap-remove "pedal")
+     (when (cmacs-gowl-input-remap-list)
+       (error "A removed rule is still listed"))
+     ;; Disabled, it answers nothing and claims nothing
+     (cmacs-gowl-input-remap-disable)
+     (when (gowl-run-command "inputremap-status")
+       (error "Still answering after disable"))
+     (gowl-stop)
+     (princ "cmacs-gowl-input-remap: ok\n"))
+  "What `cmacs-gowl-test-input-remap-headless' runs in the second cmacs.")
+
+(ert-deftest cmacs-gowl-test-input-remap-headless ()
+  "The inputremap module, driven from Elisp in a real compositor.
+It is not loaded until asked for; a rule defined in Elisp (with a
+function target) reaches it and is listed; the module refuses a
+delayed key over raw IPC; removing and disabling leave nothing."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--input-remap-form))
+         (status (car result))
+         (output (cdr result)))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-match-p "cmacs-gowl-input-remap: ok" output)))))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here
 
