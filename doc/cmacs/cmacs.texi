@@ -2882,9 +2882,11 @@ A TARGET is @code{pass}, @code{drop}, @code{(key "Super+9")},
 
 @strong{One input, one output.}  Each input maps to exactly one target
 and the release mirrors the press.  Lists of targets, two values, a
-@code{:delay}/@code{:repeat}/@code{:macro}/@code{:sequence} key, or an
-input mapped twice are refused before anything is sent, and the module
-refuses them again.  A function target is the exception.  Remapped keys
+@code{:delay}/@code{:repeat}/@code{:sequence} key, or an input mapped
+twice are refused before anything is sent, and the module refuses them
+again.  Two targets are exceptions, on purpose: a function target, and
+@code{(macro NAME [ARGS])}, which runs a gowl macro on the press
+(@pxref{gowl Macros}).  Remapped keys
 and clicks go through the compositor's own decisions, and Super+Escape
 on a claimed keyboard always reaches the escape hatches.
 
@@ -2899,6 +2901,127 @@ goes through @code{gowl-run-command} and the module's
 @code{inputremap-} words, which the IPC socket, D-Bus
 (@code{RunCommand}) and MCP reach too.  The schema and lifecycle are in
 @file{deps/gowl/docs/input-remap.org}.
+
+@section Macros
+@anchor{gowl Macros}
+@cindex macros, gowl
+@cindex gowl macros
+@cindex crispy macros
+
+gowl's @code{macro} module runs @dfn{macros}: small C files, compiled
+at run time with crispy and loaded into the compositor, that sort a
+tag's windows, type into one named window while another keeps focus,
+move windows between tags---anything the gowl API can do.  Edit the
+file and run it again: the new code runs.
+@file{lisp/cmacs/cmacs-gowl-macro.el} is its Elisp surface, and adds
+the other half: Elisp functions as macros, runnable by name from
+everything that can run a C one.
+
+@strong{Nothing is on by default.}  cmacs ships no macro and binds no
+key.  The module is loaded the first time any @code{cmacs-gowl-macro-}
+function is used, or at compositor start when
+@code{cmacs-gowl-macro-definitions} or @code{cmacs-gowl-macro-triggers}
+is set.
+
+@subsection Containment
+
+Every call into a macro runs under gowl's fault guard: SIGSEGV, SIGBUS,
+SIGFPE, SIGILL and SIGABRT are caught on the thread that raised them
+and unwound, and a per-run watchdog (@code{cmacs-gowl-macro-timeout},
+2000 ms) unwinds a macro that runs away.  The macro is then @dfn{held
+back}---refused until @kbd{M-x cmacs-gowl-macro-clear}---gowl's bar
+and log say why, @code{cmacs-gowl-macro-fault-functions} runs with the
+name and the signal, and (with @code{cmacs-gowl-macro-notify}) a
+critical notification appears.  The hold survives a restart.
+
+Outside a macro the guard's handlers chain to Emacs's own
+@code{handle_sigsegv}, so a real crash in cmacs is reported as before.
+The watchdog signal is @code{SIGRTMIN+9}, clear of the one cmacs gives
+WebKit's GC (@code{JSC_SIGNAL_FOR_GC=40}).  A macro that knows it is
+long raises its own budget with @code{gowl_macro_set_timeout}, or runs
+on a worker thread (@code{#define GOWL_MACRO_THREADED 1}), where it may
+sleep; the compositor never waits for a worker.
+
+Stop macros with @kbd{M-x cmacs-gowl-macro-stop} or the stop key.
+gowl's default, @kbd{Super+Escape}, is cmacs's menu key, and configured
+keybinds win over the module's, so cmacs moves it to
+@kbd{Super+Alt+Escape} (@code{cmacs-gowl-macro-stop-key}).
+
+@subsection Running C macros by name
+
+A bare name is looked up in @code{cmacs-gowl-macro-directory},
+@env{GOWL_MACRO_DIR}, @file{~/.config/gowl/macros},
+@file{$XDG_DATA_HOME/gowl/macros}, @file{/etc/gowl/macros},
+@file{/usr/local/share/gowl/macros}, @file{/usr/share/gowl/macros} and,
+in a development build, @file{deps/gowl/data/macros}; the first hit
+wins.  A name with a @samp{/} is a path.
+
+@lisp
+(cmacs-gowl-macro-run "sort-windows" "reverse")
+(cmacs-gowl-macro-run "type-into" "app-id:foot" "make -j8\n")
+(cmacs-gowl-macro-bind "Super+s" "sort-windows")
+@end lisp
+
+@kbd{M-x cmacs-gowl-macro-list-macros} lists everything runnable;
+@kbd{M-x cmacs-gowl-macro-new} writes a skeleton into your macro
+directory; @kbd{M-x cmacs-gowl-macro-visit} opens the file a name
+resolves to.  gowl ships 24 commented examples.
+
+@subsection Elisp macros
+
+@code{cmacs-gowl-macro-define} gives an Elisp function a macro name, so
+@command{gowl-msg macro-run NAME}, gowl keybinds, the input remapper,
+D-Bus, MCP and C macros can run it.  It runs on Emacs's main thread
+through the custom-action idle dispatch, with the macro's arguments;
+@code{cmacs-gowl-macro-trigger} says what started it.  An error in it
+is reported like a fault.
+
+@lisp
+(cmacs-gowl-macro-define "browser"
+  (lambda (&rest _)
+    (cmacs-gowl-macro-run "focus-or-launch"
+                          "app-id:librewolf" "librewolf")))
+
+(add-hook 'cmacs-gowl-macro-fault-functions
+          (lambda (name what)
+            (message "macro %s died: %s" name what)))
+@end lisp
+
+Crispy macros never call Lisp themselves; define the Elisp half with
+@code{cmacs-gowl-macro-define} and have the C half run it by name.
+
+@subsection Triggers
+
+@lisp
+(cmacs-gowl-input-remap-define "pedals"
+  :match '(:id "1a86:e026" :type keyboard)
+  :map '((KEY_A . (button middle))
+         (KEY_B . (macro "focus-or-launch"
+                         "'title:World of Warcraft*' lutris"))))
+
+(setq cmacs-gowl-macro-triggers
+      '("client-added: layout-for-count" "every 600000: night"))
+@end lisp
+
+cmacs's D-Bus service has @code{RunMacro(s name, as args) -> s} on
+@code{org.cmacs.Editor1.Compositor}, which loads the module on first
+use.  With @code{cmacs-gowl-macro-dbus} the module also owns
+@code{org.gowl.Macro1}; gowl's MCP server has @code{macro_run} and
+friends.
+
+@subsection Commands and options
+
+@code{cmacs-gowl-macro-run}, @code{-stop}, @code{-define},
+@code{-undefine}, @code{-bind}, @code{-list-macros}, @code{-new},
+@code{-visit}, @code{-clear}, @code{-compile}, @code{-list},
+@code{-status}, @code{-info}, @code{-reload}, @code{-configure},
+@code{-ensure} and @code{-disable}; options
+@code{cmacs-gowl-macro-directory}, @code{-timeout},
+@code{-max-running}, @code{-stop-key}, @code{-triggers},
+@code{-definitions}, @code{-dbus}, @code{-notify},
+@code{-fault-functions}, @code{-log} and @code{-log-file}.  The macro
+API, both run modes, every setting and the examples are in
+@file{deps/gowl/docs/macros.org}.
 
 @section Client Embedding
 

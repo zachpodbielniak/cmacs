@@ -875,9 +875,10 @@ INPUT is a =KEY_*= or =BTN_*= name, =left= / =middle= / =right= / =side= / =extr
 | =(button middle)=             | one pointer button where the cursor is              |
 | =(action ACTION [ARG])=       | one compositor action (=tag-view=, =focus-client=, ...) |
 | =(command "LINE")=            | one module IPC command line                         |
+| =(macro NAME [ARGS])=         | a gowl macro, on the press (outside one-to-one)     |
 | a function                    | Elisp, on the press, on the main thread             |
 
-*One input, one output.*  Each input maps to exactly one target and the release mirrors the press.  A list of targets, a target with two values, a =:delay= / =:repeat= / =:macro= / =:sequence= key, or an input mapped twice is refused with a =user-error= before anything is sent --- and the module refuses the same things again on its side.  This is what keeps a pedal a hardware remap rather than automation (WoW's "one keypress, one action").  A function target is the exception: what it does is up to it.
+*One input, one output.*  Each input maps to exactly one target and the release mirrors the press.  A list of targets, a target with two values, a =:delay= / =:repeat= / =:sequence= key, or an input mapped twice is refused with a =user-error= before anything is sent --- and the module refuses the same things again on its side.  This is what keeps a pedal a hardware remap rather than automation (WoW's "one keypress, one action").  Two targets are exceptions, on purpose: a function target, and =(macro NAME [ARGS])=, which runs a [[#gowl-macros][gowl macro]] on the press (and loads the macro module when the rule is defined).  What those do is up to them --- keep them away from the game itself.
 
 Remapped keys and clicks go through the compositor's own decisions, so keybinds, the Emacs key intercept and InputCapture see them, and =Super+Escape= on a claimed keyboard always reaches the escape hatches.
 
@@ -907,6 +908,155 @@ Remapped keys and clicks go through the compositor's own decisions, so keybinds,
 | =cmacs-gowl-input-remap-identified-functions=   | nil     | Hook run with what identify caught        |
 
 Everything goes through =gowl-run-command= and the module's =inputremap-= words, so the same rules are reachable from the socket (=gowl-msg inputremap-devices=), from D-Bus (=RunCommand= on =org.cmacs.Editor1.Compositor=), from MCP (gowl's =input_remap_*= tools, or =eval= on cmacs's), and from a script.  The rule schema, the claim/release lifecycle and the C side are in =deps/gowl/docs/input-remap.org=; standalone gowl's YAML and C versions of the WoW example are =deps/gowl/data/example-input-remap.{yaml,c}=.
+
+** Macros
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros
+:END:
+
+gowl's =macro= module runs *macros*: small C files, compiled at run time with crispy and loaded into the compositor, that sort a tag's windows, type into one named window while another keeps focus, move windows between tags --- anything the gowl API can do.  Edit the file and run it again: the new code runs.  =lisp/cmacs/cmacs-gowl-macro.el= is its Elisp surface, and it adds the other half: *Elisp functions as macros*, runnable by name from everything that can run a C one.
+
+*Nothing is on by default.*  cmacs ships no macro and binds no key.  The module is loaded the first time any =cmacs-gowl-macro-= function is used, or at compositor start when =cmacs-gowl-macro-definitions= or =cmacs-gowl-macro-triggers= is set.
+
+*** Containment
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-containment
+:END:
+
+A macro runs inside the compositor, which under =cmacs --gowl= is the process your whole desktop lives in.  So every call into one runs under gowl's fault guard: SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGABRT are caught on the thread that raised them and unwound, and a per-run watchdog (=cmacs-gowl-macro-timeout=, 2 s) unwinds a macro that runs away.  The macro is then /held back/ --- refused until =M-x cmacs-gowl-macro-clear= --- the log and gowl's bar say why, =cmacs-gowl-macro-fault-functions= runs with the name and the signal, and (with =cmacs-gowl-macro-notify=) a critical notification appears.  The hold survives a restart, and a macro that was running when a session died is held back at the next start.
+
+Outside a macro the guard steps aside: its handlers chain to Emacs's own =handle_sigsegv=, so a real crash in cmacs is reported exactly as before.  The watchdog uses =SIGRTMIN+9=, clear of the signal cmacs gives WebKit's GC (=JSC_SIGNAL_FOR_GC=40=).
+
+A macro that knows it is long asks for more time first thing, =gowl_macro_set_timeout(ctx, 10000)= (=0= for none), or runs on a worker thread with =#define GOWL_MACRO_THREADED 1=, where =gowl_macro_sleep()= is allowed.  The compositor never waits for a worker, which matters here: it holds the gowl lock while it dispatches.
+
+*Stopping them:* =M-x cmacs-gowl-macro-stop=, or the stop key.  gowl's default stop key is Super+Escape, but that is cmacs's menu key and configured keybinds win over the module's, so cmacs moves it to =Super+Alt+Escape= (=cmacs-gowl-macro-stop-key=).
+
+*** Running C macros by name
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-run
+:END:
+
+A bare name is looked up in =cmacs-gowl-macro-directory= (if set), =$GOWL_MACRO_DIR=, =~/.config/gowl/macros=, =$XDG_DATA_HOME/gowl/macros=, =/etc/gowl/macros=, =/usr/local/share/gowl/macros=, =/usr/share/gowl/macros= and --- in a development build --- =deps/gowl/data/macros=; the first hit wins.  A name with a =/= is a path.
+
+#+begin_src elisp
+(cmacs-gowl-macro-run "sort-windows")                      ; A..Z
+(cmacs-gowl-macro-run "sort-windows" "reverse")            ; Z..A
+(cmacs-gowl-macro-run "type-into" "app-id:foot" "make -j8\n")
+(cmacs-gowl-macro-run "~/scratch/try.c")                   ; a path
+
+;; A compositor key, whichever window has focus
+(cmacs-gowl-macro-bind "Super+s" "sort-windows")
+(cmacs-gowl-macro-bind "Super+F1" "type-into" "app-id:foot" "make\n")
+#+end_src
+
+=M-x cmacs-gowl-macro-list-macros= lists everything runnable (=RET= runs, =v= visits the source, =c= clears a hold, =n= starts a new one); =M-x cmacs-gowl-macro-new= writes a skeleton into your macro directory and visits it; =M-x cmacs-gowl-macro-visit= opens the file a name resolves to.  gowl ships 24 commented examples --- sort, group, gather, scatter, type-into, focus-or-launch, workspace snapshots, a threaded file watcher, and deliberately crashing and looping ones to see containment work.
+
+*** Elisp macros
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-elisp
+:END:
+
+=cmacs-gowl-macro-define= gives an Elisp function a macro name.  From then on =gowl-msg macro-run NAME=, a gowl keybind, the input remapper, D-Bus, MCP and C macros can all run it.  It runs on Emacs's main thread --- the module fires a =custom= action and cmacs evaluates its form through the same idle dispatch as a custom keybind --- with the macro's arguments, and =cmacs-gowl-macro-trigger= says what started it (="ipc"=, ="remap"=, ="event"=, ="timer"=, ="dbus"=, ="api"=).  An error in it is caught and reported like a fault.
+
+#+begin_src elisp
+;; Sort the visible windows by title, in Elisp
+(cmacs-gowl-macro-define "sort-titles"
+  (lambda (&rest _)
+    (cmacs-gowl-macro-run "sort-windows")))
+
+;; Focus the browser, or launch it -- through a shipped C macro
+(cmacs-gowl-macro-define "browser"
+  (lambda (&rest _)
+    (cmacs-gowl-macro-run "focus-or-launch" "app-id:librewolf" "librewolf")))
+
+;; Snapshot where every window is into an org file
+(cmacs-gowl-macro-define "snapshot"
+  (lambda (&rest _)
+    (with-current-buffer (find-file-noselect "~/Documents/notes/00_inbox/desk.org")
+      (goto-char (point-max))
+      (insert (format "* %s\n" (format-time-string "%F %R")))
+      (dolist (c (gowl-list-clients))
+        (insert (format "- %S\n" c)))
+      (save-buffer))))
+
+;; Tell me when a macro dies
+(add-hook 'cmacs-gowl-macro-fault-functions
+          (lambda (name what)
+            (message "macro %s died: %s" name what)))
+#+end_src
+
+Or, to have them installed at every compositor start:
+
+#+begin_src elisp
+(setq cmacs-gowl-macro-definitions
+      `(("sort-titles" . ,(lambda (&rest _)
+                            (cmacs-gowl-macro-run "sort-windows")))))
+#+end_src
+
+Crispy macros never call Lisp themselves --- they run in the compositor, and the cmacs-api dispatch table requires Emacs's thread.  To mix the two, define the Elisp half with =cmacs-gowl-macro-define= and have the C half run it by name (=gowl_macro_command(ctx, "macro-run snapshot")=).
+
+*** Triggers: pedals, events, timers, D-Bus
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-triggers
+:END:
+
+#+begin_src elisp
+;; A foot pedal: pedal A clicks, pedal B runs a macro
+(cmacs-gowl-input-remap-define "pedals"
+  :match '(:id "1a86:e026" :type keyboard)
+  :map '((KEY_A . (button middle))
+         (KEY_B . (macro "focus-or-launch" "'title:World of Warcraft*' lutris"))))
+
+;; Events and timers
+(setq cmacs-gowl-macro-triggers
+      '("client-added: layout-for-count"
+        "client-removed: layout-for-count"
+        "every 600000: night"))
+#+end_src
+
+From outside Emacs, cmacs's own D-Bus service has =RunMacro(s name, as args) → s= on =org.cmacs.Editor1.Compositor=; it loads the module on first use like any other caller:
+
+#+begin_src sh
+gdbus call --session --dest org.cmacs.Editor1 --object-path /org/cmacs/Editor1 \
+  --method org.cmacs.Editor1.Compositor.RunMacro sort-windows '["reverse"]'
+#+end_src
+
+The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With =cmacs-gowl-macro-dbus= the module also owns gowl's =org.gowl.Macro1=.  gowl's MCP server has =macro_run=, =macro_list=, =macro_status=, =macro_info=, =macro_stop= and =macro_clear=.
+
+*** Commands and options
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-commands
+:END:
+
+| Command / function                   | What it does                                              |
+|--------------------------------------+-----------------------------------------------------------|
+| =cmacs-gowl-macro-run=               | Run a macro by name with arguments; returns its reply     |
+| =cmacs-gowl-macro-stop=              | Stop running macros (a name, an id, or all)              |
+| =cmacs-gowl-macro-define= / =-undefine= | Give an Elisp function a macro name / take it back     |
+| =cmacs-gowl-macro-bind=              | A compositor key that runs a macro                        |
+| =cmacs-gowl-macro-list-macros=       | Buffer of every runnable macro                            |
+| =cmacs-gowl-macro-new= / =-visit=    | Start a macro file / open the one a name resolves to      |
+| =cmacs-gowl-macro-clear=             | Let a held-back macro run again                           |
+| =cmacs-gowl-macro-compile=           | Compile without running; shows the compile error         |
+| =cmacs-gowl-macro-list= / =-status= / =-info= | The module's JSON, as alists                     |
+| =cmacs-gowl-macro-reload=            | Forget compiled macros, re-read triggers                  |
+| =cmacs-gowl-macro-configure=         | Push changed options                                      |
+| =cmacs-gowl-macro-ensure= / =-disable= | Load (idempotent) / unload the module                 |
+
+| Option                                | Default              | Meaning                                    |
+|---------------------------------------+----------------------+--------------------------------------------|
+| =cmacs-gowl-macro-directory=          | nil                  | Searched before gowl's directories         |
+| =cmacs-gowl-macro-timeout=            | 2000                 | Each run's budget (ms); 0 for none         |
+| =cmacs-gowl-macro-max-running=        | 4                    | Runs at once                               |
+| =cmacs-gowl-macro-stop-key=           | ="Super+Alt+Escape"= | Stops every running macro; nil for none    |
+| =cmacs-gowl-macro-triggers=           | nil                  | ="EVENT: MACRO"= / ="every MS: MACRO"=      |
+| =cmacs-gowl-macro-definitions=        | nil                  | Elisp macros installed at every start      |
+| =cmacs-gowl-macro-dbus=               | nil                  | Also own =org.gowl.Macro1=                 |
+| =cmacs-gowl-macro-notify=             | t                    | Desktop notification on a fault            |
+| =cmacs-gowl-macro-fault-functions=    | nil                  | Hook: NAME and the signal or error         |
+| =cmacs-gowl-macro-log= / =-log-file=  | =fault= / stderr     | The module's log                           |
+
+The macro API, lookup order, both run modes, every setting and the shipped examples are in =deps/gowl/docs/macros.org=.
 
 ** Hooks
 :PROPERTIES:
