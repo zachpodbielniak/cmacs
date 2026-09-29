@@ -105,11 +105,22 @@ is cmacs's menu key, and configured keybinds win over the module's."
   :group 'cmacs-gowl-macro)
 
 (defcustom cmacs-gowl-macro-triggers nil
-  "Event and timer triggers, each \"EVENT: MACRO [ARGS]\" or
-\"every MS: MACRO [ARGS]\".  EVENT is any compositor signal
-\(\"client-added\", \"focus-changed\", \"workspace-switched\", ...).
-Setting this loads the module at compositor start."
-  :type '(repeat string)
+  "Event and timer triggers.  Setting this loads the module at start.
+Each entry is either a string, as gowl reads it,
+
+  \"EVENT [FILTER]: MACRO [ARGS]\"   or   \"every MS [FILTER]: MACRO [ARGS]\"
+
+or a list (EVENT FILTER MACRO ARG...), where EVENT is a string
+\(\"client-added\", \"focus-changed\", \"every 60000\", ...), FILTER is
+nil, a filter string, or a filter form (see `cmacs-gowl-macro-filter'),
+and MACRO and each ARG are strings.  Only the triggers whose filter
+matches the event run; several may name one event."
+  :type '(repeat (choice string
+                         (cons :tag "Structured"
+                               (string :tag "Event")
+                               (cons (sexp :tag "Filter")
+                                     (repeat :tag "Macro and arguments"
+                                             string)))))
   :group 'cmacs-gowl-macro)
 
 (defcustom cmacs-gowl-macro-dbus nil
@@ -207,8 +218,8 @@ init file before `cmacs-gowl-mode' is not lost.")
            (cons "log-file" (if cmacs-gowl-macro-log-file
                                 (expand-file-name cmacs-gowl-macro-log-file)
                               "stderr"))
-           (cons "triggers" (mapconcat #'identity cmacs-gowl-macro-triggers
-                                       "\n"))
+           (cons "triggers" (mapconcat #'cmacs-gowl-macro--trigger-line
+                                       cmacs-gowl-macro-triggers "\n"))
            (cons "dbus" (if cmacs-gowl-macro-dbus "true" "false"))
            ;; Every fault reaches Elisp: the module Lisp-quotes %n/%s
            (cons "on-fault-custom" "(cmacs-gowl-macro--fault %n %s)")))))
@@ -380,6 +391,139 @@ Return how many were told to stop."
     (when (called-interactively-p 'interactive)
       (message "Macro: %s" reply))
     reply))
+
+;;;; Trigger filters
+
+(defconst cmacs-gowl-macro--filter-ops
+  '(= != ~ !~ < <= > >=)
+  "The comparison operators a filter form may name.")
+
+(defconst cmacs-gowl-macro--filter-fields
+  '(event app-id title floating fullscreen urgent xwayland
+          focused-app-id focused-title monitor layout tag tags clients
+          arg time hour weekday)
+  "Every field gowl can test (mirrors gowl-macro-filter.c).")
+
+(defun cmacs-gowl-macro--filter-value (v)
+  "V as a quoted filter value: `\"' and `\\' escaped, nothing else."
+  (let ((s (if (stringp v) v (format "%s" v))))
+    (concat "\""
+            (replace-regexp-in-string "[\"\\]" "\\\\\\&" s)
+            "\"")))
+
+(defun cmacs-gowl-macro-filter (form)
+  "The gowl trigger filter text for FORM.
+FORM is a string (used as it is), or a list:
+
+  (and FORM...)   (or FORM...)   (not FORM)
+  (FIELD VALUE)            glob match, e.g. (app-id \"firefox*\")
+  (FIELD OP VALUE)         OP is one of = != ~ !~ < <= > >=
+
+FIELD is a symbol from `cmacs-gowl-macro--filter-fields'.  Values are
+quoted for you, so any string is safe.  For example
+
+  (and (app-id \"firefox*\")
+       (or (title \"*YouTube*\") (title ~ \"(?i)twitch\"))
+       (not (floating \"true\")))
+
+An unknown field or operator is a `user-error' here rather than a
+refused trigger in the compositor's log."
+  (cond
+   ((stringp form) form)
+   ((not (consp form))
+    (user-error "Macro filter: %S is not a filter form" form))
+   ((memq (car form) '(and or))
+    (unless (cdr form)
+      (user-error "Macro filter: (%s) needs at least one condition"
+                  (car form)))
+    (if (null (cddr form))
+        (cmacs-gowl-macro-filter (cadr form))
+      (concat "("
+              (mapconcat #'cmacs-gowl-macro-filter (cdr form)
+                         (format " %s " (car form)))
+              ")")))
+   ((eq (car form) 'not)
+    (unless (= (length form) 2)
+      (user-error "Macro filter: (not FORM) takes one form"))
+    (concat "not " (let ((inner (cmacs-gowl-macro-filter (cadr form))))
+                     (if (string-prefix-p "(" inner) inner
+                       (concat "(" inner ")")))))
+   ((memq (car form) cmacs-gowl-macro--filter-fields)
+    (pcase (cdr form)
+      (`(,value)
+       (concat (symbol-name (car form)) "="
+               (cmacs-gowl-macro--filter-value value)))
+      (`(,op ,value)
+       (unless (memq op cmacs-gowl-macro--filter-ops)
+         (user-error "Macro filter: unknown operator %S (one of %s)" op
+                     (mapconcat #'symbol-name cmacs-gowl-macro--filter-ops
+                                " ")))
+       (concat (symbol-name (car form)) (symbol-name op)
+               (cmacs-gowl-macro--filter-value value)))
+      (_ (user-error "Macro filter: %S is (FIELD VALUE) or (FIELD OP VALUE)"
+                     form))))
+   (t (user-error "Macro filter: unknown field or form %S (fields: %s)"
+                  (car form)
+                  (mapconcat #'symbol-name cmacs-gowl-macro--filter-fields
+                             " ")))))
+
+(defun cmacs-gowl-macro-trigger-string (event filter macro &rest args)
+  "The trigger line for EVENT, FILTER, MACRO and ARGS.
+FILTER is nil, a string or a form for `cmacs-gowl-macro-filter'."
+  (unless (and (stringp event) (not (string-match-p "[][:\n]" event)))
+    (user-error "Macro trigger: bad event %S" event))
+  (unless (and (stringp macro) (not (string-match-p "[[:space:]]" macro)))
+    (user-error "Macro trigger: bad macro name %S" macro))
+  (concat event
+          (and filter (concat " [" (cmacs-gowl-macro-filter filter) "]"))
+          ": " macro
+          (mapconcat (lambda (a) (concat " " (cmacs-gowl-macro--quote a)))
+                     args "")))
+
+(defun cmacs-gowl-macro--trigger-line (entry)
+  "ENTRY of `cmacs-gowl-macro-triggers' as the line gowl reads."
+  (cond ((stringp entry)
+         (when (string-match-p "\n" entry)
+           (user-error "Macro trigger %S: one line per trigger" entry))
+         entry)
+        ((and (consp entry) (>= (length entry) 3))
+         (apply #'cmacs-gowl-macro-trigger-string entry))
+        (t (user-error "Macro trigger %S: a string or (EVENT FILTER MACRO ARG...)"
+                       entry))))
+
+(defun cmacs-gowl-macro-list-triggers ()
+  "The triggers in force, as the module understood them.
+An alist with `errors' (lines refused) and `triggers': each with its
+line, event or interval, filter (fully parenthesised), macro, args, and
+how often it `fired' or was `skipped' by its filter."
+  (cmacs-gowl-macro--json "macro-triggers"))
+
+;;;###autoload
+(defun cmacs-gowl-macro-filter-test (filter &optional event)
+  "Judge FILTER against the focused window and selected monitor now.
+FILTER is a string or a form for `cmacs-gowl-macro-filter'; EVENT names
+the event the fields are filled in for.  Returns an alist with `match',
+`filter' (as understood) and `fields' (every field's value now).
+Interactively, show them."
+  (interactive (list (read-string "Filter: ")))
+  (let* ((text (cmacs-gowl-macro-filter filter))
+         (result (cmacs-gowl-macro--json
+                  (concat "macro-filter-test "
+                          (if event
+                              (concat "--event="
+                                      (replace-regexp-in-string
+                                       "[[:space:]]" "" event)
+                                      " ")
+                            "")
+                          text))))
+    (when (called-interactively-p 'interactive)
+      (with-help-window "*gowl macro filter*"
+        (princ (format "%s\n\n  %s\n\nFields now:\n\n"
+                       (if (alist-get 'match result) "MATCHES" "does not match")
+                       (alist-get 'filter result)))
+        (dolist (f (alist-get 'fields result))
+          (princ (format "  %-16s %s\n" (car f) (cdr f))))))
+    result))
 
 ;;;; Elisp macros
 

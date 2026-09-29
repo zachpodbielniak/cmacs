@@ -102,6 +102,79 @@ BODY, `sent' is the list of command lines sent (oldest first),
   (should (equal (default-value 'cmacs-gowl-macro-stop-key)
                  "Super+Alt+Escape")))
 
+;;;; Trigger filters
+
+(ert-deftest cmacs-gowl-macro-test-filter-forms ()
+  "Filter forms become the text gowl parses, values quoted for it."
+  (should (equal (cmacs-gowl-macro-filter "app-id=x and title=y")
+                 "app-id=x and title=y"))
+  (should (equal (cmacs-gowl-macro-filter '(app-id "firefox*"))
+                 "app-id=\"firefox*\""))
+  (should (equal (cmacs-gowl-macro-filter '(clients >= 5)) "clients>=\"5\""))
+  (should (equal (cmacs-gowl-macro-filter
+                  '(and (app-id "firefox*")
+                        (or (title "*YouTube*") (title ~ "(?i)twitch"))
+                        (not (floating "true"))))
+                 (concat "(app-id=\"firefox*\" and "
+                         "(title=\"*YouTube*\" or title~\"(?i)twitch\") and "
+                         "not (floating=\"true\"))")))
+  ;; a single condition needs no parentheses; `not' always groups
+  (should (equal (cmacs-gowl-macro-filter '(or (tag 1))) "tag=\"1\""))
+  (should (equal (cmacs-gowl-macro-filter '(not (tag 1))) "not (tag=\"1\")"))
+  ;; quotes and backslashes are escaped, nothing else
+  (should (equal (cmacs-gowl-macro-filter '(title "a\"b\\c"))
+                 "title=\"a\\\"b\\\\c\""))
+  ;; refusals, here and not in the compositor's log
+  (should-error (cmacs-gowl-macro-filter '(colour "red")) :type 'user-error)
+  (should-error (cmacs-gowl-macro-filter '(app-id like "x")) :type 'user-error)
+  (should-error (cmacs-gowl-macro-filter '(and)) :type 'user-error)
+  (should-error (cmacs-gowl-macro-filter '(not (tag 1) (tag 2)))
+                :type 'user-error)
+  (should-error (cmacs-gowl-macro-filter 42) :type 'user-error))
+
+(ert-deftest cmacs-gowl-macro-test-trigger-lines ()
+  "Structured triggers become lines; strings pass through."
+  (should (equal (cmacs-gowl-macro-trigger-string
+                  "client-added" '(app-id "foot") "tidy-on-map")
+                 "client-added [app-id=\"foot\"]: tidy-on-map"))
+  (should (equal (cmacs-gowl-macro-trigger-string
+                  "every 60000" nil "night")
+                 "every 60000: night"))
+  (should (equal (split-string-shell-command
+                  (cadr (split-string
+                         (cmacs-gowl-macro-trigger-string
+                          "focus-changed" "arg=x" "type-into" "app-id:foot"
+                          "make -j8")
+                         ": ")))
+                 '("type-into" "app-id:foot" "make -j8")))
+  (should-error (cmacs-gowl-macro-trigger-string "bad:event" nil "m")
+                :type 'user-error)
+  (should-error (cmacs-gowl-macro-trigger-string "e" nil "two words")
+                :type 'user-error)
+  (let ((cmacs-gowl-macro-triggers
+         '("client-added: tidy-on-map"
+           ("focus-changed" (or (app-id "mpv") (title ~ "(?i)youtube"))
+            "presentation" "on"))))
+    (should (equal (cdr (assoc "triggers" (cmacs-gowl-macro--settings)))
+                   (concat "client-added: tidy-on-map\n"
+                           "focus-changed [(app-id=\"mpv\" or "
+                           "title~\"(?i)youtube\")]: presentation on"))))
+  (let ((cmacs-gowl-macro-triggers '("two\nlines")))
+    (should-error (cmacs-gowl-macro--settings) :type 'user-error)))
+
+(ert-deftest cmacs-gowl-macro-test-filter-test-command ()
+  "`cmacs-gowl-macro-filter-test' sends the filter text and parses the reply."
+  (cmacs-gowl-macro-tests--with-module
+      (lambda (line)
+        (if (string-prefix-p "macro-status" line) "OK {}"
+          "OK {\"match\":true,\"filter\":\"clients>\\\"1\\\"\",\"fields\":{\"clients\":\"3\"}}"))
+    (let ((cmacs-gowl-macro--enabled t))
+      (let ((r (cmacs-gowl-macro-filter-test '(clients > 1) "focus-changed")))
+        (should (eq (alist-get 'match r) t))
+        (should (equal (alist-get 'clients (alist-get 'fields r)) "3"))
+        (should (equal (car (last sent))
+                       "macro-filter-test --event=focus-changed clients>\"1\""))))))
+
 ;;;; Loading on first use
 
 (ert-deftest cmacs-gowl-macro-test-loads-on-first-use ()
@@ -467,6 +540,28 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
      (unless (and (test-wait (lambda () test-fault))
                   (equal test-fault '("elisp-bad" "Boom")))
        (error "An Elisp error reached the hook as %S" test-fault))
+     ;; Filtered triggers, structured, as the module understood them
+     (setq cmacs-gowl-macro-triggers
+           '(("layout-changed" (and (arg "[M]") (not (monitor "NONE")))
+              "hello" "filtered")
+             "layout-changed [clients>=0 or tag=1]: hello"
+             "layout-changed [nosuchfield=1]: hello"))
+     (cmacs-gowl-macro-configure)
+     (let* ((tr (cmacs-gowl-macro-list-triggers))
+            (lines (alist-get 'triggers tr)))
+       (unless (and (= (alist-get 'errors tr) 1) (= (length lines) 2))
+         (error "Triggers after configure: %S" tr))
+       (unless (equal (alist-get 'filter (car lines))
+                      "(arg=\"[M]\" and not monitor=\"NONE\")")
+         (error "The structured filter was read as %S"
+                (alist-get 'filter (car lines)))))
+     (let ((r (cmacs-gowl-macro-filter-test '(and (clients >= 0) (hour >= 0))
+                                            "focus-changed")))
+       (unless (eq (alist-get 'match r) t)
+         (error "filter-test: %S" r))
+       (unless (equal (alist-get 'event (alist-get 'fields r))
+                      "focus-changed")
+         (error "filter-test fields: %S" r)))
      (cmacs-gowl-macro-disable)
      (when (gowl-run-command "macro-status")
        (error "Still answering after disable"))

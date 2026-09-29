@@ -3003,6 +3003,34 @@ Crispy macros never call Lisp themselves; define the Elisp half with
       '("client-added: layout-for-count" "every 600000: night"))
 @end lisp
 
+@cindex macro trigger filters
+A trigger may carry a filter, so it runs only for the events it wants;
+several triggers on one event each keep their own subset.  An entry is
+a string, @samp{EVENT [FILTER]: MACRO ARGS}, or a list
+@code{(EVENT FILTER MACRO ARG...)} whose FILTER is a form combining
+conditions with @code{and}, @code{or} and @code{not} to any depth:
+
+@lisp
+(setq cmacs-gowl-macro-triggers
+      '(("client-added"
+         (and (app-id "firefox*") (not (title "*Private*")))
+         "gather-app" "firefox*")
+        ("focus-changed"
+         (or (app-id "mpv") (title ~ "(?i)youtube"))
+         "presentation" "on")
+        "client-added [clients>=5 or clients<=1]: layout-for-count"))
+@end lisp
+
+A condition is @code{(FIELD VALUE)}, a glob, or @code{(FIELD OP VALUE)}
+with OP one of @code{= != ~ !~ < <= > >=}.  Fields: @code{event},
+@code{app-id}, @code{title}, @code{floating}, @code{fullscreen},
+@code{urgent}, @code{xwayland}, @code{focused-app-id},
+@code{focused-title}, @code{monitor}, @code{layout}, @code{tag},
+@code{tags}, @code{clients}, @code{arg}, @code{time}, @code{hour} and
+@code{weekday}.  @kbd{M-x cmacs-gowl-macro-filter-test} judges a filter
+against the current window; @code{cmacs-gowl-macro-list-triggers} shows
+each trigger's filter as gowl read it.
+
 cmacs's D-Bus service has @code{RunMacro(s name, as args) -> s} on
 @code{org.cmacs.Editor1.Compositor}, which loads the module on first
 use.  With @code{cmacs-gowl-macro-dbus} the module also owns
@@ -3015,6 +3043,8 @@ friends.
 @code{-undefine}, @code{-bind}, @code{-list-macros}, @code{-new},
 @code{-visit}, @code{-clear}, @code{-compile}, @code{-list},
 @code{-status}, @code{-info}, @code{-reload}, @code{-configure},
+@code{-filter}, @code{-trigger-string}, @code{-filter-test},
+@code{-list-triggers},
 @code{-ensure} and @code{-disable}; options
 @code{cmacs-gowl-macro-directory}, @code{-timeout},
 @code{-max-running}, @code{-stop-key}, @code{-triggers},

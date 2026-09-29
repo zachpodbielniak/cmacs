@@ -1014,6 +1014,29 @@ Crispy macros never call Lisp themselves --- they run in the compositor, and the
         "every 600000: night"))
 #+end_src
 
+*Filters* keep a trigger to the events it wants, and several triggers on one event each keep their own subset.  A trigger is a string as gowl reads it, =EVENT [FILTER]: MACRO ARGS=, or a list =(EVENT FILTER MACRO ARG...)= whose FILTER is an s-expression --- conditions combine with =and=, =or=, =not=, to any depth:
+
+#+begin_src elisp
+(setq cmacs-gowl-macro-triggers
+      '(;; browsers only, and not private windows
+        ("client-added" (and (app-id "firefox*") (not (title "*Private*")))
+         "gather-app" "firefox*")
+        ;; video by app, or by title with a case-insensitive regex
+        ("focus-changed" (or (app-id "mpv") (title ~ "(?i)youtube|twitch"))
+         "presentation" "on")
+        ("focus-changed" (not (or (app-id "mpv") (floating "true")))
+         "presentation" "off")
+        ;; weekday evenings
+        ("every 600000" (and (time >= "22:00")
+                             (not (or (weekday "sat") (weekday "sun"))))
+         "night")
+        ;; or the text form
+        "client-added [clients>=5 or clients<=1]: layout-for-count"))
+(cmacs-gowl-macro-configure)
+#+end_src
+
+A condition is =(FIELD VALUE)= (a glob) or =(FIELD OP VALUE)= with OP one of === =!== =~= =!~= =<= =<== =>= =>==; numbers compare as numbers, anything else as text.  The fields: =event=, =app-id=, =title=, =floating=, =fullscreen=, =urgent=, =xwayland= (the event's window, else the focused one), =focused-app-id=, =focused-title=, =monitor=, =layout=, =tag=, =tags=, =clients= (the event's monitor, else the window's, else the selected one), =arg= (the signal's first string or number), =time=, =hour=, =weekday=.  The filter is judged when the event fires, against what it saw.  =cmacs-gowl-macro-filter= renders a form to text (an unknown field is a =user-error= right there); =M-x cmacs-gowl-macro-filter-test= judges one against the current window and shows every field's value; =cmacs-gowl-macro-list-triggers= shows each trigger's filter as gowl understood it and how often it fired or was skipped.  One macro named by several triggers that fire together needs gowl's =reentrant= setting, or the later ones are refused while it runs.
+
 From outside Emacs, cmacs's own D-Bus service has =RunMacro(s name, as args) → s= on =org.cmacs.Editor1.Compositor=; it loads the module on first use like any other caller:
 
 #+begin_src sh
@@ -1040,6 +1063,9 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 | =cmacs-gowl-macro-compile=           | Compile without running; shows the compile error         |
 | =cmacs-gowl-macro-list= / =-status= / =-info= | The module's JSON, as alists                     |
 | =cmacs-gowl-macro-reload=            | Forget compiled macros, re-read triggers                  |
+| =cmacs-gowl-macro-filter= / =-trigger-string= | A filter form / a whole trigger, as gowl's text   |
+| =cmacs-gowl-macro-filter-test=       | Judge a filter now; shows every field's value             |
+| =cmacs-gowl-macro-list-triggers=     | Triggers as understood, with fired/skipped counts         |
 | =cmacs-gowl-macro-configure=         | Push changed options                                      |
 | =cmacs-gowl-macro-ensure= / =-disable= | Load (idempotent) / unload the module                 |
 
@@ -1049,7 +1075,7 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 | =cmacs-gowl-macro-timeout=            | 2000                 | Each run's budget (ms); 0 for none         |
 | =cmacs-gowl-macro-max-running=        | 4                    | Runs at once                               |
 | =cmacs-gowl-macro-stop-key=           | ="Super+Alt+Escape"= | Stops every running macro; nil for none    |
-| =cmacs-gowl-macro-triggers=           | nil                  | ="EVENT: MACRO"= / ="every MS: MACRO"=      |
+| =cmacs-gowl-macro-triggers=           | nil                  | Strings, or =(EVENT FILTER MACRO ARG...)=  |
 | =cmacs-gowl-macro-definitions=        | nil                  | Elisp macros installed at every start      |
 | =cmacs-gowl-macro-dbus=               | nil                  | Also own =org.gowl.Macro1=                 |
 | =cmacs-gowl-macro-notify=             | t                    | Desktop notification on a fault            |
