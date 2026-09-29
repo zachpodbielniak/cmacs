@@ -50,7 +50,11 @@ perm_type_name (WebKitPermissionRequest *req)
   if (WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST (req))   return "media";
   if (WEBKIT_IS_CLIPBOARD_PERMISSION_REQUEST (req))    return "clipboard";
   if (WEBKIT_IS_DEVICE_INFO_PERMISSION_REQUEST (req))  return "device-info";
+  /* WebKitGTK 2.54 moved this header behind ENABLE_POINTER_LOCK in
+     webkit2.h, so the type is only visible on some builds.  */
+#ifdef WEBKIT_TYPE_POINTER_LOCK_PERMISSION_REQUEST
   if (WEBKIT_IS_POINTER_LOCK_PERMISSION_REQUEST (req)) return "pointer-lock";
+#endif
   return "other";
 }
 
