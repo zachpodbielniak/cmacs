@@ -25,7 +25,7 @@
 ;; - C files in the normal gowl places (~/.config/gowl/macros,
 ;;   /usr/share/gowl/macros, `cmacs-gowl-macro-directory', ...), run by
 ;;   name: (cmacs-gowl-macro-run "sort-windows" "reverse").  gowl ships
-;;   24 commented examples; M-x cmacs-gowl-macro-list-macros shows them.
+;;   25 commented examples; M-x cmacs-gowl-macro-list-macros shows them.
 ;;
 ;; - Elisp functions, given a name every trigger can use:
 ;;

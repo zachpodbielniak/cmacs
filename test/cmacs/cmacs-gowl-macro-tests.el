@@ -132,6 +132,32 @@ BODY, `sent' is the list of command lines sent (oldest first),
                 :type 'user-error)
   (should-error (cmacs-gowl-macro-filter 42) :type 'user-error))
 
+(ert-deftest cmacs-gowl-macro-test-documented-example ()
+  "The manual's meeting-mode example renders to the text gowl tests.
+gowl's test-macro-filter judges exactly this string against a Meet tab
+and Zoom's settings window, so the two suites pin one example."
+  (let* ((call '(and (or (app-id "zoom*")
+                         (title ~ "(?i)jitsi|meet\\.google"))
+                     (not (title "*Settings*"))))
+         (cmacs-gowl-macro-triggers
+          `(("client-added"   ,call "meeting-mode" "on")
+            ("client-removed" ,call "meeting-mode" "off"))))
+    (should (equal (cmacs-gowl-macro-filter call)
+                   (concat "((app-id=\"zoom*\" or "
+                           "title~\"(?i)jitsi|meet\\\\.google\") "
+                           "and not (title=\"*Settings*\"))")))
+    (should (equal (split-string
+                    (cdr (assoc "triggers" (cmacs-gowl-macro--settings)))
+                    "\n")
+                   (list (concat "client-added [((app-id=\"zoom*\" or "
+                                 "title~\"(?i)jitsi|meet\\\\.google\") and "
+                                 "not (title=\"*Settings*\"))]: "
+                                 "meeting-mode on")
+                         (concat "client-removed [((app-id=\"zoom*\" or "
+                                 "title~\"(?i)jitsi|meet\\\\.google\") and "
+                                 "not (title=\"*Settings*\"))]: "
+                                 "meeting-mode off"))))))
+
 (ert-deftest cmacs-gowl-macro-test-trigger-lines ()
   "Structured triggers become lines; strings pass through."
   (should (equal (cmacs-gowl-macro-trigger-string

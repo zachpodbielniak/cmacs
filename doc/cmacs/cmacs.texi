@@ -2965,7 +2965,7 @@ wins.  A name with a @samp{/} is a path.
 @kbd{M-x cmacs-gowl-macro-list-macros} lists everything runnable;
 @kbd{M-x cmacs-gowl-macro-new} writes a skeleton into your macro
 directory; @kbd{M-x cmacs-gowl-macro-visit} opens the file a name
-resolves to.  gowl ships 24 commented examples.
+resolves to.  gowl ships 25 commented examples.
 
 @subsection Elisp macros
 
@@ -3030,6 +3030,36 @@ with OP one of @code{= != ~ !~ < <= > >=}.  Fields: @code{event},
 @code{weekday}.  @kbd{M-x cmacs-gowl-macro-filter-test} judges a filter
 against the current window; @code{cmacs-gowl-macro-list-triggers} shows
 each trigger's filter as gowl read it.
+
+A worked example, meeting mode: when a video-call window opens, quiet
+the desktop and note it in an org log; when it closes, undo both.  One
+Elisp macro, two filtered triggers sharing one filter form:
+
+@lisp
+(cmacs-gowl-macro-define "meeting-mode"
+  (lambda (state &rest _)
+    (cmacs-gowl-macro-run "presentation" state)
+    (with-current-buffer
+        (find-file-noselect "~/Documents/notes/meetings.org")
+      (goto-char (point-max))
+      (insert (format "- %s meeting %s\n"
+                      (format-time-string "[%F %a %R]")
+                      (if (equal state "on") "started" "ended")))
+      (save-buffer))))
+
+(let ((call '(and (or (app-id "zoom*")
+                      (title ~ "(?i)jitsi|meet\\.google"))
+                  (not (title "*Settings*")))))
+  (setq cmacs-gowl-macro-triggers
+        `(("client-added"   ,call "meeting-mode" "on")
+          ("client-removed" ,call "meeting-mode" "off"))))
+(cmacs-gowl-macro-configure)
+@end lisp
+
+The filter is judged when a window opens or closes, before anything
+runs, so @code{meeting-mode} never checks what the window was.  The
+same routing with a C macro and YAML, or in gowl's C config, is the
+picture-in-picture example in @file{deps/gowl/docs/macros.org}.
 
 cmacs's D-Bus service has @code{RunMacro(s name, as args) -> s} on
 @code{org.cmacs.Editor1.Compositor}, which loads the module on first

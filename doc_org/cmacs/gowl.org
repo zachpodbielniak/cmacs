@@ -949,7 +949,7 @@ A bare name is looked up in =cmacs-gowl-macro-directory= (if set), =$GOWL_MACRO_
 (cmacs-gowl-macro-bind "Super+F1" "type-into" "app-id:foot" "make\n")
 #+end_src
 
-=M-x cmacs-gowl-macro-list-macros= lists everything runnable (=RET= runs, =v= visits the source, =c= clears a hold, =n= starts a new one); =M-x cmacs-gowl-macro-new= writes a skeleton into your macro directory and visits it; =M-x cmacs-gowl-macro-visit= opens the file a name resolves to.  gowl ships 24 commented examples --- sort, group, gather, scatter, type-into, focus-or-launch, workspace snapshots, a threaded file watcher, and deliberately crashing and looping ones to see containment work.
+=M-x cmacs-gowl-macro-list-macros= lists everything runnable (=RET= runs, =v= visits the source, =c= clears a hold, =n= starts a new one); =M-x cmacs-gowl-macro-new= writes a skeleton into your macro directory and visits it; =M-x cmacs-gowl-macro-visit= opens the file a name resolves to.  gowl ships 25 commented examples --- sort, group, gather, scatter, type-into, focus-or-launch, workspace snapshots, a threaded file watcher, and deliberately crashing and looping ones to see containment work.
 
 *** Elisp macros
 :PROPERTIES:
@@ -1036,6 +1036,50 @@ Crispy macros never call Lisp themselves --- they run in the compositor, and the
 #+end_src
 
 A condition is =(FIELD VALUE)= (a glob) or =(FIELD OP VALUE)= with OP one of === =!== =~= =!~= =<= =<== =>= =>==; numbers compare as numbers, anything else as text.  The fields: =event=, =app-id=, =title=, =floating=, =fullscreen=, =urgent=, =xwayland= (the event's window, else the focused one), =focused-app-id=, =focused-title=, =monitor=, =layout=, =tag=, =tags=, =clients= (the event's monitor, else the window's, else the selected one), =arg= (the signal's first string or number), =time=, =hour=, =weekday=.  The filter is judged when the event fires, against what it saw.  =cmacs-gowl-macro-filter= renders a form to text (an unknown field is a =user-error= right there); =M-x cmacs-gowl-macro-filter-test= judges one against the current window and shows every field's value; =cmacs-gowl-macro-list-triggers= shows each trigger's filter as gowl understood it and how often it fired or was skipped.  One macro named by several triggers that fire together needs gowl's =reentrant= setting, or the later ones are refused while it runs.
+
+**** Worked example: meeting mode, in Elisp
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-filter-example
+:END:
+
+When a video-call window opens --- Zoom, or a Jitsi or Google Meet tab --- quiet the desktop and note the meeting in an org log; when it closes, undo both.  One Elisp macro does the work; two filtered triggers decide when, sharing one filter form.  The settings window Zoom opens alongside does not count.
+
+#+begin_src elisp
+;; The macro: an Elisp function with a name.  STATE is "on" or "off",
+;; the argument each trigger passes.
+(cmacs-gowl-macro-define "meeting-mode"
+  (lambda (state &rest _)
+    ;; gowl's shipped C macro: effects off, toasts dismissed, fullscreen
+    (cmacs-gowl-macro-run "presentation" state)
+    (with-current-buffer
+        (find-file-noselect "~/Documents/notes/02_areas/personal/meetings.org")
+      (goto-char (point-max))
+      (insert (format "- %s meeting %s (%s)\n"
+                      (format-time-string "[%F %a %R]")
+                      (if (equal state "on") "started" "ended")
+                      cmacs-gowl-macro-trigger))
+      (save-buffer))))
+
+;; The filter: which windows are a call.  Conditions nest to any depth;
+;; values are quoted for you.
+(let ((call '(and (or (app-id "zoom*")
+                      (title ~ "(?i)jitsi|meet\\.google"))
+                  (not (title "*Settings*")))))
+  (setq cmacs-gowl-macro-triggers
+        `(("client-added"   ,call "meeting-mode" "on")
+          ("client-removed" ,call "meeting-mode" "off"))))
+(cmacs-gowl-macro-configure)
+#+end_src
+
+gowl receives the filter as
+
+#+begin_example
+((app-id="zoom*" or title~"(?i)jitsi|meet\\.google") and not (title="*Settings*"))
+#+end_example
+
+and judges it when the window opens or closes, before anything runs --- so a new terminal or browser tab costs nothing, and =meeting-mode= never has to check what the window was.  To see why a window did or did not count, focus it and =M-x cmacs-gowl-macro-filter-test= the same form; =cmacs-gowl-macro-list-triggers= shows how often each trigger fired and how often its filter turned the event away.  An error inside =meeting-mode= is caught and reaches =cmacs-gowl-macro-fault-functions=, like a crash in a C macro.
+
+The same routing with a C macro file and YAML, or entirely in gowl's C config, is the picture-in-picture example in =deps/gowl/docs/macros.org=.  The filter above is checked character for character by both test suites: =cmacs-gowl-macro-tests.el= renders the form, and gowl's =test-macro-filter= judges that text against a Meet tab and Zoom's settings window.
 
 From outside Emacs, cmacs's own D-Bus service has =RunMacro(s name, as args) → s= on =org.cmacs.Editor1.Compositor=; it loads the module on first use like any other caller:
 
