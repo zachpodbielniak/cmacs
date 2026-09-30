@@ -120,9 +120,10 @@ than firing it at their desktop. When unsure, don't eval — read the code.
 cmacs features are all `--with-cmacs-*` / `--enable-cmacs-*`, auto-detect system
 packages, and fall back to bundled `deps/` submodules. `just run` (and `just gowl`)
 are preferred over `src/emacs`: they export `CMACS_MODULE_DIR` (bacon `cmacsgi`),
-`CMACS_GSURF_MODULE_DIR` (gsurf modules) and `CMACS_GOWL_MODULE_DIR`
-(`deps/gowl/build/release/modules`) so local testing always loads the freshly-built
-modules instead of any system-installed copy. Bare `src/emacs` is fine for plain
+`CMACS_GSURF_MODULE_DIR` (gsurf modules), `CMACS_GOWL_MODULE_DIR`
+(`deps/gowl/build/release/modules`) and `GOWL_MENU_FILE` (the tree's
+`deps/gowl/data/menu.yaml` -- an installed one otherwise wins) so local testing always
+loads the freshly-built modules and data instead of any system-installed copy. Bare `src/emacs` is fine for plain
 editing (it still finds in-tree gowl modules via the relative dev-build path, but
 the env var is the explicit override — see `cmacs_gowl_find_module`).
 

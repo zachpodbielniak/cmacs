@@ -41,12 +41,16 @@ dep_buildtype := "debug"
 # libregnum/graylib typelibs) so local testing never loads a
 # system-installed copy.  CMACS_GOWL_MODULE_DIR wins over both the
 # in-tree default and any installed gowl modules (see
-# cmacs_gowl_find_module in cmacs/gowl/cmacs-gowl.c).
+# cmacs_gowl_find_module in cmacs/gowl/cmacs-gowl.c).  GOWL_MENU_FILE
+# does the same for the Super+space menu: an installed
+# /usr/share/gowl/menu.yaml otherwise wins over the tree's, and a new
+# submenu (Macros, say) is invisible until the image is rebuilt.
 local_env := \
     "CMACS_LISP_DIR=" + justfile_directory() + "/lisp/cmacs " + \
     "CMACS_MODULE_DIR=" + justfile_directory() + "/cmacs/bacon/modules " + \
     "CMACS_GSURF_MODULE_DIR=" + justfile_directory() + "/cmacs/gsurf/modules " + \
     "CMACS_GOWL_MODULE_DIR=" + justfile_directory() + "/deps/gowl/build/" + dep_buildtype + "/modules " + \
+    "GOWL_MENU_FILE=" + justfile_directory() + "/deps/gowl/data/menu.yaml " + \
     "CMACS_SCREENSAVER_MODULE_DIR=" + justfile_directory() + "/deps/screensavers/build/" + dep_buildtype + " " + \
     "CMACS_SCREENSAVER_RENDER_BIN=" + justfile_directory() + "/src/cmacs-screensaver-render " + \
     "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/" + dep_buildtype + "/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"

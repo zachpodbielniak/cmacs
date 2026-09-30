@@ -600,6 +600,19 @@ Called from the module's `on-fault-custom' form for C macros, and by
     (error (message "cmacs-gowl-macro-fault-functions: %s"
                     (error-message-string err)))))
 
+;;;; The Super+space menu
+
+;;;###autoload
+(defun cmacs-gowl-macro-menu-load ()
+  "Load the macro module, then reopen the gowl menu on its Macros list.
+What the menu's `Load macros' row runs: the module is opt-in and loads
+on first use, so until something has used it the Macros submenu has
+nothing to list.  Returns t."
+  (interactive)
+  (cmacs-gowl-macro-ensure)
+  (gowl-run-command "menu-open macros")
+  t)
+
 ;;;; Keys
 
 ;;;###autoload

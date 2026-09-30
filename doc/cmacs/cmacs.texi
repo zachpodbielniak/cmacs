@@ -2962,6 +2962,16 @@ wins.  A name with a @samp{/} is a path.
 (cmacs-gowl-macro-bind "Super+s" "sort-windows")
 @end lisp
 
+The @kbd{Super+space} menu has a @emph{Macros} submenu listing every
+macro by name---C files, and Elisp macros marked @samp{Elisp}---and
+choosing one runs it; typing a macro's name at the top finds it too.
+Until the module has been used it holds only @emph{Load macros}, which
+loads it (@code{cmacs-gowl-macro-menu-load}) and reopens the menu on
+the list.  @emph{Macro tools} stops, clears, reloads and opens the
+macro list, a new macro, and the triggers.  @code{just run} and
+@code{just gowl} set @env{GOWL_MENU_FILE} to the tree's
+@file{menu.yaml}, since an installed copy otherwise wins.
+
 @kbd{M-x cmacs-gowl-macro-list-macros} lists everything runnable;
 @kbd{M-x cmacs-gowl-macro-new} writes a skeleton into your macro
 directory; @kbd{M-x cmacs-gowl-macro-visit} opens the file a name
@@ -3074,6 +3084,7 @@ friends.
 @code{-visit}, @code{-clear}, @code{-compile}, @code{-list},
 @code{-status}, @code{-info}, @code{-reload}, @code{-configure},
 @code{-filter}, @code{-trigger-string}, @code{-filter-test},
+@code{-menu-load},
 @code{-list-triggers},
 @code{-ensure} and @code{-disable}; options
 @code{cmacs-gowl-macro-directory}, @code{-timeout},

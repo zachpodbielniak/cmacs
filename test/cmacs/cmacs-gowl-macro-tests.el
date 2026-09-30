@@ -375,6 +375,42 @@ from being evaluated as a call."
       (should (string-match-p "timeout" (cadr notified)))
       (should (eq (nth 2 notified) 'critical)))))
 
+;;;; The Super+space menu
+
+(ert-deftest cmacs-gowl-macro-test-menu-load ()
+  "The menu's `Load macros' row loads the module and reopens on Macros."
+  (let ((flag (list nil)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (cl-letf (((symbol-function 'gowl-enable-module)
+                 (lambda (name &rest _)
+                   (push name enabled) (setcar flag t) t)))
+        (should (eq (cmacs-gowl-macro-menu-load) t))
+        (should (equal enabled '("macro")))
+        (should (equal (car (last sent)) "menu-open macros"))))))
+
+(ert-deftest cmacs-gowl-macro-test-menu-rows-name-real-functions ()
+  "Every `elisp:' row in the shipped Macros submenu calls something real.
+A row naming a function that does not exist looks fine and does
+nothing when chosen."
+  (let ((menu (expand-file-name "deps/gowl/data/menu.yaml"
+                                (expand-file-name
+                                 "../.." (file-name-directory
+                                          cmacs-gowl-macro-tests--this-file)))))
+    (skip-unless (file-readable-p menu))
+    (with-temp-buffer
+      (insert-file-contents menu)
+      (should (search-forward "  - id: macros" nil t))
+      (let ((end (save-excursion (or (re-search-forward "^  - id: " nil t)
+                                     (point-max))))
+            (seen 0))
+        (while (re-search-forward "elisp: \"(\\(?:call-interactively '\\)?\\([a-z-]+\\)"
+                                  end t)
+          (setq seen (1+ seen))
+          (ert-info ((match-string 1))
+            (should (fboundp (intern (match-string 1))))))
+        (should (>= seen 3))))))
+
 ;;;; Keys and files
 
 (ert-deftest cmacs-gowl-macro-test-bind ()
@@ -486,6 +522,12 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
                         (concat "XDG_STATE_HOME="
                                 (expand-file-name "state" runtime))
                         (concat "XDG_CACHE_HOME=" cache)
+                        ;; this tree's menu, not an installed older one
+                        (concat "GOWL_MENU_FILE="
+                                (expand-file-name
+                                 "../../deps/gowl/data/menu.yaml"
+                                 (file-name-directory
+                                  cmacs-gowl-macro-tests--this-file)))
                         "WLR_BACKENDS=headless"
                         "WLR_HEADLESS_OUTPUTS=1"
                         "WLR_RENDERER=pixman"
@@ -513,9 +555,17 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
          (funcall pred)))
      (gowl-start)
      (require 'cmacs-gowl-macro)
+     (require 'seq)
      ;; Opt-in: starting the compositor loaded no macro module
      (when (gowl-run-command "macro-status")
        (error "The macro module was loaded before anyone asked"))
+     ;; ... so the menu's Macros submenu offers only `Load macros'
+     (when (fboundp 'gowl-menu-items)
+       (let ((rows (gowl-menu-items "macros")))
+         (unless (and (= (length rows) 1)
+                      (equal (plist-get (car rows) :label) "Load macros")
+                      (not (plist-get (car rows) :disabled)))
+           (error "Macros submenu before loading: %S" rows))))
      (setq cmacs-gowl-macro-notify nil)
      (add-hook 'cmacs-gowl-macro-fault-functions
                (lambda (name what) (setq test-fault (list name what))))
@@ -537,6 +587,27 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
      (unless (and (test-wait (lambda () test-ran))
                   (equal test-ran '("ipc" "x")))
        (error "Via IPC the Elisp macro got %S" test-ran))
+     ;; The menu now lists the macros, Elisp ones included, and choosing
+     ;; one runs it
+     (when (fboundp 'gowl-menu-items)
+       (let* ((rows (gowl-menu-items "macros"))
+              (mine (seq-find (lambda (r)
+                                (equal (plist-get r :label) "elisp-hello"))
+                              rows)))
+         (when (seq-find (lambda (r)
+                           (equal (plist-get r :label) "Load macros"))
+                         rows)
+           (error "`Load macros' is still offered once loaded"))
+         (unless (seq-find (lambda (r) (equal (plist-get r :label) "hello"))
+                           rows)
+           (error "The shipped hello is not in the Macros submenu"))
+         (unless (and mine (equal (plist-get mine :detail) "Elisp"))
+           (error "The Elisp macro's row: %S" mine))
+         (setq test-ran nil)
+         (gowl-menu-activate (plist-get mine :route))
+         (unless (and (test-wait (lambda () test-ran))
+                      (equal test-ran '("ipc")))
+           (error "Chosen from the menu, the Elisp macro got %S" test-ran))))
      ;; A shipped crispy macro by name
      (let ((reply (cmacs-gowl-macro-run "hello" "world")))
        (unless (equal reply "hello: hello")

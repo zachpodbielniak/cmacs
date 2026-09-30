@@ -949,6 +949,8 @@ A bare name is looked up in =cmacs-gowl-macro-directory= (if set), =$GOWL_MACRO_
 (cmacs-gowl-macro-bind "Super+F1" "type-into" "app-id:foot" "make\n")
 #+end_src
 
+*In the Super+space menu* there is a *Macros* submenu listing every macro by name --- the C files, and your Elisp macros marked =Elisp= --- and choosing one runs it (the macro sees detail =menu=).  Typing a macro's name at the top of the menu finds it too.  Because the module loads on first use, the submenu holds only *Load macros* until something has used it; choosing that loads the module and reopens the menu on the list.  *Macro tools* above the list stops running macros, clears held-back ones, reloads, and opens =cmacs-gowl-macro-list-macros=, =cmacs-gowl-macro-new= and the trigger listing.  =just run= and =just gowl= point =GOWL_MENU_FILE= at the tree's =menu.yaml=, because an installed =/usr/share/gowl/menu.yaml= otherwise wins and a new submenu is invisible until the image is rebuilt.
+
 =M-x cmacs-gowl-macro-list-macros= lists everything runnable (=RET= runs, =v= visits the source, =c= clears a hold, =n= starts a new one); =M-x cmacs-gowl-macro-new= writes a skeleton into your macro directory and visits it; =M-x cmacs-gowl-macro-visit= opens the file a name resolves to.  gowl ships 25 commented examples --- sort, group, gather, scatter, type-into, focus-or-launch, workspace snapshots, a threaded file watcher, and deliberately crashing and looping ones to see containment work.
 
 *** Elisp macros
@@ -1107,6 +1109,7 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 | =cmacs-gowl-macro-compile=           | Compile without running; shows the compile error         |
 | =cmacs-gowl-macro-list= / =-status= / =-info= | The module's JSON, as alists                     |
 | =cmacs-gowl-macro-reload=            | Forget compiled macros, re-read triggers                  |
+| =cmacs-gowl-macro-menu-load=         | Load the module, reopen Super+space on Macros            |
 | =cmacs-gowl-macro-filter= / =-trigger-string= | A filter form / a whole trigger, as gowl's text   |
 | =cmacs-gowl-macro-filter-test=       | Judge a filter now; shows every field's value             |
 | =cmacs-gowl-macro-list-triggers=     | Triggers as understood, with fired/skipped counts         |
