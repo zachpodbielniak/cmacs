@@ -2393,8 +2393,9 @@ Vsplit on: master row on top, stack row on the bottom.
 @item Super+Shift+v
 Vsplit off: restore the normal left/right split.
 @item Super+space
-Toggle floating; @kbd{Super+f} and @kbd{Super+Shift+space} both toggle
-fullscreen.
+The menu; @kbd{Super+Shift+space} opens it with every program on
+@env{PATH} listed and searched beside the applications
+(@code{menu-path}).  @kbd{Super+f} toggles fullscreen.
 @item Super+s
 Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and

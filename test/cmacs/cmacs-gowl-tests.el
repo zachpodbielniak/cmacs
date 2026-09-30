@@ -867,6 +867,11 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; which only flips the flag -- was sitting behind it waiting for
     ;; the day the config bind went away.
     (should-not (member '("Super+space" toggle-float nil) captured))
+    ;; Super+Shift+space was a second fullscreen toggle next to Super+f;
+    ;; it is the menu with every program on $PATH now.
+    (should (member '("Super+Shift+space" ipc-command "menu-path") captured))
+    (should-not (member '("Super+Shift+space" toggle-fullscreen nil) captured))
+    (should (member '("Super+space" ipc-command "menu") captured))
     (should (member '("Super+Ctrl+o" output-power "off") captured))
     (should (member '("Super+r" mode "resize") captured))
     ;; The mode's binds carry the mode name, and both exits are bound.

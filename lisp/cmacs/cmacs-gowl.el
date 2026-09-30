@@ -1104,7 +1104,6 @@ standalone gowl ships with (see
   Super+< / Super+>   previous / next layout on this tag (scrolling too)
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
-  Super+Shift+space   toggle fullscreen
   Super+Alt+b         this floating window behind the tiling (toggle)
   Super+Ctrl+Alt+b    every floating window behind the tiling (toggle)
   Super+s             scratchpad: slide it up / roll it away
@@ -1127,6 +1126,7 @@ standalone gowl ships with (see
   Super+/             show the keybind cheatsheet
   Super+Escape        control surface (power, audio, network, ...)
   Super+space         the same menu, drawn on screen by the compositor
+  Super+Shift+space   that menu, with every program on $PATH too
   Super+Alt+space     that menu, opened at Applications
 
 Every bind is registered with a description, which is what
@@ -1529,7 +1529,6 @@ authoritative and keeps re-runs idempotent."
               "Scroll columns right")
         (bind "Super+v" 'set-split "vsplit" "Vertical split")
         (bind "Super+Shift+v" 'set-split "normal" "Horizontal split")
-        (bind "Super+Shift+space" 'toggle-fullscreen nil "Toggle fullscreen")
         ;; Tags.  The compositor interprets every tag-action arg as a
         ;; raw tag *bitmask* (atoi(arg) & TAGMASK), not a 1-based tag
         ;; number — and arg "0" is a no-op.  So tag N uses the string
@@ -1655,6 +1654,12 @@ authoritative and keeps re-runs idempotent."
         ;; nothing at all when the module is not loaded.
         (bind "Super+space" 'ipc-command "menu"
               "Menu (on screen)")
+        ;; The same menu with every program on $PATH listed and searched
+        ;; beside the applications -- kept off plain Super+space, where
+        ;; thousands of command-line tools would bury them.  (This key
+        ;; was a second fullscreen toggle; Super+f is the one.)
+        (bind "Super+Shift+space" 'ipc-command "menu-path"
+              "Menu, with programs on $PATH")
         (bind "Super+Alt+space" 'ipc-command "menu-open apps"
               "Menu: applications"))
       ;; Media, volume and brightness keys.  Bound to Elisp via gowl's

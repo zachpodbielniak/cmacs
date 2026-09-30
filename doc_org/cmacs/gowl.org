@@ -716,7 +716,6 @@ holds focus.
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
 | =Super+Shift+v=         | Vsplit off (normal left/right split)    |
-| =Super+Shift+space=     | Toggle fullscreen                       |
 | =Super+1=..=9=          | View tag N                              |
 | =Super+Shift+1=..=9=    | Move focused client to tag N            |
 | =Super+Ctrl+1=..=9=     | Toggle visibility of tag N              |
@@ -4245,8 +4244,11 @@ standalone gowl opts in with =modules.menu.enabled=.
 | Key                 | Action                                          |
 |---------------------+-------------------------------------------------|
 | =Super+space=       | The menu, drawn on screen by the compositor     |
+| =Super+Shift+space= | The same, with every program on =$PATH= too     |
 | =Super+Alt+space=   | The same, opened at Applications                |
 | =Super+Escape=      | The same tree, as a =completing-read=           |
+
+*Super+Shift+space* opens the same card with a *Programs on $PATH* row and every executable on =$PATH= in its search, beside the applications --- so typing =htop= or =pavucontrol= runs it even without a desktop entry.  Plain =Super+space= leaves them out: thousands of command-line tools would bury the applications in every search.  A program runs by its full path, the first directory on =$PATH= that has it, exactly as a shell would pick; the list is cached for five seconds.  It is gowl's =menu-path= command (=gowl-run-command "menu-path"=), and the row's guard asks the module whether this opening is a =$PATH= one; pressing the key again closes the card, and pressing it over an open plain menu adds =$PATH= to it.
 
 *Two front ends over one tree*, and that is the point of having both.
 The card is drawn by the compositor, so it sits over every window ---
