@@ -2396,6 +2396,25 @@ Vsplit off: restore the normal left/right split.
 The menu; @kbd{Super+Shift+space} opens it with every program on
 @env{PATH} listed and searched beside the applications
 (@code{menu-path}).  @kbd{Super+f} toggles fullscreen.
+@item Super+Alt+v
+The menu, opened at the clipboard history.  The @samp{Clipboard} entry
+is @code{private: true} in @file{menu.yaml}: its entries are listed
+only when it is opened---never in a search and never in ``recent'',
+because a clipboard holds whatever was copied last, a password
+included.  Typing @samp{clipboard} finds the entry; @kbd{RET} on an
+entry puts it back on the clipboard.
+@item Super+Alt+Shift+s
+The @kbd{Super+Shift+s} rubber band, read instead of photographed:
+tesseract puts the region's text on the clipboard, and nothing is saved
+(the image is a private temporary file).  Needs @command{tesseract} and
+a language pack (Fedora: @code{tesseract}, @code{tesseract-langpack-eng}).
+@item Super+Alt+c
+Click a pixel; its colour goes on the clipboard as @samp{#rrggbb}.
+@item Super+Alt+r / Super+Alt+Shift+r
+Record a macro (press again to stop) / replay the last recording
+(@pxref{gowl Macros}).
+@item Super+Alt+m
+Say a macro's name and run it, transcribed by cmacs's own whisper.
 @item Super+s
 Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and
@@ -2918,11 +2937,13 @@ file and run it again: the new code runs.
 the other half: Elisp functions as macros, runnable by name from
 everything that can run a C one.
 
-@strong{Nothing is on by default.}  cmacs ships no macro and binds no
-key.  The module is loaded the first time any @code{cmacs-gowl-macro-}
-function is used, or at compositor start when
-@code{cmacs-gowl-macro-definitions} or @code{cmacs-gowl-macro-triggers}
-is set.
+@strong{Nothing is loaded by default.}  The module is loaded the first
+time any @code{cmacs-gowl-macro-} function is used, or at compositor
+start when @code{cmacs-gowl-macro-definitions} or
+@code{cmacs-gowl-macro-triggers} is set.  The three macro keys cmacs
+binds---@kbd{Super+Alt+r} (record), @kbd{Super+Alt+Shift+r} (replay)
+and @kbd{Super+Alt+m} (voice)---reach it through functions here, so
+pressing one is a first use.
 
 @subsection Containment
 
@@ -3000,6 +3021,54 @@ is reported like a fault.
 
 Crispy macros never call Lisp themselves; define the Elisp half with
 @code{cmacs-gowl-macro-define} and have the C half run it by name.
+
+@subsection Recording and replaying
+
+@kbd{Super+Alt+r}, do the thing, @kbd{Super+Alt+r}: what you did between
+the presses---keys, clicks, drags, scrolls, with their timing---is
+written out as @file{last-recording.c} in your macro directory, and
+@kbd{Super+Alt+Shift+r} plays it back.  It is an ordinary C macro, to
+edit, rename, bind or trigger.  @kbd{C-u M-x cmacs-gowl-macro-record}
+also writes it under a name.
+
+@lisp
+(cmacs-gowl-macro-record)              ; start; again stops and writes
+(cmacs-gowl-macro-record "tidy-mail")  ; ... and tidy-mail.c too
+(cmacs-gowl-macro-replay 2)            ; twice as fast
+@end lisp
+
+The screen wears a frame while recording.  It is gowl's input recorder
+used as a @emph{private} recording: the key is the consent, so
+@code{input-recording} need not be on, and its token is never
+published, so nothing else can read it.  Password prompts and the lock
+screen are not recorded, @kbd{Super+Shift+Escape} and a five-minute
+deadline stop it (what was recorded is still written), the record key's
+own presses are dropped, a chord is one step, and pauses over three
+seconds are shortened.  Keys replay into whichever window has focus and
+the pointer goes to the same screen positions.
+
+@subsection Voice
+
+@kbd{Super+Alt+m}, say a macro's name, @kbd{Super+Alt+m}: cmacs records
+with its audio subsystem, transcribes with its embedded whisper
+(@code{cmacs-whisper-model-path}), and the module runs the macro the
+words name---a phrase from @code{cmacs-gowl-macro-voice-phrases}, a
+macro's name said as words (@samp{pip corner twenty five} runs
+@code{pip-corner 25}), or every word of a name in any order.  Listening
+stops by itself after @code{cmacs-gowl-macro-voice-max-seconds}.  An
+Elisp macro sees @code{cmacs-gowl-macro-trigger} @code{"voice"}.
+
+@lisp
+(setq cmacs-gowl-macro-voice-phrases
+      '(("tidy up" . "sort-windows")))
+(cmacs-gowl-macro-voice-text "pip corner 25") ; no microphone needed
+@end lisp
+
+With @code{cmacs-gowl-macro-voice-backend} set to @code{command} (or in
+a cmacs without audio or whisper) the module's @code{voice-command}
+listens instead---@code{cmacs-gowl-macro-voice-command}, by default
+gowl's @command{gowl-stt} (@command{pw-record} or @command{arecord},
+then whisper.cpp's @command{whisper-cli}).
 
 @subsection Triggers
 
@@ -3086,12 +3155,15 @@ friends.
 @code{-status}, @code{-info}, @code{-reload}, @code{-configure},
 @code{-filter}, @code{-trigger-string}, @code{-filter-test},
 @code{-menu-load},
-@code{-list-triggers},
+@code{-list-triggers}, @code{-record}, @code{-record-status},
+@code{-replay}, @code{-voice}, @code{-voice-text},
 @code{-ensure} and @code{-disable}; options
 @code{cmacs-gowl-macro-directory}, @code{-timeout},
 @code{-max-running}, @code{-stop-key}, @code{-triggers},
 @code{-definitions}, @code{-dbus}, @code{-notify},
-@code{-fault-functions}, @code{-log} and @code{-log-file}.  The macro
+@code{-fault-functions}, @code{-log}, @code{-log-file},
+@code{-voice-max-seconds}, @code{-voice-phrases}, @code{-voice-backend}
+and @code{-voice-command}.  The macro
 API, both run modes, every setting and the examples are in
 @file{deps/gowl/docs/macros.org}.
 

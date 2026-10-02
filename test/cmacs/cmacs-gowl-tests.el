@@ -894,6 +894,45 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
 
+(ert-deftest cmacs-gowl-test-default-keybinds-grab-keys ()
+  "OCR, the colour picker, the macro recorder, voice and the clipboard
+menu are bound out of the box, each once.  The three macro keys are Lisp
+that loads `cmacs-gowl-macro' and calls a function that exists -- the
+module is opt-in, so the key itself is the first use."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (require 'cl-lib)
+  (let ((captured nil)
+        (cmacs-gowl--keybinds-installed nil))
+    (cl-letf (((symbol-function 'gowl-add-keybind)
+               (lambda (key action &optional arg _desc)
+                 (push (list key action arg) captured)))
+              ((symbol-function 'gowl-add-keybind-ex)
+               (lambda (&rest _) nil)))
+      (cmacs-gowl--install-default-keybinds))
+    (should (member '("Super+Alt+Shift+s" ipc-command "screenshot-ocr")
+                    captured))
+    (should (member '("Super+Alt+c" ipc-command "screenshot-color") captured))
+    (should (member '("Super+Alt+v" ipc-command "menu-open clipboard")
+                    captured))
+    ;; Super+Shift+s is still the picture, not the text
+    (should (member '("Super+Shift+s" ipc-command "screenshot-area") captured))
+    (dolist (k '(("Super+Alt+r" . cmacs-gowl-macro-record)
+                 ("Super+Alt+Shift+r" . cmacs-gowl-macro-replay)
+                 ("Super+Alt+m" . cmacs-gowl-macro-voice)))
+      (let* ((bind (assoc (car k) captured))
+             (form (and bind (eq (nth 1 bind) 'custom)
+                        (car (read-from-string (nth 2 bind))))))
+        (should form)
+        (should (equal form `(progn (require 'cmacs-gowl-macro)
+                                    (,(cdr k)))))
+        (require 'cmacs-gowl-macro)
+        (should (commandp (cdr k)))))
+    ;; each of the six exactly once
+    (dolist (key '("Super+Alt+Shift+s" "Super+Alt+c" "Super+Alt+r"
+                   "Super+Alt+Shift+r" "Super+Alt+m" "Super+Alt+v"))
+      (should (= 1 (cl-count key captured :key #'car :test #'equal))))))
+
 (ert-deftest cmacs-gowl-test-every-backdrop-is-pushed-to-the-compositor ()
   "`cmacs-gowl--apply-backdrop\=' pushes EVERY backdrop\='s settings.
 

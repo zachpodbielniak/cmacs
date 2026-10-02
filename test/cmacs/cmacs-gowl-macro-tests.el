@@ -20,8 +20,14 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'seq)
 (require 'cmacs-gowl-macro)
 (require 'cmacs-gowl-input-remap)
+
+(defvar cmacs-audio-default-rate)
+(defvar cmacs-audio-capture-source)
+(defvar cmacs-audio-default-device)
+(defvar cmacs-whisper-language)
 
 (defconst cmacs-gowl-macro-tests--this-file
   (or load-file-name buffer-file-name)
@@ -101,6 +107,157 @@ BODY, `sent' is the list of command lines sent (oldest first),
   ;; the default stop key is not cmacs's menu key
   (should (equal (default-value 'cmacs-gowl-macro-stop-key)
                  "Super+Alt+Escape")))
+
+;;;; Recording, replay and voice
+
+(ert-deftest cmacs-gowl-macro-test-record-voice-settings ()
+  "Recordings land in the macro directory; voice options are pushed."
+  (let ((cmacs-gowl-macro-directory '("/macros/mine"))
+        (cmacs-gowl-macro-voice-max-seconds 0)
+        (cmacs-gowl-macro-voice-command nil)
+        (cmacs-gowl-macro-voice-phrases '(("tidy up" . "sort-windows")
+                                          ("small video" . "pip-corner 20"))))
+    (let ((s (cmacs-gowl-macro--settings)))
+      (should (equal (cdr (assoc "record-dir" s)) "/macros/mine"))
+      ;; at least a second of listening
+      (should (equal (cdr (assoc "voice-max-seconds" s)) "1"))
+      ;; empty: the module's own default (gowl-stt)
+      (should (equal (cdr (assoc "voice-command" s)) ""))
+      (should (equal (cdr (assoc "voice-phrases" s))
+                     "tidy up: sort-windows\nsmall video: pip-corner 20"))))
+  (let ((cmacs-gowl-macro-voice-command "my-stt --fast"))
+    (should (equal (cdr (assoc "voice-command" (cmacs-gowl-macro--settings)))
+                   "my-stt --fast"))))
+
+(ert-deftest cmacs-gowl-macro-test-record-and-replay-lines ()
+  "Record toggles, names are quoted, replay takes a speed."
+  (let ((flag (list t)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (cmacs-gowl-macro-record)
+      (cmacs-gowl-macro-record "my macro")
+      (cmacs-gowl-macro-replay)
+      (cmacs-gowl-macro-replay 2)
+      (should (member "macro-record" sent))
+      (should (member "macro-record start my\\ macro" sent))
+      ;; replay is an ordinary run of last-recording
+      (should (member "macro-run --trigger=api -- last-recording" sent))
+      (should (member "macro-run --trigger=api -- last-recording 2" sent)))))
+
+(ert-deftest cmacs-gowl-macro-test-voice-text-line ()
+  "What was heard goes to the module on one line."
+  (let ((flag (list t)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (cmacs-gowl-macro-voice-text "  Rec two,\n forty.\t")
+      (should (member "macro-voice-match Rec two, forty." sent)))))
+
+(ert-deftest cmacs-gowl-macro-test-voice-command-backend ()
+  "The command backend, and a cmacs without whisper, use the module's."
+  (let ((flag (list t)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (let ((cmacs-gowl-macro-voice-backend 'command))
+        (cmacs-gowl-macro-voice))
+      (should (member "macro-voice" sent))
+      (setq sent nil)
+      (cl-letf (((symbol-function 'cmacs-gowl-macro--whisper-p)
+                 (lambda (&rest _) nil)))
+        (let ((cmacs-gowl-macro-voice-backend 'whisper))
+          (cmacs-gowl-macro-voice)))
+      (should (member "macro-voice" sent)))))
+
+(defmacro cmacs-gowl-macro-tests--with-whisper (chunks text &rest body)
+  "Run BODY with cmacs's audio and whisper stubbed.
+The microphone yields the strings in CHUNKS, then nothing; whisper
+answers TEXT at once.  Inside BODY, `closed' is non-nil once the capture
+was closed and `transcribed' holds the PCM handed to whisper."
+  (declare (indent 2))
+  `(let ((pending ,chunks) (closed nil) (transcribed nil)
+         (cmacs-gowl-macro--voice nil)
+         (cmacs-gowl-macro-voice-backend 'whisper)
+         (cmacs-gowl-macro-voice-max-seconds 30)
+         (cmacs-audio-default-rate 16000)
+         (cmacs-audio-capture-source 'auto)
+         (cmacs-audio-default-device nil)
+         (cmacs-whisper-language "en"))
+     (cl-letf (((symbol-function 'cmacs-gowl-macro--whisper-p)
+                (lambda (&rest _) t))
+               ((symbol-function 'cmacs-audio--capture-open-1)
+                (lambda (&rest _) 'mic))
+               ((symbol-function 'cmacs-audio-start) (lambda (&rest _) t))
+               ((symbol-function 'cmacs-audio-read-pcm)
+                (lambda (&rest _) (if pending (pop pending) "")))
+               ((symbol-function 'cmacs-audio-close)
+                (lambda (&rest _) (setq closed t)))
+               ((symbol-function 'cmacs-whisper-model-path)
+                (lambda (&rest _) cmacs-gowl-macro-tests--this-file))
+               ((symbol-function 'cmacs-whisper-transcribe-pcm-async)
+                (lambda (_model pcm callback &rest _)
+                  (setq transcribed pcm)
+                  (funcall callback (list (cons :text ,text))))))
+       (unwind-protect
+           (progn ,@body)
+         ;; never leave a drain timer behind
+         (dolist (k '(:drain :limit))
+           (when (timerp (plist-get cmacs-gowl-macro--voice k))
+             (cancel-timer (plist-get cmacs-gowl-macro--voice k))))))))
+
+(ert-deftest cmacs-gowl-macro-test-voice-whisper ()
+  "Press, speak, press: the recording goes to whisper, the words to
+the module, and nothing is left listening."
+  (let ((flag (list t))
+        (second (make-string 16000 ?a)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (cmacs-gowl-macro-tests--with-whisper (list second second)
+          " Sort windows. "
+        (cmacs-gowl-macro-voice)
+        (should (eq (plist-get cmacs-gowl-macro--voice :state) 'listening))
+        (cmacs-gowl-macro-voice)
+        (should closed)
+        ;; both chunks, in order
+        (should (= (length transcribed) 32000))
+        (should (member "macro-voice-match Sort windows." sent))
+        (should (null cmacs-gowl-macro--voice))))))
+
+(ert-deftest cmacs-gowl-macro-test-voice-whisper-silence ()
+  "Too little audio, or whisper's silence marker, runs nothing."
+  (let ((flag (list t)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      ;; a tenth of a second: not even sent to whisper
+      (cmacs-gowl-macro-tests--with-whisper (list (make-string 3200 ?a))
+          "never"
+        (cmacs-gowl-macro-voice)
+        (cmacs-gowl-macro-voice)
+        (should-not transcribed)
+        (should-not (seq-find (lambda (l)
+                                (string-prefix-p "macro-voice-match" l))
+                              sent)))
+      (cmacs-gowl-macro-tests--with-whisper (list (make-string 32000 ?a))
+          "[BLANK_AUDIO]"
+        (cmacs-gowl-macro-voice)
+        (cmacs-gowl-macro-voice)
+        (should transcribed)
+        (should-not (seq-find (lambda (l)
+                                (string-prefix-p "macro-voice-match" l))
+                              sent))))))
+
+(ert-deftest cmacs-gowl-macro-test-voice-whisper-busy ()
+  "A press while whisper is still working does not start another."
+  (let ((flag (list t)))
+    (cmacs-gowl-macro-tests--with-module
+        (cmacs-gowl-macro-tests--loaded-after flag)
+      (cmacs-gowl-macro-tests--with-whisper nil "unused"
+        (setq cmacs-gowl-macro--voice (list :state 'transcribing))
+        (let ((opened nil))
+          (cl-letf (((symbol-function 'cmacs-audio--capture-open-1)
+                     (lambda (&rest _) (setq opened t) 'mic)))
+            (cmacs-gowl-macro-voice))
+          (should-not opened)
+          (should (eq (plist-get cmacs-gowl-macro--voice :state)
+                      'transcribing)))))))
 
 ;;;; Trigger filters
 
@@ -659,6 +816,59 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
        (unless (equal (alist-get 'event (alist-get 'fields r))
                       "focus-changed")
          (error "filter-test fields: %S" r)))
+     ;; Recording: start, private (no token in the recorder's status),
+     ;; cancel.  The keys a person would press cannot be pressed from
+     ;; here; gowl's own test-macro-runner records and replays real ones.
+     (let ((reply (cmacs-gowl-macro-record)))
+       (unless (equal reply "recording last-recording")
+         (error "macro-record said %S" reply)))
+     (unless (eq (cmacs-gowl-macro-record-status) t)
+       (error "Not recording after macro-record"))
+     (gowl-run-command "macro-record cancel")
+     (when (cmacs-gowl-macro-record-status)
+       (error "Still recording after cancel"))
+     ;; Replay runs last-recording from the recording directory -- here
+     ;; a hand-written one, whose custom step is evaluated as Lisp
+     (let ((dir (cmacs-gowl-macro--new-dir)))
+       (make-directory dir t)
+       (with-temp-file (expand-file-name "last-recording.c" dir)
+         (insert "#include <gowl/gowl.h>\n"
+                 "G_MODULE_EXPORT gboolean\n"
+                 "gowl_macro_run(GowlMacroContext *ctx)\n{\n"
+                 "\tgowl_macro_action(ctx, GOWL_ACTION_CUSTOM,\n"
+                 "\t\t\"(setq test-ran 'replayed)\");\n"
+                 "\treturn TRUE;\n}\n")))
+     (setq test-ran nil)
+     (cmacs-gowl-macro-replay)
+     (unless (and (test-wait (lambda () test-ran)) (eq test-ran 'replayed))
+       (error "The replay ran: %S" test-ran))
+     ;; Voice: text as whisper would hand it over, matched to an Elisp
+     ;; macro by its name said as words, with the voice trigger
+     (cmacs-gowl-macro-define
+      "say-hi" (lambda (&rest args)
+                 (setq test-ran (cons cmacs-gowl-macro-trigger args))))
+     (setq test-ran nil)
+     (cmacs-gowl-macro-voice-text "Say hi, twenty five.")
+     (unless (and (test-wait (lambda () test-ran))
+                  (equal test-ran '("voice" "25")))
+       (error "Said, the Elisp macro got %S" test-ran))
+     ;; ... and through the module's voice-command, the standalone way
+     (setq cmacs-gowl-macro-voice-backend 'command
+           cmacs-gowl-macro-voice-command "printf 'Say hi please.\\n'")
+     (cmacs-gowl-macro-configure)
+     (setq test-ran nil)
+     (cmacs-gowl-macro-voice)
+     (unless (and (test-wait (lambda () test-ran))
+                  (equal test-ran '("voice")))
+       (error "From voice-command, the Elisp macro got %S" test-ran))
+     ;; The clipboard history is its own private menu entry
+     (when (fboundp 'gowl-menu-items)
+       (unless (seq-find (lambda (r)
+                           (equal (plist-get r :label)
+                                  "Forget the clipboard history"))
+                         (gowl-menu-items "clipboard"))
+         (error "No Clipboard entry in the menu: %S"
+                (gowl-menu-items "clipboard"))))
      (cmacs-gowl-macro-disable)
      (when (gowl-run-command "macro-status")
        (error "Still answering after disable"))

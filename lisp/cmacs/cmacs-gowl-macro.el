@@ -18,7 +18,15 @@
 ;; enabled the first time any function here is used -- or at compositor
 ;; start when you have configured something for it (an Elisp macro in
 ;; `cmacs-gowl-macro-definitions', a trigger in
-;; `cmacs-gowl-macro-triggers').  cmacs ships no macro and binds no key.
+;; `cmacs-gowl-macro-triggers').  The three default keys reach it
+;; through functions here, so pressing one is a first use:
+;;
+;;   Super+Alt+r         `cmacs-gowl-macro-record': record what you do
+;;                       next; press again to stop.  It is written out
+;;                       as last-recording.c (`C-u' to name it).
+;;   Super+Alt+Shift+r   `cmacs-gowl-macro-replay': play it back.
+;;   Super+Alt+m         `cmacs-gowl-macro-voice': say a macro's name;
+;;                       cmacs's own whisper transcribes it.
 ;;
 ;; Two kinds of macro:
 ;;
@@ -60,6 +68,16 @@
 (declare-function gowl-configure-module "cmacs-gowl")
 (declare-function gowl-add-keybind "cmacs-gowl")
 (declare-function cmacs-notify "cmacs-notify")
+(declare-function cmacs-audio--capture-open-1 "cmacs-audio")
+(declare-function cmacs-audio-start "cmacs-audio")
+(declare-function cmacs-audio-close "cmacs-audio")
+(declare-function cmacs-audio-read-pcm "cmacs-audio")
+(declare-function cmacs-whisper-model-path "cmacs-whisper")
+(declare-function cmacs-whisper-transcribe-pcm-async "cmacs-whisper")
+(defvar cmacs-audio-capture-source)
+(defvar cmacs-audio-default-rate)
+(defvar cmacs-audio-default-device)
+(defvar cmacs-whisper-language)
 
 (defgroup cmacs-gowl-macro nil
   "gowl macros: guarded crispy C scripts, and Elisp by name."
@@ -151,6 +169,38 @@ for an Elisp one."
   :type 'hook
   :group 'cmacs-gowl-macro)
 
+(defcustom cmacs-gowl-macro-voice-max-seconds 10
+  "Stop listening after this many seconds, as if the voice key were
+pressed again.  Also the module's `voice-max-seconds'."
+  :type 'integer
+  :group 'cmacs-gowl-macro)
+
+(defcustom cmacs-gowl-macro-voice-phrases nil
+  "Spoken phrases for macros, checked before macro names.
+An alist of (PHRASE . \"MACRO ARGS\"): (\"tidy up\" . \"sort-windows\")
+makes saying \"tidy up\" run `sort-windows'.  Words said after the
+phrase are added as arguments.  Without an entry a macro is still
+reached by saying its name: `pip-corner' is \"pip corner\"."
+  :type '(alist :key-type string :value-type string)
+  :group 'cmacs-gowl-macro)
+
+(defcustom cmacs-gowl-macro-voice-command nil
+  "The module's `voice-command', for the `command' backend.
+A shell command that listens until SIGINT and prints what it heard.
+nil leaves the module's default, gowl-stt."
+  :type '(choice (const :tag "gowl-stt" nil) string)
+  :group 'cmacs-gowl-macro)
+
+(defcustom cmacs-gowl-macro-voice-backend 'whisper
+  "How `cmacs-gowl-macro-voice' listens.
+`whisper' records with cmacs's audio subsystem and transcribes with its
+embedded whisper.cpp -- no extra program.  `command' leaves it to the
+module's `voice-command' (gowl-stt by default), as standalone gowl
+does.  `whisper' falls back to `command' in a cmacs built without the
+audio or whisper subsystems."
+  :type '(choice (const whisper) (const command))
+  :group 'cmacs-gowl-macro)
+
 (defconst cmacs-gowl-macro--module "macro"
   "The gowl module this file drives.")
 
@@ -221,6 +271,15 @@ init file before `cmacs-gowl-mode' is not lost.")
            (cons "triggers" (mapconcat #'cmacs-gowl-macro--trigger-line
                                        cmacs-gowl-macro-triggers "\n"))
            (cons "dbus" (if cmacs-gowl-macro-dbus "true" "false"))
+           ;; Recordings land where `cmacs-gowl-macro-new' writes, so
+           ;; the list and `cmacs-gowl-macro-visit' find them.
+           (cons "record-dir" (cmacs-gowl-macro--new-dir))
+           (cons "voice-command" (or cmacs-gowl-macro-voice-command ""))
+           (cons "voice-max-seconds"
+                 (number-to-string (max 1 cmacs-gowl-macro-voice-max-seconds)))
+           (cons "voice-phrases"
+                 (mapconcat (lambda (p) (format "%s: %s" (car p) (cdr p)))
+                            cmacs-gowl-macro-voice-phrases "\n"))
            ;; Every fault reaches Elisp: the module Lisp-quotes %n/%s
            (cons "on-fault-custom" "(cmacs-gowl-macro--fault %n %s)")))))
 
@@ -612,6 +671,165 @@ nothing to list.  Returns t."
   (cmacs-gowl-macro-ensure)
   (gowl-run-command "menu-open macros")
   t)
+
+;;;; Recording
+
+;;;###autoload
+(defun cmacs-gowl-macro-record (&optional name)
+  "Start recording a macro, or stop the one being recorded.
+What you do next -- keys, clicks, drags, scrolls -- is written out as
+a macro when you stop: last-recording.c, plus NAME.c when NAME is
+given (interactively, with a prefix argument).  The screen wears a
+frame while recording; password prompts and the lock screen are not
+recorded; Super+Shift+Escape also stops it.  Returns the module's
+reply."
+  (interactive
+   (list (and current-prefix-arg
+              (not (equal (cmacs-gowl-macro-record-status) t))
+              (read-string "Record as: "))))
+  (let ((reply (cmacs-gowl-macro--command
+                (if (and name (not (string-empty-p name)))
+                    (format "macro-record start %s"
+                            (cmacs-gowl-macro--quote name))
+                  "macro-record"))))
+    (when (called-interactively-p 'interactive)
+      (message "gowl macro: %s" reply))
+    reply))
+
+(defun cmacs-gowl-macro-record-status ()
+  "t while a macro is being recorded, else nil."
+  (and (cmacs-gowl-macro--running-p)
+       (let ((reply (gowl-run-command "macro-record status")))
+         (and reply (string-prefix-p "OK " reply)
+              (eq t (alist-get 'recording
+                               (json-parse-string (substring reply 3)
+                                                  :object-type 'alist
+                                                  :false-object nil)))))))
+
+;;;###autoload
+(defun cmacs-gowl-macro-replay (&optional speed)
+  "Play back the last recording.
+SPEED is a factor: 2 is twice as fast (interactively, the prefix
+argument)."
+  (interactive (list (and current-prefix-arg
+                          (prefix-numeric-value current-prefix-arg))))
+  (if speed
+      (cmacs-gowl-macro-run "last-recording" (number-to-string speed))
+    (cmacs-gowl-macro-run "last-recording")))
+
+;;;; Voice
+
+(defvar cmacs-gowl-macro--voice nil
+  "The listener: nil, or a plist (:state listening|transcribing
+:handle AUDIO :chunks LIST :drain TIMER :limit TIMER).")
+
+(defun cmacs-gowl-macro--toast (summary body)
+  "Say SUMMARY and BODY on the gowl bar (when loaded) and in the echo area."
+  (message "%s: %s" summary body)
+  (ignore-errors
+    (gowl-run-command
+     (format "bar-notify %s|%s"
+             (replace-regexp-in-string "[|\n]" " " summary)
+             (replace-regexp-in-string "[|\n]" " " body)))))
+
+(defun cmacs-gowl-macro--whisper-p ()
+  "Non-nil when cmacs itself can listen and transcribe."
+  (and (fboundp 'cmacs-audio--capture-open-1)
+       (fboundp 'cmacs-whisper-transcribe-pcm-async)
+       (require 'cmacs-audio nil t)
+       (require 'cmacs-whisper nil t)))
+
+(defun cmacs-gowl-macro--voice-drain ()
+  "Move what the microphone has captured into the chunk list."
+  (let ((handle (plist-get cmacs-gowl-macro--voice :handle)))
+    (when handle
+      (let ((pcm (cmacs-audio-read-pcm handle cmacs-audio-default-rate)))
+        (while (> (length pcm) 0)
+          (push pcm (plist-get cmacs-gowl-macro--voice :chunks))
+          (setq pcm (cmacs-audio-read-pcm handle cmacs-audio-default-rate)))))))
+
+;;;###autoload
+(defun cmacs-gowl-macro-voice-text (text)
+  "Run the macro TEXT names, as if it had been said.
+Matching is the module's: a configured phrase, then a macro's name said
+as words (\"pip corner 25\" is `pip-corner 25'), then a name whose words
+all appear.  Returns the module's reply."
+  (interactive "sSay: ")
+  (cmacs-gowl-macro--command
+   (concat "macro-voice-match "
+           (string-trim (replace-regexp-in-string "[ \r\n\t]+" " " text)))))
+
+(defun cmacs-gowl-macro--voice-heard (result)
+  "Whisper's RESULT alist is in: run the macro it names."
+  (setq cmacs-gowl-macro--voice nil)
+  (let ((text (string-trim (or (cdr (assq :text result)) "")))
+        (err (cdr (assq :error result))))
+    (cond
+     (err (cmacs-gowl-macro--toast "Voice" err))
+     ((or (string-empty-p text)
+          (member text '("[BLANK_AUDIO]" "(silence)" "[silence]")))
+      (cmacs-gowl-macro--toast "Voice" "heard nothing"))
+     (t
+      ;; The module toasts what it heard and what it ran, or that no
+      ;; macro has that name; an error here is only echoed.
+      (condition-case e
+          (cmacs-gowl-macro-voice-text text)
+        (error (message "gowl macro voice: %s" (error-message-string e))))))))
+
+(defun cmacs-gowl-macro--voice-stop ()
+  "Stop listening and hand the recording to whisper."
+  (let ((v cmacs-gowl-macro--voice))
+    (dolist (k '(:drain :limit))
+      (when (timerp (plist-get v k)) (cancel-timer (plist-get v k))))
+    (cmacs-gowl-macro--voice-drain)
+    (let ((pcm (apply #'concat (reverse (plist-get cmacs-gowl-macro--voice
+                                                   :chunks)))))
+      (ignore-errors (cmacs-audio-close (plist-get v :handle)))
+      (if (< (length pcm) (/ cmacs-audio-default-rate 2))
+          (progn (setq cmacs-gowl-macro--voice nil)
+                 (cmacs-gowl-macro--toast "Voice" "heard nothing"))
+        (setq cmacs-gowl-macro--voice (list :state 'transcribing))
+        (cmacs-gowl-macro--toast "Voice" "transcribing...")
+        (cmacs-whisper-transcribe-pcm-async
+         (cmacs-whisper-model-path) pcm
+         #'cmacs-gowl-macro--voice-heard cmacs-whisper-language)))))
+
+;;;###autoload
+(defun cmacs-gowl-macro-voice ()
+  "Say a macro's name and run it: press once, speak, press again.
+Listening stops by itself after `cmacs-gowl-macro-voice-max-seconds'.
+cmacs records and transcribes with its own whisper (see
+`cmacs-gowl-macro-voice-backend'); the module matches what was said to
+a macro with `cmacs-gowl-macro-voice-text'.  Bound to Super+Alt+m."
+  (interactive)
+  (cmacs-gowl-macro-ensure)
+  (cond
+   ((or (eq cmacs-gowl-macro-voice-backend 'command)
+        (not (cmacs-gowl-macro--whisper-p)))
+    (cmacs-gowl-macro--command "macro-voice"))
+   ((eq (plist-get cmacs-gowl-macro--voice :state) 'transcribing)
+    (cmacs-gowl-macro--toast "Voice" "still transcribing the last one"))
+   ((eq (plist-get cmacs-gowl-macro--voice :state) 'listening)
+    (cmacs-gowl-macro--voice-stop))
+   ((not (file-exists-p (cmacs-whisper-model-path)))
+    (cmacs-gowl-macro--toast
+     "Voice" (format "no whisper model at %s -- M-x cmacs-whisper-download-model"
+                     (cmacs-whisper-model-path))))
+   (t
+    (let ((handle (cmacs-audio--capture-open-1
+                   :source cmacs-audio-capture-source
+                   :rate cmacs-audio-default-rate
+                   :channels 1
+                   :device cmacs-audio-default-device)))
+      (cmacs-audio-start handle)
+      (setq cmacs-gowl-macro--voice
+            (list :state 'listening :handle handle :chunks nil
+                  :drain (run-with-timer 0.5 0.5
+                                         #'cmacs-gowl-macro--voice-drain)
+                  :limit (run-with-timer cmacs-gowl-macro-voice-max-seconds
+                                         nil #'cmacs-gowl-macro--voice-stop)))
+      (cmacs-gowl-macro--toast "Listening"
+                               "say a macro's name; Super+Alt+m when done")))))
 
 ;;;; Keys
 

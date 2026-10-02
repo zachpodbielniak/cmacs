@@ -1118,6 +1118,12 @@ standalone gowl ships with (see
   Super+Shift+s       screenshot: select a region
   Super+Print         screenshot: focused window
   Print               screenshot: whole screen
+  Super+Alt+Shift+s   copy the text in a region (OCR, tesseract)
+  Super+Alt+c         pick a colour: its #rrggbb to the clipboard
+  Super+Alt+r         record a macro / stop recording
+  Super+Alt+Shift+r   replay the last recorded macro
+  Super+Alt+m         say a macro's name and run it (whisper)
+  Super+Alt+v         the menu's clipboard history
   Super+, / Super+.   focus previous / next monitor
   Super+Ctrl+Shift+, / . move focused client to previous / next monitor
   Super+Shift+l       lock the session
@@ -1580,6 +1586,32 @@ authoritative and keeps re-runs idempotent."
               "Screenshot: focused window")
         (bind "Print" 'ipc-command "screenshot-screen"
               "Screenshot: whole screen")
+        ;; The same rubber band, read instead of photographed:
+        ;; tesseract puts the region's text on the clipboard.  And one
+        ;; pixel's colour as #rrggbb.  Both are the screenshot module's,
+        ;; so they are inert without it -- and the OCR needs tesseract.
+        (bind "Super+Alt+Shift+s" 'ipc-command "screenshot-ocr"
+              "Copy text from a region (OCR)")
+        (bind "Super+Alt+c" 'ipc-command "screenshot-color"
+              "Pick a colour")
+        ;; Macros.  Elisp rather than ipc-command because the macro
+        ;; module is opt-in: these functions load it on first use, so
+        ;; the key is the first use.  The `require' makes the form work
+        ;; before the autoloads are regenerated.
+        (bind "Super+Alt+r" 'custom
+              "(progn (require 'cmacs-gowl-macro) (cmacs-gowl-macro-record))"
+              "Macro: record / stop recording")
+        (bind "Super+Alt+Shift+r" 'custom
+              "(progn (require 'cmacs-gowl-macro) (cmacs-gowl-macro-replay))"
+              "Macro: replay the last recording")
+        (bind "Super+Alt+m" 'custom
+              "(progn (require 'cmacs-gowl-macro) (cmacs-gowl-macro-voice))"
+              "Macro: say one")
+        ;; The clipboard history, as the menu's private Clipboard list:
+        ;; its entries are never search results, so a copied password is
+        ;; not two keystrokes from the screen.
+        (bind "Super+Alt+v" 'ipc-command "menu-open clipboard"
+              "Menu: clipboard history")
         ;; The scratchpad: a panel of windows that slides up from the
         ;; bottom of the focused output, the dropdown's twin.  Reached by
         ;; NAME like the screenshots, so inert (not broken) in a session

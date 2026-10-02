@@ -729,6 +729,12 @@ holds focus.
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
 | =Super+/=               | Show the keybind cheatsheet             |
+| =Super+Alt+Shift+s=     | Drag a region; its text goes on the clipboard (OCR, tesseract) |
+| =Super+Alt+c=           | Click a pixel; its =#rrggbb= goes on the clipboard |
+| =Super+Alt+r=           | Record a macro; again to stop ([[#gowl-macros-record][Recording]]) |
+| =Super+Alt+Shift+r=     | Replay the last recorded macro          |
+| =Super+Alt+m=           | Say a macro's name and run it (whisper) ([[#gowl-macros-voice][Voice]]) |
+| =Super+Alt+v=           | The menu's clipboard history ([[#gowl-menu-clipboard][private]]) |
 
 Super+Shift+j/k swap the focused window with the next/previous tiled
 window, wrapping at the ends. Focus stays on the moved window; floating
@@ -915,7 +921,7 @@ Everything goes through =gowl-run-command= and the module's =inputremap-= words,
 
 gowl's =macro= module runs *macros*: small C files, compiled at run time with crispy and loaded into the compositor, that sort a tag's windows, type into one named window while another keeps focus, move windows between tags --- anything the gowl API can do.  Edit the file and run it again: the new code runs.  =lisp/cmacs/cmacs-gowl-macro.el= is its Elisp surface, and it adds the other half: *Elisp functions as macros*, runnable by name from everything that can run a C one.
 
-*Nothing is on by default.*  cmacs ships no macro and binds no key.  The module is loaded the first time any =cmacs-gowl-macro-= function is used, or at compositor start when =cmacs-gowl-macro-definitions= or =cmacs-gowl-macro-triggers= is set.
+*Nothing is loaded by default.*  The module is loaded the first time any =cmacs-gowl-macro-= function is used, or at compositor start when =cmacs-gowl-macro-definitions= or =cmacs-gowl-macro-triggers= is set.  The three macro keys cmacs binds --- Super+Alt+r (record), Super+Alt+Shift+r (replay), Super+Alt+m (voice) --- reach it through functions here, so pressing one is a first use.
 
 *** Containment
 :PROPERTIES:
@@ -995,6 +1001,43 @@ Or, to have them installed at every compositor start:
 #+end_src
 
 Crispy macros never call Lisp themselves --- they run in the compositor, and the cmacs-api dispatch table requires Emacs's thread.  To mix the two, define the Elisp half with =cmacs-gowl-macro-define= and have the C half run it by name (=gowl_macro_command(ctx, "macro-run snapshot")=).
+
+*** Recording and replaying
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-record
+:END:
+
+*Super+Alt+r, do the thing, Super+Alt+r.*  What you did between the presses --- keys, clicks, drags, scrolls, with their timing --- is written out as =last-recording.c= in your macro directory (=cmacs-gowl-macro-directory=, else =~/.config/gowl/macros=), and *Super+Alt+Shift+r* plays it back.  It is an ordinary C macro: =M-x cmacs-gowl-macro-visit RET last-recording= opens it to edit, and =C-u M-x cmacs-gowl-macro-record= asks for a name and writes =NAME.c= as well, so it can be bound and triggered like any other.
+
+#+begin_src elisp
+(cmacs-gowl-macro-record)           ; start; again stops and writes it
+(cmacs-gowl-macro-record "tidy-mail") ; ... and also tidy-mail.c
+(cmacs-gowl-macro-replay)           ; play last-recording
+(cmacs-gowl-macro-replay 2)         ; twice as fast
+(cmacs-gowl-macro-bind "Super+F5" "tidy-mail")
+#+end_src
+
+The screen wears a frame while it records.  It is gowl's input recorder, used as a /private/ recording: the key you pressed is the consent, so =input-recording= need not be on, and the recording's token is never published, so neither MCP nor anything else can read it.  Password prompts and the lock screen are not recorded (the file says how many events were left out), Super+Shift+Escape stops it, and so does a five-minute deadline --- either way, what was recorded so far is written.  The record key's own presses are dropped, a chord such as =Ctrl+c= is one step, and a pause longer than three seconds is replayed as three.  Keys replay into whichever window has focus, through the compositor's keybinds, and the pointer goes to the same screen positions: a recording is as portable as the layout it was made on.
+
+*** Voice
+:PROPERTIES:
+:CUSTOM_ID: gowl-macros-voice
+:END:
+
+*Super+Alt+m, say a macro's name, Super+Alt+m.*  cmacs records with its audio subsystem and transcribes with its embedded whisper (=cmacs-whisper-model-path=; =M-x cmacs-whisper-download-model= the first time), then hands the words to the module, which runs the macro they name.  Listening stops by itself after =cmacs-gowl-macro-voice-max-seconds= (10).
+
+What counts as naming a macro, first match wins: a phrase in =cmacs-gowl-macro-voice-phrases=; a macro's name said as words --- =pip-corner= is "pip corner", and what follows becomes its arguments, so "pip corner twenty five" runs =pip-corner 25=; or every word of a name, in any order.  Numbers said as words become digits, and "please" and "thank you" are ignored.  An Elisp macro is reached the same way, and sees =cmacs-gowl-macro-trigger= ="voice"=.
+
+#+begin_src elisp
+(setq cmacs-gowl-macro-voice-phrases
+      '(("tidy up" . "sort-windows")
+        ("small video" . "pip-corner 20")))
+(cmacs-gowl-macro-define "note"
+  (lambda (&rest _) (org-capture nil "n")))   ; say "note"
+(cmacs-gowl-macro-voice-text "pip corner 25") ; the matching, without a microphone
+#+end_src
+
+=cmacs-gowl-macro-voice-backend= set to =command= leaves the listening to the module's =voice-command= (=cmacs-gowl-macro-voice-command=, default gowl's =gowl-stt=: =pw-record= or =arecord= plus whisper.cpp's =whisper-cli=), as standalone gowl does; a cmacs built without the audio or whisper subsystems falls back to it.
 
 *** Triggers: pedals, events, timers, D-Bus
 :PROPERTIES:
@@ -1114,6 +1157,11 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 | =cmacs-gowl-macro-list-triggers=     | Triggers as understood, with fired/skipped counts         |
 | =cmacs-gowl-macro-configure=         | Push changed options                                      |
 | =cmacs-gowl-macro-ensure= / =-disable= | Load (idempotent) / unload the module                 |
+| =cmacs-gowl-macro-record=            | Start recording a macro, or stop and write it (Super+Alt+r) |
+| =cmacs-gowl-macro-record-status=     | t while recording                                         |
+| =cmacs-gowl-macro-replay=            | Play last-recording, at an optional speed (Super+Alt+Shift+r) |
+| =cmacs-gowl-macro-voice=             | Listen, transcribe, run what was said (Super+Alt+m)       |
+| =cmacs-gowl-macro-voice-text=        | Run the macro a sentence names                            |
 
 | Option                                | Default              | Meaning                                    |
 |---------------------------------------+----------------------+--------------------------------------------|
@@ -1127,6 +1175,10 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 | =cmacs-gowl-macro-notify=             | t                    | Desktop notification on a fault            |
 | =cmacs-gowl-macro-fault-functions=    | nil                  | Hook: NAME and the signal or error         |
 | =cmacs-gowl-macro-log= / =-log-file=  | =fault= / stderr     | The module's log                           |
+| =cmacs-gowl-macro-voice-max-seconds=  | 10                   | Stop listening after this long             |
+| =cmacs-gowl-macro-voice-phrases=      | nil                  | =(PHRASE . "MACRO ARGS")=, matched first   |
+| =cmacs-gowl-macro-voice-backend=      | =whisper=            | =whisper= (cmacs) or =command= (the module's) |
+| =cmacs-gowl-macro-voice-command=      | nil                  | The module's listener; nil is =gowl-stt=   |
 
 The macro API, lookup order, both run modes, every setting and the shipped examples are in =deps/gowl/docs/macros.org=.
 
@@ -4246,6 +4298,7 @@ standalone gowl opts in with =modules.menu.enabled=.
 | =Super+space=       | The menu, drawn on screen by the compositor     |
 | =Super+Shift+space= | The same, with every program on =$PATH= too     |
 | =Super+Alt+space=   | The same, opened at Applications                |
+| =Super+Alt+v=       | The same, opened at the clipboard history       |
 | =Super+Escape=      | The same tree, as a =completing-read=           |
 
 *Super+Shift+space* opens the same card with a *Programs on $PATH* row and every executable on =$PATH= in its search, beside the applications --- so typing =htop= or =pavucontrol= runs it even without a desktop entry.  Plain =Super+space= leaves them out: thousands of command-line tools would bury the applications in every search.  A program runs by its full path, the first directory on =$PATH= that has it, exactly as a shell would pick; the list is cached for five seconds.  It is gowl's =menu-path= command (=gowl-run-command "menu-path"=), and the row's guard asks the module whether this opening is a =$PATH= one; pressing the key again closes the card, and pressing it over an open plain menu adds =$PATH= to it.
@@ -4310,6 +4363,17 @@ you only ever run CMacs.
 =cmacs-gowl-menu-tree= is still a defcustom and still the tree that runs
 when gowl is not --- a =--lrg= session, or a plain GUI Emacs. Set
 =cmacs-gowl-menu-prefer-compositor= to nil to use it even under gowl.
+
+*** The clipboard history is private
+:PROPERTIES:
+:CUSTOM_ID: gowl-menu-clipboard
+:END:
+
+The *Clipboard* entry lists what the clipboard module has kept, newest first --- the preview, its type and size --- and Return puts one back on the clipboard.  It is marked =private: true= in =menu.yaml=, which keeps every entry out of a search and out of "recent": a clipboard holds whatever was copied last, a password from a password manager included, and a menu that searched it would show it to anyone who typed two letters of it.  Typing =clipboard= finds the entry; Return opens it, and only then are the entries listed; typing inside filters them.  =Super+Alt+v= opens it straight.  *Forget the clipboard history* is the first row.
+
+*** Text and colours from the screen
+
+=Super+Alt+Shift+s= is Super+Shift+s's rubber band read instead of photographed: drag over some text and tesseract puts it on the clipboard (a toast says how much), and nothing is saved to the screenshots folder --- the image is a private temporary file, deleted afterwards.  =Super+Alt+c= frames the screen and puts the colour of the pixel you click on the clipboard as =#rrggbb=.  Both are the screenshot module's, which cmacs loads by default; Escape or a right-click cancels.  OCR needs =tesseract= and a language pack installed (Fedora: =tesseract= and =tesseract-langpack-eng=); the language is gowl's =ocr-language= setting.
 
 ** Available Modules
 
