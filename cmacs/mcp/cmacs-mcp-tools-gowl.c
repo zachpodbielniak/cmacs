@@ -540,6 +540,258 @@ handle_gowl_screenshot (McpServer *s, const gchar *n,
   return result;
 }
 
+/* ── Macros, the recorder, voice, the screen, the clipboard ─────────
+ *
+ * Thin: each is one call to an Elisp function in cmacs-gowl-macro.el or
+ * cmacs-gowl-grab.el, so the MCP tool, Lisp and the default keys share
+ * one path.  Strings go into the generated Lisp through
+ * cmacs_dispatch_lisp_escape(), and an error in the Lisp (a module
+ * reply of ERROR) comes back as an MCP error with its message. */
+
+/* Like gowl_eval, but a string result comes back as the text itself --
+   JSON from the module, OCR text, a colour -- not prin1-quoted. */
+static McpToolResult *
+gowl_eval_raw (const gchar *expr)
+{
+  GError *error = NULL;
+  gchar *str = cmacs_dispatch_eval_string (expr, &error);
+  McpToolResult *result = gowl_result (str, error);
+  g_clear_error (&error);
+  return result;
+}
+
+static McpToolResult *
+gowl_missing (const gchar *what)
+{
+  McpToolResult *r = mcp_tool_result_new (TRUE);
+  g_autofree gchar *msg = g_strdup_printf ("Missing required argument: %s",
+                                           what);
+  mcp_tool_result_add_text (r, msg);
+  return r;
+}
+
+/* (FN "ESCAPED-LINE") */
+static McpToolResult *
+gowl_eval_line (const gchar *fn, const gchar *line)
+{
+  g_autofree gchar *el = cmacs_dispatch_lisp_escape (line);
+  g_autofree gchar *expr = g_strdup_printf ("(%s \"%s\")", fn, el);
+  return gowl_eval_raw (expr);
+}
+
+static McpToolResult *
+handle_gowl_macro_run (McpServer *s, const gchar *n,
+                       JsonObject *a, gpointer u)
+{
+  const gchar *name;
+  GString *line;
+  McpToolResult *r;
+  (void) s; (void) n; (void) u;
+
+  name = json_object_get_string_member_with_default (a, "name", NULL);
+  if (name == NULL || *name == '\0')
+    return gowl_missing ("name");
+  line = g_string_new ("macro-run --trigger=api -- ");
+  {
+    g_autofree gchar *q = g_shell_quote (name);
+    g_string_append (line, q);
+  }
+  if (json_object_has_member (a, "args"))
+    {
+      JsonArray *args = json_object_get_array_member (a, "args");
+      guint i;
+      for (i = 0; args != NULL && i < json_array_get_length (args); i++)
+        {
+          g_autofree gchar *q
+            = g_shell_quote (json_array_get_string_element (args, i));
+          g_string_append_printf (line, " %s", q);
+        }
+    }
+  r = gowl_eval_line ("cmacs-gowl-macro-command", line->str);
+  g_string_free (line, TRUE);
+  return r;
+}
+
+static McpToolResult *
+handle_gowl_macro_list (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_eval_line ("cmacs-gowl-macro-command", "macro-list");
+}
+
+static McpToolResult *
+handle_gowl_macro_status (McpServer *s, const gchar *n,
+                          JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_eval_line ("cmacs-gowl-macro-command", "macro-status");
+}
+
+static McpToolResult *
+handle_gowl_macro_stop (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  const gchar *which;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  which = json_object_get_string_member_with_default (a, "which", NULL);
+  if (which != NULL && *which != '\0')
+    {
+      g_autofree gchar *q = g_shell_quote (which);
+      line = g_strdup_printf ("macro-stop %s", q);
+    }
+  else
+    line = g_strdup ("macro-stop");
+  return gowl_eval_line ("cmacs-gowl-macro-command", line);
+}
+
+/* The recorder.  `start' asks for gowl's input-recording consent: the
+   Super+Alt+r key needs none because the person pressed it, an agent
+   asking is a different thing. */
+static McpToolResult *
+handle_gowl_macro_record (McpServer *s, const gchar *n,
+                          JsonObject *a, gpointer u)
+{
+  const gchar *action, *name;
+  g_autofree gchar *ea = NULL, *en = NULL, *expr = NULL;
+  (void) s; (void) n; (void) u;
+
+  action = json_object_get_string_member_with_default (a, "action", "status");
+  name = json_object_get_string_member_with_default (a, "name", NULL);
+  ea = cmacs_dispatch_lisp_escape (action);
+  if (name != NULL)
+    {
+      en = cmacs_dispatch_lisp_escape (name);
+      expr = g_strdup_printf (
+        "(cmacs-gowl-macro-record-command \"%s\" \"%s\" t)", ea, en);
+    }
+  else
+    expr = g_strdup_printf (
+      "(cmacs-gowl-macro-record-command \"%s\" nil t)", ea);
+  return gowl_eval_raw (expr);
+}
+
+static McpToolResult *
+handle_gowl_macro_voice_match (McpServer *s, const gchar *n,
+                               JsonObject *a, gpointer u)
+{
+  const gchar *text;
+  gboolean dry;
+  g_autofree gchar *et = NULL, *expr = NULL;
+  (void) s; (void) n; (void) u;
+
+  text = json_object_get_string_member_with_default (a, "text", NULL);
+  if (text == NULL || *text == '\0')
+    return gowl_missing ("text");
+  dry = json_object_get_boolean_member_with_default (a, "dry_run", FALSE);
+  et = cmacs_dispatch_lisp_escape (text);
+  expr = g_strdup_printf ("(cmacs-gowl-macro-voice-text \"%s\" %s)", et,
+                          dry ? "t" : "nil");
+  return gowl_eval_raw (expr);
+}
+
+static McpToolResult *
+handle_gowl_macro_voice_status (McpServer *s, const gchar *n,
+                                JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_eval_line ("cmacs-gowl-macro-command", "macro-voice status");
+}
+
+static gboolean
+gowl_int_member (JsonObject *a, const gchar *name, gint64 *out)
+{
+  if (a == NULL || !json_object_has_member (a, name))
+    return FALSE;
+  *out = json_object_get_int_member (a, name);
+  return TRUE;
+}
+
+static McpToolResult *
+handle_gowl_screen_text (McpServer *s, const gchar *n,
+                         JsonObject *a, gpointer u)
+{
+  gint64 x, y, w, h;
+  const gchar *lang;
+  gboolean copy;
+  g_autofree gchar *el = NULL, *expr = NULL;
+  (void) s; (void) n; (void) u;
+
+  if (!gowl_int_member (a, "x", &x) || !gowl_int_member (a, "y", &y)
+      || !gowl_int_member (a, "width", &w)
+      || !gowl_int_member (a, "height", &h))
+    return gowl_missing ("x, y, width, height");
+  lang = json_object_get_string_member_with_default (a, "language", NULL);
+  copy = json_object_get_boolean_member_with_default (a, "copy", FALSE);
+  if (lang != NULL && *lang != '\0')
+    {
+      el = cmacs_dispatch_lisp_escape (lang);
+      expr = g_strdup_printf (
+        "(cmacs-gowl-screen-text %" G_GINT64_FORMAT " %" G_GINT64_FORMAT
+        " %" G_GINT64_FORMAT " %" G_GINT64_FORMAT " \"%s\" %s)",
+        x, y, w, h, el, copy ? "t" : "nil");
+    }
+  else
+    expr = g_strdup_printf (
+      "(cmacs-gowl-screen-text %" G_GINT64_FORMAT " %" G_GINT64_FORMAT
+      " %" G_GINT64_FORMAT " %" G_GINT64_FORMAT " nil %s)",
+      x, y, w, h, copy ? "t" : "nil");
+  return gowl_eval_raw (expr);
+}
+
+static McpToolResult *
+handle_gowl_pick_color (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  gint64 x, y;
+  g_autofree gchar *expr = NULL;
+  (void) s; (void) n; (void) u;
+
+  if (!gowl_int_member (a, "x", &x) || !gowl_int_member (a, "y", &y))
+    return gowl_missing ("x, y");
+  expr = g_strdup_printf ("(cmacs-gowl-pixel-color %" G_GINT64_FORMAT
+                          " %" G_GINT64_FORMAT ")", x, y);
+  return gowl_eval_raw (expr);
+}
+
+static McpToolResult *
+handle_gowl_clipboard_list (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_eval_line ("cmacs-gowl-command", "clipboard-list");
+}
+
+static McpToolResult *
+gowl_clipboard_by_id (JsonObject *a, const gchar *word)
+{
+  gint64 id;
+  g_autofree gchar *line = NULL;
+
+  if (!gowl_int_member (a, "id", &id) || id <= 0)
+    return gowl_missing ("id (a positive entry id)");
+  line = g_strdup_printf ("%s %" G_GINT64_FORMAT, word, id);
+  return gowl_eval_line ("cmacs-gowl-command", line);
+}
+
+static McpToolResult *
+handle_gowl_clipboard_entry (McpServer *s, const gchar *n,
+                             JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  return gowl_clipboard_by_id (a, "clipboard-path");
+}
+
+static McpToolResult *
+handle_gowl_clipboard_copy (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  return gowl_clipboard_by_id (a, "clipboard-copy");
+}
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 void
@@ -848,6 +1100,125 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
   mcp_server_add_tool (server, tool, handle_gowl_recording_status,
                        NULL, NULL);
   g_object_unref (tool);
+
+  /* ── Macros, the recorder, voice, the screen, the clipboard ── */
+  {
+    static const struct {
+      const gchar   *name;
+      gboolean       read_only;
+      const gchar   *schema;
+      McpToolHandler handler;
+      const gchar   *description;
+    } tools[] = {
+      { "gowl_macro_run", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"name\":{\"type\":\"string\",\"description\":\"A macro name "
+        "(a file on the macro path, a registered or an Elisp macro), or "
+        "a path to a .c file\"},"
+        "\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},"
+        "\"required\":[\"name\"]}",
+        handle_gowl_macro_run,
+        "Run a gowl macro: in-process C (crispy) or an Elisp macro that "
+        "drives the compositor. Runs under gowl's fault guard and time "
+        "budget; a crash or runaway loop is stopped and held back. "
+        "Loads the opt-in macro module on first use." },
+      { "gowl_macro_list", TRUE, "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_macro_list,
+        "Every macro runnable by name, as JSON: name, kind (file, "
+        "registered, custom = Elisp, ...), path, held-back." },
+      { "gowl_macro_status", TRUE, "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_macro_status,
+        "Running macros, held-back ones and why, the fault count, the "
+        "time budget, triggers -- the macro module's status JSON." },
+      { "gowl_macro_stop", FALSE,
+        "{\"type\":\"object\",\"properties\":{\"which\":{\"type\":"
+        "\"string\",\"description\":\"A macro name, a run id or all "
+        "(the default)\"}}}",
+        handle_gowl_macro_stop, "Stop running macros." },
+      { "gowl_macro_record", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\","
+        "\"cancel\",\"status\"]},"
+        "\"name\":{\"type\":\"string\",\"description\":\"With start: "
+        "also write NAME.c\"}},\"required\":[\"action\"]}",
+        handle_gowl_macro_record,
+        "The macro recorder (Super+Alt+r). start records the person's "
+        "keys, clicks, drags and scrolls; stop writes last-recording.c "
+        "(and NAME.c) and replies `recorded NAME STEPS PATH'; cancel "
+        "discards; status reports. Starting from here needs gowl's "
+        "`input-recording' consent, because it watches the person's "
+        "input; the screen is framed while it runs and password prompts "
+        "are not recorded." },
+      { "gowl_macro_voice_match", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"text\":{\"type\":\"string\"},\"dry_run\":{\"type\":\"boolean\"}},"
+        "\"required\":[\"text\"]}",
+        handle_gowl_macro_voice_match,
+        "Run the macro a sentence names, as Super+Alt+m does with what "
+        "was said: a configured phrase, a macro's name said as words "
+        "(\"pip corner 25\" runs pip-corner 25), or every word of a name. "
+        "dry_run reports what it would run (heard, normalised, macro, "
+        "args) and runs nothing." },
+      { "gowl_macro_voice_status", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_macro_voice_status,
+        "The voice listener's state: listening, command, time limit, last "
+        "sentence heard, last error. There is no tool to start "
+        "listening: the microphone is the person's to turn on." },
+      { "gowl_screen_text", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},"
+        "\"width\":{\"type\":\"integer\"},\"height\":{\"type\":\"integer\"},"
+        "\"language\":{\"type\":\"string\",\"description\":\"tesseract "
+        "languages, e.g. eng+deu (default: the screenshot module's)\"},"
+        "\"copy\":{\"type\":\"boolean\",\"description\":\"Also put the "
+        "text on the clipboard (default false)\"}},"
+        "\"required\":[\"x\",\"y\",\"width\",\"height\"]}",
+        handle_gowl_screen_text,
+        "Read the text in a region of the screen (OCR via tesseract, the "
+        "screenshot module's ocr-command), in layout coordinates as "
+        "gowl_list_monitors and gowl_list_clients report them. Returns "
+        "the text, \"\" when there is none. The clipboard is left alone "
+        "unless copy is true." },
+      { "gowl_pick_color", TRUE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},"
+        "\"required\":[\"x\",\"y\"]}",
+        handle_gowl_pick_color,
+        "The colour of the screen at layout x, y, as \"#rrggbb\". The "
+        "clipboard is left alone." },
+      { "gowl_clipboard_list", TRUE, "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_clipboard_list,
+        "The clipboard history, newest first: one line per entry, "
+        "ID<TAB>MIME<TAB>BYTES<TAB>PREVIEW. This is everything the person "
+        "copied -- passwords included -- so read it when the task needs "
+        "it, not by habit. The Super+space menu keeps it private for the "
+        "same reason." },
+      { "gowl_clipboard_entry", TRUE,
+        "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},"
+        "\"required\":[\"id\"]}",
+        handle_gowl_clipboard_entry,
+        "The path of one history entry's stored bytes (exactly what was "
+        "copied, in its MIME type)." },
+      { "gowl_clipboard_copy", FALSE,
+        "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},"
+        "\"required\":[\"id\"]}",
+        handle_gowl_clipboard_copy,
+        "Put a history entry back on the clipboard: the next paste in any "
+        "window produces it. Replaces what the person has copied." },
+    };
+    gsize i;
+
+    for (i = 0; i < G_N_ELEMENTS (tools); i++)
+      {
+        tool = mcp_tool_new (tools[i].name, tools[i].description);
+        schema = cmacs_mcp_schema_from_string (tools[i].schema);
+        mcp_tool_set_input_schema (tool, schema);
+        mcp_tool_set_read_only_hint (tool, tools[i].read_only);
+        mcp_server_add_tool (server, tool, tools[i].handler, NULL, NULL);
+        g_object_unref (tool);
+      }
+  }
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GOWL */

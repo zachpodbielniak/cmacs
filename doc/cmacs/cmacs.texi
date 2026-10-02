@@ -2409,7 +2409,10 @@ tesseract puts the region's text on the clipboard, and nothing is saved
 (the image is a private temporary file).  Needs @command{tesseract} and
 a language pack (Fedora: @code{tesseract}, @code{tesseract-langpack-eng}).
 @item Super+Alt+c
-Click a pixel; its colour goes on the clipboard as @samp{#rrggbb}.
+Click a pixel; its colour goes on the clipboard as @samp{#rrggbb}.  From Lisp, naming the place instead:
+@code{(cmacs-gowl-screen-text X Y W H &optional LANGUAGE COPY)} and
+@code{(cmacs-gowl-pixel-color X Y)} in @file{cmacs-gowl-grab.el}, in
+layout coordinates; neither touches the clipboard unless asked.
 @item Super+Alt+r / Super+Alt+Shift+r
 Record a macro (press again to stop) / replay the last recording
 (@pxref{gowl Macros}).
@@ -3166,6 +3169,27 @@ friends.
 and @code{-voice-command}.  The macro
 API, both run modes, every setting and the examples are in
 @file{deps/gowl/docs/macros.org}.
+
+@subsection MCP tools for macros, the screen and the clipboard
+
+cmacs's MCP server has @code{gowl_macro_run}, @code{gowl_macro_list},
+@code{gowl_macro_status}, @code{gowl_macro_stop},
+@code{gowl_macro_record}, @code{gowl_macro_voice_match},
+@code{gowl_macro_voice_status}, @code{gowl_screen_text},
+@code{gowl_pick_color}, @code{gowl_clipboard_list},
+@code{gowl_clipboard_entry} and @code{gowl_clipboard_copy}, each a thin
+call into @file{cmacs-gowl-macro.el} or @file{cmacs-gowl-grab.el}.
+@code{gowl_macro_record start} needs gowl's @code{input-recording}
+consent (the key does not); no tool turns the microphone on;
+@code{gowl_screen_text} and @code{gowl_pick_color} leave the clipboard
+alone unless asked.  For the brigade, the recorder, macro-running and
+clipboard tools are privileged: they work when named, and @samp{*} does
+not include them.
+
+Text gowl puts on the clipboard itself---OCR, a colour, a screenshot,
+your kills---is kept in the clipboard history, and an entry put back
+from the history is served from gowl's event loop, so yanking it does
+not hang Emacs.
 
 @section Client Embedding
 

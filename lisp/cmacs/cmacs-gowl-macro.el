@@ -237,6 +237,13 @@ init file before `cmacs-gowl-mode' is not lost.")
   (cmacs-gowl-macro-ensure)
   (cmacs-gowl-macro--reply (gowl-run-command line)))
 
+(defun cmacs-gowl-macro-command (line)
+  "Run the macro module's command LINE, loading the module first.
+Returns the reply without its \"OK \"; an \"ERROR\" reply is a
+`user-error'.  The general form the MCP tools and other callers use:
+\"macro-list\", \"macro-status\", \"macro-voice status\", ..."
+  (cmacs-gowl-macro--command line))
+
 (defun cmacs-gowl-macro--json (line)
   "Run LINE and parse its JSON reply into alists."
   (json-parse-string (cmacs-gowl-macro--command line)
@@ -696,6 +703,24 @@ reply."
       (message "gowl macro: %s" reply))
     reply))
 
+(defun cmacs-gowl-macro-record-command (action &optional name for-agent)
+  "Drive the recorder: ACTION is `start', `stop', `cancel' or `status'.
+NAME, with `start', also writes NAME.c.  FOR-AGENT non-nil is what a
+program asking passes (the MCP tool): `start' then needs gowl's
+`input-recording' consent, which the record key does not.  Returns the
+module's reply."
+  (let ((verb (format "%s" action)))
+    (unless (member verb '("start" "stop" "cancel" "status"))
+      (user-error "Action must be start, stop, cancel or status, not %s"
+                  verb))
+    (cmacs-gowl-macro--command
+     (concat "macro-record "
+             (if for-agent "--require-consent " "")
+             verb
+             (if (and name (equal verb "start") (not (string-empty-p name)))
+                 (concat " " (cmacs-gowl-macro--quote name))
+               "")))))
+
 (defun cmacs-gowl-macro-record-status ()
   "t while a macro is being recorded, else nil."
   (and (cmacs-gowl-macro--running-p)
@@ -749,15 +774,23 @@ argument)."
           (setq pcm (cmacs-audio-read-pcm handle cmacs-audio-default-rate)))))))
 
 ;;;###autoload
-(defun cmacs-gowl-macro-voice-text (text)
+(defun cmacs-gowl-macro-voice-text (text &optional dry-run)
   "Run the macro TEXT names, as if it had been said.
 Matching is the module's: a configured phrase, then a macro's name said
 as words (\"pip corner 25\" is `pip-corner 25'), then a name whose words
-all appear.  Returns the module's reply."
+all appear.  With DRY-RUN, run nothing and return the module's JSON:
+what was heard, the normalised form, and the macro and arguments it
+would run.  Returns the module's reply."
   (interactive "sSay: ")
   (cmacs-gowl-macro--command
    (concat "macro-voice-match "
+           (if dry-run "--dry-run " "")
            (string-trim (replace-regexp-in-string "[ \r\n\t]+" " " text)))))
+
+(defun cmacs-gowl-macro-voice-status ()
+  "The module's voice listener, as an alist: listening, command,
+max-seconds, last-heard, last-error, phrases."
+  (cmacs-gowl-macro--json "macro-voice status"))
 
 (defun cmacs-gowl-macro--voice-heard (result)
   "Whisper's RESULT alist is in: run the macro it names."

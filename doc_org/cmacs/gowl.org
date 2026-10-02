@@ -1132,7 +1132,7 @@ gdbus call --session --dest org.cmacs.Editor1 --object-path /org/cmacs/Editor1 \
   --method org.cmacs.Editor1.Compositor.RunMacro sort-windows '["reverse"]'
 #+end_src
 
-The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With =cmacs-gowl-macro-dbus= the module also owns gowl's =org.gowl.Macro1=.  gowl's MCP server has =macro_run=, =macro_list=, =macro_status=, =macro_info=, =macro_stop= and =macro_clear=.
+The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With =cmacs-gowl-macro-dbus= the module also owns gowl's =org.gowl.Macro1=.  cmacs's MCP server has the macro tools listed in [[#gowl-mcp-tools][MCP tools for macros, the screen and the clipboard]]; standalone gowl's has the same set without the =gowl_= prefix.
 
 *** Commands and options
 :PROPERTIES:
@@ -4374,6 +4374,48 @@ The *Clipboard* entry lists what the clipboard module has kept, newest first ---
 *** Text and colours from the screen
 
 =Super+Alt+Shift+s= is Super+Shift+s's rubber band read instead of photographed: drag over some text and tesseract puts it on the clipboard (a toast says how much), and nothing is saved to the screenshots folder --- the image is a private temporary file, deleted afterwards.  =Super+Alt+c= frames the screen and puts the colour of the pixel you click on the clipboard as =#rrggbb=.  Both are the screenshot module's, which cmacs loads by default; Escape or a right-click cancels.  OCR needs =tesseract= and a language pack installed (Fedora: =tesseract= and =tesseract-langpack-eng=); the language is gowl's =ocr-language= setting.
+
+*** From Lisp and from agents
+:PROPERTIES:
+:CUSTOM_ID: gowl-grab-lisp
+:END:
+
+The keys are interactive; =lisp/cmacs/cmacs-gowl-grab.el= is the half where you name the place:
+
+#+begin_src elisp
+(cmacs-gowl-screen-text 200 150 400 80)        ; => "Text in that box"
+(cmacs-gowl-screen-text 200 150 400 80 "deu" t) ; German, and onto the clipboard
+(cmacs-gowl-pixel-color 230 170)               ; => "#336699"
+(cmacs-gowl-command "clipboard-list")          ; any gowl IPC word, OK stripped
+#+end_src
+
+Coordinates are layout coordinates (=gowl-list-monitors=, a client's geometry).  Neither touches the clipboard unless asked.  OCR runs the screenshot module's own =ocr-command= and =ocr-language=, asked for with =screenshot-ocr-config=, on a 0600 PNG in =$XDG_RUNTIME_DIR= that is deleted afterwards; tesseract runs synchronously on Emacs's thread (=cmacs-gowl-grab-ocr-timeout=, 60 s), which pauses Emacs and not the compositor.
+
+** MCP tools for macros, the screen and the clipboard
+:PROPERTIES:
+:CUSTOM_ID: gowl-mcp-tools
+:END:
+
+On cmacs's MCP server, each a thin call into the Elisp above or in =cmacs-gowl-macro.el=, returning the text itself (JSON from the module, OCR text, a colour):
+
+| Tool                       | Arguments                                   | Does                                                       |
+|----------------------------+---------------------------------------------+------------------------------------------------------------|
+| =gowl_macro_run=           | =name=, =args= (array)                      | Run a macro (C or Elisp) by name                           |
+| =gowl_macro_list=          | --                                          | Every runnable macro, as JSON                              |
+| =gowl_macro_status=        | --                                          | Running and held-back macros, faults, triggers             |
+| =gowl_macro_stop=          | =which= (optional)                          | Stop running macros                                        |
+| =gowl_macro_record=        | =action= (start, stop, cancel, status), =name= | The recorder; =start= needs =input-recording= consent    |
+| =gowl_macro_voice_match=   | =text=, =dry_run=                           | Run (or name) the macro a sentence names                   |
+| =gowl_macro_voice_status=  | --                                          | The listener's state; nothing turns the microphone on      |
+| =gowl_screen_text=         | =x=, =y=, =width=, =height=, =language=, =copy= | OCR a region; the clipboard is left alone unless =copy=  |
+| =gowl_pick_color=          | =x=, =y=                                    | One pixel as =#rrggbb=                                     |
+| =gowl_clipboard_list=      | --                                          | The history, newest first                                  |
+| =gowl_clipboard_entry=     | =id=                                        | The path of one entry's stored bytes                       |
+| =gowl_clipboard_copy=      | =id=                                        | Put an entry back on the clipboard                         |
+
+Three rules shape them.  *Recording needs consent from here*: Super+Alt+r needs none because you pressed it, but =gowl_macro_record start= passes =--require-consent= and is refused until =input-recording: true=.  *Nothing turns the microphone on*: =gowl_macro_voice_match= takes the sentence instead.  *Reading the screen leaves the clipboard alone*.  For the brigade, =gowl_macro_record=, =gowl_macro_run=, =gowl_macro_voice_match= and the three clipboard tools are /privileged/ --- named in an allowlist they work, =*= does not sweep them in --- because they watch your input, run code in the compositor, or read everything you copied.
+
+What gowl puts on the clipboard itself --- OCR text, a picked colour, a screenshot, your kills --- is in the history.  A history entry put back on the clipboard is served from gowl's event loop, not Emacs's thread, so yanking it afterwards no longer hangs Emacs (it could, before: Emacs reads the clipboard with a blocking read, and the writer was waiting for Emacs).
 
 ** Available Modules
 

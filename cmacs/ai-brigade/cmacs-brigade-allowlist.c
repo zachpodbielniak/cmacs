@@ -71,6 +71,16 @@ static const gchar *const cmacs_brigade__privileged[] = {
   "gowl_start_recording",
   "gowl_drain_recording",
   "gowl_stop_recording",
+  /* The macro recorder watches the same input; a macro runs arbitrary
+   * code in the compositor (it can type, like send_keys), and so does
+   * the macro a sentence names; the clipboard history is everything the
+   * person copied, passwords included. */
+  "gowl_macro_record",
+  "gowl_macro_run",
+  "gowl_macro_voice_match",
+  "gowl_clipboard_list",
+  "gowl_clipboard_entry",
+  "gowl_clipboard_copy",
   /* JavaScript in the user's logged-in browser sessions. */
   "gsurf_eval_js",
   NULL
