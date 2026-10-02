@@ -729,6 +729,7 @@ holds focus.
 | =Super+Shift+q=         | Quit the compositor                     |
 | =Super+Shift+r=         | Reload config                           |
 | =Super+/=               | Show the keybind cheatsheet             |
+| =Super+?=               | Every keybinding, in the menu, saying what each runs ([[#gowl-menu-keybinds][Keybindings]]) |
 | =Super+Alt+Shift+s=     | Drag a region; its text goes on the clipboard (OCR, tesseract) |
 | =Super+Alt+c=           | Click a pixel; its =#rrggbb= goes on the clipboard |
 | =Super+Alt+r=           | Record a macro; again to stop ([[#gowl-macros-record][Recording]]) |
@@ -4299,6 +4300,7 @@ standalone gowl opts in with =modules.menu.enabled=.
 | =Super+Shift+space= | The same, with every program on =$PATH= too     |
 | =Super+Alt+space=   | The same, opened at Applications                |
 | =Super+Alt+v=       | The same, opened at the clipboard history       |
+| =Super+?=           | The same, opened at Keybindings                 |
 | =Super+Escape=      | The same tree, as a =completing-read=           |
 
 *Super+Shift+space* opens the same card with a *Programs on $PATH* row and every executable on =$PATH= in its search, beside the applications --- so typing =htop= or =pavucontrol= runs it even without a desktop entry.  Plain =Super+space= leaves them out: thousands of command-line tools would bury the applications in every search.  A program runs by its full path, the first directory on =$PATH= that has it, exactly as a shell would pick; the list is cached for five seconds.  It is gowl's =menu-path= command (=gowl-run-command "menu-path"=), and the row's guard asks the module whether this opening is a =$PATH= one; pressing the key again closes the card, and pressing it over an open plain menu adds =$PATH= to it.
@@ -4363,6 +4365,19 @@ you only ever run CMacs.
 =cmacs-gowl-menu-tree= is still a defcustom and still the tree that runs
 when gowl is not --- a =--lrg= session, or a plain GUI Emacs. Set
 =cmacs-gowl-menu-prefer-compositor= to nil to use it even under gowl.
+
+*** Keybindings: what every key runs, right now
+:PROPERTIES:
+:CUSTOM_ID: gowl-menu-keybinds
+:END:
+
+=Super+?= (=Super+Shift+slash=) opens the menu at *Keybindings*, also reached by typing =keys= or =shortcuts=.  Nothing in it is written down: the rows are read out of the running compositor each time it opens, so a bind you added with =gowl-add-keybind= a moment ago, or one a reload changed, is what you see.  Each row is the bind's description (or one made from what it runs), the key on the right, and a second line saying what runs:
+
+- *a macro* --- =Run macro sort-windows=, with where the macro lives: a C file and its path, an Elisp macro (=cmacs-gowl-macro-define=), one registered from C, not found, or held back after a fault;
+- *custom code* --- every =custom= bind is an Elisp form under cmacs, and says so with the form: =Custom code (Elisp): (cmacs-gowl-macro-record)=;
+- a program, a module command, a key mode --- and whether it works while locked, fires on release, or lives in a key mode (the =resize= mode's =h= is listed as =h (resize)=).
+
+Above the list are its views: *Keys that run macros or custom code*, *Mouse buttons*, *Touchpad gestures*, and *Remapped device inputs that run something* (a pedal's =KEY_A= mapped to a macro).  The macro module's own stop key is listed too.  Choosing a row runs what the key runs.  =Super+/= is still the cheatsheet in a buffer; this is the same information in the menu, with the callouts.
 
 *** The clipboard history is private
 :PROPERTIES:

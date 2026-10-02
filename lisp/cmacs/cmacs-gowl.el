@@ -1130,6 +1130,7 @@ standalone gowl ships with (see
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
   Super+/             show the keybind cheatsheet
+  Super+?             every keybinding, in the menu (what each runs)
   Super+Escape        control surface (power, audio, network, ...)
   Super+space         the same menu, drawn on screen by the compositor
   Super+Shift+space   that menu, with every program on $PATH too
@@ -1672,6 +1673,11 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+l" 'lock nil "Lock the session")
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
+        ;; Super+? -- the menu's Keybindings: every key bound right now,
+        ;; read out of the running compositor, saying what each runs
+        ;; (macros and Elisp called out).  Super+/ is the same in a buffer.
+        (bind "Super+Shift+slash" 'ipc-command "menu-open keybinds"
+              "Menu: every keybinding")
         (bind "Super+slash" 'custom "(cmacs-gowl-describe-keybinds)"
               "Show this cheatsheet")
         (bind "Super+Escape" 'custom "(cmacs-gowl-menu)"

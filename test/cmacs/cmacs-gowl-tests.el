@@ -929,8 +929,14 @@ module is opt-in, so the key itself is the first use."
         (require 'cmacs-gowl-macro)
         (should (commandp (cdr k)))))
     ;; each of the six exactly once
+    ;; Super+? is the menu's live Keybindings; Super+/ stays the
+    ;; buffer cheatsheet
+    (should (member '("Super+Shift+slash" ipc-command "menu-open keybinds")
+                    captured))
+    (should (assoc "Super+slash" captured))
     (dolist (key '("Super+Alt+Shift+s" "Super+Alt+c" "Super+Alt+r"
-                   "Super+Alt+Shift+r" "Super+Alt+m" "Super+Alt+v"))
+                   "Super+Alt+Shift+r" "Super+Alt+m" "Super+Alt+v"
+                   "Super+Shift+slash"))
       (should (= 1 (cl-count key captured :key #'car :test #'equal))))))
 
 (ert-deftest cmacs-gowl-test-every-backdrop-is-pushed-to-the-compositor ()

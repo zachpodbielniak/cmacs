@@ -869,6 +869,34 @@ cache is never written, and no GOWL_MACRO_DIR from the environment."
                          (gowl-menu-items "clipboard"))
          (error "No Clipboard entry in the menu: %S"
                 (gowl-menu-items "clipboard"))))
+     ;; Super+?: the menu's Keybindings is the live config, saying what
+     ;; each key runs -- an Elisp form is custom code (Elisp), a key that
+     ;; runs an Elisp macro says so, and a key added now is listed now
+     (when (fboundp 'gowl-menu-items)
+       (gowl-add-keybind "Super+F9" 'custom "(ignore 'from-the-test)"
+                         "A test's Elisp key")
+       (gowl-add-keybind "Super+F10" 'ipc-command "macro-run say-hi")
+       (let* ((rows (gowl-menu-items "keybinds"))
+              (elisp (seq-find (lambda (r)
+                                 (equal (plist-get r :value) "Super+F9"))
+                               rows))
+              (macro (seq-find (lambda (r)
+                                 (equal (plist-get r :value) "Super+F10"))
+                               rows)))
+         (unless (and elisp
+                      (equal (plist-get elisp :label) "A test's Elisp key")
+                      (string-match-p "Custom code (Elisp)"
+                                      (plist-get elisp :detail)))
+           (error "Keybindings, the Elisp key: %S" elisp))
+         (unless (and macro
+                      (equal (plist-get macro :label) "Run macro say-hi")
+                      (string-match-p "Macro say-hi .* Elisp"
+                                      (plist-get macro :detail)))
+           (error "Keybindings, the macro key: %S" macro))
+         (unless (seq-find (lambda (r)
+                             (equal (plist-get r :value) "Super+F10"))
+                           (gowl-menu-items "keybinds.code"))
+           (error "The macro key is not in the code view"))))
      (cmacs-gowl-macro-disable)
      (when (gowl-run-command "macro-status")
        (error "Still answering after disable"))

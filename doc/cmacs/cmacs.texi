@@ -2396,6 +2396,14 @@ Vsplit off: restore the normal left/right split.
 The menu; @kbd{Super+Shift+space} opens it with every program on
 @env{PATH} listed and searched beside the applications
 (@code{menu-path}).  @kbd{Super+f} toggles fullscreen.
+@item Super+?
+The menu, opened at @samp{Keybindings}: every key bound right now, read
+out of the running compositor when it opens, each row saying what it
+runs---a macro (and whether it is a C file, an Elisp macro or
+registered from C), custom code (the Elisp form), a program, a module
+command, a key mode---plus views of only the macros and custom code,
+the mouse buttons, the touchpad gestures and remapped device inputs.
+@kbd{Super+/} is still the cheatsheet in a buffer.
 @item Super+Alt+v
 The menu, opened at the clipboard history.  The @samp{Clipboard} entry
 is @code{private: true} in @file{menu.yaml}: its entries are listed
