@@ -625,7 +625,7 @@ rebindings.
 | Control                         | Tap                          | Hold                                  |
 |---------------------------------+------------------------------+---------------------------------------|
 | right trigger                   | =mouse-1= at the laser       | drag to select                        |
-| grip (either hand)              | carry the panel / keyboard / world under the laser |                 |
+| grip (either hand)              | laser-carry the panel / keyboard under the laser, or pull the world |  |
 | right stick                     | scroll (Y), h-scroll (X) on a panel; off one, flick: workspaces (←/→), overview (↑/↓) | |
 | right stick press               | =mouse-3= on a panel; overview off one |                             |
 | left stick                      | walk (Y), snap-turn 30° (X)  |                                       |
@@ -637,14 +637,35 @@ rebindings.
 | menu =<vr-menu>=                | quick menu                   | recenter                              |
 | view =<vr-view>=                | workspace overview           | controller help                       |
 | right bumper =<vr-bumper>=      | switch buffer                |                                       |
-| D-pad =<vr-dpad-left>= ...      | ←/→ workspaces, ↑ overview, ↓ back |                                 |
+| D-pad                           | arrow keys, repeating        |                                       |
 | left stick press =<vr-left-stick>= | reset the view            | controller help                       |
 
 With a layer: Shift (left trigger) A new / B close / X switch workspace, Y
-switch buffer, D-pad ↑/↓ page up/down; Meta (left bumper) A find file, B
-kill buffer, X recent files, Y save, D-pad or flick ←/→ previous/next
-buffer; Control (both) A split right, B close window, X only window, Y
-split below, menu cycle arrangement, D-pad or flick ←/→ other window.
+switch buffer; Meta (left bumper) A find file, B kill buffer, X recent
+files, Y save, flick ←/→ previous/next buffer; Control (both) A split
+right, B close window, X only window, Y split below, menu cycle
+arrangement, flick ←/→ other window.  The D-pad's arrows take the layer
+too: =S-<left>= selects.
+
+*The D-pad is arrow keys* (~cmacs-lrg-vr-dpad-arrows~): the keysym at once
+with the layer's modifiers, repeating after 0.4 s every 70 ms, so it moves
+point, scrolls completion lists and popup menus.  nil gives
+=<vr-dpad-up>= and friends with tap and hold instead.
+
+*Carrying* is a laser carry (~grab_begin~ / ~grab_update~): the grabbed
+point stays on the laser at its grab distance and the object keeps its
+offset from it in its own right / up axes and its yaw relative to facing
+the hand, so pointing moves it in any direction and nothing jumps when
+the grip closes.  The gripping hand's stick pushes / pulls (0.25--30 m)
+and turns it at 90°/s; with its trigger held, Y resizes it (and the
+trigger does not click while carrying).  Before, the object rode the
+controller's heading at a fixed height: it only swung left and right.
+
+*Input focus.*  The Steam button opens SteamVR's dashboard, which takes
+the controllers: the session drops to VISIBLE and OpenXR delivers no
+input.  ~cmacs-lrg-vr-ui--watch-focus~ polls the state each second and
+says so in the echo area, and again when focus returns -- otherwise it
+looks like Emacs ignoring the controllers.
 
 *The Steam Frame* is a split gamepad: the right controller has A, B, X, Y
 and Menu, the left a D-pad and View, and each a bumper.  SteamVR offers it

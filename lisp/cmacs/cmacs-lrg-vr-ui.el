@@ -456,14 +456,24 @@ Read from `cmacs-lrg-vr-mode-map', so it shows your own bindings too."
                        cmacs-lrg-vr-both-modifier))
         (princ "layer applies to every button, click, scroll and key.  (On a\n")
         (princ "controller with no bumper the left grip is the second layer.)\n"))
-      (princ (format "\nTap = press and let go;  hold = %.2gs or longer.\n\n"
+      (princ (format "\nTap = press and let go;  hold = %.2gs or longer.\n"
                      cmacs-lrg-vr-hold-seconds))
+      (when cmacs-lrg-vr-dpad-arrows
+        (princ "D-pad = arrow keys, repeating while held (S-, M-, C- with a layer).\n"))
+      (princ "Grip carries what the laser is on: point to move it (up and down\n")
+      (princ "too); its stick pushes / pulls (up/down) and turns (left/right);\n")
+      (princ "with its trigger held, up/down resizes.\n\n")
       (pcase-dolist (`(,mods . ,lname) layers)
         (princ (if (string-empty-p lname) "--- No layer ---\n"
                  (format "--- %s layer (%s held) ---\n"
                          (car mods) lname)))
         (let ((any nil))
-          (pcase-dolist (`(,button . ,label) cmacs-lrg-vr--help-buttons)
+          (pcase-dolist (`(,button . ,label)
+                         (if cmacs-lrg-vr-dpad-arrows
+                             (cl-remove-if (lambda (b) (string-prefix-p "vr-dpad"
+                                                                        (symbol-name (car b))))
+                                           cmacs-lrg-vr--help-buttons)
+                           cmacs-lrg-vr--help-buttons))
             (let ((tap (cmacs-lrg-vr--help-binding (cmacs-lrg-vr--event button mods)))
                   (hold (and (not (string-prefix-p "vr-flick" (symbol-name button)))
                              (cmacs-lrg-vr--help-binding
@@ -481,8 +491,35 @@ Read from `cmacs-lrg-vr-mode-map', so it shows your own bindings too."
 
 ;;;; Session
 
+(defvar cmacs-lrg-vr-ui--focus-timer nil)
+(defvar cmacs-lrg-vr-ui--last-state nil)
+
+(defun cmacs-lrg-vr-ui--watch-focus ()
+  "Say so when the runtime takes the controllers away, and when they are back.
+SteamVR's dashboard (the Steam / system button) takes input focus: the
+session drops to `visible' and no controller input reaches Emacs until
+it is closed.  Without a word that looks like Emacs ignoring you."
+  (let ((st (and (cmacs-lrg-vr-active-now-p)
+                 (plist-get (cmacs-lrg-vr-status) :state))))
+    (cond
+     ((null st)
+      (when (timerp cmacs-lrg-vr-ui--focus-timer)
+        (cancel-timer cmacs-lrg-vr-ui--focus-timer))
+      (setq cmacs-lrg-vr-ui--focus-timer nil))
+     ((equal st cmacs-lrg-vr-ui--last-state))
+     ((and (equal st "visible") (equal cmacs-lrg-vr-ui--last-state "focused"))
+      (message "%s" (propertize
+                     "SteamVR has the controllers (its dashboard is open) -- press the Steam button to come back"
+                     'face 'warning)))
+     ((and (equal st "focused") (equal cmacs-lrg-vr-ui--last-state "visible"))
+      (message "Controllers back")))
+    (setq cmacs-lrg-vr-ui--last-state st)))
+
 (defun cmacs-lrg-vr-ui--session-start ()
   "Set up the VR interface once a headset session is up."
+  (unless (timerp cmacs-lrg-vr-ui--focus-timer)
+    (setq cmacs-lrg-vr-ui--focus-timer
+          (run-with-timer 1 1 #'cmacs-lrg-vr-ui--watch-focus)))
   (when (and cmacs-lrg-vr-carousel
              (require 'cmacs-lrg-3d-workspaces nil t)
              (not (bound-and-true-p cmacs-lrg-3d-workspaces-mode)))

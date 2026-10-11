@@ -170,6 +170,14 @@ See `cmacs-lrg-vr-modifier-source'."
   :type 'number
   :set (cmacs-lrg-vr--set 'hold-seconds))
 
+(defcustom cmacs-lrg-vr-dpad-arrows t
+  "Non-nil: the D-pad sends arrow keys, repeating while held.
+They move point, scroll completion lists and popup menus, and with a
+layer held are S-<up>, M-<left> and so on.  nil sends <vr-dpad-up> and
+friends instead, with tap and hold, to bind as you like."
+  :type 'boolean
+  :set (cmacs-lrg-vr--set 'dpad-arrows))
+
 (defcustom cmacs-lrg-vr-escape-key nil
   "What <vr-b> sends.
 nil means <escape> when `evil-mode' is on and \\[keyboard-quit] otherwise;
@@ -507,7 +515,8 @@ FUNCTION and an input event bound to `cmacs-lrg-vr--run-deferred'."
     (cmacs-lrg-vr-set-option 'mod-bumper cmacs-lrg-vr-bumper-modifier)
     (cmacs-lrg-vr-set-option 'mod-second-source cmacs-lrg-vr-modifier-source)
     (cmacs-lrg-vr-set-option 'mod-both cmacs-lrg-vr-both-modifier)
-    (cmacs-lrg-vr-set-option 'hold-seconds cmacs-lrg-vr-hold-seconds))
+    (cmacs-lrg-vr-set-option 'hold-seconds cmacs-lrg-vr-hold-seconds)
+    (cmacs-lrg-vr-set-option 'dpad-arrows cmacs-lrg-vr-dpad-arrows))
   (when (and cmacs-lrg-vr-scale (cmacs-lrg-vr-active-now-p))
     (cmacs-lrg-vr-set-scale cmacs-lrg-vr-scale)))
 

@@ -214,9 +214,11 @@ struct vr_hand
   /* Grip: carrying a panel (grab_key), the keyboard, or the world. */
   enum { GRAB_NONE, GRAB_PANEL, GRAB_KEYBOARD, GRAB_WORLD } grab;
   guint64 grab_key;
-  float grab_local[3];           /* object centre in the controller-yaw frame */
-  float grab_yaw_off;            /* object yaw - controller yaw, degrees */
+  float grab_local[3];           /* unused since the laser carry */
+  float grab_yaw_off;            /* object yaw - yaw facing the hand, degrees */
   float grab_w, grab_h;
+  float grab_dist;               /* along the laser to the grabbed point */
+  float grab_off_r, grab_off_u;  /* object centre from that point: right, up */
   float grab_track[3];           /* GRAB_WORLD: controller position, metres */
 
   float scroll_acc, hscroll_acc;
@@ -224,6 +226,7 @@ struct vr_hand
 
   /* Tap / hold (enum vr_button).  */
   gint64 btn_down_us[VB_COUNT];  /* 0: not down */
+  gint64 btn_next_us[VB_COUNT];  /* D-pad as arrows: next auto-repeat */
   bool btn_held[VB_COUNT];       /* the hold event was sent */
   bool btn_consumed[VB_COUNT];   /* handled at press (mouse-3): no tap */
   int btn_mods[VB_COUNT];        /* layer modifiers when it went down */
@@ -288,11 +291,12 @@ static struct
   gint64 second_checked_us;
   int layer;                     /* modifiers in effect this frame */
   gint64 hold_us;                /* tap / hold threshold */
+  bool dpad_arrows;              /* the D-pad sends arrow keys, repeating */
 } vr = {
   .frame_fd = -1, .pointer_hand = LRG_VR_HAND_RIGHT,
   .snap_degrees = 30.0f, .move_speed = 1.5f, .scroll_rate = 10.0f,
   .haptics = true, .move_hand = LRG_VR_HAND_LEFT, .kb_tilt = 50.0f,
-  .modifier_hand = true, .hold_us = 350000,
+  .modifier_hand = true, .hold_us = 350000, .dpad_arrows = true,
   .mod_trigger = shift_modifier, .mod_grip = meta_modifier,
   .mod_both = ctrl_modifier,
 };
@@ -907,12 +911,24 @@ released_now (const struct vr_hand *hand, guint bit)
   return !(hand->buttons & bit) && (hand->prev & bit);
 }
 
+/* The yaw, in degrees, of a panel at (CX, CZ) that faces the point
+   (PX, PZ): a panel faces +Z at yaw 0.  */
+static float
+yaw_facing (float cx, float cz, float px, float pz)
+{
+  return atan2f (px - cx, pz - cz) * (float) (180.0 / G_PI);
+}
+
+/* The grip carries what is under the laser -- the in-world keyboard or a
+   panel -- or, on empty space, the world.  Carrying is a laser carry: the
+   grabbed point stays on the laser, at its grab distance, so pointing
+   anywhere -- up and down too -- moves the object, which keeps facing the
+   hand.  While carrying, the gripping hand's stick pushes and pulls (Y)
+   and turns the object (X); with its trigger held, Y resizes instead.  */
 static void
 grab_begin (struct vr_hand *hand, int which)
 {
-  float cx, cy, cz, yaw, w, h, cyaw, lx, lz;
-
-  cyaw = heading_deg (hand->dir[0], hand->dir[2]);
+  float cx, cy, cz, yaw, w, h, hx, hy, hz, rx, rz, t;
 
   if (hand->kb_row >= 0)
     {
@@ -940,14 +956,20 @@ grab_begin (struct vr_hand *hand, int which)
       return;
     }
 
-  /* The object rides on the controller: remember its centre in the frame
-     that turns with the controller's heading (pitch/roll are ignored, so
-     panels stay upright). */
-  rot_y_deg (-cyaw, cx - hand->origin[0], cz - hand->origin[2], &lx, &lz);
-  hand->grab_local[0] = lx;
-  hand->grab_local[1] = cy - hand->origin[1];
-  hand->grab_local[2] = lz;
-  hand->grab_yaw_off = yaw - cyaw;
+  /* The grabbed point, and the object's centre relative to it along the
+     object's own right and up axes.  */
+  hand->grab_dist = hand->hit_dist;
+  hx = hand->origin[0] + hand->dir[0] * hand->grab_dist;
+  hy = hand->origin[1] + hand->dir[1] * hand->grab_dist;
+  hz = hand->origin[2] + hand->dir[2] * hand->grab_dist;
+  t = yaw * (float) (G_PI / 180.0);
+  rx = cosf (t);
+  rz = -sinf (t);
+  hand->grab_off_r = (cx - hx) * rx + (cz - hz) * rz;
+  hand->grab_off_u = cy - hy;
+  /* Measured from the grabbed point, as grab_update does: the point is on
+     the object's plane, so the object does not move as the grip closes.  */
+  hand->grab_yaw_off = yaw - yaw_facing (hx, hz, hand->origin[0], hand->origin[2]);
   hand->grab_w = w;
   hand->grab_h = h;
   vr_pulse (which, 0.03f, 0.5f);
@@ -956,11 +978,12 @@ grab_begin (struct vr_hand *hand, int which)
 static void
 grab_update (struct vr_hand *hand, int which)
 {
-  float cyaw, wx, wz, nx, ny, nz, sy, sx, push, grow, mpu;
+  float sx, sy, mpu, hx, hy, hz, yaw, t, nx, ny, nz;
+  bool resize;
 
   if (hand->grab == GRAB_WORLD)
     {
-      float pose[16], head[16], dx, dy, dz, hy, fwd, right;
+      float pose[16], head[16], dx, dy, dz, hyaw, fwd, right;
       LrgVRService *svc = vr_service ();
 
       lrg_vr_service_get_controller_pose (svc, (LrgVRHand) which, pose);
@@ -969,9 +992,9 @@ grab_update (struct vr_hand *hand, int which)
       dy = pose[13] - hand->grab_track[1];
       dz = pose[14] - hand->grab_track[2];
       /* Pulling the hand toward you pulls the world toward you. */
-      hy = heading_deg (-head[8], -head[10]) * (float) (G_PI / 180.0);
-      fwd = dx * -sinf (hy) + dz * -cosf (hy);
-      right = dx * cosf (hy) + dz * -sinf (hy);
+      hyaw = heading_deg (-head[8], -head[10]) * (float) (G_PI / 180.0);
+      fwd = dx * -sinf (hyaw) + dz * -cosf (hyaw);
+      right = dx * cosf (hyaw) + dz * -sinf (hyaw);
       lrg_3d_surface_vr_move (vr.s3, -fwd, -right, -dy);
       hand->grab_track[0] = pose[12];
       hand->grab_track[1] = pose[13];
@@ -979,50 +1002,56 @@ grab_update (struct vr_hand *hand, int which)
       return;
     }
 
-  /* While carrying: stick Y pushes/pulls, stick X resizes. */
   mpu = lrg_3d_surface_get_vr_scale (vr.s3);
   sy = lrg_vr_service_get_controller_axis (vr_service (), (LrgVRHand) which,
                                            LRG_VR_AXIS_THUMBSTICK_Y);
   sx = lrg_vr_service_get_controller_axis (vr_service (), (LrgVRHand) which,
                                            LRG_VR_AXIS_THUMBSTICK_X);
+  resize = (hand->buttons & LRG_VR_CONTROLLER_BUTTON_TRIGGER) != 0;
+
   if (fabsf (sy) > VR_DEADZONE)
     {
-      float len = sqrtf (hand->grab_local[0] * hand->grab_local[0]
-                         + hand->grab_local[2] * hand->grab_local[2]);
-      push = 1.0f + sy * vr.dt * 1.2f;
-      if (len * push * mpu > 0.15f || push > 1.0f)
+      if (resize)
         {
-          hand->grab_local[0] *= push;
-          hand->grab_local[2] *= push;
+          float grow = 1.0f + sy * vr.dt * 0.8f;
+          if ((hand->grab_h * grow * mpu > 0.1f || grow > 1.0f)
+              && (hand->grab_h * grow * mpu < 8.0f || grow < 1.0f))
+            {
+              hand->grab_w *= grow;
+              hand->grab_h *= grow;
+              hand->grab_off_r *= grow;
+              hand->grab_off_u *= grow;
+            }
+        }
+      else
+        {
+          /* Push / pull, faster the farther it is; never into your hand
+             (0.25 m) or past 30 m.  */
+          float d = hand->grab_dist * (1.0f + sy * vr.dt * 1.5f);
+          hand->grab_dist = CLAMP (d, 0.25f / mpu, 30.0f / mpu);
         }
     }
-  if (fabsf (sx) > VR_DEADZONE)
-    {
-      grow = 1.0f + sx * vr.dt * 0.8f;
-      if ((hand->grab_w * grow * mpu > 0.1f || grow > 1.0f)
-          && (hand->grab_w * grow * mpu < 12.0f || grow < 1.0f))
-        {
-          hand->grab_w *= grow;
-          hand->grab_h *= grow;
-        }
-    }
+  if (fabsf (sx) > VR_DEADZONE && !resize)
+    hand->grab_yaw_off -= sx * vr.dt * 90.0f;    /* 90 degrees a second */
 
-  cyaw = heading_deg (hand->dir[0], hand->dir[2]);
-  rot_y_deg (cyaw, hand->grab_local[0], hand->grab_local[2], &wx, &wz);
-  nx = hand->origin[0] + wx;
-  ny = hand->origin[1] + hand->grab_local[1];
-  nz = hand->origin[2] + wz;
+  hx = hand->origin[0] + hand->dir[0] * hand->grab_dist;
+  hy = hand->origin[1] + hand->dir[1] * hand->grab_dist;
+  hz = hand->origin[2] + hand->dir[2] * hand->grab_dist;
+  yaw = yaw_facing (hx, hz, hand->origin[0], hand->origin[2]) + hand->grab_yaw_off;
+  t = yaw * (float) (G_PI / 180.0);
+  nx = hx + cosf (t) * hand->grab_off_r;
+  ny = hy + hand->grab_off_u;
+  nz = hz - sinf (t) * hand->grab_off_r;
 
   if (hand->grab == GRAB_KEYBOARD)
     {
       vr.kb_center[0] = nx; vr.kb_center[1] = ny; vr.kb_center[2] = nz;
-      vr.kb_yaw = cyaw + hand->grab_yaw_off;
+      vr.kb_yaw = yaw;
       vr.kb_w = hand->grab_w;
       vr.kb_h = hand->grab_h;
     }
   else
-    lrg_3d_surface_set_panel_transform (vr.s3, hand->grab_key, nx, ny, nz,
-                                        cyaw + hand->grab_yaw_off,
+    lrg_3d_surface_set_panel_transform (vr.s3, hand->grab_key, nx, ny, nz, yaw,
                                         hand->grab_w, hand->grab_h);
 }
 
@@ -1119,6 +1148,42 @@ vr_button (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
   return count;
 }
 
+/* The D-pad as arrow keys (`dpad-arrows'): the key at once, with the
+   layer's modifiers -- S-<left> extends the region -- then repeating while
+   held, like a keyboard's.  Arrows work everywhere: buffers, the
+   minibuffer, completion lists, popup menus.  */
+#define VR_ARROW_DELAY_US  400000
+#define VR_ARROW_REPEAT_US 70000
+
+static int
+vr_arrow (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
+{
+  static const int sym[] = { 0xff52, 0xff54, 0xff51, 0xff53 };   /* XK_Up ... */
+  struct vr_hand *hand = &vr.hand[h];
+  gint64 now = g_get_monotonic_time ();
+  int key = sym[b - VB_DPAD_UP];
+
+  if (pressed_now (hand, bit))
+    {
+      hand->btn_down_us[b] = now;
+      hand->btn_next_us[b] = now + VR_ARROW_DELAY_US;
+      vr_pulse (h, 0.008f, 0.25f);
+      return vr_emit_keysym (hold_quit, key, vr.layer);
+    }
+  if (released_now (hand, bit))
+    {
+      hand->btn_down_us[b] = 0;
+      return 0;
+    }
+  if ((hand->buttons & bit) && hand->btn_down_us[b] != 0
+      && now >= hand->btn_next_us[b])
+    {
+      hand->btn_next_us[b] = now + VR_ARROW_REPEAT_US;
+      return vr_emit_keysym (hold_quit, key, vr.layer);
+    }
+  return 0;
+}
+
 /* An edge-triggered stick flick, like the snap turn: one event when the
    stick crosses the arm threshold, re-armed near the centre.  */
 static int
@@ -1187,7 +1252,10 @@ vr_hand_input (struct input_event *hold_quit, int h)
 
   /* Trigger: type on the keyboard, or click in a buffer -- unless this is
      the modifier hand, whose trigger is a layer (vr_read_layer).  */
-  if (!modhand && pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
+  /* While carrying, the trigger turns the stick into resize (grab_update):
+     it does not click.  */
+  if (!modhand && hand->grab == GRAB_NONE
+      && pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
     {
       if (hand->kb_row >= 0)
         {
@@ -1310,10 +1378,17 @@ vr_hand_input (struct input_event *hold_quit, int h)
   count += vr_button (hold_quit, h, VB_MENU, LRG_VR_CONTROLLER_BUTTON_MENU);
   count += vr_button (hold_quit, h, VB_STICK, LRG_VR_CONTROLLER_BUTTON_THUMBSTICK);
   count += vr_button (hold_quit, h, VB_VIEW, LRG_VR_CONTROLLER_BUTTON_VIEW);
-  count += vr_button (hold_quit, h, VB_DPAD_UP, LRG_VR_CONTROLLER_BUTTON_DPAD_UP);
-  count += vr_button (hold_quit, h, VB_DPAD_DOWN, LRG_VR_CONTROLLER_BUTTON_DPAD_DOWN);
-  count += vr_button (hold_quit, h, VB_DPAD_LEFT, LRG_VR_CONTROLLER_BUTTON_DPAD_LEFT);
-  count += vr_button (hold_quit, h, VB_DPAD_RIGHT, LRG_VR_CONTROLLER_BUTTON_DPAD_RIGHT);
+  {
+    static const guint dpad[] = {
+      LRG_VR_CONTROLLER_BUTTON_DPAD_UP, LRG_VR_CONTROLLER_BUTTON_DPAD_DOWN,
+      LRG_VR_CONTROLLER_BUTTON_DPAD_LEFT, LRG_VR_CONTROLLER_BUTTON_DPAD_RIGHT
+    };
+    int i;
+    for (i = 0; i < 4; i++)
+      count += vr.dpad_arrows
+               ? vr_arrow (hold_quit, h, (enum vr_button) (VB_DPAD_UP + i), dpad[i])
+               : vr_button (hold_quit, h, (enum vr_button) (VB_DPAD_UP + i), dpad[i]);
+  }
   /* The modifier hand's bumper is a layer button there, not a button.  */
   if (!(modhand && vr.second_is_bumper))
     count += vr_button (hold_quit, h, VB_BUMPER, LRG_VR_CONTROLLER_BUTTON_BUMPER);
@@ -1892,6 +1967,9 @@ KEY is one of:
                   Frame), else the grip
   `hold-seconds'  how long a button is held before it is a hold, not a
                   tap (default 0.35)
+  `dpad-arrows'   non-nil: the D-pad sends arrow keys, repeating while
+                  held; nil: <vr-dpad-up> etc. with tap and hold
+                  (default t)
 Return VALUE.  */)
   (Lisp_Object key, Lisp_Object value)
 {
@@ -1903,6 +1981,7 @@ Return VALUE.  */)
       && !EQ (key, intern_c_string ("mod-grip"))
       && !EQ (key, intern_c_string ("mod-bumper"))
       && !EQ (key, intern_c_string ("mod-second-source"))
+      && !EQ (key, intern_c_string ("dpad-arrows"))
       && !EQ (key, intern_c_string ("mod-both")))
     CHECK_NUMBER (value);
   if (EQ (key, intern_c_string ("snap-degrees")))
@@ -1925,6 +2004,8 @@ Return VALUE.  */)
   else if (EQ (key, intern_c_string ("mod-grip"))
            || EQ (key, intern_c_string ("mod-bumper")))
     vr.mod_grip = vr_modifier_bit (value);
+  else if (EQ (key, intern_c_string ("dpad-arrows")))
+    vr.dpad_arrows = !NILP (value);
   else if (EQ (key, intern_c_string ("mod-second-source")))
     {
       vr.mod_second = EQ (value, intern_c_string ("bumper")) ? 1

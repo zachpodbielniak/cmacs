@@ -11023,17 +11023,23 @@ Tap: the quick menu.  Hold: recenter.
 @item view
 Tap: workspace overview.  Hold: controller help.
 @item right bumper, D-pad
-Switch buffer; previous/next workspace (left/right), overview and back
-(up/down).
+Switch buffer; arrow keys, repeating while held, with the layer's
+modifiers (@code{cmacs-lrg-vr-dpad-arrows}).
 @item left stick press
 Tap: reset the view.  Hold: controller help.
 @end table
 
-With the Shift layer A, B and X make, close and switch workspaces, Y
-switches buffer and the D-pad pages; with Meta A finds a file, B kills the
-buffer, X opens a recent file, Y saves and the D-pad steps through
-buffers; with Control A and Y split, B closes the window, X keeps only it,
-menu cycles the panel arrangement and the D-pad changes window.
+With the Shift layer A, B and X make, close and switch workspaces and Y
+switches buffer; with Meta A finds a file, B kills the buffer, X opens a
+recent file and Y saves; with Control A and Y split, B closes the window,
+X keeps only it and menu cycles the panel arrangement.
+
+The grip carries what the laser is on: the grabbed point stays on the
+laser, so the object goes wherever you point, up and down too, facing
+you; the gripping hand's stick pushes or pulls it and turns it, and with
+that hand's trigger held resizes it.  The Steam button opens SteamVR's
+dashboard, which takes the controllers until it closes; Emacs says so in
+the echo area.
 
 The Steam Frame is a split gamepad (right A, B, X, Y, menu; left D-pad,
 view; a bumper on each).  SteamVR offers it natively only with

@@ -431,10 +431,10 @@ bindings apply.
 | Control                     | Action                                                        |
 |-----------------------------+---------------------------------------------------------------|
 | Trigger                     | =mouse-1= at the laser: click, hold to drag-select            |
-| Grip                        | grab the panel or keyboard under the laser, or the world      |
+| Grip                        | carry the panel or keyboard under the laser (or pull the world) |
 | Stick up / down             | scroll at the laser                                           |
 | Stick left / right          | horizontal scroll                                             |
-| Stick while gripping        | push / pull the panel (Y), resize it (X)                      |
+| Stick while gripping        | push / pull (up/down), turn (left/right); trigger held: resize |
 | Stick press on a panel      | =mouse-3= (context menu)                                      |
 | Stick flick, laser off a panel | left / right: previous / next workspace; up: overview; down: back |
 
@@ -465,8 +465,7 @@ left controller shows the layer: blue, green, orange.
 | Menu                 | *quick menu* at the laser         | recenter the scene ahead of you          |
 | View                 | workspace overview                | controller help                          |
 | Right bumper         | switch buffer                     |                                          |
-| D-pad left / right   | previous / next workspace         |                                          |
-| D-pad up / down      | workspace overview / back         |                                          |
+| D-pad                | arrow keys, repeating while held  |                                          |
 | Left stick press     | reset the view                    | controller help                          |
 | Right stick press, off a panel | workspace overview       |                                          |
 
@@ -479,11 +478,21 @@ left controller shows the layer: blue, green, orange.
 | X      | switch workspace...  | recent files       | only this window |
 | Y      | switch buffer        | save               | split below    |
 | Menu   | controller help      |                    | cycle panel arrangement |
-| D-pad up / down | page up / down |                  |                |
-| D-pad or stick flick left / right | previous / next workspace | previous / next buffer | other window |
+| D-pad  | =S-<arrow>= (select) | =M-<arrow>=        | =C-<arrow>=    |
+| Stick flick left / right | previous / next workspace | previous / next buffer | other window |
 
 A hold with nothing bound does what the tap does, so a slow press is never
 lost.
+
+*Carrying a panel*: grip it, then point -- the spot you grabbed stays on
+the end of the laser, so it goes wherever you point, up and down too, and
+keeps facing you.  The gripping hand's stick pushes it away or pulls it
+closer (up / down) and turns it (left / right); with that hand's trigger
+held, up / down resizes it.  It stays where you let go.
+
+*The Steam (system) button* opens SteamVR's dashboard, which takes the
+controllers: nothing reaches Emacs until it closes.  Emacs says so in the
+echo area -- press the Steam button again to come back.
 
 *** Popup menus
 
@@ -523,8 +532,9 @@ size; more shrink to share the circle.
 
 - *Turn to one, point at it and pull the trigger*: it becomes live where
   it stands -- the view turns with it, so nothing on the desk moves.
-- *D-pad left / right* (or flick the right stick off a panel) brings the
-  previous / next one round to the front instead.
+- *Flick the right stick* left / right off a panel (or anywhere with the
+  left trigger held) to bring the previous / next one round to the front
+  instead.
 - Left trigger + A makes a new one; the quick menu lists them by name.
 
 =cmacs-lrg-3d-workspaces-layout= picks =desk= (the VR default), or =arc=,

@@ -110,6 +110,7 @@ the build would still link and VR would fail only at runtime."
   (should (eq 'control (cmacs-lrg-vr-set-option 'mod-both 'control)))
   (should (eq t (cmacs-lrg-vr-set-option 'modifier-hand t)))
   (should (= 0.35 (cmacs-lrg-vr-set-option 'hold-seconds 0.35)))
+  (should (eq t (cmacs-lrg-vr-set-option 'dpad-arrows t)))
   ;; Hyper and super mark holds and releases.
   (should-error (cmacs-lrg-vr-set-option 'mod-grip 'hyper))
   (should-error (cmacs-lrg-vr-set-option 'mod-grip 'super))
@@ -268,6 +269,24 @@ the build would still link and VR would fail only at runtime."
     (funcall (cmacs-lrg-vr-voice--finish #'ignore) '((:error . "boom")))
     (should-not unread-command-events)))
 
+(ert-deftest cmacs-lrg-vr-says-when-steamvr-takes-the-controllers ()
+  "Losing input focus to SteamVR's dashboard is announced, and so is its return."
+  (skip-unless (require 'cmacs-lrg-vr-ui nil t))
+  (let ((states '("focused" "visible" "visible" "focused"))
+        (cmacs-lrg-vr-ui--last-state nil)
+        (cmacs-lrg-vr-ui--focus-timer nil)
+        (msgs nil))
+    (cl-letf (((symbol-function 'cmacs-lrg-vr-active-now-p) (lambda () t))
+              ((symbol-function 'cmacs-lrg-vr-status)
+               (lambda () (list :state (pop states))))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+      (dotimes (_ 4) (cmacs-lrg-vr-ui--watch-focus)))
+    (setq msgs (nreverse msgs))
+    (should (= (length msgs) 2))
+    (should (string-search "Steam button" (car msgs)))
+    (should (string-search "back" (cadr msgs)))))
+
 ;;;; The quick menu and help
 
 (ert-deftest cmacs-lrg-vr-quick-menu-tree-indexes-leaves ()
@@ -292,11 +311,18 @@ the build would still link and VR would fail only at runtime."
     (cmacs-lrg-vr-controller-help)
     (with-current-buffer "*VR Controls*"
       (let ((s (buffer-string)))
-        (should (string-search "D-pad left" s))
+        (should (string-search "D-pad = arrow keys" s))
+        (should (string-search "pushes / pulls" s))
         (should (string-search "voice-dictate-hold" s))
         (should (string-search "shift layer" s))
         (should (string-search "workspace-new" s))))
-    (kill-buffer "*VR Controls*")))
+    (kill-buffer "*VR Controls*")
+    ;; With the D-pad as named events, it is listed button by button.
+    (let ((cmacs-lrg-vr-dpad-arrows nil))
+      (cmacs-lrg-vr-controller-help)
+      (with-current-buffer "*VR Controls*"
+        (should (string-search "D-pad left" (buffer-string))))
+      (kill-buffer "*VR Controls*"))))
 
 (ert-deftest cmacs-lrg-vr-every-bound-command-exists ()
   "Nothing in the VR keymap names a function that is not defined."
