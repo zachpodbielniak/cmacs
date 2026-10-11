@@ -939,6 +939,66 @@ bacon modules can find =libcmacs-api.so=.  Fedora and Arch use
 =/usr/lib/<triplet>/cmacs=; a wrong path here is silent, since
 =ldconfig= will happily cache a directory that does not exist.
 
+* Distrobox builds
+
+=just distrobox TARGET= (alias =just dbox=) builds cmacs inside a distrobox and installs it into that box's =/usr=, so plain =emacs= inside the box runs that distro's cmacs.  It takes the same targets as =./build-container= and the same base images; the box is named after the target:
+
+| =just dbox ...= | Box                  | Image                                  |
+|-----------------+----------------------+----------------------------------------|
+| =44= (=42=, =43=, =45=, ...) | =cmacs-fedora-44=    | =registry.fedoraproject.org/fedora:44= |
+| =24.04= (=26.04=, ...)    | =cmacs-ubuntu-24.04= | =docker.io/library/ubuntu:24.04=       |
+| =arch=          | =cmacs-arch=         | =docker.io/library/archlinux:latest=   |
+
+#+begin_src bash
+just dbox 44                       # create/reuse cmacs-fedora-44, build, install
+just dbox 24.04 --jobs 8           # cap parallelism (native-comp is memory-hungry)
+just dbox arch --enter             # open a shell in the box afterwards
+just dbox 44 --force-packages      # redo the system-package step
+just dbox 44 --dry-run             # print box, image and tree; change nothing
+distrobox enter cmacs-fedora-44 -- emacs
+#+end_src
+
+Use it to reproduce a distro-specific build failure, or to run cmacs against another distro's libraries, without building an image.  The script is =admin/cmacs-distrobox.sh= (=--help= for the options).
+
+** What it does
+
+1. Creates the box from the target's image, or reuses one that already exists under that name.  A reused box is checked from inside against =/etc/os-release=; a box with the right name and the wrong distro is refused rather than fed the wrong package list.
+2. Populates =deps/= in the checkout (=admin/cmacs-submodules.sh=, under the same lock =build-container= takes).
+3. Copies the sources into =build/distrobox/<box>/= (see below).
+4. Inside the box, under =env -i= with a plain system =PATH=: installs system packages (a few basics a bare image lacks, =./install-deps --system=, and the Wayland stack via =admin/cmacs-build-wayland.sh= where the distro's wlroots is too old --- the same script the Containerfile runs), then reports =./install-deps --check=.
+5. Builds and =sudo make install=​s the bundled deps into the box's =/usr= exactly as the Containerfile does (crispy, yaml-glib and mcp-glib first and serially; ai-glib with =GIR=1=; =PREFIX=/usr= on every phase), then cad-glib's kernels.
+6. Configures with the Justfile's =configure_flags= plus =--prefix=/usr=, runs =make=, stages =make install= into a =DESTDIR= as the user, adds the cmacs-mcp relay, =ld.so.conf.d/cmacs.conf= and the Org manual, and copies the stage over =/=.
+
+** Where it builds, and why not in the checkout
+
+The build is in-tree, so building in the checkout would replace the host's objects with ones linked against another distro's libraries, and two boxes would fight over one tree.  Each box gets a copy in =build/distrobox/<box>/= (gitignored), which the box can see because distrobox shares =$HOME=.
+
+The copy holds only the tracked files of the superproject and every checked-out submodule, plus untracked-but-not-ignored files at the top level --- so an uncommitted new file still builds.  Never build artifacts: a host =.d= names headers the box's distro may not have, and a host =.pc= carries the host's link line, which is exactly what =.containerignore= exists to keep out of an image.  =rsync -a= keeps source mtimes, so a rerun rewrites only what you edited and the box's =make= is incremental; a source that disappears from the list is deleted from the copy.
+
+** Resuming
+
+Every step is safe to rerun, so a box interrupted anywhere is resumed by running the same command again:
+
+- system packages are skipped while =.dbox/packages.stamp= matches a hash of =install-deps= and =admin/cmacs-build-wayland.sh=;
+- the Wayland stack is probed with =pkg-config= before anything is built;
+- deps and cmacs are plain =make=;
+- =autogen.sh= reruns when =configure.ac= is newer than =configure=, and =configure= when its flags change or =configure= was regenerated;
+- the install restages from scratch and prunes files the previous install had and this one does not, using =/usr/share/cmacs/distrobox-manifest= --- the reason =install-from-container= keeps a manifest applies here too.
+
+One build per box at a time (a lock beside its tree); different boxes run concurrently.
+
+** Why =env -i=
+
+distrobox forwards the host environment into the box.  A host =PATH= or =PKG_CONFIG_PATH= that reaches into linuxbrew, nix or =~/.local= makes =configure= find the host's libraries; the result links and then fails anywhere else.
+
+** The copy goes in with =tar=, not =cp -a=
+
+Arch's =/usr/lib64= is a symlink to =lib=, and =cp -a= refuses to merge a staged =usr/lib64= directory into it ("cannot overwrite non-directory").  =tar --keep-directory-symlink= follows it.
+
+** Not installed
+
+The Wayland session file, the CUPS printer with its systemd units, and the D-Bus activation file: all three are read by host daemons that never look inside a box.  Nor the bundled whisper/piper models --- cmacs searches =~/.local/share/cmacs/= first, which the box shares with the host.
+
 * Known Issues
 
 - The pdumper image must be regenerated after changes to temacs-linked

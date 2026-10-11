@@ -12574,6 +12574,70 @@ bacon modules can find @file{libcmacs-api.so}.  Fedora and Arch use
 @file{/usr/lib/<triplet>/cmacs}; a wrong path here is silent, since
 @command{ldconfig} will happily cache a directory that does not exist.
 
+@section Distrobox Builds
+
+@code{just distrobox @var{target}} (alias @code{just dbox}) builds cmacs
+inside a distrobox and installs it into that box's @file{/usr}, so plain
+@command{emacs} inside the box runs that distro's cmacs.  It takes the
+same targets as @command{./build-container} and the same base images; the
+box is named after the target: @code{44} @result{} @code{cmacs-fedora-44},
+@code{24.04} @result{} @code{cmacs-ubuntu-24.04}, @code{arch} @result{}
+@code{cmacs-arch}.
+
+@example
+just dbox 44                       # create/reuse cmacs-fedora-44, build, install
+just dbox 24.04 --jobs 8           # cap parallelism
+just dbox arch --enter             # open a shell in the box afterwards
+just dbox 44 --force-packages      # redo the system-package step
+just dbox 44 --dry-run             # print box, image and tree; change nothing
+distrobox enter cmacs-fedora-44 -- emacs
+@end example
+
+The script is @file{admin/cmacs-distrobox.sh}.  It creates the box (or
+reuses an existing one, after checking its @file{/etc/os-release} matches
+the target), populates @file{deps/}, copies the sources into
+@file{build/distrobox/@var{box}/}, and then, inside the box under
+@code{env -i} with a plain system @env{PATH}: installs system packages
+(a few basics, @code{./install-deps --system}, and the Wayland stack via
+@file{admin/cmacs-build-wayland.sh} --- the same script the Containerfile
+runs), builds and installs the bundled deps exactly as the Containerfile
+does, configures with the Justfile's @code{configure_flags} plus
+@code{--prefix=/usr}, builds, stages @code{make install} into a
+@env{DESTDIR} as the user, and copies the stage over @file{/}.
+
+@subsection Where it builds
+
+Not in the checkout: the build is in-tree, so that would replace the
+host's objects with ones linked against another distro's libraries.  The
+copy in @file{build/distrobox/@var{box}/} holds only tracked files (plus
+untracked-but-not-ignored top-level files) and never build artifacts ---
+a host @file{.d} or @file{.pc} is the same leak @file{.containerignore}
+keeps out of an image.  @command{rsync -a} preserves source mtimes, so
+the box's @command{make} stays incremental, and sources that disappear
+are deleted from the copy.
+
+@subsection Resuming
+
+Every step is safe to rerun, so an interrupted box is resumed by running
+the same command again.  System packages are skipped while a stamp
+matches a hash of @file{install-deps} and the Wayland script; the Wayland
+stack is probed with @command{pkg-config}; deps and cmacs are plain
+@command{make}; @command{configure} reruns only when its flags change or
+@file{configure} was regenerated; and the install prunes files the
+previous one had and this one does not, via
+@file{/usr/share/cmacs/distrobox-manifest}.
+
+@env{env -i} matters: distrobox forwards the host environment, and a
+host @env{PKG_CONFIG_PATH} or @env{PATH} reaching into linuxbrew, nix or
+@file{~/.local} makes @command{configure} find the host's libraries.  The
+stage is copied with @command{tar --keep-directory-symlink}, not
+@command{cp -a}, because Arch's @file{/usr/lib64} is a symlink and
+@command{cp} refuses to merge a directory into it.
+
+Not installed: the Wayland session file, the CUPS printer and its
+systemd units, and the D-Bus activation file --- host daemons read those
+and never look inside a box.
+
 @section Testing
 
 @example

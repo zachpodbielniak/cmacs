@@ -339,102 +339,28 @@ RUN set -eux; \
 # ---------------------------------------------------------------------
 # The Wayland stack, from source, when the distro's is too old.
 #
-# gowl needs wlroots >= 0.19; Ubuntu 24.04 (noble) ships 0.17, along
-# with wayland 1.22 (wlroots wants >= 1.23.1) and pixman 0.42 (wants
-# >= 0.43).  Everything else -- Fedora 44, Arch, Ubuntu 26.04 -- has a
-# usable wlroots in its repositories and skips this entirely.
+# gowl needs wlroots >= 0.19; Ubuntu 24.04 (noble) ships 0.17.  The
+# build lives in admin/cmacs-build-wayland.sh -- shared with
+# `just distrobox', so the two cannot drift -- and its header carries the
+# two silent traps (multiarch libdir, staging only the libdir).  It is a
+# no-op wherever pkg-config already finds wlroots 0.19/0.20.
 #
-# The probe is on pkg-config rather than on the distro version, so a
-# release that starts shipping a new enough wlroots stops building it
-# from source without anyone editing this file.
+# Only that one script is copied here, ahead of the tree, so this slow
+# layer stays cached across source edits.
 #
-# Two details that are easy to get wrong, both silent:
-#
-#   * libdir.  Installing to /usr/lib on Debian/Ubuntu does NOT shadow
-#     the distro's libraries: /usr/lib/<triplet>/pkgconfig is searched
-#     first, so meson happily reports "found 1.22.0 but need >=1.23.1"
-#     with a freshly built 1.23.1 sitting in /usr/lib.  The libdir is
-#     therefore taken from the multiarch triplet.
-#
-#   * staging.  The final image is only /build/stage, so a library
-#     built here and installed to the builder's /usr is NOT in the
-#     image -- the result links against wayland 1.23 symbols and lands
-#     on a host that has 1.22.  The install is done twice: once into
-#     the builder so cmacs can build, and once into a scratch DESTDIR
-#     whose libdir alone is copied into the stage.  Headers are
-#     deliberately left behind; the image must not shadow the distro's
-#     wayland headers for anything else the user compiles.
-#
-# libwayland and pixman have only ever added to their ABI, so the newer
-# copies satisfy every existing consumer.  wlroots 0.19 carries its
-# version in its soname and coexists with the distro's 0.17.  The one
-# standing caveat is that a later `apt upgrade' of libwayland-server0
-# repoints the soname symlink back at the distro's build; re-running
-# install-container puts it right.  install-container says so.
+# The one standing caveat on Ubuntu 24.04 is that a later `apt upgrade'
+# of libwayland-server0 repoints the soname symlink back at the distro's
+# build; re-running install-container puts it right.  install-container
+# says so.
 # ---------------------------------------------------------------------
 ARG WAYLAND_VERSION=1.23.1
 ARG WAYLAND_PROTOCOLS_VERSION=1.41
 ARG PIXMAN_VERSION=pixman-0.44.2
 ARG WLROOTS_VERSION=0.19
 
-RUN set -eux; \
-    if pkg-config --exists wlroots-0.20 || pkg-config --exists wlroots-0.19; then \
-        echo "==> Distro wlroots is usable:"; \
-        pkg-config --modversion wlroots-0.20 2>/dev/null \
-            || pkg-config --modversion wlroots-0.19; \
-        exit 0; \
-    fi; \
-    echo "==> No usable wlroots; building the Wayland stack from source"; \
-    libdir="lib64"; \
-    case "${CMACS_DISTRO}" in \
-    ubuntu|debian) \
-        export DEBIAN_FRONTEND=noninteractive; \
-        apt-get install -y --no-install-recommends \
-            meson ninja-build git ca-certificates \
-            libffi-dev libexpat1-dev libxml2-dev docbook-xsl xsltproc \
-            libudev-dev libseat-dev libdisplay-info-dev libliftoff-dev \
-            hwdata libgbm-dev libvulkan-dev glslang-tools \
-            libxcb-composite0-dev libxcb-ewmh-dev \
-            libxcb-render-util0-dev libxcb-res0-dev libxcb-xinput-dev \
-            libxcb-dri3-dev libxcb-present-dev libxcb-shm0-dev \
-            libxcb-xfixes0-dev libxcb-randr0-dev \
-            python3-setuptools \
-        ; \
-        apt-get install -y --no-install-recommends libxcb-errors-dev \
-            || echo "NOTE: no libxcb-errors-dev; X11 errors print as codes"; \
-        libdir="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
-        ;; \
-    esac; \
-    echo "==> Wayland stack libdir: /usr/${libdir}"; \
-    stage="/build/wayland-stage"; \
-    mkdir -p "${stage}" /build/wayland-src; \
-    cd /build/wayland-src; \
-    \
-    for spec in \
-        "wayland|https://gitlab.freedesktop.org/wayland/wayland.git|${WAYLAND_VERSION}|-Ddocumentation=false -Dtests=false" \
-        "wayland-protocols|https://gitlab.freedesktop.org/wayland/wayland-protocols.git|${WAYLAND_PROTOCOLS_VERSION}|-Dtests=false" \
-        "pixman|https://gitlab.freedesktop.org/pixman/pixman.git|${PIXMAN_VERSION}|-Dtests=disabled -Ddemos=disabled" \
-        "wlroots|https://gitlab.freedesktop.org/wlroots/wlroots.git|${WLROOTS_VERSION}|-Dexamples=false -Dbackends=drm,libinput,x11 -Drenderers=gles2,vulkan" \
-    ; do \
-        name="${spec%%|*}"; rest="${spec#*|}"; \
-        url="${rest%%|*}"; rest="${rest#*|}"; \
-        ref="${rest%%|*}"; opts="${rest#*|}"; \
-        echo "==> ${name} ${ref}"; \
-        git clone --depth 1 -b "${ref}" "${url}" "${name}"; \
-        meson setup "${name}/build" "${name}" \
-            --prefix=/usr --libdir="${libdir}" ${opts}; \
-        ninja -C "${name}/build"; \
-        ninja -C "${name}/build" install; \
-        DESTDIR="${stage}" ninja -C "${name}/build" install; \
-        ldconfig; \
-    done; \
-    \
-    mkdir -p "/build/stage/usr/${libdir}"; \
-    cp -a "${stage}/usr/${libdir}/." "/build/stage/usr/${libdir}/"; \
-    rm -rf "/build/stage/usr/${libdir}/pkgconfig"; \
-    rm -rf /build/wayland-src "${stage}"; \
-    touch /build/stage/.bundled-wayland; \
-    pkg-config --modversion wlroots-0.19
+COPY admin/cmacs-build-wayland.sh /build/cmacs-build-wayland.sh
+RUN /build/cmacs-build-wayland.sh --stage /build/stage \
+    && rm -f /build/cmacs-build-wayland.sh
 
 COPY . /build/cmacs
 WORKDIR /build/cmacs

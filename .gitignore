@@ -78,6 +78,8 @@ java/org/gnu/emacs/*.class
 # downloaded Po Lu APK that `android-repack` injects into.
 /build/android-out/
 /build/upstream-apk-cache/
+# `just distrobox`: per-box sources-only build trees + their locks.
+/build/distrobox/
 /build-aux/android-doom-bundle/
 
 # Built by `aapt'.

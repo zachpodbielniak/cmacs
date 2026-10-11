@@ -454,6 +454,15 @@ consumes it.
   `--prefix` case; the script re-execs itself once under `podman unshare`. `--local` also
   passes `--pull=never`, since `podman create` otherwise pulls on a missing name.
 
+**`just distrobox TARGET` (alias `dbox`)** is the box-shaped sibling: same targets and
+base images, but it builds inside a long-lived `cmacs-<distro>-<version>` (or `cmacs-arch`)
+distrobox and installs into that box's `/usr` (`admin/cmacs-distrobox.sh`). It builds in
+`build/distrobox/<box>/`, a **sources-only** copy (tracked files, never host artifacts),
+never in the checkout -- the build is in-tree, so the host's objects would be replaced.
+Every step is resumable; the inside step runs under `env -i` so host
+`PKG_CONFIG_PATH`/linuxbrew cannot leak in. The Wayland-from-source step lives in
+`admin/cmacs-build-wayland.sh`, shared with the Containerfile -- edit it there, once.
+
 The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubuntu),
 `NN` (Fedora, the default: 44). The Containerfile takes `BASE_IMAGE`, `CMACS_DISTRO`,
 `CMACS_RELEASE`; `CMACS_DISTRO` selects the package manager and everything after the

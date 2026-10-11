@@ -223,6 +223,26 @@ deps-list PLATFORM='':
 container TARGET='44' *EXTRA:
     ./build-container {{ TARGET }} {{ EXTRA }}
 
+# The distrobox counterpart of `container': same TARGET shapes, same base
+# images, but the build is installed into /usr of a long-lived box --
+# cmacs-fedora-44, cmacs-ubuntu-24.04, cmacs-arch -- so `emacs' inside it
+# runs that distro's cmacs.  An existing box is reused; rerunning resumes
+# whatever step a previous run stopped at.  The build happens in
+# build/distrobox/<box>/, a sources-only copy of this checkout, so the
+# host's own build is never touched.  EXTRA: --jobs N, --force-packages,
+# --enter, --dry-run.  Details: admin/cmacs-distrobox.sh --help.
+
+# Build + install cmacs into a distrobox (44, 24.04, arch, ...).
+[group('build')]
+distrobox TARGET *EXTRA:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CMACS_CONFIGURE_FLAGS="$(echo "{{ configure_flags }}" | tr -s ' \n' ' ' | sed 's/^ //; s/ $//')"
+    export CMACS_CONFIGURE_FLAGS
+    exec ./admin/cmacs-distrobox.sh {{ TARGET }} {{ EXTRA }}
+
+alias dbox := distrobox
+
 # Unpack a prebuilt image onto this machine instead of building for hours.
 # The same command updates an existing install: it prunes files the previous
 # image had and this one does not, so a renamed library cannot linger.  Needs
