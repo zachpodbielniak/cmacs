@@ -246,6 +246,18 @@ distrobox TARGET *EXTRA:
 
 alias dbox := distrobox
 
+# Put "Emacs VR" in the Steam library: a VR app that starts cmacs in the
+# headset (`emacs --lrg=3dvr') in your home directory.  It runs the emacs
+# `just distrobox' exported to ~/bin/export, through ~/bin/export/emacs-vr
+# (which this writes), and logs to ~/.local/state/cmacs/emacs-vr.log.
+# Steam reads its library at startup: restart it, or pass --restart-steam.
+# EXTRA: --restart-steam, --remove, --dry-run, --export-path DIR, --start-dir DIR.
+
+# Add "Emacs VR" (emacs --lrg=3dvr) to the Steam library.
+[group('run')]
+steam-vr-shortcut *EXTRA:
+    python3 admin/cmacs-steam-shortcut.py {{ EXTRA }}
+
 # Unpack a prebuilt image onto this machine instead of building for hours.
 # The same command updates an existing install: it prunes files the previous
 # image had and this one does not, so a renamed library cannot linger.  Needs
