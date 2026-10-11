@@ -204,6 +204,71 @@ cmacs_bacon_import_bashrc_aliases (BaconShell *shell)
   g_strfreev (lines);
 }
 
+/* Load *.so from DIR into MM, skipping any file name in SEEN (a set
+   of basenames) and adding the rest to it.  */
+static void
+cmacs_bacon_load_module_dir (BaconModuleManager *mm, const gchar *dir,
+                             GHashTable *seen)
+{
+  GDir *d;
+  const gchar *name;
+
+  if (dir == NULL || !g_file_test (dir, G_FILE_TEST_IS_DIR))
+    return;
+  d = g_dir_open (dir, 0, NULL);
+  if (d == NULL)
+    return;
+
+  while ((name = g_dir_read_name (d)) != NULL)
+    {
+      gchar *path;
+      GError *error = NULL;
+
+      if (!g_str_has_suffix (name, ".so")
+          || g_hash_table_contains (seen, name))
+        continue;
+      g_hash_table_add (seen, g_strdup (name));
+
+      path = g_build_filename (dir, name, NULL);
+      if (bacon_module_manager_load_module (mm, path, &error) == NULL)
+        {
+          g_warning ("cmacs-bacon: failed to load '%s': %s",
+                     path, error != NULL ? error->message : "?");
+          g_clear_error (&error);
+        }
+      g_free (path);
+    }
+  g_dir_close (d);
+}
+
+/* Load the standard module set into MM, most specific directory first:
+   the dev build, the installed modules, cmacs's own, $CMACS_MODULE_DIR.
+
+   Each file name loads ONCE, from the first directory that has it.
+   The dev and installed directories normally hold the same modules
+   (any machine where deps/bacon was both built and installed), and a
+   second copy of a module re-registers its GType: the registration
+   fails, leaves that module's g_once half-entered, and the next
+   get_type call waits on it forever -- `bacon-start' hung.  */
+static void
+cmacs_bacon_load_standard_modules (BaconModuleManager *mm)
+{
+  GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                            g_free, NULL);
+
+#ifdef BACON_DEV_MODULE_DIR
+  cmacs_bacon_load_module_dir (mm, BACON_DEV_MODULE_DIR, seen);
+#endif
+#ifdef BACON_MODULEDIR
+  cmacs_bacon_load_module_dir (mm, BACON_MODULEDIR, seen);
+#endif
+#ifdef CMACS_BACON_MODULE_DIR
+  cmacs_bacon_load_module_dir (mm, CMACS_BACON_MODULE_DIR, seen);
+#endif
+  cmacs_bacon_load_module_dir (mm, g_getenv ("CMACS_MODULE_DIR"), seen);
+  g_hash_table_unref (seen);
+}
+
 /* ──────────────────────────────────────────────────────────────────── */
 /* DEFUN primitives                                                    */
 /* ──────────────────────────────────────────────────────────────────── */
@@ -233,24 +298,7 @@ Returns non-nil on success. */)
   {
     BaconModuleManager *mm
       = bacon_shell_get_module_manager (cmacs_bacon_shell);
-#ifdef BACON_DEV_MODULE_DIR
-    if (g_file_test (BACON_DEV_MODULE_DIR, G_FILE_TEST_IS_DIR))
-      bacon_module_manager_load_from_directory (mm, BACON_DEV_MODULE_DIR);
-#endif
-#ifdef BACON_MODULEDIR
-    if (g_file_test (BACON_MODULEDIR, G_FILE_TEST_IS_DIR))
-      bacon_module_manager_load_from_directory (mm, BACON_MODULEDIR);
-#endif
-#ifdef CMACS_BACON_MODULE_DIR
-    if (g_file_test (CMACS_BACON_MODULE_DIR, G_FILE_TEST_IS_DIR))
-      bacon_module_manager_load_from_directory (mm, CMACS_BACON_MODULE_DIR);
-#endif
-    {
-      const gchar *module_dir = g_getenv ("CMACS_MODULE_DIR");
-      if (module_dir != NULL
-          && g_file_test (module_dir, G_FILE_TEST_IS_DIR))
-        bacon_module_manager_load_from_directory (mm, module_dir);
-    }
+    cmacs_bacon_load_standard_modules (mm);
     bacon_module_manager_activate_all (mm);
     bacon_module_manager_dispatch_startup (mm, cmacs_bacon_shell);
   }
@@ -611,7 +659,6 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
 {
   BaconShell *shell;
   BaconModuleManager *mm;
-  const gchar *module_dir;
   const gchar *batch_cmd = NULL;
   const gchar *batch_script = NULL;
   gboolean batch_stdin = FALSE;
@@ -667,17 +714,7 @@ cmacs_bacon_main (int argc, char **argv, int bacon_idx)
   /* Load modules from standard bacon directories (starship, fzf, git,
      etc.) and from the CMacs-specific cmacsgi module directory. */
   mm = bacon_shell_get_module_manager (shell);
-#ifdef BACON_DEV_MODULE_DIR
-  if (g_file_test (BACON_DEV_MODULE_DIR, G_FILE_TEST_IS_DIR))
-    bacon_module_manager_load_from_directory (mm, BACON_DEV_MODULE_DIR);
-#endif
-#ifdef BACON_MODULEDIR
-  if (g_file_test (BACON_MODULEDIR, G_FILE_TEST_IS_DIR))
-    bacon_module_manager_load_from_directory (mm, BACON_MODULEDIR);
-#endif
-  module_dir = g_getenv ("CMACS_MODULE_DIR");
-  if (module_dir != NULL && g_file_test (module_dir, G_FILE_TEST_IS_DIR))
-    bacon_module_manager_load_from_directory (mm, module_dir);
+  cmacs_bacon_load_standard_modules (mm);
   bacon_module_manager_activate_all (mm);
 
   /* Dispatch module startup hooks so module-provided builtins

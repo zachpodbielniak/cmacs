@@ -734,9 +734,6 @@ endif
 ifeq ($(CMACS_BACON_BUNDLED),yes)
 all: cmacs-bacon-dep-modules
 endif
-ifneq ($(CMACS_BACON_OBJ),)
-all: $(CMACS_BACON_MODULES)
-endif
 ifeq ($(CMACS_PODOMATION_BUNDLED),yes)
 all: cmacs-podomation-modules
 endif
@@ -1488,6 +1485,10 @@ $(CMACS_BACON_MODULES): $(CMACS_API_SO)
 	$(MAKE) -C $(srcdir)/../cmacs/bacon/modules \
 		BACON_DIR=$(abspath $(srcdir)/../deps/bacon) \
 		API_DIR=$(abspath $(srcdir)/../cmacs/api)
+## CMACS: here, not with the other `all:' lines -- a prerequisite list
+## is expanded when the rule is read, and up there this variable was
+## still empty, so a fresh tree never built the modules.
+all: $(CMACS_BACON_MODULES)
 endif
 
 ## Build liborgex-1.0.a (statically linked into emacs).

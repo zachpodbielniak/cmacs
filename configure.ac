@@ -763,12 +763,21 @@ if test "$with_cmacs_bacon" != "no"; then
     # second commit, compiled against an archive built from the first.
     PKG_CHECK_MODULES([CMACS_BACON_DEPS],
       [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 gmodule-2.0 json-glib-1.0 yaml-0.1 readline])
+    # $libdir is `${exec_prefix}/lib64', and src/Makefile defines no
+    # exec_prefix -- spliced in unexpanded, BACON_MODULEDIR compiled
+    # to "/lib64/bacon/modules", right on Fedora only by the /lib64
+    # symlink.  Expand it here; $prefix is NONE until AC_OUTPUT.
+    cmacs_bacon_prefix=$prefix
+    test "$cmacs_bacon_prefix" = NONE && cmacs_bacon_prefix=$ac_default_prefix
+    cmacs_bacon_exec_prefix=$exec_prefix
+    test "$cmacs_bacon_exec_prefix" = NONE && cmacs_bacon_exec_prefix=$cmacs_bacon_prefix
+    cmacs_bacon_libdir=`prefix=$cmacs_bacon_prefix; exec_prefix=$cmacs_bacon_exec_prefix; eval echo "$libdir"`
     CMACS_BACON_CFLAGS="-I\$(srcdir)/../deps/bacon -I\$(srcdir)/../deps/bacon/src \
       -I\$(srcdir)/../deps/crispy/src \
       -I\$(srcdir)/../deps/yaml-glib/src \
       -DBACON_COMPILATION \
       -DBACON_DEV_MODULE_DIR=\\\"\$(abs_top_srcdir)/deps/bacon/build/$cmacs_dep_buildtype/modules\\\" \
-      -DBACON_MODULEDIR=\\\"$libdir/bacon/modules\\\" \
+      -DBACON_MODULEDIR=\\\"$cmacs_bacon_libdir/bacon/modules\\\" \
       -DCMACS_BACON_MODULE_DIR=\\\"\$(abs_top_srcdir)/cmacs/bacon/modules\\\" \
       $CMACS_BACON_DEPS_CFLAGS"
     CMACS_BACON_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/bacon/build/$cmacs_dep_buildtype/libbacon-1.0.a \
