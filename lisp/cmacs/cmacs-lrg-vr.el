@@ -90,12 +90,15 @@
 Larger makes the whole workspace bigger and farther away."
   :type '(choice (const :tag "Default" nil) number))
 
-(defcustom cmacs-lrg-vr-frame-size '(1400 . 1000)
+(defcustom cmacs-lrg-vr-frame-size '(1240 . 880)
   "Pixel size (WIDTH . HEIGHT) the frame takes when VR starts, or nil.
 In VR the frame is drawn offscreen and shown on a panel of fixed angular
-size (about 41 degrees tall at the default seat), so this is a
-resolution: more pixels fit more text in, each line smaller.  1000 px
-tall is about 0.7 degrees a line.  nil leaves the frame as created."
+size (about 41 degrees tall at the default seat), so this sets how many
+frame pixels share each degree.  The default puts about one frame pixel
+on one display pixel of a Steam Frame (about 21 per degree): text is as
+sharp as the headset can show it.  More pixels fit more text in, each
+line smaller, but the headset then has to shrink them and fine strokes
+blur; fewer make text larger.  nil leaves the frame as created."
   :type '(choice (const :tag "Leave as created" nil)
                  (cons (integer :tag "Width") (integer :tag "Height"))))
 

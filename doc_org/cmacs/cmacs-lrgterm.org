@@ -654,9 +654,30 @@ headset (gamescope under SteamVR) would otherwise show it as a flat black
 frame is rendered offscreen instead.  ~CMACS_LRG_VR_SHOW_WINDOW=1~ keeps the
 window (and its ordinary keyboard focus).
 
-In VR the frame is resized to ~cmacs-lrg-vr-frame-size~ (default 1400×1000
-pixels) once startup finishes: with no window there is no window manager to
-size it, and more pixels make sharper panels.  ~nil~ keeps the size.
+*Text sharpness* comes down to two resamplings, frame → eye image →
+display, and each loses detail when it shrinks:
+
+- *Eye resolution.*  SteamVR on a standalone headset recommends eye images
+  below the display's resolution: 1728 pixels a side on the Steam Frame,
+  against a 2160-pixel panel (its "0.64" render scale is of area).  Eyes
+  are rendered at 1.25× the recommendation, the panel's native size.
+  ~CMACS_LRG_VR_RESOLUTION~ overrides it: =1= is the runtime's size,
+  =1.5= supersamples at 2.25× the GPU fill.  It is read when VR starts,
+  before any init file, so set it in the environment (the =emacs-vr=
+  launcher).  ~(plist-get (cmacs-lrg-vr-status) :eye-size)~ shows the size
+  in use.
+- *Frame size.*  In VR the frame is resized to ~cmacs-lrg-vr-frame-size~
+  once startup finishes.  With no window there is no window manager to
+  size it.  The panel's angular size is fixed (about 41° tall), so this
+  sets how many frame pixels share a degree.  The default, 1240×880, puts
+  about one on each display pixel of a Steam Frame (about 21 per degree).
+  More pixels fit more text but get shrunk, which blurs fine strokes;
+  fewer make text larger.  ~nil~ keeps the size.  In VR the frame's size is
+  not the window's: the hidden window is clamped to the host display
+  (gamescope's is 1280×720), so the off-screen target is a raylib render
+  texture of the frame's own size (~lrg_3d_surface_set_offscreen_size~), and
+  ~set_window_size_hook~ confirms a resize from ~read_socket~ the way a
+  window system would.
 
 ** Comfort and scale
 

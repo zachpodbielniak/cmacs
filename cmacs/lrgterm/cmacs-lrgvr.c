@@ -1107,6 +1107,30 @@ cmacs_lrgvr_mouse_position (struct frame *f, int *x, int *y)
   return true;
 }
 
+/* Eye images are rendered at this multiple of the runtime's recommended
+   size.  SteamVR on a standalone headset recommends below the display's
+   own resolution -- on the Steam Frame 1728 pixels a side against a
+   2160-pixel panel (its "0.64" render scale is of area) -- and text loses
+   the most to that: its strokes are finer than the eye image's pixels, so
+   they blur and swim as the head moves.  1.25 is the panel's native size
+   there; more supersamples, at the square of the scale in GPU fill.  The
+   swapchains are made when VR starts, before any init file runs, so the
+   override is the environment: CMACS_LRG_VR_RESOLUTION=1 renders at the
+   runtime's size again, 1.5 supersamples.  */
+#define VR_DEFAULT_RESOLUTION 1.25
+
+static float
+vr_resolution_scale (void)
+{
+  const gchar *env = g_getenv ("CMACS_LRG_VR_RESOLUTION");
+  gdouble v;
+
+  if (env == NULL || *env == '\0')
+    return VR_DEFAULT_RESOLUTION;
+  v = g_ascii_strtod (env, NULL);
+  return v >= 0.25 && v <= 4.0 ? (float) v : VR_DEFAULT_RESOLUTION;
+}
+
 /* Headset frames are drawn from read_socket, and Emacs calls read_socket
    only while it reads keyboard input: idle in the command loop, or in
    sit-for.  A command waiting on a process (accept-process-output, as
@@ -1174,6 +1198,7 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
     }
 
   xr = lrg_openxr_service_new ("cmacs");
+  lrg_openxr_service_set_resolution_scale (xr, vr_resolution_scale ());
   if (!lrg_vr_service_initialize (LRG_VR_SERVICE (xr), &error))
     {
       if (err != NULL)
@@ -1198,6 +1223,12 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
 
   lrg_3d_surface_set_vr_service (vr.s3, LRG_VR_SERVICE (xr));
   lrg_3d_surface_set_vr_overlay_func (vr.s3, vr_overlay, NULL, NULL);
+
+  /* The flat frame is drawn off screen from here on, at the frame's own
+     size; resizes set it (lrg_set_window_size), the window no longer
+     does.  */
+  lrg_3d_surface_set_offscreen_size (vr.s3, FRAME_PIXEL_WIDTH (f),
+                                     FRAME_PIXEL_HEIGHT (f));
 
   /* Frames are waited for off the main thread; pselect wakes on this fd. */
   vr.frame_fd = lrg_openxr_service_start_frame_thread (xr);
@@ -1255,6 +1286,7 @@ cmacs_lrgvr_detach (void)
     }
   if (vr.s3 != NULL)
     {
+      lrg_3d_surface_set_offscreen_size (vr.s3, 0, 0);
       lrg_3d_surface_set_vr_overlay_func (vr.s3, NULL, NULL, NULL);
       lrg_3d_surface_set_vr_service (vr.s3, NULL);
     }
@@ -1568,8 +1600,9 @@ DEFUN ("cmacs-lrg-vr-status", Fcmacs_lrg_vr_status, Scmacs_lrg_vr_status,
        doc: /* Return a plist describing the VR session, or nil when inactive.
 Keys: :runtime :system :state :refresh-rate :scale :keyboard
 :left-profile :right-profile :left-tracked :right-tracked, :frames
-(headset frames rendered so far), :keyboards (physical keyboards read
-from evdev) and :window-hidden.  */)
+(headset frames rendered so far), :eye-size (WIDTH . HEIGHT of each
+eye image, see CMACS_LRG_VR_RESOLUTION), :keyboards (physical keyboards
+read from evdev) and :window-hidden.  */)
   (void)
 {
   Lisp_Object plist = Qnil;
@@ -1582,6 +1615,11 @@ from evdev) and :window-hidden.  */)
   rp = lrg_openxr_service_get_interaction_profile (vr.xr, LRG_VR_HAND_RIGHT);
 #define PUT(k, v) plist = Fcons (intern_c_string (k), Fcons ((v), plist))
   PUT (":frames", make_fixnum (vr.frame_no));
+  {
+    guint ew = 0, eh = 0;
+    lrg_openxr_service_get_eye_size (vr.xr, &ew, &eh);
+    PUT (":eye-size", Fcons (make_fixnum (ew), make_fixnum (eh)));
+  }
   PUT (":keyboards", make_fixnum (cmacs_lrgvr_kbd_count ()));
   PUT (":window-hidden", vr.window_hidden ? Qt : Qnil);
   PUT (":right-tracked", vr.hand[1].tracked ? Qt : Qnil);

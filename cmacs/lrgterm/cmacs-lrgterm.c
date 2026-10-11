@@ -2152,6 +2152,11 @@ lrg_route_keys_to_gsurf (struct frame *f, int mods)
 }
 #endif
 
+#ifdef HAVE_CMACS_LRGVR
+/* A VR frame size set by lrg_set_window_size, applied by lrg_read_socket. */
+static int lrg_vr_pending_width, lrg_vr_pending_height;
+#endif
+
 static int
 lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 {
@@ -2192,8 +2197,29 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
       count += lrg_store (f, hold_quit, &ie);
     }
 
-  /* Window resize -> re-fit the Emacs frame to the new pixel size.  */
-  if (grl_window_is_resized (win))
+#ifdef HAVE_CMACS_LRGVR
+  /* The VR counterpart of the window resize below: confirm the size
+     lrg_set_window_size asked for.  */
+  if (lrg_vr_pending_width > 0 && cmacs_lrgvr_active_p ())
+    {
+      int w = lrg_vr_pending_width, h = lrg_vr_pending_height;
+
+      lrg_vr_pending_width = lrg_vr_pending_height = 0;
+      block_input ();
+      change_frame_size (f, w, h, false, true, false);
+      unblock_input ();
+      SET_FRAME_GARBAGED (f);
+    }
+#endif
+
+  /* Window resize -> re-fit the Emacs frame to the new pixel size.  Not in
+     VR: the frame is drawn off screen at its own size there, and the hidden
+     window's size means nothing.  */
+  if (grl_window_is_resized (win)
+#ifdef HAVE_CMACS_LRGVR
+      && !cmacs_lrgvr_active_p ()
+#endif
+      )
     {
       int w = grl_window_get_width (win);
       int h = grl_window_get_height (win);
@@ -2820,6 +2846,23 @@ lrg_set_window_size (struct frame *f, bool change_gravity, int width, int height
   GrlWindow *win = lrg_window_of_frame (f);
   (void) change_gravity;
   block_input ();
+#ifdef HAVE_CMACS_LRGVR
+  if (cmacs_lrgvr_active_p () && FRAME_PARENT_FRAME (f) == NULL
+      && LRG_IS_3D_SURFACE (FRAME_LRG_SURFACE (f)))
+    {
+      /* In VR the frame is drawn off screen at its own size; the hidden
+         window is clamped to the host display (gamescope's is 1280x720) and
+         would snap the frame back.  Size the off-screen target, and confirm
+         the size from read_socket the way a window system confirms a
+         resize: adjust_frame_size, which called this hook, returns without
+         applying anything and waits for that confirmation.  */
+      lrg_3d_surface_set_offscreen_size (LRG_3D_SURFACE (FRAME_LRG_SURFACE (f)),
+                                         width, height);
+      lrg_vr_pending_width = width;
+      lrg_vr_pending_height = height;
+    }
+  else
+#endif
   if (win != NULL)
     grl_window_set_size (win, width, height);
   else if (FRAME_PARENT_FRAME (f) != NULL)

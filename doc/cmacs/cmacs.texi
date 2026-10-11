@@ -11020,8 +11020,16 @@ it would otherwise appear as a black ``desktop game'' in front of the
 scene and take the focus -- and the frame is rendered offscreen;
 @env{CMACS_LRG_VR_SHOW_WINDOW}=1 keeps it.
 In VR the frame is resized to @code{cmacs-lrg-vr-frame-size} (default
-1400 by 1000 pixels) once startup finishes, since no window manager sizes
-a hidden window; @code{nil} keeps the size.
+1240 by 880 pixels) once startup finishes, since no window manager sizes
+a hidden window; @code{nil} keeps the size.  The panel's angular size is
+fixed, so the default puts about one frame pixel on each display pixel of
+a Steam Frame: more pixels fit more text but get shrunk and blur.  Eye
+images are rendered at 1.25 times the runtime's recommended size, the
+Steam Frame's native resolution; @env{CMACS_LRG_VR_RESOLUTION} overrides
+that (1 for the runtime's size, 1.5 to supersample), read when VR starts.
+@code{(plist-get (cmacs-lrg-vr-status) :eye-size)} shows the size in use.
+The VR frame size is independent of the hidden window, which a host
+compositor may clamp to its display.
 @kbd{C-c v} holds recenter (@kbd{r}), keyboard (@kbd{k}), scale
 (@kbd{+}/@kbd{-}) and status (@kbd{?}).
 
