@@ -110,7 +110,10 @@ detect_platform () {
 pkg_available () {
 	local platform="$1" pkg="$2"
 	case "${platform}" in
-		fedora)  [[ -n "$(dnf -q repoquery --qf '%{name}' -- "${pkg}" 2>/dev/null)" ]] ;;
+		# --whatprovides too: zlib-devel is only a Provides of
+		# zlib-ng-compat-devel since F40, and dnf installs it fine.
+		fedora)  [[ -n "$(dnf -q repoquery --qf '%{name}' -- "${pkg}" 2>/dev/null)" \
+		            || -n "$(dnf -q repoquery --qf '%{name}' --whatprovides "${pkg}" 2>/dev/null)" ]] ;;
 		debian)  apt-cache show "${pkg}" >/dev/null 2>&1 ;;
 		arch)    pacman -Si "${pkg}" >/dev/null 2>&1 ;;
 		macos)   brew info "${pkg}" >/dev/null 2>&1 ;;
@@ -246,7 +249,8 @@ set_packages_fedora () {
 	           libxcb-devel xcb-util-wm-devel xorg-x11-server-Xwayland
 	           libeis-devel            # EIS server for the InputCapture/RemoteDesktop portal (deskflow KVM)
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
-	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
+	           slurp                   # output/region chooser for the portal-wlr ScreenCast picker
+	           pam-devel)              # gowl screenlock module (<security/pam_appl.h>)
 	# cmacs-video: GStreamer + plugins-{base,good,bad,ugly} + libav.
 	# plugins-bad provides rtspsrc (RTSP + RTSPS); libav gives software
 	# H.264/H.265 fallback when hardware decode is unavailable.
@@ -421,7 +425,8 @@ set_packages_debian () {
 	           libpixman-1-dev libdecor-0-dev libei-dev
 	           libxcb1-dev libxcb-icccm4-dev xwayland
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
-	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
+	           slurp                   # output/region chooser for the portal-wlr ScreenCast picker
+	           libpam0g-dev)           # gowl screenlock module (<security/pam_appl.h>)
 	PKGS_VIDEO=(libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 	            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 	            gstreamer1.0-plugins-ugly gstreamer1.0-libav)
@@ -496,7 +501,8 @@ set_packages_arch () {
 	           pixman libdecor libei
 	           libxcb xcb-util-wm xorg-xwayland
 	           xdg-desktop-portal-wlr  # wlroots ScreenCast/Screenshot portal backend (runtime)
-	           slurp)                  # output/region chooser for the portal-wlr ScreenCast picker
+	           slurp                   # output/region chooser for the portal-wlr ScreenCast picker
+	           pam)                    # gowl screenlock module (<security/pam_appl.h>)
 	PKGS_VIDEO=(gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
 	            gst-plugins-ugly gst-libav)
 	PKGS_AUDIO=(pipewire libpulse cmake python-pipx espeak-ng)

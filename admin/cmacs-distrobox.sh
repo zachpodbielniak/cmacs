@@ -212,7 +212,7 @@ ensure_box () {
 	fi
 
 	log "creating distrobox from ${BASE_IMAGE}"
-	distrobox create --yes --name "${BOX}" --image "${BASE_IMAGE}"
+	distrobox create --yes --name "${BOX}" --image "${BASE_IMAGE}" 9>&-
 }
 
 # ensure_submodules
@@ -360,8 +360,11 @@ run_host () {
 	ensure_submodules
 	sync_tree "${tree}"
 
+	# 9>&-: the first enter STARTS the container, and conmon would
+	# inherit the lock fd -- holding the lock for as long as the box
+	# runs, so every later build of it dies "another build is running".
 	log "building inside the box"
-	distrobox enter "${BOX}" -- env -i \
+	distrobox enter "${BOX}" 9>&- -- env -i \
 		HOME="${HOME}" \
 		USER="${USER:-$(id -un)}" \
 		LOGNAME="${LOGNAME:-$(id -un)}" \
@@ -376,7 +379,7 @@ run_host () {
 	log "done: \`distrobox enter ${BOX} -- emacs' runs this build"
 	if [[ "${ENTER_AFTER}" -eq 1 ]]
 	then
-		exec distrobox enter "${BOX}"
+		exec distrobox enter "${BOX}" 9>&-
 	fi
 }
 
