@@ -618,45 +618,65 @@ frame stays a desktop 3D frame and says why on stderr.  From a running 3D frame
 
 The right hand points and acts; the left hand moves and is the *modifier
 hand*.  Buttons tell a tap from a hold (~cmacs-lrg-vr-hold-seconds~, 0.35).
-Holding the left stick, or =C-c v h=, shows the full sheet
+Holding View or the left stick, or =C-c v h=, shows the full sheet
 (~cmacs-lrg-vr-controller-help~), read from the keymap so it matches your
 rebindings.
 
 | Control                         | Tap                          | Hold                                  |
 |---------------------------------+------------------------------+---------------------------------------|
 | right trigger                   | =mouse-1= at the laser       | drag to select                        |
-| right grip                      | carry the panel / keyboard / world under the laser |                 |
+| grip (either hand)              | carry the panel / keyboard / world under the laser |                 |
 | right stick                     | scroll (Y), h-scroll (X) on a panel; off one, flick: workspaces (←/→), overview (↑/↓) | |
 | right stick press               | =mouse-3= on a panel; overview off one |                             |
 | left stick                      | walk (Y), snap-turn 30° (X)  |                                       |
-| left trigger / grip / both      | Shift / Meta / Control *layer* for the right hand |                  |
-| A =<vr-right-a>=                | in-world keyboard            | dictate at the cursor                 |
-| B =<vr-right-b>=                | escape                       | undo                                  |
-| X =<vr-left-x>=                 | select the pointed-at window | peek at every workspace               |
-| Y =<vr-left-y>=                 | =M-x=                        | voice command                         |
+| left trigger / bumper / both    | Shift / Meta / Control *layer* |                                     |
+| A =<vr-a>=                      | in-world keyboard            | dictate at the cursor                 |
+| B =<vr-b>=                      | escape                       | undo                                  |
+| X =<vr-x>=                      | select the pointed-at window | peek at every workspace               |
+| Y =<vr-y>=                      | =M-x=                        | voice command                         |
 | menu =<vr-menu>=                | quick menu                   | recenter                              |
+| view =<vr-view>=                | workspace overview           | controller help                       |
+| right bumper =<vr-bumper>=      | switch buffer                |                                       |
+| D-pad =<vr-dpad-left>= ...      | ←/→ workspaces, ↑ overview, ↓ back |                                 |
 | left stick press =<vr-left-stick>= | reset the view            | controller help                       |
 
 With a layer: Shift (left trigger) A new / B close / X switch workspace, Y
-switch buffer; Meta (left grip) A find file, B kill buffer, X recent files,
-Y save, flick ←/→ previous/next buffer; Control (both) A split right, B
-close window, X only window, Y split below, menu cycle arrangement, flick
-←/→ other window.
+switch buffer, D-pad ↑/↓ page up/down; Meta (left bumper) A find file, B
+kill buffer, X recent files, Y save, D-pad or flick ←/→ previous/next
+buffer; Control (both) A split right, B close window, X only window, Y
+split below, menu cycle arrangement, D-pad or flick ←/→ other window.
+
+*The Steam Frame* is a split gamepad: the right controller has A, B, X, Y
+and Menu, the left a D-pad and View, and each a bumper.  SteamVR offers it
+natively only to an app that enables
+=XR_VALVE_frame_controller_interaction= and suggests
+=/interaction_profiles/valve/frame_controller_valve=; otherwise it emulates
+an Oculus Touch, whose two face buttons per hand turned the right X and Y
+into B and dropped the D-pad, View and bumpers.  libregnum does both, and
+suggests the grip both as =squeeze/value= (accepted) and =grip/value=,
+since a rejected suggestion leaves the other in place.  Buttons are named
+by their letter, not their hand, so a Touch-style controller -- X and Y on
+the left, reported as that hand's A and B -- gets the same bindings.  The
+second layer button is the bumper where the modifier hand has one and the
+grip elsewhere (~cmacs-lrg-vr-modifier-source~); on the Frame the left grip
+grabs like the right.
 
 *How the events are made.*  ~vr_hand_input~ sends a tap on release, as the
-button's keysym (F25..F31); holding past the threshold sends the keysym
-with the *hyper* bit at once, and the release after a hold the keysym with
+button's keysym: F25..F29 for A B X Y menu, F30 / F31 for the stick
+presses, and a second bank -- F25..F31 with the *alt* bit -- for the right
+and left bumper, view and the D-pad.  Holding past the threshold sends the
+keysym with *hyper* at once, and the release after a hold the keysym with
 *super*.  Flicks are F32..F35.  The layer -- read from the modifier hand
 each frame, before either hand's input (~vr_read_layer~) -- is OR-ed into
-every event the other hand sends: buttons, clicks, wheel and in-world
-keys.  The layer modifiers are therefore limited to shift, meta, control
-and alt.  ~cmacs-lrg-vr--install-translations~ names the keysyms in
+every event: buttons, clicks, wheel and in-world keys, so the layer
+modifiers are limited to shift, meta and control.
+~cmacs-lrg-vr--install-translations~ names the keysyms in
 ~function-key-map~ for every layer, tap / hold / release
-(=S-H-f28= → =S-<vr-left-y-hold>=), and gives every unbound hold
-~cmacs-lrg-vr-hold-as-tap~ (a slow press still taps) and every release
-~cmacs-lrg-vr-button-released~, which runs what the hold registered with
-~cmacs-lrg-vr-on-release~ -- push-to-talk and peek are one hold command
-each.
+(=S-H-f28= → =S-<vr-y-hold>=, =A-f27= → =<vr-view>=), and gives every
+unbound hold ~cmacs-lrg-vr-hold-as-tap~ (a slow press still taps) and
+every release ~cmacs-lrg-vr-button-released~, which runs what the hold
+registered with ~cmacs-lrg-vr-on-release~ -- push-to-talk and peek are one
+hold command each.
 
 *Voice* (=cmacs-lrg-vr-voice.el=).  Hold A to dictate, hold Y for a
 command; =C-c v i= / =C-c v SPC= toggle the same from a keyboard.  Audio

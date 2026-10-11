@@ -11001,13 +11001,15 @@ shows every binding (@code{cmacs-lrg-vr-controller-help}).
 laser; scroll on a panel, and off one flick left/right for the previous
 or next workspace, up/down for the overview.  The stick press is
 @code{mouse-3} on a panel, the overview off one.
-@item left stick
-Walk, and snap-turn 30@textdegree{} (@code{cmacs-lrg-vr-move-hand}).
-@item left trigger, grip, both
-Shift, Meta and Control @emph{layers} for everything the right hand
-sends: buttons, clicks, the wheel, the in-world keyboard
-(@code{cmacs-lrg-vr-modifier-hand}, @code{cmacs-lrg-vr-trigger-modifier}
-and friends).
+@item left stick, grip
+Walk, and snap-turn 30@textdegree{} (@code{cmacs-lrg-vr-move-hand}); the
+grip grabs like the right one.
+@item left trigger, bumper, both
+Shift, Meta and Control @emph{layers} for every button, click, wheel event
+and in-world key (@code{cmacs-lrg-vr-modifier-hand},
+@code{cmacs-lrg-vr-trigger-modifier} and friends).  On a controller with
+no bumper the left grip is the second layer button
+(@code{cmacs-lrg-vr-modifier-source}).
 @item A
 Tap: in-world keyboard.  Hold: dictate at the cursor.
 @item B
@@ -11018,18 +11020,33 @@ Tap: select the pointed-at window.  Hold: peek at every workspace.
 Tap: @kbd{M-x}.  Hold: voice command.
 @item menu
 Tap: the quick menu.  Hold: recenter.
+@item view
+Tap: workspace overview.  Hold: controller help.
+@item right bumper, D-pad
+Switch buffer; previous/next workspace (left/right), overview and back
+(up/down).
 @item left stick press
 Tap: reset the view.  Hold: controller help.
 @end table
 
-With the Shift layer A, B and X make, close and switch workspaces and Y
-switches buffer; with Meta A finds a file, B kills the buffer, X opens a
-recent file and Y saves; with Control A and Y split, B closes the window,
-X keeps only it and menu cycles the panel arrangement.  Buttons arrive as
-F25--F31 (flicks F32--F35), with hyper for a hold and super for the
-release after one, and are translated to @code{<vr-right-a>},
-@code{<vr-right-a-hold>} and @code{<vr-right-a-release>} with the layer's
-modifiers; an unbound hold does the tap, and a release runs what the hold
+With the Shift layer A, B and X make, close and switch workspaces, Y
+switches buffer and the D-pad pages; with Meta A finds a file, B kills the
+buffer, X opens a recent file, Y saves and the D-pad steps through
+buffers; with Control A and Y split, B closes the window, X keeps only it,
+menu cycles the panel arrangement and the D-pad changes window.
+
+The Steam Frame is a split gamepad (right A, B, X, Y, menu; left D-pad,
+view; a bumper on each).  SteamVR offers it natively only with
+@code{XR_VALVE_frame_controller_interaction} and the profile
+@code{/interaction_profiles/valve/frame_controller_valve}, which libregnum
+uses; otherwise SteamVR emulates an Oculus Touch, whose right X and Y both
+arrive as B.  Buttons are named by their letter, not their hand:
+@code{<vr-a>}, @code{<vr-b>}, @code{<vr-x>}, @code{<vr-y>},
+@code{<vr-menu>}, @code{<vr-view>}, @code{<vr-bumper>},
+@code{<vr-dpad-up>} and so on, with @code{-hold} and @code{-release}
+forms and the layer's modifiers.  They arrive as F25--F31 (a second bank
+with the alt bit), with hyper for a hold and super for the release after
+one; an unbound hold does the tap, and a release runs what the hold
 registered with @code{cmacs-lrg-vr-on-release}.
 
 Voice is push-to-talk and offline: audio from cmacs-audio is transcribed

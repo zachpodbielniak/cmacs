@@ -81,6 +81,16 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #define VR_XK_F34       0xffdf   /* <vr-flick-up> */
 #define VR_XK_F35       0xffe0   /* <vr-flick-down> */
 
+/* Buttons are named by their letter, not their hand: <vr-a> <vr-b> <vr-x>
+   <vr-y> <vr-menu> -- F25..F29.  A Touch-style controller has A and B on
+   the right and X and Y on the left, which arrive as the left hand's A and
+   B bits; the Steam Frame has all four on the right.  Either way the
+   letter on the button is its name.  Buttons past the F-keys are a second
+   bank, F25..F31 with the alt bit: <vr-bumper> (the pointer hand's),
+   <vr-left-bumper>, <vr-view> and the D-pad.  So alt cannot be a layer
+   modifier.  */
+#define VR_BANK2        alt_modifier
+
 /* Buttons distinguish a tap from a hold.  A tap is sent on release, as the
    button's plain keysym; holding past the hold time sends the keysym with
    the hyper bit at once, and the release after that the keysym with the
@@ -91,7 +101,11 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #define VR_HOLD_MOD     hyper_modifier
 #define VR_RELEASE_MOD  super_modifier
 
-enum vr_button { VB_A, VB_B, VB_MENU, VB_STICK, VB_COUNT };
+enum vr_button
+{
+  VB_A, VB_B, VB_X, VB_Y, VB_MENU, VB_STICK, VB_BUMPER, VB_VIEW,
+  VB_DPAD_UP, VB_DPAD_DOWN, VB_DPAD_LEFT, VB_DPAD_RIGHT, VB_COUNT
+};
 
 #define VR_DEADZONE      0.25f
 #define VR_SNAP_ARM      0.75f
@@ -268,6 +282,10 @@ static struct
      to everything the other hand sends.  */
   bool modifier_hand;
   int mod_trigger, mod_grip, mod_both;
+  int mod_second;                /* 0 auto, 1 bumper, 2 grip: the second
+                                    layer button (see vr_second_is_bumper) */
+  bool second_is_bumper;         /* resolved: the bumper, not the grip */
+  gint64 second_checked_us;
   int layer;                     /* modifiers in effect this frame */
   gint64 hold_us;                /* tap / hold threshold */
 } vr = {
@@ -1020,22 +1038,38 @@ vr_read_layer (void)
   b = lrg_vr_service_get_controller_buttons (vr_service (),
                                              (LrgVRHand) vr.move_hand);
   trig = (b & LRG_VR_CONTROLLER_BUTTON_TRIGGER) != 0;
-  grip = (b & LRG_VR_CONTROLLER_BUTTON_GRIP) != 0;
+  grip = (b & (vr.second_is_bumper ? LRG_VR_CONTROLLER_BUTTON_BUMPER
+                                   : LRG_VR_CONTROLLER_BUTTON_GRIP)) != 0;
   return trig && grip ? vr.mod_both : trig ? vr.mod_trigger
          : grip ? vr.mod_grip : 0;
 }
 
+/* The keysym and bank bit button B of hand H is sent as.  */
 static int
-vr_button_keysym (int h, enum vr_button b)
+vr_button_keysym (int h, enum vr_button b, int *bank)
 {
   bool right = h == LRG_VR_HAND_RIGHT;
 
+  *bank = 0;
   switch (b)
     {
-    case VB_A: return right ? VR_XK_F25 : VR_XK_F27;
-    case VB_B: return right ? VR_XK_F26 : VR_XK_F28;
+    case VB_A: return right ? VR_XK_F25 : VR_XK_F27;   /* Touch: left A = X */
+    case VB_B: return right ? VR_XK_F26 : VR_XK_F28;   /* Touch: left B = Y */
+    case VB_X: return VR_XK_F27;
+    case VB_Y: return VR_XK_F28;
     case VB_MENU: return VR_XK_F29;
-    default: return h == vr.move_hand ? VR_XK_F30 : VR_XK_F31;
+    case VB_STICK: return h == vr.move_hand ? VR_XK_F30 : VR_XK_F31;
+    default: break;
+    }
+  *bank = VR_BANK2;
+  switch (b)
+    {
+    case VB_BUMPER: return h == vr.move_hand ? VR_XK_F26 : VR_XK_F25;
+    case VB_VIEW: return VR_XK_F27;
+    case VB_DPAD_UP: return VR_XK_F28;
+    case VB_DPAD_DOWN: return VR_XK_F29;
+    case VB_DPAD_LEFT: return VR_XK_F30;
+    default: return VR_XK_F31;                         /* VB_DPAD_RIGHT */
     }
 }
 
@@ -1045,7 +1079,7 @@ vr_button (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
 {
   struct vr_hand *hand = &vr.hand[h];
   gint64 now = g_get_monotonic_time ();
-  int count = 0, sym = vr_button_keysym (h, b);
+  int bank, count = 0, sym = vr_button_keysym (h, b, &bank);
 
   if (pressed_now (hand, bit))
     {
@@ -1070,13 +1104,14 @@ vr_button (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
     {
       hand->btn_held[b] = true;
       vr_pulse (h, 0.02f, 0.45f);
-      count += vr_emit_keysym (hold_quit, sym, hand->btn_mods[b] | VR_HOLD_MOD);
+      count += vr_emit_keysym (hold_quit, sym,
+                               hand->btn_mods[b] | bank | VR_HOLD_MOD);
     }
   if (released_now (hand, bit) && hand->btn_down_us[b] != 0)
     {
       if (!hand->btn_consumed[b])
         count += vr_emit_keysym (hold_quit, sym,
-                                 hand->btn_mods[b]
+                                 hand->btn_mods[b] | bank
                                  | (hand->btn_held[b] ? VR_RELEASE_MOD : 0));
       hand->btn_down_us[b] = 0;
     }
@@ -1204,8 +1239,9 @@ vr_hand_input (struct input_event *hold_quit, int h)
       && !vr.hand[vr.pointer_hand].hit_panel)
     vr.pointer_hand = h;
 
-  /* Grip: carry the panel / keyboard under the laser, or the world. */
-  if (!modhand)
+  /* Grip: carry the panel / keyboard under the laser, or the world --
+     also on the modifier hand when its second layer button is the bumper. */
+  if (!modhand || vr.second_is_bumper)
     {
       if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_GRIP))
         grab_begin (hand, h);
@@ -1259,8 +1295,18 @@ vr_hand_input (struct input_event *hold_quit, int h)
   /* Buttons: tap, hold, release (vr_button).  */
   count += vr_button (hold_quit, h, VB_A, LRG_VR_CONTROLLER_BUTTON_A);
   count += vr_button (hold_quit, h, VB_B, LRG_VR_CONTROLLER_BUTTON_B);
+  count += vr_button (hold_quit, h, VB_X, LRG_VR_CONTROLLER_BUTTON_X);
+  count += vr_button (hold_quit, h, VB_Y, LRG_VR_CONTROLLER_BUTTON_Y);
   count += vr_button (hold_quit, h, VB_MENU, LRG_VR_CONTROLLER_BUTTON_MENU);
   count += vr_button (hold_quit, h, VB_STICK, LRG_VR_CONTROLLER_BUTTON_THUMBSTICK);
+  count += vr_button (hold_quit, h, VB_VIEW, LRG_VR_CONTROLLER_BUTTON_VIEW);
+  count += vr_button (hold_quit, h, VB_DPAD_UP, LRG_VR_CONTROLLER_BUTTON_DPAD_UP);
+  count += vr_button (hold_quit, h, VB_DPAD_DOWN, LRG_VR_CONTROLLER_BUTTON_DPAD_DOWN);
+  count += vr_button (hold_quit, h, VB_DPAD_LEFT, LRG_VR_CONTROLLER_BUTTON_DPAD_LEFT);
+  count += vr_button (hold_quit, h, VB_DPAD_RIGHT, LRG_VR_CONTROLLER_BUTTON_DPAD_RIGHT);
+  /* The modifier hand's bumper is a layer button there, not a button.  */
+  if (!(modhand && vr.second_is_bumper))
+    count += vr_button (hold_quit, h, VB_BUMPER, LRG_VR_CONTROLLER_BUTTON_BUMPER);
   return count;
 }
 
@@ -1561,6 +1607,20 @@ cmacs_lrgvr_tick (struct frame *f, struct input_event *hold_quit)
   /* The modifier hand's layer applies to everything the other hand sends
      this frame; a change is felt in the modifier hand.  The modifier hand
      never holds the mouse.  */
+  /* The second layer button: the bumper where the modifier hand has one
+     (the Steam Frame), else the grip.  Re-read now and then: the runtime
+     binds the controller profile after the session starts.  */
+  if (vr.mod_second != 0)
+    vr.second_is_bumper = vr.mod_second == 1;
+  else if (g_get_monotonic_time () - vr.second_checked_us > 2 * G_USEC_PER_SEC)
+    {
+      char *prof = lrg_openxr_service_get_interaction_profile
+        (vr.xr, (LrgVRHand) vr.move_hand);
+      vr.second_is_bumper = prof != NULL && strstr (prof, "frame_controller") != NULL;
+      vr.second_checked_us = g_get_monotonic_time ();
+      g_free (prof);
+    }
+
   {
     int layer = vr_read_layer ();
     if (layer != vr.layer)
@@ -1729,8 +1789,9 @@ SECONDS defaults to 0.05 and AMPLITUDE (0..1) to 0.5.  */)
   return Qnil;
 }
 
-/* A layer modifier named by SYM.  Hyper and super are taken: they mark a
-   button's hold and release (VR_HOLD_MOD, VR_RELEASE_MOD).  */
+/* A layer modifier named by SYM: shift, meta or control.  Hyper and super
+   mark a button's hold and release (VR_HOLD_MOD, VR_RELEASE_MOD), alt its
+   second bank (VR_BANK2).  */
 static int
 vr_modifier_bit (Lisp_Object sym)
 {
@@ -1741,8 +1802,6 @@ vr_modifier_bit (Lisp_Object sym)
     return meta_modifier;
   if (EQ (sym, intern_c_string ("control")))
     return ctrl_modifier;
-  if (EQ (sym, intern_c_string ("alt")))
-    return alt_modifier;
   xsignal2 (Qwrong_type_argument, intern_c_string ("vr-layer-modifier-p"), sym);
 }
 
@@ -1795,8 +1854,6 @@ no layer is.  */)
     mods = Fcons (intern_c_string ("meta"), mods);
   if (vr.layer & ctrl_modifier)
     mods = Fcons (intern_c_string ("control"), mods);
-  if (vr.layer & alt_modifier)
-    mods = Fcons (intern_c_string ("alt"), mods);
   return mods;
 }
 
@@ -1814,10 +1871,15 @@ KEY is one of:
   `modifier-hand' non-nil: the move hand's trigger and grip are layer
                   modifiers for everything the other hand sends, instead
                   of click and grab (default t)
-  `mod-trigger', `mod-grip', `mod-both'
-                  the modifier for the trigger, the grip and both held:
-                  `shift', `meta', `control' or `alt' (defaults shift,
-                  meta, control)
+  `mod-trigger', `mod-bumper', `mod-both'
+                  the modifier for the trigger, the second layer button
+                  and both held: `shift', `meta' or `control' (defaults
+                  shift, meta, control); `mod-grip' is an alias of
+                  `mod-bumper'
+  `mod-second-source'
+                  the second layer button: `bumper', `grip', or `auto'
+                  -- the bumper on controllers that have one (the Steam
+                  Frame), else the grip
   `hold-seconds'  how long a button is held before it is a hold, not a
                   tap (default 0.35)
 Return VALUE.  */)
@@ -1829,6 +1891,8 @@ Return VALUE.  */)
       && !EQ (key, intern_c_string ("modifier-hand"))
       && !EQ (key, intern_c_string ("mod-trigger"))
       && !EQ (key, intern_c_string ("mod-grip"))
+      && !EQ (key, intern_c_string ("mod-bumper"))
+      && !EQ (key, intern_c_string ("mod-second-source"))
       && !EQ (key, intern_c_string ("mod-both")))
     CHECK_NUMBER (value);
   if (EQ (key, intern_c_string ("snap-degrees")))
@@ -1848,8 +1912,15 @@ Return VALUE.  */)
     vr.modifier_hand = !NILP (value);
   else if (EQ (key, intern_c_string ("mod-trigger")))
     vr.mod_trigger = vr_modifier_bit (value);
-  else if (EQ (key, intern_c_string ("mod-grip")))
+  else if (EQ (key, intern_c_string ("mod-grip"))
+           || EQ (key, intern_c_string ("mod-bumper")))
     vr.mod_grip = vr_modifier_bit (value);
+  else if (EQ (key, intern_c_string ("mod-second-source")))
+    {
+      vr.mod_second = EQ (value, intern_c_string ("bumper")) ? 1
+                      : EQ (value, intern_c_string ("grip")) ? 2 : 0;
+      vr.second_checked_us = 0;
+    }
   else if (EQ (key, intern_c_string ("mod-both")))
     vr.mod_both = vr_modifier_bit (value);
   else if (EQ (key, intern_c_string ("hold-seconds")))

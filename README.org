@@ -417,8 +417,14 @@ the /VR mode/ section of [[file:doc_org/cmacs/cmacs-lrgterm.org][the lrgterm man
 
 The right hand points and acts; the left hand moves and is a *modifier
 hand*.  Every button tells a *tap* (press and let go) from a *hold*
-(0.35 s or longer).  Hold the left stick, or press =C-c v h=, for the full
-sheet, generated from your actual bindings.
+(0.35 s or longer).  Hold View or the left stick, or press =C-c v h=, for
+the full sheet, generated from your actual bindings.
+
+On the *Steam Frame* (a split gamepad: right A B X Y and Menu, left D-pad
+and View, a bumper on each) cmacs binds the controllers natively
+(=XR_VALVE_frame_controller_interaction=).  Buttons are named by their
+letter, so on Touch-style controllers, with X and Y on the left, the same
+bindings apply.
 
 *** Right hand: pointing
 
@@ -438,37 +444,43 @@ sheet, generated from your actual bindings.
 |----------------------+-----------------------------------------------------------------|
 | Stick up / down      | walk forward / back                                             |
 | Stick left / right   | snap turn (30°)                                                 |
-| *Trigger held*       | *Shift layer* for everything the right hand does                |
-| *Grip held*          | *Meta layer*                                                    |
-| *Trigger + grip*     | *Control layer*                                                 |
+| Grip                 | grab, like the right grip                                       |
+| *Trigger held*       | *Shift layer*                                                   |
+| *Bumper held*        | *Meta layer* (the grip, on controllers without a bumper)        |
+| *Trigger + bumper*   | *Control layer*                                                 |
 
-A layer reaches clicks (=S-mouse-1= extends the region), the wheel
-(=C-wheel= zooms text), the in-world keyboard (trigger = Shift) and every
-button below.  With a layer held the right stick flicks even on a panel.
-A dot on the left controller shows the layer: blue, green, orange.
+A layer reaches every button, click (=S-mouse-1= extends the region), the
+wheel (=C-wheel= zooms text) and the in-world keyboard (trigger = Shift).
+With a layer held the right stick flicks even on a panel.  A dot on the
+left controller shows the layer: blue, green, orange.
 
 *** Buttons
 
 | Button               | Tap                               | Hold                                     |
 |----------------------+-----------------------------------+------------------------------------------|
-| A (right)            | in-world keyboard                 | *dictate* -- speak, release: typed at the cursor |
-| B (right)            | escape (=<escape>= under Evil)    | undo                                     |
-| X (left)             | select the pointed-at window      | *peek* at every workspace, release to return |
-| Y (left)             | =M-x=                             | *voice command* -- speak, release: done  |
-| Menu (left)          | *quick menu* at the laser         | recenter the scene ahead of you          |
+| A                    | in-world keyboard                 | *dictate* -- speak, release: typed at the cursor |
+| B                    | escape (=<escape>= under Evil)    | undo                                     |
+| X                    | select the pointed-at window      | *peek* at every workspace, release to return |
+| Y                    | =M-x=                             | *voice command* -- speak, release: done  |
+| Menu                 | *quick menu* at the laser         | recenter the scene ahead of you          |
+| View                 | workspace overview                | controller help                          |
+| Right bumper         | switch buffer                     |                                          |
+| D-pad left / right   | previous / next workspace         |                                          |
+| D-pad up / down      | workspace overview / back         |                                          |
 | Left stick press     | reset the view                    | controller help                          |
 | Right stick press, off a panel | workspace overview       |                                          |
 
 *** With a layer
 
-| Button | Shift (left trigger) | Meta (left grip) | Control (both) |
-|--------+----------------------+------------------+----------------|
+| Button | Shift (left trigger) | Meta (left bumper) | Control (both) |
+|--------+----------------------+--------------------+----------------|
 | A      | new workspace        | find file (in the project) | split right |
-| B      | close workspace      | kill buffer      | close window   |
-| X      | switch workspace...  | recent files     | only this window |
-| Y      | switch buffer        | save             | split below    |
-| Menu   | controller help      |                  | cycle panel arrangement |
-| Right stick flick left / right | previous / next workspace | previous / next buffer | other window |
+| B      | close workspace      | kill buffer        | close window   |
+| X      | switch workspace...  | recent files       | only this window |
+| Y      | switch buffer        | save               | split below    |
+| Menu   | controller help      |                    | cycle panel arrangement |
+| D-pad up / down | page up / down |                  |                |
+| D-pad or stick flick left / right | previous / next workspace | previous / next buffer | other window |
 
 A hold with nothing bound does what the tap does, so a slow press is never
 lost.
@@ -505,9 +517,9 @@ while listening and amber while transcribing.
 
 Doom workspaces (persp-mode; tab-bar tabs without Doom) are panels on a 3D
 carousel around you: the current one in front, the others to its sides.
-Flick the right stick left / right off a panel (or anywhere with the left
-trigger held) to cycle, hold X to pull back and see them all, Shift+A for
-a new one.  The quick menu lists them by name.
+The D-pad left / right cycles them (so does flicking the right stick off a
+panel), D-pad up or View pulls back to see them all (hold X to peek), and
+left trigger + A makes a new one.  The quick menu lists them by name.
 
 ** Keyboards
 
@@ -543,10 +555,10 @@ The buttons are ordinary events in =cmacs-lrg-vr-mode-map=:
 
 #+begin_src emacs-lisp
 (with-eval-after-load 'cmacs-lrg-vr
-  (keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer)
+  (keymap-set cmacs-lrg-vr-mode-map "<vr-y>" #'consult-buffer)
   ;; Layers are modifiers; holds and releases have their own events.
-  (keymap-set cmacs-lrg-vr-mode-map "M-<vr-left-x>" #'magit-status)
-  (keymap-set cmacs-lrg-vr-mode-map "<vr-right-b-hold>" #'kill-current-buffer))
+  (keymap-set cmacs-lrg-vr-mode-map "M-<vr-x>" #'magit-status)
+  (keymap-set cmacs-lrg-vr-mode-map "<vr-b-hold>" #'kill-current-buffer))
 #+end_src
 
 A hold command can act on release with =cmacs-lrg-vr-on-release= (that is
@@ -565,8 +577,9 @@ Customize the group =cmacs-lrg-vr=:
 | =cmacs-lrg-vr-scale=         | =nil= (0.3) | metres per scene unit                                |
 | =cmacs-lrg-vr-frame-size=    | =(1240 . 880)= | frame pixels on the fixed-size panel; about one per display pixel on a Steam Frame |
 | =cmacs-lrg-vr-escape-key=    | =nil=       | what B sends                                         |
-| =cmacs-lrg-vr-modifier-hand= | =t=         | left trigger / grip are layers, not click / grab     |
-| =cmacs-lrg-vr-trigger-modifier=, =-grip-=, =-both-= | =shift=, =meta=, =control= | the layers' modifiers (=alt= also allowed) |
+| =cmacs-lrg-vr-modifier-hand= | =t=         | left trigger / bumper are layers                     |
+| =cmacs-lrg-vr-modifier-source= | =auto=    | second layer button: the bumper, or the grip on controllers without one |
+| =cmacs-lrg-vr-trigger-modifier=, =-bumper-=, =-both-= | =shift=, =meta=, =control= | the layers' modifiers |
 | =cmacs-lrg-vr-hold-seconds=  | 0.35        | tap / hold threshold                                 |
 | =cmacs-lrg-vr-carousel=      | =t=         | show workspaces on the 3D carousel in VR             |
 | =cmacs-lrg-vr-voice-speak-feedback= | =nil= | say voice-command results aloud (piper)            |
@@ -900,7 +913,7 @@ Module flags:
 - =--with-cmacs-cad= — Parametric CAD subsystem (cad-glib kernels: Manifold mesh-CSG + OpenCASCADE B-rep + SolveSpace sketches).  =.cad= (s-expression) and =.ccad= (crispy) part sources evaluate to solids with feature trees; sweep/loft/hole ops; topological face/edge references (so a hole follows its face across recomputes); =defassembly= with mates, drivable joints, a composition solver, bill of materials and interference detection (=C-c C-a= commands).  Parts render through the libregnum CAD nodes.  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= and =opencascade-devel= + =eigen3-devel= (installed by =install-deps=).  cad-glib builds from =deps/cad-glib= and links statically.  See [[file:doc_org/cmacs/cmacs-cad.org][the manual]].
 
 - =--with-cmacs-lrgterm= — =output_lrg=: an independent libregnum/raylib *display backend* (a third peer to the tty and pgtk backends) that renders the entire Emacs UI — glyphs, cursor, fringes, region, modeline, text decorations and inline images — through libregnum/graylib, reusing Emacs's own FreeType/HarfBuzz shaping via a GPU glyph atlas.  Opt in at runtime with =emacs --lrg= (the installed desktop launchers /Emacs Libregnum/ and /Emacs Libregnum (Client)/ do this for you); plain =emacs= still starts pgtk.  =emacs --lrg=3d= shows the frame as panels in a 3D scene and =emacs --lrg=3dvr= puts that scene in a VR headset (see =--with-cmacs-lrgvr=).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= + =--with-cmacs-glib= (reuses libregnum's archive and its =Lrg*= surface/atlas types).  See [[file:doc_org/cmacs/cmacs-lrgterm.org][the manual]].
-- =--with-cmacs-lrgvr= — =emacs --lrg=3dvr=: the lrg 3D scene in a *VR headset* through OpenXR (SteamVR — including the Steam Frame — Monado, WiVRn).  Panels float around you; each motion controller's laser clicks, drag-selects and scrolls in buffers as ordinary mouse events, the grip carries panels (or the world), the sticks walk/snap-turn and scroll, and an in-world keyboard types with sticky modifiers.  Face buttons arrive as =<vr-right-a>= etc. so they rebind like any key.  Frame pacing (=xrWaitFrame=) runs on its own thread and wakes Emacs's =pselect= through an eventfd, so it never blocks the editor.  =just steam-vr-shortcut= adds an /Emacs VR/ entry to the Steam library.  Part of the standard flag set; requires =--with-cmacs-lrgterm= and the OpenXR loader (=openxr-devel= / =libopenxr-dev= / =openxr=).  Without a runtime, =--lrg=3dvr= degrades to desktop 3D.
+- =--with-cmacs-lrgvr= — =emacs --lrg=3dvr=: the lrg 3D scene in a *VR headset* through OpenXR (SteamVR — including the Steam Frame — Monado, WiVRn).  Panels float around you; each motion controller's laser clicks, drag-selects and scrolls in buffers as ordinary mouse events, the grip carries panels (or the world), the sticks walk/snap-turn and scroll, and an in-world keyboard types with sticky modifiers.  Buttons arrive as =<vr-a>=, =<vr-y-hold>= etc. (with the left hand's trigger and bumper as Shift/Meta/Control layers) so they rebind like any key; push-to-talk dictation and voice commands, and Doom workspaces on a 3D carousel.  Frame pacing (=xrWaitFrame=) runs on its own thread and wakes Emacs's =pselect= through an eventfd, so it never blocks the editor.  =just steam-vr-shortcut= adds an /Emacs VR/ entry to the Steam library.  Part of the standard flag set; requires =--with-cmacs-lrgterm= and the OpenXR loader (=openxr-devel= / =libopenxr-dev= / =openxr=).  Without a runtime, =--lrg=3dvr= degrades to desktop 3D.
 
 - =--with-cmacs-screensaver= — Renders the =deps/screensavers= libregnum game modules (blackhole, singularity, helios) as an animated *gowl wallpaper*, an animated *lock-screen background* (=gowl-lock= integration), or *in-buffer* playback (=M-x cmacs-screensaver-play=).  cmacs renders each module off-screen to BGRA and pushes raw frames to gowl's frame-sink API, so *gowl links no libregnum* (guard-tested).  Named configs with raw CLI args + a completing-read picker (=cmacs-screensaver-set-wallpaper=).  Part of the standard flag set (=just bootstrap= and the container build include it); requires =--with-cmacs-libregnum= (wallpaper + lock additionally need =--with-cmacs-gowl=).  Modules build from =deps/screensavers= and install to =$(libdir)/cmacs/screensaver-modules=.  See [[file:doc_org/cmacs/cmacs-screensaver.org][the manual]].
 

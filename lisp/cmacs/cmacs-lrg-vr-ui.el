@@ -406,11 +406,18 @@ it.  Off an lrg frame, a completion list of the same items."
 ;;;; Controller help
 
 (defconst cmacs-lrg-vr--help-buttons
-  '((vr-right-a . "A (right)")
-    (vr-right-b . "B (right)")
-    (vr-left-x . "X (left)")
-    (vr-left-y . "Y (left)")
-    (vr-menu . "Menu (left)")
+  '((vr-a . "A")
+    (vr-b . "B")
+    (vr-x . "X")
+    (vr-y . "Y")
+    (vr-menu . "Menu")
+    (vr-view . "View")
+    (vr-bumper . "Right bumper")
+    (vr-left-bumper . "Left bumper (modifiers off)")
+    (vr-dpad-up . "D-pad up")
+    (vr-dpad-down . "D-pad down")
+    (vr-dpad-left . "D-pad left")
+    (vr-dpad-right . "D-pad right")
     (vr-left-stick . "Left stick press")
     (vr-right-stick . "Right stick press (off a panel)")
     (vr-flick-left . "Right stick flick left")
@@ -435,18 +442,20 @@ Read from `cmacs-lrg-vr-mode-map', so it shows your own bindings too."
   (interactive)
   (let ((layers `((nil . "")
                   ((,cmacs-lrg-vr-trigger-modifier) . "trigger")
-                  ((,cmacs-lrg-vr-grip-modifier) . "grip")
+                  ((,cmacs-lrg-vr-bumper-modifier) . "bumper")
                   ((,cmacs-lrg-vr-both-modifier) . "both"))))
     (with-help-window "*VR Controls*"
       (princ "VR controller bindings  (cmacs-lrg-vr-mode-map)\n\n")
       (princ "Right hand points:  trigger = click (mouse-1)   grip = grab a panel,\n")
       (princ "the keyboard or the world   stick = scroll   stick press on a panel\n")
-      (princ "= context menu (mouse-3).  Left hand: stick walks and snap-turns.\n")
+      (princ "= context menu (mouse-3).  Left hand: stick walks and snap-turns,\n")
+      (princ "grip grabs too.\n")
       (when cmacs-lrg-vr-modifier-hand
-        (princ (format "Left trigger = %s layer, left grip = %s, both = %s; the\n"
-                       cmacs-lrg-vr-trigger-modifier cmacs-lrg-vr-grip-modifier
+        (princ (format "Left trigger = %s layer, left bumper = %s, both = %s; the\n"
+                       cmacs-lrg-vr-trigger-modifier cmacs-lrg-vr-bumper-modifier
                        cmacs-lrg-vr-both-modifier))
-        (princ "layer applies to every right-hand button, click, scroll and key.\n"))
+        (princ "layer applies to every button, click, scroll and key.  (On a\n")
+        (princ "controller with no bumper the left grip is the second layer.)\n"))
       (princ (format "\nTap = press and let go;  hold = %.2gs or longer.\n\n"
                      cmacs-lrg-vr-hold-seconds))
       (pcase-dolist (`(,mods . ,lname) layers)

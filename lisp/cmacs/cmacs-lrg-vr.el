@@ -15,31 +15,35 @@
 ;; moving, turning and the in-world keyboard itself.
 ;;
 ;; The left controller is a *modifier hand* (`cmacs-lrg-vr-modifier-hand'):
-;; its trigger, its grip, or both held are layers -- shift, meta, control
-;; by default -- added to everything the right hand sends: buttons, clicks
-;; (S-mouse-1 extends the region), the wheel (C-wheel zooms text) and the
-;; in-world keyboard.
+;; its trigger, its bumper (the grip on controllers without one), or both
+;; held are layers -- shift, meta, control by default -- added to every
+;; button, click (S-mouse-1 extends the region), wheel event (C-wheel zooms
+;; text) and in-world key.
 ;;
-;; Buttons tell a tap from a hold.  Each arrives as an event named for
-;; it, with the layer's modifiers:
+;; Buttons are named by the letter on them, whichever hand it is on (the
+;; Steam Frame has A, B, X, Y on the right; Touch-style controllers X and Y
+;; on the left): <vr-a> <vr-b> <vr-x> <vr-y> <vr-menu> <vr-view>
+;; <vr-bumper> <vr-left-bumper> <vr-dpad-up> <vr-dpad-down> <vr-dpad-left>
+;; <vr-dpad-right> <vr-left-stick> and <vr-right-stick> (the pointer stick
+;; pressed off a panel; on one it is mouse-3).  Each tells a tap from a
+;; hold:
 ;;
-;;   <vr-right-a>          tap        <vr-right-a-hold>     held 0.35 s
-;;   <vr-right-a-release>  let go after a hold
+;;   <vr-a>          tap        <vr-a-hold>     held 0.35 s
+;;   <vr-a-release>  let go after a hold
 ;;
-;; for vr-right-a, vr-right-b, vr-left-x, vr-left-y, vr-menu,
-;; vr-left-stick and vr-right-stick (the pointer stick pressed off a
-;; panel; on one it is mouse-3).  The pointer stick flicked off a panel,
-;; or anywhere with a layer held, sends <vr-flick-left>, <vr-flick-right>,
-;; <vr-flick-up> and <vr-flick-down>.  The C side sends them as F25..F35
-;; with hyper (hold) and super (release); `cmacs-lrg-vr--install-translations'
-;; names them.  A hold with no binding of its own does what the tap does,
-;; and a release runs whatever the hold asked for (`cmacs-lrg-vr-on-release')
-;; -- so push-to-talk is one hold command.
+;; with the layer's modifiers (S-<vr-y-hold>).  The pointer stick flicked
+;; off a panel, or anywhere with a layer held, sends <vr-flick-left>,
+;; <vr-flick-right>, <vr-flick-up>, <vr-flick-down>.  The C side sends them
+;; as F25..F35 (alt for the second bank, hyper for a hold, super for its
+;; release); `cmacs-lrg-vr--install-translations' names them.  A hold with
+;; no binding of its own does what the tap does, and a release runs what
+;; the hold asked for (`cmacs-lrg-vr-on-release') -- so push-to-talk is one
+;; hold command.
 ;;
 ;; Rebind any of them in `cmacs-lrg-vr-mode-map':
 ;;
-;;   (keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer)
-;;   (keymap-set cmacs-lrg-vr-mode-map "S-<vr-right-a>" #'magit-status)
+;;   (keymap-set cmacs-lrg-vr-mode-map "<vr-y>" #'consult-buffer)
+;;   (keymap-set cmacs-lrg-vr-mode-map "S-<vr-a>" #'magit-status)
 ;;
 ;; \[cmacs-lrg-vr-controller-help] lists every binding; the voice,
 ;; workspace and quick-menu commands are in cmacs-lrg-vr-voice.el and
@@ -123,31 +127,41 @@ blur; fewer make text larger.  nil leaves the frame as created."
                  (cons (integer :tag "Width") (integer :tag "Height"))))
 
 (defcustom cmacs-lrg-vr-modifier-hand t
-  "Non-nil: the move hand's trigger and grip are layer modifiers.
-While on, that hand does not click or grab; its trigger, its grip, or
-both held add `cmacs-lrg-vr-trigger-modifier', `cmacs-lrg-vr-grip-modifier'
-or `cmacs-lrg-vr-both-modifier' to every button, click, scroll and
-keyboard key of the other hand.  A coloured dot on the controller shows
-the layer: blue trigger, green grip, orange both."
+  "Non-nil: the move hand's trigger and bumper are layer modifiers.
+While on, that hand's trigger does not click; its trigger, its bumper (the
+grip on a controller without one, which then does not grab), or both held
+add `cmacs-lrg-vr-trigger-modifier', `cmacs-lrg-vr-bumper-modifier' or
+`cmacs-lrg-vr-both-modifier' to every button, click, scroll and keyboard
+key.  A coloured dot on the controller shows the layer: blue trigger,
+green bumper, orange both."
   :type 'boolean
   :set (cmacs-lrg-vr--set 'modifier-hand))
 
+(defcustom cmacs-lrg-vr-modifier-source 'auto
+  "The modifier hand's second layer button.
+`auto' is the bumper on controllers that have one (the Steam Frame) and
+the grip elsewhere."
+  :type '(choice (const auto) (const bumper) (const grip))
+  :set (cmacs-lrg-vr--set 'mod-second-source))
+
 (defconst cmacs-lrg-vr--modifier-type
-  '(choice (const shift) (const meta) (const control) (const alt))
-  "The modifiers a controller layer can be (hyper and super mark holds).")
+  '(choice (const shift) (const meta) (const control))
+  "The modifiers a controller layer can be.
+Hyper and super mark a button's hold and release, alt its second bank.")
 
 (defcustom cmacs-lrg-vr-trigger-modifier 'shift
   "Modifier while the modifier hand's trigger is held."
   :type cmacs-lrg-vr--modifier-type
   :set (cmacs-lrg-vr--set 'mod-trigger))
 
-(defcustom cmacs-lrg-vr-grip-modifier 'meta
-  "Modifier while the modifier hand's grip is held."
+(defcustom cmacs-lrg-vr-bumper-modifier 'meta
+  "Modifier while the modifier hand's bumper (or grip) is held.
+See `cmacs-lrg-vr-modifier-source'."
   :type cmacs-lrg-vr--modifier-type
-  :set (cmacs-lrg-vr--set 'mod-grip))
+  :set (cmacs-lrg-vr--set 'mod-bumper))
 
 (defcustom cmacs-lrg-vr-both-modifier 'control
-  "Modifier while the modifier hand's trigger and grip are both held."
+  "Modifier while the modifier hand's trigger and bumper are both held."
   :type cmacs-lrg-vr--modifier-type
   :set (cmacs-lrg-vr--set 'mod-both))
 
@@ -157,21 +171,29 @@ the layer: blue trigger, green grip, orange both."
   :set (cmacs-lrg-vr--set 'hold-seconds))
 
 (defcustom cmacs-lrg-vr-escape-key nil
-  "What <vr-right-b> sends.
+  "What <vr-b> sends.
 nil means <escape> when `evil-mode' is on and \\[keyboard-quit] otherwise;
 a key description string (\"C-g\", \"<escape>\") forces one."
   :type '(choice (const :tag "Automatic" nil) string))
 
 (defconst cmacs-lrg-vr--button-keys
-  '((f25 . vr-right-a)
-    (f26 . vr-right-b)
-    (f27 . vr-left-x)
-    (f28 . vr-left-y)
-    (f29 . vr-menu)
-    (f30 . vr-left-stick)
-    (f31 . vr-right-stick))
-  "The function keys the controller buttons arrive as, and their names.
-Each also comes with hyper (held) and super (released after a hold).")
+  '((f25 nil vr-a)
+    (f26 nil vr-b)
+    (f27 nil vr-x)
+    (f28 nil vr-y)
+    (f29 nil vr-menu)
+    (f30 nil vr-left-stick)
+    (f31 nil vr-right-stick)
+    (f25 alt vr-bumper)
+    (f26 alt vr-left-bumper)
+    (f27 alt vr-view)
+    (f28 alt vr-dpad-up)
+    (f29 alt vr-dpad-down)
+    (f30 alt vr-dpad-left)
+    (f31 alt vr-dpad-right))
+  "The keys the controller buttons arrive as, (KEY BANK NAME).
+BANK is alt for the second bank.  Each also comes with hyper (held) and
+super (released after a hold).")
 
 (defconst cmacs-lrg-vr--flick-keys
   '((f32 . vr-flick-left)
@@ -184,7 +206,7 @@ Each also comes with hyper (held) and super (released after a hold).")
   "The modifier sets a controller layer can add: none, then each layer's."
   (delete-dups (list nil
                      (list cmacs-lrg-vr-trigger-modifier)
-                     (list cmacs-lrg-vr-grip-modifier)
+                     (list cmacs-lrg-vr-bumper-modifier)
                      (list cmacs-lrg-vr-both-modifier))))
 
 (defun cmacs-lrg-vr-active-now-p ()
@@ -300,44 +322,57 @@ See `cmacs-lrg-vr-escape-key'."
   :doc "Keymap for `cmacs-lrg-vr-mode': controller buttons and VR commands.
 Layers (the modifier hand): S- trigger, M- grip, C- both, by default."
   ;; No layer.
-  "<vr-right-a>"           #'cmacs-lrg-vr-toggle-keyboard
-  "<vr-right-a-hold>"      #'cmacs-lrg-vr-voice-dictate-hold
-  "<vr-right-b>"           #'cmacs-lrg-vr-escape
-  "<vr-right-b-hold>"      #'cmacs-lrg-vr-undo
-  "<vr-left-x>"            #'cmacs-lrg-vr-focus-pointed-window
-  "<vr-left-x-hold>"       #'cmacs-lrg-vr-workspace-peek
-  "<vr-left-y>"            #'execute-extended-command
-  "<vr-left-y-hold>"       #'cmacs-lrg-vr-voice-command-hold
+  "<vr-a>"                 #'cmacs-lrg-vr-toggle-keyboard
+  "<vr-a-hold>"            #'cmacs-lrg-vr-voice-dictate-hold
+  "<vr-b>"                 #'cmacs-lrg-vr-escape
+  "<vr-b-hold>"            #'cmacs-lrg-vr-undo
+  "<vr-x>"                 #'cmacs-lrg-vr-focus-pointed-window
+  "<vr-x-hold>"            #'cmacs-lrg-vr-workspace-peek
+  "<vr-y>"                 #'execute-extended-command
+  "<vr-y-hold>"            #'cmacs-lrg-vr-voice-command-hold
   "<vr-menu>"              #'cmacs-lrg-vr-quick-menu
   "<vr-menu-hold>"         #'cmacs-lrg-vr-recenter-view
+  "<vr-view>"              #'cmacs-lrg-vr-workspace-overview
+  "<vr-view-hold>"         #'cmacs-lrg-vr-controller-help
+  "<vr-bumper>"            #'cmacs-lrg-vr-switch-buffer
   "<vr-left-stick>"        #'cmacs-lrg-vr-reset-view
   "<vr-left-stick-hold>"   #'cmacs-lrg-vr-controller-help
   "<vr-right-stick>"       #'cmacs-lrg-vr-workspace-overview
+  "<vr-dpad-left>"         #'cmacs-lrg-vr-workspace-previous
+  "<vr-dpad-right>"        #'cmacs-lrg-vr-workspace-next
+  "<vr-dpad-up>"           #'cmacs-lrg-vr-workspace-overview
+  "<vr-dpad-down>"         #'cmacs-lrg-vr-workspace-overview-off
   "<vr-flick-left>"        #'cmacs-lrg-vr-workspace-previous
   "<vr-flick-right>"       #'cmacs-lrg-vr-workspace-next
   "<vr-flick-up>"          #'cmacs-lrg-vr-workspace-overview
   "<vr-flick-down>"        #'cmacs-lrg-vr-workspace-overview-off
   ;; Trigger layer (S-): workspaces and buffers.
-  "S-<vr-right-a>"         #'cmacs-lrg-vr-workspace-new
-  "S-<vr-right-b>"         #'cmacs-lrg-vr-workspace-close
-  "S-<vr-left-x>"          #'cmacs-lrg-vr-workspace-switch
-  "S-<vr-left-y>"          #'cmacs-lrg-vr-switch-buffer
+  "S-<vr-a>"               #'cmacs-lrg-vr-workspace-new
+  "S-<vr-b>"               #'cmacs-lrg-vr-workspace-close
+  "S-<vr-x>"               #'cmacs-lrg-vr-workspace-switch
+  "S-<vr-y>"               #'cmacs-lrg-vr-switch-buffer
   "S-<vr-menu>"            #'cmacs-lrg-vr-controller-help
+  "S-<vr-dpad-up>"         #'scroll-down-command
+  "S-<vr-dpad-down>"       #'scroll-up-command
   "S-<vr-flick-left>"      #'cmacs-lrg-vr-workspace-previous
   "S-<vr-flick-right>"     #'cmacs-lrg-vr-workspace-next
-  ;; Grip layer (M-): files and buffers.
-  "M-<vr-right-a>"         #'cmacs-lrg-vr-find-file
-  "M-<vr-right-b>"         #'cmacs-lrg-vr-kill-buffer
-  "M-<vr-left-x>"          #'cmacs-lrg-vr-recent-file
-  "M-<vr-left-y>"          #'save-buffer
+  ;; Bumper layer (M-): files and buffers.
+  "M-<vr-a>"               #'cmacs-lrg-vr-find-file
+  "M-<vr-b>"               #'cmacs-lrg-vr-kill-buffer
+  "M-<vr-x>"               #'cmacs-lrg-vr-recent-file
+  "M-<vr-y>"               #'save-buffer
+  "M-<vr-dpad-left>"       #'previous-buffer
+  "M-<vr-dpad-right>"      #'next-buffer
   "M-<vr-flick-left>"      #'previous-buffer
   "M-<vr-flick-right>"     #'next-buffer
   ;; Both (C-): windows.
-  "C-<vr-right-a>"         #'cmacs-lrg-vr-split-right
-  "C-<vr-right-b>"         #'delete-window
-  "C-<vr-left-x>"          #'delete-other-windows
-  "C-<vr-left-y>"          #'cmacs-lrg-vr-split-below
+  "C-<vr-a>"               #'cmacs-lrg-vr-split-right
+  "C-<vr-b>"               #'delete-window
+  "C-<vr-x>"               #'delete-other-windows
+  "C-<vr-y>"               #'cmacs-lrg-vr-split-below
   "C-<vr-menu>"            #'cmacs-lrg-vr-cycle-arrangement
+  "C-<vr-dpad-left>"       #'cmacs-lrg-vr-other-window-back
+  "C-<vr-dpad-right>"      #'other-window
   "C-<vr-flick-left>"      #'cmacs-lrg-vr-other-window-back
   "C-<vr-flick-right>"     #'other-window
   ;; The keyboard, under the voice prefix (`C-c v', shared with
@@ -367,20 +402,22 @@ Layers (the modifier hand): S- trigger, M- grip, C- both, by default."
    (append mods (list (if suffix (intern (format "%s-%s" base suffix)) base)))))
 
 (defun cmacs-lrg-vr--install-translations ()
-  "Name the controller's function keys: <vr-right-a>, its -hold, -release.
+  "Name the controller's function keys: <vr-a>, its -hold, -release.
 Every layer gets its own translation, since `function-key-map' does not
 carry modifiers across.  Holds and releases with no binding go to the
 dispatchers, so a slow press still does the tap and no release is ever
 \"undefined\"."
   (dolist (mods (cmacs-lrg-vr--layer-modifiers))
-    (pcase-dolist (`(,fkey . ,name) cmacs-lrg-vr--button-keys)
+    (pcase-dolist (`(,fkey ,bank ,name) cmacs-lrg-vr--button-keys)
       (define-key function-key-map
-                  (vector (event-convert-list (append mods (list fkey))))
+                  (vector (event-convert-list
+                           (append mods (and bank (list bank)) (list fkey))))
                   (vector (cmacs-lrg-vr--event name mods)))
       (pcase-dolist (`(,bit . ,suffix) '((hyper . "hold") (super . "release")))
         (let ((to (cmacs-lrg-vr--event name mods suffix)))
           (define-key function-key-map
-                      (vector (event-convert-list (append mods (list bit fkey))))
+                      (vector (event-convert-list
+                               (append mods (and bank (list bank)) (list bit fkey))))
                       (vector to))
           (unless (lookup-key cmacs-lrg-vr-mode-map (vector to))
             (define-key cmacs-lrg-vr-mode-map (vector to)
@@ -398,7 +435,7 @@ dispatchers, so a slow press still does the tap and no release is ever
   "Alist (BUTTON . FUNCTION): what releasing BUTTON after a hold runs.")
 
 (defun cmacs-lrg-vr--button-of (event)
-  "The button symbol (vr-right-a ...) EVENT is a tap, hold or release of."
+  "The button symbol (vr-a ...) EVENT is a tap, hold or release of."
   (let ((name (symbol-name (event-basic-type event))))
     (intern (replace-regexp-in-string "-\\(hold\\|release\\)\\'" "" name))))
 
@@ -467,7 +504,8 @@ FUNCTION and an input event bound to `cmacs-lrg-vr--run-deferred'."
     (cmacs-lrg-vr-set-option 'keyboard-tilt cmacs-lrg-vr-keyboard-tilt)
     (cmacs-lrg-vr-set-option 'modifier-hand cmacs-lrg-vr-modifier-hand)
     (cmacs-lrg-vr-set-option 'mod-trigger cmacs-lrg-vr-trigger-modifier)
-    (cmacs-lrg-vr-set-option 'mod-grip cmacs-lrg-vr-grip-modifier)
+    (cmacs-lrg-vr-set-option 'mod-bumper cmacs-lrg-vr-bumper-modifier)
+    (cmacs-lrg-vr-set-option 'mod-second-source cmacs-lrg-vr-modifier-source)
     (cmacs-lrg-vr-set-option 'mod-both cmacs-lrg-vr-both-modifier)
     (cmacs-lrg-vr-set-option 'hold-seconds cmacs-lrg-vr-hold-seconds))
   (when (and cmacs-lrg-vr-scale (cmacs-lrg-vr-active-now-p))
@@ -476,7 +514,7 @@ FUNCTION and an input event bound to `cmacs-lrg-vr--run-deferred'."
 ;;;###autoload
 (define-minor-mode cmacs-lrg-vr-mode
   "Bindings for Emacs in a VR headset (`emacs --lrg=3dvr').
-Binds the controller buttons (<vr-right-a> and friends) and \\`C-c v'
+Binds the controller buttons (<vr-a> and friends) and \\`C-c v'
 VR commands.  Harmless off a headset: the <vr-...> events only come from
 controllers."
   :global t
@@ -496,7 +534,7 @@ controllers."
     (when (fboundp 'cmacs-lrg-vr-ui--session-start)
       (cmacs-lrg-vr-ui--session-start))
     (message "%s" (substitute-command-keys "VR: menu button = quick menu, \
-hold left stick = all controls (\\[cmacs-lrg-vr-controller-help]).  Hold A to \
+hold View or the left stick = all controls (\\[cmacs-lrg-vr-controller-help]).  Hold A to \
 dictate, hold Y for a voice command"))))
 
 (add-hook 'window-setup-hook #'cmacs-lrg-vr--announce)

@@ -11,8 +11,8 @@
 ;; Push-to-talk for Emacs in a VR headset (`emacs --lrg=3dvr'), usable off
 ;; one too.  Hold a controller button, speak, let go:
 ;;
-;;   hold A  (right)   dictate -- the words are typed where the cursor is
-;;   hold Y  (left)    a voice command -- "new workspace", "save",
+;;   hold A            dictate -- the words are typed where the cursor is
+;;   hold Y            a voice command -- "new workspace", "save",
 ;;                     "switch to buffer notes", "split right", ...
 ;;
 ;; From a keyboard the same two are toggles:
@@ -286,7 +286,7 @@ text, from the command loop (`cmacs-lrg-vr-run-later')."
   (let ((base (and (symbolp (event-basic-type last-command-event))
                    (symbol-name (event-basic-type last-command-event)))))
     (cond ((null base) (and (cmacs-lrg-vr-active-now-p) 'right))
-          ((string-prefix-p "vr-left" base) 'left)
+          ((string-match-p "\\`vr-\\(?:left\\|dpad\\|view\\)" base) 'left)
           (t 'right))))
 
 
