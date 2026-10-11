@@ -41,6 +41,8 @@
 (declare-function persp-parameter "ext:persp-mode" (param-name &optional persp))
 (declare-function set-persp-parameter "ext:persp-mode" (param-name value &optional persp))
 (declare-function safe-persp-window-conf "ext:persp-mode" (p))
+(declare-function cmacs-lrg-vr-active-p "cmacs-lrgvr.c")
+(declare-function cmacs-lrg-vr-turn "cmacs-lrgvr.c" (degrees))
 (declare-function persp-buffers "ext:persp-mode" (p))
 
 ;; Forward declaration: the mode variable is defined by the `define-minor-mode'
@@ -51,6 +53,33 @@
   "Spatial 3D workspace switcher for the libregnum backend."
   :group 'cmacs-lrg-3d
   :prefix "cmacs-lrg-3d-workspaces-")
+
+(defcustom cmacs-lrg-3d-workspaces-layout 'auto
+  "How the other workspaces stand around the live one.
+`desk': a full circle around your seat, every workspace the same distance
+away and size as the live one, at eye height, facing you -- a 360-degree
+desk; turn to any of them.  `arc': a shallow arc behind and beside the
+live panel, curving away, for a fixed desktop view.  `auto' is `desk' in
+a VR headset and `arc' otherwise."
+  :type '(choice (const auto) (const desk) (const arc))
+  :group 'cmacs-lrg-3d-workspaces)
+
+(defcustom cmacs-lrg-3d-workspaces-desk-radius 6.6
+  "Distance, in world units, from your seat to each workspace on the desk.
+The default is the live panel's distance at the default camera (about 2 m
+at the default VR scale), so every workspace reads like the live one."
+  :type 'number
+  :group 'cmacs-lrg-3d-workspaces)
+
+(defcustom cmacs-lrg-3d-workspaces-desk-height 4.6
+  "Height, in world units, of each workspace on the desk (the live panel's)."
+  :type 'number
+  :group 'cmacs-lrg-3d-workspaces)
+
+(defcustom cmacs-lrg-3d-workspaces-desk-gap 4.0
+  "Degrees of space between neighbouring workspaces on the desk."
+  :type 'number
+  :group 'cmacs-lrg-3d-workspaces)
 
 (defcustom cmacs-lrg-3d-workspaces-radius 10.0
   "Curve radius (world units) of the workspace carousel.
@@ -180,13 +209,70 @@ Requires Doom's `+workspace' API and a live 3D lrg frame."
         (/ (float (frame-pixel-width f)) (frame-pixel-height f))
       cmacs-lrg-3d-workspaces--default-aspect)))
 
-(defun cmacs-lrg-3d-workspaces--slot (rel aspect)
+(defun cmacs-lrg-3d-workspaces--desk-p ()
+  "Non-nil when the workspaces stand on the 360-degree desk."
+  (pcase cmacs-lrg-3d-workspaces-layout
+    ('desk t)
+    ('arc nil)
+    (_ (and (fboundp 'cmacs-lrg-vr-active-p) (cmacs-lrg-vr-active-p)))))
+
+(defun cmacs-lrg-3d-workspaces--desk-geometry (count aspect)
+  "The desk's (STEP-DEGREES WIDTH HEIGHT) for COUNT workspaces of ASPECT.
+STEP is a panel's angular width at the desk radius plus the gap; when
+COUNT of them would not fit in a circle, the step is 360 / COUNT and the
+panels shrink to fit their share."
+  (let* ((r cmacs-lrg-3d-workspaces-desk-radius)
+         (h cmacs-lrg-3d-workspaces-desk-height)
+         (w (* h aspect))
+         (gap cmacs-lrg-3d-workspaces-desk-gap)
+         (step (+ (* 2 (radians-to-degrees (atan (/ w 2.0) r))) gap)))
+    (if (<= (* (max count 1) step) 360.0)
+        (list step w h)
+      (let* ((step (/ 360.0 count))
+             (fit (* 2 r (tan (degrees-to-radians (/ (max 1.0 (- step gap)) 2.0)))))
+             (k (/ fit w)))
+        (list step (* w k) (* h k))))))
+
+(defun cmacs-lrg-3d-workspaces--desk-slot (rel aspect count)
+  "The desk transform (PX PY PZ YAW W H) for the workspace REL from the live one.
+The circle is centred on the seat -- the default camera's eye, the live
+panel's distance in front of it -- so REL 0 lands on the live panel at
+the origin; positive REL goes to your right.  Each panel faces the seat.
+REL is not wrapped: a workspace keeps its place on the circle when
+another becomes current, so turning to it (or pointing at it and pulling
+the trigger, which turns you) finds it where it was."
+  (pcase-let* ((`(,step ,w ,h) (cmacs-lrg-3d-workspaces--desk-geometry count aspect))
+               (r cmacs-lrg-3d-workspaces-desk-radius)
+               (deg (* rel step))
+               (th (degrees-to-radians deg)))
+    (list (* r (sin th))
+          cmacs-lrg-3d-workspaces-elevation
+          (* r (- 1.0 (cos th)))
+          (- deg) w h)))
+
+(defun cmacs-lrg-3d-workspaces-angle (name &optional frame)
+  "Degrees to your right that workspace NAME stands on the desk, or nil.
+Nil off the desk, for the current workspace, or for an unknown NAME."
+  (when (and (cmacs-lrg-3d-workspaces--desk-p) (fboundp '+workspace-list-names))
+    (let* ((names (+workspace-list-names))
+           (i (cl-position name names :test #'string=))
+           (cur (cl-position (+workspace-current-name) names :test #'string=)))
+      (when (and i cur (/= i cur))
+        (* (- i cur)
+           (car (cmacs-lrg-3d-workspaces--desk-geometry
+                 (length names) (cmacs-lrg-3d-workspaces--aspect frame))))))))
+
+(defun cmacs-lrg-3d-workspaces--slot (rel aspect &optional count)
   "Return the transform (PX PY PZ YAW W H) for the slot REL steps from centre.
+On the desk (`cmacs-lrg-3d-workspaces-layout'), COUNT is how many
+workspaces share the circle; see `cmacs-lrg-3d-workspaces--desk-slot'.
 REL is the signed offset from the current workspace (0 = centre, negative =
 left).  ASPECT is the frame aspect ratio.  Panels sit on a concave arc that
 wraps around the viewer: positions curve back at the sides, and each panel is
 toed in (yaw = -beta) so its face turns toward you -- you read neighbours at a
 glance rather than edge-on."
+  (if (cmacs-lrg-3d-workspaces--desk-p)
+      (cmacs-lrg-3d-workspaces--desk-slot rel aspect (or count 1))
   (let* ((beta-deg (* rel cmacs-lrg-3d-workspaces-spacing))
          (beta (* beta-deg (/ float-pi 180.0)))
          (rw cmacs-lrg-3d-workspaces-radius)
@@ -195,17 +281,21 @@ glance rather than edge-on."
          (px (* rw (sin beta)))
          (pz (* rw (- (cos beta) 1.0)))
          (py cmacs-lrg-3d-workspaces-elevation))
-    (list px py pz (- beta-deg) w h)))
+    (list px py pz (- beta-deg) w h))))
 
-(defun cmacs-lrg-3d-workspaces--placement (name rel aspect)
+(defun cmacs-lrg-3d-workspaces--placement (name rel aspect &optional count)
   "Return the placement transform for workspace NAME at slot REL.
 If the workspace carries a saved `lrg-3d-xform' persp-parameter (a user move /
-rotate), use that; otherwise compute the default arc slot."
-  (or (and (fboundp 'persp-parameter)
+rotate), use that -- on the arc only: the desk places each workspace by
+its turn on the circle, relative to the current one, so a fixed position
+saved there would land in the wrong place -- otherwise compute the slot.
+COUNT is the number of workspaces, for the desk."
+  (or (and (not (cmacs-lrg-3d-workspaces--desk-p))
+           (fboundp 'persp-parameter)
            (fboundp '+workspace-get)
            (let ((persp (ignore-errors (+workspace-get name t))))
              (and persp (persp-parameter 'lrg-3d-xform persp))))
-      (cmacs-lrg-3d-workspaces--slot rel aspect)))
+      (cmacs-lrg-3d-workspaces--slot rel aspect count)))
 
 (defun cmacs-lrg-3d-workspaces--xform-moved-p (a b)
   "Return non-nil if transforms A and B differ in position or yaw.
@@ -274,7 +364,7 @@ without a window layout."
 
 ;; --- placement / relayout --------------------------------------------------
 
-(defun cmacs-lrg-3d-workspaces--place-one (name rel aspect &optional frame)
+(defun cmacs-lrg-3d-workspaces--place-one (name rel aspect &optional frame count)
   "Place workspace NAME's panel at slot REL (or its saved transform) on FRAME.
 Eases the panel into place (the first placement snaps).  If the panel has been
 manually moved or rotated since we last placed it, that placement is persisted
@@ -283,16 +373,18 @@ first so it is kept rather than overwritten."
          (index (cmacs-lrg-3d-workspaces--index name))
          (geom (cmacs-lrg-3d-workspace-panel-geometry index f))
          (applied (gethash name cmacs-lrg-3d-workspaces--applied)))
-    (when (and geom applied
+    (when (and geom applied (not (cmacs-lrg-3d-workspaces--desk-p))
                (cmacs-lrg-3d-workspaces--xform-moved-p geom applied))
       (cmacs-lrg-3d-workspaces--save-xform name geom))
-    (let ((xf (cmacs-lrg-3d-workspaces--placement name rel aspect)))
+    (let ((xf (cmacs-lrg-3d-workspaces--placement name rel aspect count)))
       (apply #'cmacs-lrg-3d-place-workspace-panel-eased index (append xf (list f)))
       (puthash name xf cmacs-lrg-3d-workspaces--applied))))
 
 (defun cmacs-lrg-3d-workspaces--visible-p (rel)
-  "Return non-nil if a workspace REL slots from centre should be drawn."
-  (or (null cmacs-lrg-3d-workspaces-max)
+  "Return non-nil if a workspace REL slots from centre should be drawn.
+On the desk every workspace is: they share the circle."
+  (or (cmacs-lrg-3d-workspaces--desk-p)
+      (null cmacs-lrg-3d-workspaces-max)
       (<= (abs rel) cmacs-lrg-3d-workspaces-max)))
 
 (defun cmacs-lrg-3d-workspaces-relayout (&optional frame)
@@ -315,7 +407,8 @@ render contents (see `cmacs-lrg-3d-workspaces--render-one')."
                            (cmacs-lrg-3d-workspaces--visible-p rel))
                       (progn
                         (puthash name t live)
-                        (cmacs-lrg-3d-workspaces--place-one name rel aspect f))
+                        (cmacs-lrg-3d-workspaces--place-one name rel aspect f
+                                                            (length names)))
                     ;; current workspace, or out-of-range: ensure no panel
                     (cmacs-lrg-3d-workspaces--drop name f)))
       ;; Drop panels for workspaces that vanished entirely.
@@ -404,7 +497,15 @@ normally."
         (let ((name (cmacs-lrg-3d-workspaces--name-for-index idx)))
           (when (and name (member name (+workspace-list-names))
                      (not (string= name (+workspace-current-name))))
-            (+workspace-switch name)))))))
+            ;; On the desk the chosen workspace becomes live where it
+            ;; stands: switch, which brings it to the front of the circle,
+            ;; and turn the seat by its angle, so the front is where you
+            ;; were looking.  Every other workspace stays put too.
+            (let ((angle (cmacs-lrg-3d-workspaces-angle name)))
+              (+workspace-switch name)
+              (when (and angle (fboundp 'cmacs-lrg-vr-active-p)
+                         (cmacs-lrg-vr-active-p) (fboundp 'cmacs-lrg-vr-turn))
+                (cmacs-lrg-vr-turn (- angle))))))))))
 
 (defun cmacs-lrg-3d-workspaces--tick ()
   "Live-updater tick.

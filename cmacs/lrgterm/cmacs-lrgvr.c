@@ -1089,7 +1089,8 @@ vr_button (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
       hand->btn_mods[b] = vr.layer;
       /* The pointer hand's stick click on a panel is mouse-3 at the laser
          (context menus), at once: a click has no hold.  */
-      if (b == VB_STICK && h != vr.move_hand && hand->hit_panel)
+      if (b == VB_STICK && h != vr.move_hand && hand->hit_panel
+          && !cmacs_lrgterm_workspace_key_p (hand->key))
         {
           count += vr_emit_mouse (hold_quit, 2, true, hand->fx, hand->fy,
                                   vr.layer);
@@ -1193,6 +1194,12 @@ vr_hand_input (struct input_event *hold_quit, int h)
           count += kb_press (hold_quit, hand->kb_row, hand->kb_col);
           vr_pulse (h, 0.015f, 0.4f);
         }
+      /* Another workspace's panel on the ring: switch to it, as a
+         Ctrl+double-click on it does on the desktop.  It is a picture of
+         that workspace, not the live frame, so it gets no mouse events.  */
+      else if (hand->hit_panel
+               && cmacs_lrgterm_select_workspace_panel (hand->key))
+        vr_pulse (h, 0.03f, 0.6f);
       else if (hand->hit_panel)
         {
           vr.pointer_hand = h;
@@ -1215,8 +1222,10 @@ vr_hand_input (struct input_event *hold_quit, int h)
                               vr.layer);
     }
 
-  /* Pointer motion (drag while the trigger is held, hover otherwise). */
+  /* Pointer motion (drag while the trigger is held, hover otherwise) --
+     over the live frame only, not another workspace's picture.  */
   if (hand->hit_panel && h == vr.pointer_hand
+      && !cmacs_lrgterm_workspace_key_p (hand->key)
       && (hand->fx != vr.mouse_x || hand->fy != vr.mouse_y || !vr.mouse_valid))
     {
       vr.mouse_valid = true;
@@ -1275,9 +1284,10 @@ vr_hand_input (struct input_event *hold_quit, int h)
           else if (hand->snap_used && fabsf (sx) < VR_SNAP_REARM)
             hand->snap_used = false;
         }
-      else if (hand->hit_panel && vr.layer == 0)
+      else if (hand->hit_panel && vr.layer == 0
+               && !cmacs_lrgterm_workspace_key_p (hand->key))
         count += vr_scroll (hold_quit, hand, sx, sy, true, true);
-      else if (hand->hit_panel)
+      else if (hand->hit_panel && !cmacs_lrgterm_workspace_key_p (hand->key))
         {
           count += vr_scroll (hold_quit, hand, sx, sy, true, false);
           count += vr_flick (hold_quit, sx, &hand->flick_x_used,

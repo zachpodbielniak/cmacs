@@ -515,11 +515,21 @@ while listening and amber while transcribing.
 
 ** Workspaces
 
-Doom workspaces (persp-mode; tab-bar tabs without Doom) are panels on a 3D
-carousel around you: the current one in front, the others to its sides.
-The D-pad left / right cycles them (so does flicking the right stick off a
-panel), D-pad up or View pulls back to see them all (hold X to peek), and
-left trigger + A makes a new one.  The quick menu lists them by name.
+In VR your Doom workspaces (persp-mode; tab-bar tabs without Doom) stand
+around you like a 360° desk: every one the same distance away and the same
+size as the live one, at eye height, facing you, the next to your right,
+the previous to your left, going round.  Six fit at the default frame
+size; more shrink to share the circle.
+
+- *Turn to one, point at it and pull the trigger*: it becomes live where
+  it stands -- the view turns with it, so nothing on the desk moves.
+- *D-pad left / right* (or flick the right stick off a panel) brings the
+  previous / next one round to the front instead.
+- Left trigger + A makes a new one; the quick menu lists them by name.
+
+=cmacs-lrg-3d-workspaces-layout= picks =desk= (the VR default), or =arc=,
+the flat desktop's carousel.  =-desk-radius=, =-desk-height= and
+=-desk-gap= size it.
 
 ** Keyboards
 

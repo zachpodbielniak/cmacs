@@ -163,7 +163,8 @@
 
 (ert-deftest cmacs-lrg-3d-tests-workspaces-arc-math ()
   "Arc slots: the centre is dead ahead; +/-N mirror across it and toe in."
-  (let ((cmacs-lrg-3d-workspaces-radius 9.0)
+  (let ((cmacs-lrg-3d-workspaces-layout 'arc)
+        (cmacs-lrg-3d-workspaces-radius 9.0)
         (cmacs-lrg-3d-workspaces-spacing 24.0)
         (cmacs-lrg-3d-workspaces-height 3.2)
         (cmacs-lrg-3d-workspaces-elevation 0.0))
@@ -188,15 +189,88 @@
       (should (< (abs (- pzr pzl)) 0.001))
       (should (< (abs (+ yawr yawl)) 0.001)))))
 
+(defun cmacs-lrg-3d-tests--desk-seat ()
+  "The seat the desk is built around: the live panel's distance in front."
+  (list 0.0 cmacs-lrg-3d-workspaces-elevation cmacs-lrg-3d-workspaces-desk-radius))
+
+(ert-deftest cmacs-lrg-3d-tests-workspaces-desk-surrounds-the-seat ()
+  "Desk slots: each workspace stands the desk radius from the seat, faces it,
+and is the live panel's size; the current one is the live panel itself."
+  (let ((cmacs-lrg-3d-workspaces-layout 'desk)
+        (cmacs-lrg-3d-workspaces-desk-radius 6.6)
+        (cmacs-lrg-3d-workspaces-desk-height 4.6)
+        (cmacs-lrg-3d-workspaces-desk-gap 4.0)
+        (cmacs-lrg-3d-workspaces-elevation 0.0))
+    (pcase-let ((`(,px ,py ,pz ,yaw ,w ,h) (cmacs-lrg-3d-workspaces--slot 0 1.43 4)))
+      (should (< (abs px) 1e-6)) (should (< (abs py) 1e-6))
+      (should (< (abs pz) 1e-6)) (should (< (abs yaw) 1e-6))
+      (should (< (abs (- h 4.6)) 1e-6))
+      (should (< (abs (- w (* 4.6 1.43))) 1e-6)))
+    (dolist (rel '(-3 -2 -1 1 2 3 5))
+      (pcase-let* ((`(,px ,_py ,pz ,yaw ,_w ,_h) (cmacs-lrg-3d-workspaces--slot rel 1.43 6))
+                   (`(,sx ,_sy ,sz) (cmacs-lrg-3d-tests--desk-seat))
+                   (dx (- sx px)) (dz (- sz pz))
+                   ;; The panel's normal at YAW (the panel faces +Z at 0).
+                   (ny (degrees-to-radians yaw)))
+        (should (< (abs (- (sqrt (+ (* dx dx) (* dz dz))) 6.6)) 1e-6))
+        ;; It faces the seat: its normal points along the way to the seat.
+        (should (> (/ (+ (* dx (sin ny)) (* dz (cos ny))) 6.6) 0.9999))))
+    ;; Positive REL is to your right.
+    (should (> (car (cmacs-lrg-3d-workspaces--slot 1 1.43 4)) 0))
+    (should (< (car (cmacs-lrg-3d-workspaces--slot -1 1.43 4)) 0))))
+
+(ert-deftest cmacs-lrg-3d-tests-workspaces-desk-no-overlap ()
+  "Neighbours on the desk never overlap, and a crowded desk shrinks to fit."
+  (let ((cmacs-lrg-3d-workspaces-layout 'desk)
+        (cmacs-lrg-3d-workspaces-desk-radius 6.6)
+        (cmacs-lrg-3d-workspaces-desk-height 4.6)
+        (cmacs-lrg-3d-workspaces-desk-gap 4.0))
+    (dolist (count '(2 4 6 9 14))
+      (pcase-let* ((`(,step ,w ,_h) (cmacs-lrg-3d-workspaces--desk-geometry count 1.43))
+                   (width-deg (* 2 (radians-to-degrees (atan (/ w 2.0) 6.6)))))
+        ;; Each panel's angular width plus the gap fits in its step...
+        (should (<= (+ width-deg 4.0) (+ step 1e-6)))
+        ;; ...and all of them fit in one turn.
+        (should (<= (* count step) (+ 360.0 1e-6)))))
+    ;; Few workspaces keep the live panel's size.
+    (should (= 4.6 (nth 2 (cmacs-lrg-3d-workspaces--desk-geometry 3 1.43))))
+    (should (< (nth 2 (cmacs-lrg-3d-workspaces--desk-geometry 14 1.43)) 4.6))))
+
+(ert-deftest cmacs-lrg-3d-tests-workspaces-desk-is-world-stable ()
+  "A workspace's angle is its offset from the current one, unwrapped, so
+switching to it and turning by that angle leaves every workspace in place."
+  (let ((cmacs-lrg-3d-workspaces-layout 'desk)
+        (names '("a" "b" "c" "d"))
+        (current "a"))
+    (cl-letf (((symbol-function '+workspace-list-names) (lambda () names))
+              ((symbol-function '+workspace-current-name) (lambda () current)))
+      (let* ((step (car (cmacs-lrg-3d-workspaces--desk-geometry
+                         4 (cmacs-lrg-3d-workspaces--aspect))))
+             (ac (cmacs-lrg-3d-workspaces-angle "c")))
+        (should (< (abs (- ac (* 2 step))) 1e-6))
+        (should-not (cmacs-lrg-3d-workspaces-angle "a"))
+        ;; Switch to "c" and turn right by AC: "b" was at STEP, and is now
+        ;; at -STEP from "c" -- plus the AC turn, the same place in the room.
+        (setq current "c")
+        (should (< (abs (+ (cmacs-lrg-3d-workspaces-angle "b") ac (- step))) 1e-6))))))
+
+(ert-deftest cmacs-lrg-3d-tests-workspaces-desk-shows-all ()
+  "On the desk every workspace is shown, whatever the arc's limit."
+  (let ((cmacs-lrg-3d-workspaces-layout 'desk)
+        (cmacs-lrg-3d-workspaces-max 2))
+    (should (cmacs-lrg-3d-workspaces--visible-p 7))))
+
 (ert-deftest cmacs-lrg-3d-tests-workspaces-visibility ()
   "Visibility respects `cmacs-lrg-3d-workspaces-max'."
-  (let ((cmacs-lrg-3d-workspaces-max 8))
+  (let ((cmacs-lrg-3d-workspaces-layout 'arc)
+        (cmacs-lrg-3d-workspaces-max 8))
     (should (cmacs-lrg-3d-workspaces--visible-p 0))
     (should (cmacs-lrg-3d-workspaces--visible-p 8))
     (should (cmacs-lrg-3d-workspaces--visible-p -8))
     (should-not (cmacs-lrg-3d-workspaces--visible-p 9))
     (should-not (cmacs-lrg-3d-workspaces--visible-p -9)))
-  (let ((cmacs-lrg-3d-workspaces-max nil))
+  (let ((cmacs-lrg-3d-workspaces-layout 'arc)
+        (cmacs-lrg-3d-workspaces-max nil))
     (should (cmacs-lrg-3d-workspaces--visible-p 999))))
 
 (ert-deftest cmacs-lrg-3d-tests-workspaces-off-frame ()

@@ -95,6 +95,26 @@ static bool lrg_present_suppressed;
    thus runs in the command loop, never as Lisp called from the input path.  */
 static int lrg_pending_ws_select = -1;
 
+/* True when KEY is a workspace panel's (the 3D workspace ring).  */
+bool
+cmacs_lrgterm_workspace_key_p (guint64 key)
+{
+  return LRG_WS_IS_KEY (key);
+}
+
+/* Ask to switch to the workspace whose panel KEY is -- as a Ctrl+double-
+   click on it does -- and return true; false when KEY is no workspace's.
+   For the VR trigger (cmacs-lrgvr.c).  The switch runs later, in the
+   command loop, from the workspace ring's timer.  */
+bool
+cmacs_lrgterm_select_workspace_panel (guint64 key)
+{
+  if (!LRG_WS_IS_KEY (key))
+    return false;
+  lrg_pending_ws_select = LRG_WS_KEY_INDEX (key);
+  return true;
+}
+
 /* Per-image-surface cache key: the GrlTexture we build for an image is stashed
    as cairo user-data on its image surface, so it is unref'd automatically when
    the surface (img->cr_data) is destroyed (image cleared / reloaded) -- no

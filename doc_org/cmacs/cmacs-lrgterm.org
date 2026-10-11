@@ -698,9 +698,24 @@ typed.  The first use offers to download the speech model.
 
 *Workspaces and the quick menu* (=cmacs-lrg-vr-ui.el=).  Workspace
 commands go through Doom's =+workspace= API (tab-bar without it), and VR
-turns on ~cmacs-lrg-3d-workspaces-mode~, so the others stand on the 3D
-carousel; overview pulls the camera -- and so your seat -- back to frame
-them.  The quick menu (menu button) is an ~lrg-popup-menu~ of voice,
+turns on ~cmacs-lrg-3d-workspaces-mode~.  In VR the ring is a *360° desk*
+(~cmacs-lrg-3d-workspaces-layout~ =desk=; =arc= is the desktop's): a
+circle centred on the seat -- the default camera's eye, 6.6 units in front
+of the live panel -- with every workspace at that radius, the live
+panel's size, at eye height and facing you, spaced by its angular width
+plus ~cmacs-lrg-3d-workspaces-desk-gap~.  When they would not fit the
+circle the step becomes 360 / N and the panels shrink.  A workspace's
+angle is its list offset from the current one, never wrapped, so it
+keeps its place in the room: pointing at one and pulling the trigger
+(~cmacs_lrgterm_select_workspace_panel~, consumed by the ring's timer)
+switches to it and turns the seat by its angle
+(~cmacs-lrg-3d-workspaces-angle~), which leaves every panel where it
+stood.  The D-pad switches without turning, so the ring comes round
+instead.  Panels of other workspaces take no mouse events -- they are
+pictures -- and the pointer stick flicks on them.  The old arc placed
+its centre of curvature behind the live panel, so the neighbours
+receded edge-on; it stays for a fixed desktop camera, which cannot turn
+to a full circle.  The quick menu (menu button) is an ~lrg-popup-menu~ of voice,
 workspaces (by name), recent buffers, files, windows and arrangements,
 and the view; in VR it is chosen with the laser.
 

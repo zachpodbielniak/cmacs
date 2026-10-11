@@ -11057,8 +11057,14 @@ cursor was, spaced and capitalised to fit.  Voice commands
 adds yours) cover workspaces, buffers, files, windows, navigation and the
 view; anything else is tried as a command name, then opens @kbd{M-x}
 with the words typed.  Results run as commands, queued with
-@code{cmacs-lrg-vr-run-later}.  Doom workspaces (tab-bar tabs without
-Doom) stand on the 3D carousel around you; the quick menu lists them.
+@code{cmacs-lrg-vr-run-later}.  In VR the Doom workspaces (tab-bar tabs without
+Doom) stand around you as a 360-degree desk: a circle centred on your
+seat, each workspace the live panel's distance and size, at eye height,
+facing you (@code{cmacs-lrg-3d-workspaces-layout}; @code{arc} is the
+desktop's carousel).  Point at one and pull the trigger to switch to it
+where it stands -- the view turns with it, so the desk stays put -- or
+step through them with the D-pad, which brings each round to the front.
+The quick menu lists them.
 @kbd{C-c v} holds the keyboard equivalents: @kbd{SPC} voice command,
 @kbd{i} dictate, @kbd{m} menu, @kbd{h} help, @kbd{o} overview, @kbd{n},
 @kbd{]}, @kbd{[}, @kbd{w}, @kbd{q} workspaces, @kbd{c} recenter, @kbd{0}

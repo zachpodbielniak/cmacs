@@ -231,6 +231,8 @@ extern guint64 lrg_font_atlas_id (cairo_scaled_font_t *scaled);
 extern int cmacs_lrgterm_store_event (struct frame *, struct input_event *,
                                       struct input_event *);
 extern Time cmacs_lrgterm_now_ms (void);
+extern bool cmacs_lrgterm_workspace_key_p (guint64 key);
+extern bool cmacs_lrgterm_select_workspace_panel (guint64 key);
 
 #ifdef HAVE_CMACS_LRGVR
 /* VR presentation of a 3D lrg frame (cmacs-lrgvr.c).  */
