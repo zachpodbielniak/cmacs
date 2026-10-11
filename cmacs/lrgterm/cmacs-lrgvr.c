@@ -43,6 +43,8 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
+#include <signal.h>
 #include <libregnum.h>
 #include <rlgl.h>
 #include <GL/gl.h>
@@ -78,15 +80,19 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #define VR_SNAP_ARM      0.75f
 #define VR_SNAP_REARM    0.30f
 #define VR_LASER_M       4.0f    /* laser length when it hits nothing */
-/* While Lisp is busy, render a headset frame at most this often.  The
-   headset still gets a fresh frame ten times a second -- SteamVR reprojects
-   in between -- and the rest of the main thread goes to Lisp.  Rendering
-   every frame the runtime wants would block in xrEndFrame for most of each
-   display interval (it waits for the GPU), and read_socket runs constantly
-   while Lisp works (input polling), so a long command -- or a large init
-   file -- would crawl.  Idle (in the command loop, waiting for input),
-   every frame renders.  */
-#define VR_BUSY_FRAME_US 100000
+/* While Lisp is busy, render a headset frame at most this often -- fifteen
+   a second, SteamVR reprojecting in between -- and leave the rest of the
+   main thread to Lisp.  Each frame blocks in xrEndFrame until the GPU is
+   done with it, so rendering every frame the runtime wants would make a
+   long command, or a large init file, crawl.  Idle (in the command loop,
+   waiting for input), every frame renders.  */
+#define VR_BUSY_FRAME_US 66667
+
+/* The frame watcher (vr_watch_thread) waits this long after a frame becomes
+   due before deciding Emacs is busy, and at least this long between the
+   SIGIOs it then raises.  */
+#define VR_WATCH_GRACE_US  4000
+#define VR_WATCH_PERIOD_US 20000
 
 /* The head of raylib's Texture2D: its GL name comes first.  graylib hands the
    struct out opaquely; mirroring two fields avoids pulling raylib.h (whose
@@ -194,6 +200,8 @@ static struct
   Lrg3DSurface *s3;
   LrgOpenXRService *xr;
   int frame_fd;
+  GThread *watch_thread;         /* vr_watch_thread */
+  gint watch_quit;               /* atomic */
   bool quit_sent;
   gint64 last_frame_us;
   float dt;
@@ -1099,6 +1107,45 @@ cmacs_lrgvr_mouse_position (struct frame *f, int *x, int *y)
   return true;
 }
 
+/* Headset frames are drawn from read_socket, and Emacs calls read_socket
+   only while it reads keyboard input: idle in the command loop, or in
+   sit-for.  A command waiting on a process (accept-process-output, as
+   Doom's project file listing does) never watches keyboard descriptors, so
+   the frame eventfd wakes nothing, and busy Lisp polls for input only
+   every `polling-period' (2 s).  For the length of any slow command the
+   headset got no frames; SteamVR timed the app out and showed its own
+   white environment until it came back.
+
+   This thread watches the frame eventfd without draining it.  A frame that
+   is still unclaimed VR_WATCH_GRACE_US after it became due means Emacs is
+   busy, so it raises SIGIO: the handler sets pending_signals and cuts the
+   select timeout short, and Emacs's next safe point (maybe_quit -- in every
+   Lisp loop and every pass of wait_reading_process_output) runs
+   read_socket, which renders the frame.  It is the mechanism Emacs's own
+   input polling uses; a SIGIO landing on another thread is forwarded to
+   the main one (deliver_process_signal).  Idle, the frame is claimed at
+   once and nothing is raised.  */
+static gpointer
+vr_watch_thread (gpointer data)
+{
+  struct pollfd p;
+
+  p.fd = GPOINTER_TO_INT (data);
+  p.events = POLLIN;
+  while (!g_atomic_int_get (&vr.watch_quit))
+    {
+      p.revents = 0;
+      if (poll (&p, 1, 100) <= 0)
+        continue;
+      g_usleep (VR_WATCH_GRACE_US);
+      p.revents = 0;
+      if (poll (&p, 1, 0) > 0 && !g_atomic_int_get (&vr.watch_quit))
+        kill (getpid (), SIGIO);
+      g_usleep (VR_WATCH_PERIOD_US);
+    }
+  return NULL;
+}
+
 /* Start presenting F's 3D surface in the headset.  The GL context must be
    current (it is, on the main thread, once the frame's window exists).  On
    failure *ERR gets a malloc'd message and the frame stays in plain 3D.  */
@@ -1155,7 +1202,12 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
   /* Frames are waited for off the main thread; pselect wakes on this fd. */
   vr.frame_fd = lrg_openxr_service_start_frame_thread (xr);
   if (vr.frame_fd >= 0)
-    add_keyboard_wait_descriptor (vr.frame_fd);
+    {
+      add_keyboard_wait_descriptor (vr.frame_fd);
+      g_atomic_int_set (&vr.watch_quit, 0);
+      vr.watch_thread = g_thread_new ("cmacs-vr-watch", vr_watch_thread,
+                                      GINT_TO_POINTER (vr.frame_fd));
+    }
 
   /* Hide the desktop window.  The headset is the display, and a compositor
      that hosts it (gamescope under SteamVR) shows any mapped window as a
@@ -1183,6 +1235,12 @@ cmacs_lrgvr_detach (void)
 {
   if (!vr.active)
     return;
+  if (vr.watch_thread != NULL)
+    {
+      g_atomic_int_set (&vr.watch_quit, 1);
+      g_thread_join (vr.watch_thread);
+      vr.watch_thread = NULL;
+    }
   if (vr.frame_fd >= 0)
     delete_keyboard_wait_descriptor (vr.frame_fd);
   vr.frame_fd = -1;

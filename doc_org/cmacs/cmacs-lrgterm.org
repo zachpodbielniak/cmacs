@@ -690,12 +690,27 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
 - *Frame pacing never blocks Emacs.*  ~xrWaitFrame~ runs on a thread of the
   service's own and signals an eventfd that is a keyboard wait descriptor, so
   ~pselect~ wakes exactly when the headset wants a frame and ~lrg_read_socket~
-  renders it (never mid-redisplay).  While a command runs (Emacs is not idle
-  in the command loop) the headset gets at most 10 frames a second and the
-  runtime reprojects in between: each frame blocks in ~xrEndFrame~ until the
-  GPU finishes it, and ~read_socket~ runs constantly while Lisp works, so
-  rendering every frame would leave Lisp a fraction of the main thread.  Idle,
+  renders it (never mid-redisplay).
+- *Frames keep coming while a command runs.*  Emacs calls ~read_socket~ only
+  while it reads keyboard input: a command waiting on a process
+  (~accept-process-output~, as Doom's project file listing does) never
+  watches keyboard descriptors, and busy Lisp polls for input only every
+  ~polling-period~ (2 s).  The headset used to get no frames for the length
+  of any slow command; SteamVR timed the app out and showed its own white
+  environment, with the text still visible, until it came back.  A watcher
+  thread now polls the frame eventfd without draining it, and when a due
+  frame is still unclaimed after 4 ms it raises SIGIO.  That is how Emacs's
+  own input polling works: the handler sets ~pending_signals~ and cuts the
+  select short, and the next ~maybe_quit~ (in every Lisp loop and every pass
+  of a process wait) runs ~read_socket~.  While a command runs the headset
+  gets at most 15 frames a second, with SteamVR reprojecting in between,
+  because each frame blocks in ~xrEndFrame~ until the GPU finishes it.  Idle,
   every frame renders.
+- *Panel textures are trilinear-filtered.*  raylib loads textures with
+  NEAREST filters, and its anisotropic setting changes only the anisotropy
+  level, so the panels' mipmaps were generated and never sampled.  Text was
+  read nearest-texel, and its strokes crawled like interlacing with every
+  head movement.  Panels now set trilinear, then 16× anisotropic.
 - Controller input becomes ordinary events: =MOUSE_CLICK_EVENT=s and wheel
   events at the frame pixel the laser hits (~lrg_3d_surface_pick_ray~), motion
   through ~mouse-position~ (so drag-select and ~track-mouse~ work), and F-key
