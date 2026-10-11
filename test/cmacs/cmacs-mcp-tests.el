@@ -27,15 +27,27 @@ time a test body runs.")
 (defun cmacs-mcp-tests--available-p ()
   (and (fboundp 'cmacs-mcp-start) (fboundp 'cmacs-mcp-socket-path)))
 
+(defun cmacs-mcp-tests--socket-dir ()
+  "The directory this build's server actually puts its socket in.
+
+Asked of the server rather than guessed: with no XDG_RUNTIME_DIR, GLib
+falls back to the cache directory, and a path too long for sun_path
+moves to $TMPDIR/cmacs-UID -- neither of which is `temporary-file-directory'."
+  (cmacs-mcp-start)
+  (unwind-protect (file-name-directory (cmacs-mcp-socket-path))
+    (cmacs-mcp-stop)))
+
 (ert-deftest cmacs-mcp-stop-removes-its-socket ()
   "A clean stop takes the file with it, not just the listener."
   (skip-unless (cmacs-mcp-tests--available-p))
   (cmacs-mcp-start)
-  (let ((path (cmacs-mcp-socket-path)))
-    (should (stringp path))
-    (should (file-exists-p path))
-    (cmacs-mcp-stop)
-    (should-not (file-exists-p path))))
+  (unwind-protect
+      (let ((path (cmacs-mcp-socket-path)))
+        (should (stringp path))
+        (should (file-exists-p path))
+        (cmacs-mcp-stop)
+        (should-not (file-exists-p path)))
+    (ignore-errors (cmacs-mcp-stop))))
 
 (ert-deftest cmacs-mcp-restart-reuses-a-clean-path ()
   "Starting again after a stop works, and leaves one socket behind it."
@@ -59,7 +71,7 @@ The crash path reaches neither the stop nor the atexit handler, so the
 sweep is the only thing that ever removes those -- and the only thing
 that clears a machine which has already accumulated them."
   (skip-unless (cmacs-mcp-tests--available-p))
-  (let* ((dir (or (getenv "XDG_RUNTIME_DIR") temporary-file-directory))
+  (let* ((dir (cmacs-mcp-tests--socket-dir))
          ;; A pid that cannot be running: above the system maximum.
          (dead (expand-file-name "cmacs-mcp-4194303.sock" dir))
          ;; Not ours to remove: right prefix, wrong shape.
@@ -77,13 +89,14 @@ that clears a machine which has already accumulated them."
           ;; and the live one it just made is untouched
           (should (file-exists-p (cmacs-mcp-socket-path)))
           (cmacs-mcp-stop))
+      (ignore-errors (cmacs-mcp-stop))
       (dolist (f (list dead decoy unrelated))
         (ignore-errors (delete-file f))))))
 
 (ert-deftest cmacs-mcp-sweep-keeps-a-live-instance ()
   "Another running cmacs is a normal thing to find, and is left alone."
   (skip-unless (cmacs-mcp-tests--available-p))
-  (let* ((dir (or (getenv "XDG_RUNTIME_DIR") temporary-file-directory))
+  (let* ((dir (cmacs-mcp-tests--socket-dir))
          ;; This process is certainly alive.
          (live (expand-file-name (format "cmacs-mcp-%d.sock.keep" (emacs-pid))
                                  dir))
@@ -96,6 +109,7 @@ that clears a machine which has already accumulated them."
           (cmacs-mcp-start)
           (should (file-exists-p other))
           (cmacs-mcp-stop))
+      (ignore-errors (cmacs-mcp-stop))
       (dolist (f (list live other))
         (ignore-errors (delete-file f))))))
 

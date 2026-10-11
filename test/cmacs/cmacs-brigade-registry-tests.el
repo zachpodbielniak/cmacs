@@ -403,7 +403,7 @@ provisioner exports as CMACS_BRIGADE_BLOCK_RECURSIVE."
         (progn
           (should (stringp path))
           (should (file-exists-p path))
-          (should (string-match-p "/cmacs/brigade/mcp-[0-9]+-" path))
+          (should (string-match-p "/brigade/mcp-[0-9]+-" path))
           (should (equal (file-modes path) #o600))
           (should (assoc path (cmacs-brigade-scope-list)))
           (should (equal (cdr (assoc path (cmacs-brigade-scope-list)))

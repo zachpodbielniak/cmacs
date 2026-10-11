@@ -122,5 +122,14 @@ gboolean cmacs_mcp_result_add_png_file (McpToolResult *result,
    failure. */
 gchar *cmacs_mcp_temp_path (const gchar *template);
 
+/* True when PATH fits a sockaddr_un.  bind() does not fail on a longer
+ * one; it binds a truncated path. */
+gboolean cmacs_mcp_fits_sun_path (const gchar *path);
+
+/* $TMPDIR/cmacs-<uid>, created 0700 and refused unless it is a private
+ * directory of ours: where sockets go when the runtime directory's path
+ * is too long for them.  Free with g_free. */
+gchar *cmacs_mcp_private_tmp_dir (GError **error);
+
 #endif /* HAVE_CMACS_MCP */
 #endif /* CMACS_MCP_TOOLS_H */

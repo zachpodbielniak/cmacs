@@ -362,6 +362,21 @@ scope_dir (GError **error)
 {
   gchar *dir = g_build_filename (g_get_user_runtime_dir (), "cmacs",
                                  "brigade", NULL);
+  /* The longest name scope-open puts in it: "mcp-<pid>-<uuid>.sock". */
+  g_autofree gchar *probe
+    = g_strdup_printf ("%s/mcp-%ld-%s.sock", dir, (long) G_MAXINT32,
+                       "00000000-0000-0000-0000-000000000000");
+
+  if (!cmacs_mcp_fits_sun_path (probe))
+    {
+      gchar *tmp = cmacs_mcp_private_tmp_dir (error);
+
+      g_free (dir);
+      if (tmp == NULL)
+        return NULL;
+      dir = g_build_filename (tmp, "brigade", NULL);
+      g_free (tmp);
+    }
 
   if (g_mkdir_with_parents (dir, 0700) != 0)
     {

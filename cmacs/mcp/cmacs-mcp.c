@@ -25,6 +25,8 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 /* ── Static state ─────────────────────────────────────────────────── */
@@ -132,9 +134,8 @@ cmacs_mcp_pid_alive (long pid)
  * this user's runtime directory, and never touches a live one -- another
  * running cmacs is a normal thing to find here. */
 static void
-cmacs_mcp_sweep_stale_sockets (void)
+cmacs_mcp_sweep_stale_sockets_in (const gchar *dirname)
 {
-  const gchar *dirname = g_get_user_runtime_dir ();
   g_autoptr (GDir) dir = NULL;
   const gchar *name;
 
@@ -170,6 +171,60 @@ cmacs_mcp_sweep_stale_sockets (void)
     }
 }
 
+/* The directory a socket goes in when the runtime directory's path is
+ * too long for one.  sun_path holds 108 bytes, and bind() does not fail
+ * on a longer path -- it binds a truncated one, which mcp-glib then
+ * cannot find ("Cannot identify bound socket").  The usual way to get
+ * there is no XDG_RUNTIME_DIR (a container entered with `env -i', a
+ * cron job): GLib falls back to the cache directory, which can be deep.
+ * Private to this user, and refused if anything else owns it. */
+gchar *
+cmacs_mcp_private_tmp_dir (GError **error)
+{
+  gchar *dir = g_strdup_printf ("%s/cmacs-%d", g_get_tmp_dir (),
+                                (int) getuid ());
+  struct stat st;
+
+  if (g_mkdir (dir, 0700) != 0 && errno != EEXIST)
+    goto fail;
+  if (g_lstat (dir, &st) != 0)
+    goto fail;
+  if (!S_ISDIR (st.st_mode) || st.st_uid != getuid ()
+      || (st.st_mode & 077) != 0)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                   "%s is not a private directory owned by this user",
+                   dir);
+      g_free (dir);
+      return NULL;
+    }
+  return dir;
+
+ fail:
+  g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+               "%s: %s", dir, g_strerror (errno));
+  g_free (dir);
+  return NULL;
+}
+
+gboolean
+cmacs_mcp_fits_sun_path (const gchar *path)
+{
+  return strlen (path) < sizeof (((struct sockaddr_un *) 0)->sun_path);
+}
+
+static void
+cmacs_mcp_sweep_stale_sockets (void)
+{
+  g_autofree gchar *short_dir = NULL;
+
+  cmacs_mcp_sweep_stale_sockets_in (g_get_user_runtime_dir ());
+  short_dir = g_strdup_printf ("%s/cmacs-%d", g_get_tmp_dir (),
+                               (int) getuid ());
+  if (g_file_test (short_dir, G_FILE_TEST_IS_DIR))
+    cmacs_mcp_sweep_stale_sockets_in (short_dir);
+}
+
 /* ── Start / stop helpers ─────────────────────────────────────────── */
 
 static gboolean
@@ -192,6 +247,16 @@ cmacs_mcp_do_start (GError **error)
   socket_path = g_strdup_printf ("%s/cmacs-mcp-%d.sock",
                                  g_get_user_runtime_dir (),
                                  (int) getpid ());
+  if (!cmacs_mcp_fits_sun_path (socket_path))
+    {
+      g_autofree gchar *dir = cmacs_mcp_private_tmp_dir (error);
+
+      g_clear_pointer (&socket_path, g_free);
+      if (dir == NULL)
+        return FALSE;
+      socket_path = g_strdup_printf ("%s/cmacs-mcp-%d.sock", dir,
+                                     (int) getpid ());
+    }
 
   /* Our own path may still exist if a previous process held this pid and
    * died badly; binding onto a leftover inode fails. */
