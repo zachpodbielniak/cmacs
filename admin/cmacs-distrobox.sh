@@ -509,6 +509,33 @@ link_host_vr_runtime () {
 	fi
 }
 
+# share_host_fonts
+#
+# The box has its own /usr/share/fonts, so a font the host has (installed
+# there by the host's package manager) is missing inside it, and a config
+# that names it -- Doom's doom-font -- fails, aborting the rest of its UI
+# setup, theme included.  ~/.local/share/fonts is shared already (home is);
+# add the host's system font directories to the box's fontconfig too.
+share_host_fonts () {
+	local conf=/etc/fonts/conf.d/99-cmacs-host-fonts.conf
+	local want
+
+	want='<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<!-- Written by cmacs-distrobox.sh: the host'"'"'s fonts, seen through /run/host. -->
+<fontconfig>
+  <dir>/run/host/usr/share/fonts</dir>
+  <dir>/run/host/usr/local/share/fonts</dir>
+</fontconfig>'
+	[[ -d /run/host/usr/share/fonts ]] || return 0
+	if [[ ! -f "${conf}" ]] || [[ "$(cat "${conf}")" != "${want}" ]]
+	then
+		log "sharing the host's fonts with the box"
+		printf '%s\n' "${want}" | sudo tee "${conf}" >/dev/null
+		fc-cache -f >/dev/null 2>&1 || true
+	fi
+}
+
 # install_packages <state-dir>
 #
 # System packages: install-deps --system (the host source of truth),
@@ -786,6 +813,7 @@ run_inside () {
 	link_host_vr_runtime
 
 	install_packages "${state}"
+	share_host_fonts
 	build_deps "${jobs}"
 	configure_cmacs "${state}"
 

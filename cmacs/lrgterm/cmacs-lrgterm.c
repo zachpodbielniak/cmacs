@@ -4082,16 +4082,16 @@ Returns t, or nil off a 3D lrg frame.  */)
     lrg_frame_surface_begin_frame (surf);
     lrg_frame_surface_clear (surf, bg);
 
+    /* In VR the content goes to an off-screen target (the desktop window
+       is hidden); begin_capture binds and clears it, and is a no-op on a
+       flat screen.  end_capture flushes the batched glyph quads and reads
+       back whichever target was drawn into.  */
+    lrg_3d_surface_begin_capture (s3);
     lrg_drawing = true;
     expose_frame (f, 0, 0, w, h);
     lrg_drawing = false;
 
-    /* Flush the batched glyph quads so the readback sees them (mirrors the
-       scissor flush in lrg_3d_surface_end_content).  */
-    grl_draw_begin_scissor_mode (0, 0, w, h);
-    grl_draw_end_scissor_mode ();
-
-    img = grl_image_new_from_screen ();
+    img = lrg_3d_surface_end_capture (s3);
     if (img != NULL)
       lrg_3d_surface_set_panel_image (s3, key, img);
 

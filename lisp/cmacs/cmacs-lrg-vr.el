@@ -90,6 +90,15 @@
 Larger makes the whole workspace bigger and farther away."
   :type '(choice (const :tag "Default" nil) number))
 
+(defcustom cmacs-lrg-vr-frame-size '(1400 . 1000)
+  "Pixel size (WIDTH . HEIGHT) the frame takes when VR starts, or nil.
+In VR the frame is drawn offscreen and shown on a panel of fixed angular
+size (about 41 degrees tall at the default seat), so this is a
+resolution: more pixels fit more text in, each line smaller.  1000 px
+tall is about 0.7 degrees a line.  nil leaves the frame as created."
+  :type '(choice (const :tag "Leave as created" nil)
+                 (cons (integer :tag "Width") (integer :tag "Height"))))
+
 (defcustom cmacs-lrg-vr-escape-key nil
   "What <vr-right-b> sends.
 nil means <escape> when `evil-mode' is on and \\[keyboard-quit] otherwise;
@@ -259,13 +268,14 @@ controllers."
     (cmacs-lrg-vr--apply-options)))
 
 (defun cmacs-lrg-vr--announce ()
-  "Say how to drive VR, once, when a session is up."
+  "Size the frame for VR and say how to drive it, once a session is up."
   (when (cmacs-lrg-vr-active-now-p)
     (cmacs-lrg-vr--apply-options)
-    (message "%s" (substitute-command-keys
-                   "VR: trigger clicks, grip grabs, sticks scroll/move.  \
-\\<cmacs-lrg-vr-mode-map>\\[cmacs-lrg-vr-toggle-keyboard] keyboard, \
-\\[cmacs-lrg-vr-recenter-view] recenter, \\[execute-extended-command] M-x"))))
+    (when (consp cmacs-lrg-vr-frame-size)
+      (set-frame-size (selected-frame) (car cmacs-lrg-vr-frame-size)
+                      (cdr cmacs-lrg-vr-frame-size) t))
+    (message "VR: trigger clicks, grip grabs, right stick scrolls, left \
+stick walks.  A keyboard, Y M-x, X focus, menu recenter")))
 
 (add-hook 'window-setup-hook #'cmacs-lrg-vr--announce)
 

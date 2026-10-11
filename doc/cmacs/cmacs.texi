@@ -11006,6 +11006,9 @@ The frame's desktop window is hidden in VR -- under SteamVR's gamescope
 it would otherwise appear as a black ``desktop game'' in front of the
 scene and take the focus -- and the frame is rendered offscreen;
 @env{CMACS_LRG_VR_SHOW_WINDOW}=1 keeps it.
+In VR the frame is resized to @code{cmacs-lrg-vr-frame-size} (default
+1400 by 1000 pixels) once startup finishes, since no window manager sizes
+a hidden window; @code{nil} keeps the size.
 @kbd{C-c v} holds recenter (@kbd{r}), keyboard (@kbd{k}), scale
 (@kbd{+}/@kbd{-}) and status (@kbd{?}).
 
@@ -11041,6 +11044,17 @@ steam-vr-shortcut} then adds @samp{Emacs VR} to the Steam library (a VR app
 starting in your home directory, logging to
 @file{~/.local/state/cmacs/emacs-vr.log}).  @kbd{M-x cmacs-lrg-vr-describe}
 reports the runtime, headset and controller profiles.
+The box's fontconfig also reads the host's @file{/usr/share/fonts}
+(through @file{/run/host}): a config naming a font the box lacks, such as
+Doom's @code{doom-font}, otherwise aborts UI setup before the theme loads.
+
+@code{(cmacs-lrg-vr-screenshot "/tmp/vr")} writes @file{/tmp/vr-eye.png}
+(the left eye of the next frame as sent to the headset) and
+@file{/tmp/vr-frame.png} (the flat frame the panels are cut from), so a
+rendering problem can be told from a runtime one without wearing the
+headset.  The offscreen target the frame is drawn into is cleared to the
+frame background each time it is bound; redisplay's own clear comes
+earlier, and without that each frame was drawn over the previous one.
 
 @section Commands
 

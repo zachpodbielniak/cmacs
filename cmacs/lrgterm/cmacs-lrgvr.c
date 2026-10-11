@@ -54,6 +54,7 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #include "termhooks.h"
 #include "dispextern.h"
 #include "blockinput.h"
+#include "coding.h"
 #include "cmacs-lrgterm.h"
 
 /* X keysyms for the keys the in-world keyboard and the buttons produce.  */
@@ -198,6 +199,7 @@ static struct
   float dt;
   guint64 frame_no;
   bool pointers_fresh;           /* lasers recomputed for the current frame */
+  char *shot_path;               /* cmacs-lrg-vr-screenshot: eye PNG to write */
 
   struct vr_hand hand[2];
   int pointer_hand;              /* hand whose laser is "the mouse" */
@@ -715,6 +717,32 @@ draw_keyboard (void)
     }
 }
 
+/* Write the eye being drawn -- everything so far, lasers included -- as a
+   PNG (cmacs-lrg-vr-screenshot), then forget the request.  */
+static void
+vr_write_eye (char *path)
+{
+  int vp[4] = { 0, 0, 0, 0 };
+  unsigned char *px;
+
+  rlDrawRenderBatchActive ();
+  glGetIntegerv (GL_VIEWPORT, vp);
+  px = rlReadScreenPixels (vp[2], vp[3]);   /* RGBA, rows top-down */
+  if (px != NULL)
+    {
+      GrlImage *img = grl_image_new_from_pixels
+        (vp[2], vp[3], GRL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, px);
+      if (img != NULL)
+        {
+          grl_image_export (img, path);
+          g_object_unref (img);
+        }
+      free (px);
+    }
+  xfree (path);
+  vr.shot_path = NULL;
+}
+
 static void
 vr_overlay (Lrg3DSurface *s3, guint view, gpointer data)
 {
@@ -724,37 +752,6 @@ vr_overlay (Lrg3DSurface *s3, guint view, gpointer data)
   (void) data;
   if (view == 0)
     vr_update_pointers ();
-
-  /* Diagnostic: CMACS_LRG_VR_DUMP=/path.ppm writes the left eye of frame
-     CMACS_LRG_VR_DUMP_FRAME (default 120), as the headset is sent it, to a
-     binary PPM (rows top-down).  It is how a rendering problem is told
-     apart from a runtime or compositor one without wearing the headset.  */
-  if (view == 0 && getenv ("CMACS_LRG_VR_DUMP") != NULL)
-    {
-      const char *fs = getenv ("CMACS_LRG_VR_DUMP_FRAME");
-      guint64 want = fs != NULL ? (guint64) g_ascii_strtoull (fs, NULL, 10) : 120;
-      if (vr.frame_no == want)
-        {
-          int vp[4] = { 0, 0, 0, 0 };
-          unsigned char *px;
-          rlDrawRenderBatchActive ();
-          glGetIntegerv (GL_VIEWPORT, vp);
-          px = rlReadScreenPixels (vp[2], vp[3]);
-          if (px != NULL)
-            {
-              FILE *fp = fopen (getenv ("CMACS_LRG_VR_DUMP"), "wb");
-              if (fp != NULL)
-                {
-                  int i;
-                  fprintf (fp, "P6\n%d %d\n255\n", vp[2], vp[3]);
-                  for (i = 0; i < vp[2] * vp[3]; i++)
-                    fwrite (px + i * 4, 1, 3, fp);
-                  fclose (fp);
-                }
-              free (px);
-            }
-        }
-    }
 
   if (vr.kb_visible)
     draw_keyboard ();
@@ -787,6 +784,9 @@ vr_overlay (Lrg3DSurface *s3, guint view, gpointer data)
       if (aiming)
         grl_draw_sphere (b, (pressed ? 0.010f : 0.007f) / mpu, beam);
     }
+
+  if (view == 0 && vr.shot_path != NULL)
+    vr_write_eye (vr.shot_path);
 }
 
 /* ----------------------------------------------------------- input ------ */
@@ -1197,6 +1197,8 @@ cmacs_lrgvr_detach (void)
       lrg_3d_surface_set_vr_service (vr.s3, NULL);
     }
   g_clear_object (&vr.kb_texture);
+  xfree (vr.shot_path);
+  vr.shot_path = NULL;
   if (vr.xr != NULL)
     lrg_vr_service_shutdown (LRG_VR_SERVICE (vr.xr));
   g_clear_object (&vr.xr);
@@ -1464,6 +1466,30 @@ Return VALUE.  */)
   return value;
 }
 
+DEFUN ("cmacs-lrg-vr-screenshot", Fcmacs_lrg_vr_screenshot,
+       Scmacs_lrg_vr_screenshot, 1, 1, 0,
+       doc: /* Save what the headset shows, as PNGs, with names built from PREFIX.
+PREFIX-eye.png gets the left eye of the next headset frame, lasers and
+keyboard included; PREFIX-frame.png gets the flat Emacs frame as last
+captured onto the panels.  The eye image appears once that frame is
+drawn -- a moment later, and not while the headset is asleep.  Return
+the list of the two file names.  */)
+  (Lisp_Object prefix)
+{
+  Lisp_Object eye, flat;
+
+  check_vr_active ();
+  CHECK_STRING (prefix);
+  prefix = Fexpand_file_name (prefix, Qnil);
+  eye = concat2 (prefix, build_string ("-eye.png"));
+  flat = concat2 (prefix, build_string ("-frame.png"));
+  xfree (vr.shot_path);
+  vr.shot_path = xstrdup (SSDATA (ENCODE_FILE (eye)));
+  if (!lrg_3d_surface_export_content (vr.s3, SSDATA (ENCODE_FILE (flat))))
+    flat = Qnil;
+  return list2 (eye, flat);
+}
+
 DEFUN ("cmacs-lrg-vr-pointed-window", Fcmacs_lrg_vr_pointed_window,
        Scmacs_lrg_vr_pointed_window, 0, 0, 0,
        doc: /* Return the window under the active controller's laser, or nil.  */)
@@ -1533,6 +1559,7 @@ syms_of_cmacs_lrgvr (void)
   defsubr (&Scmacs_lrg_vr_haptic);
   defsubr (&Scmacs_lrg_vr_set_option);
   defsubr (&Scmacs_lrg_vr_pointed_window);
+  defsubr (&Scmacs_lrg_vr_screenshot);
   defsubr (&Scmacs_lrg_vr_status);
 }
 

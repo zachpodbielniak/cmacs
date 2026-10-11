@@ -629,6 +629,10 @@ headset (gamescope under SteamVR) would otherwise show it as a flat black
 frame is rendered offscreen instead.  ~CMACS_LRG_VR_SHOW_WINDOW=1~ keeps the
 window (and its ordinary keyboard focus).
 
+In VR the frame is resized to ~cmacs-lrg-vr-frame-size~ (default 1400×1000
+pixels) once startup finishes: with no window there is no window manager to
+size it, and more pixels make sharper panels.  ~nil~ keeps the size.
+
 ** Comfort and scale
 
 You sit in a *seat* that follows the 3D camera: at the camera's eye, at the
@@ -683,9 +687,15 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
   frame cannot switch drivers: start that frame with the variable set.
 - SteamVR keeps the session /synchronized/ (not shown, no controller input)
   while the headset is in standby -- off your head.  Put it on.
-- ~CMACS_LRG_VR_DUMP=/tmp/eye.ppm~ (with ~CMACS_LRG_VR_DUMP_FRAME=N~, default
-  120) writes the left eye of frame N as sent to the headset -- the way to tell
-  a rendering problem from a runtime one without wearing it.
+- ~(cmacs-lrg-vr-screenshot "/tmp/vr")~ writes =/tmp/vr-eye.png= (the left
+  eye of the next frame, exactly as sent to the headset) and
+  =/tmp/vr-frame.png= (the flat frame the panels are cut from), and returns
+  both names -- the way to tell a rendering problem from a runtime one
+  without wearing it.  Over D-Bus: ~emacsctl eval '(cmacs-lrg-vr-screenshot
+  "/tmp/vr")'~.
+- The offscreen target is cleared to the frame's background on every bind.
+  Redisplay's own clear comes before the target is bound, so without that
+  every frame drew over the last one and stale text bled through.
 
 ** Running it from a distrobox (Steam Frame / SteamOS)
 
@@ -696,6 +706,12 @@ name that path), and exports ~emacs~ & co. to =~/bin/export=.  Then
 the Steam library as a VR app starting in your home directory.  Restart Steam
 (or pass ~--restart-steam~) for it to appear.  Its output goes to
 =~/.local/state/cmacs/emacs-vr.log=.
+
+The box sees the host's fonts: ~just distrobox~ adds =/run/host/usr/share/fonts=
+and =/run/host/usr/local/share/fonts= to the box's fontconfig (your
+=~/.local/share/fonts= is already shared through the home directory).  A
+config naming a font the box cannot find -- Doom's ~doom-font~ -- otherwise
+aborts UI setup before the theme loads, and the frame comes up white.
 
 ~M-x cmacs-lrg-vr-describe~ reports the runtime, headset, session state,
 refresh rate and the controller profiles the runtime bound.  Controllers only
