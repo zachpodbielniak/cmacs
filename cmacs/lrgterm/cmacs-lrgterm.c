@@ -993,7 +993,7 @@ lrg_menu_draw_text (struct frame *f, int x, int y_top, const char *str,
           x += FRAME_COLUMN_WIDTH (f);
           continue;
         }
-      key = lrg_glyph_key_new ((guint64) (uintptr_t) font, code, 0);
+      key = lrg_glyph_key_new (lrg_font_atlas_id (scaled), code, 0);
       m = lrg_glyph_atlas_lookup (atlas, key);
       if (m == NULL)
         m = lrg_font_bake (atlas, scaled, code, key);

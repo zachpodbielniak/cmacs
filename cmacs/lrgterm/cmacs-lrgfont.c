@@ -52,6 +52,44 @@ lrg_frame_glyph_atlas (struct frame *f)
   return dpyinfo->glyph_atlas;
 }
 
+/* The atlas caches glyphs under (font id, glyph index), and a glyph index
+   means nothing without its font, so the id must never name two fonts.
+   The `struct font' address cannot be it: when Emacs closes a font (a
+   face change, the font cache being compacted at GC) the next font can be
+   allocated at the same address, and its glyph indices then hit the old
+   font's bitmaps -- text drawn in the wrong letters.  Doom's startup does
+   exactly that, swapping the initial font for `doom-font'.
+
+   The id is instead a serial attached to the cairo scaled font as user
+   data, so it lives and dies with the rasteriser the bitmaps came from.
+   Cairo hands back the same scaled font for the same face, size and
+   options, so a font reopened at the same size keeps its cached glyphs.  */
+static const cairo_user_data_key_t lrg_font_id_key;
+
+guint64
+lrg_font_atlas_id (cairo_scaled_font_t *scaled)
+{
+  static guint64 next_id;
+  guint64 *id = cairo_scaled_font_get_user_data (scaled, &lrg_font_id_key);
+
+  if (id == NULL)
+    {
+      id = g_new (guint64, 1);
+      *id = ++next_id;
+      if (cairo_scaled_font_set_user_data (scaled, &lrg_font_id_key, id,
+                                           g_free)
+          != CAIRO_STATUS_SUCCESS)
+        {
+          /* Out of memory: a fresh id per call is still never wrong, only
+             uncached.  */
+          guint64 one_off = *id;
+          g_free (id);
+          return one_off;
+        }
+    }
+  return *id;
+}
+
 /* Rasterise glyph CODE of SCALED into the atlas under KEY; return its
    metrics (owned by the atlas) or NULL.  Public so the in-engine popup menu
    (cmacs-lrgterm.c) can render label text through the same atlas path.  */
@@ -188,6 +226,7 @@ lrg_font_draw_glyph_string (struct glyph_string *s, int from, int to, int x,
   LrgGlyphAtlas *atlas;
   unsigned long fg = s->xgcv.foreground;
   g_autoptr(GrlColor) fgc = NULL;
+  guint64 font_id;
   int i;
 
   /* s->char2b is NULL for glyphless glyph strings: the display engine never
@@ -195,6 +234,7 @@ lrg_font_draw_glyph_string (struct glyph_string *s, int from, int to, int x,
      never routed here -- but guard anyway so a stray caller can't NULL-deref.  */
   if (surface == NULL || scaled == NULL || s->char2b == NULL)
     return 0;
+  font_id = lrg_font_atlas_id (scaled);
 
   atlas = lrg_frame_glyph_atlas (f);
   fgc = grl_color_new (LRG_RED (fg), LRG_GREEN (fg), LRG_BLUE (fg), 255);
@@ -212,7 +252,7 @@ lrg_font_draw_glyph_string (struct glyph_string *s, int from, int to, int x,
   for (i = from; i < to; i++)
     {
       unsigned code = s->char2b[i];
-      LrgGlyphKey *key = lrg_glyph_key_new ((guint64) (uintptr_t) font, code, 0);
+      LrgGlyphKey *key = lrg_glyph_key_new (font_id, code, 0);
       LrgGlyphMetrics *m = lrg_glyph_atlas_lookup (atlas, key);
 
       if (m == NULL)

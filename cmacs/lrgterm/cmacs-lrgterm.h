@@ -221,6 +221,9 @@ extern int lrg_font_draw_glyph_string (struct glyph_string *s, int from,
 extern LrgGlyphMetrics *lrg_font_bake (LrgGlyphAtlas *atlas,
                                        cairo_scaled_font_t *scaled,
                                        unsigned code, const LrgGlyphKey *key);
+/* The glyph-atlas font id of SCALED: a serial unique for the life of the
+   process, never an address (see lrgfont.c).  */
+extern guint64 lrg_font_atlas_id (cairo_scaled_font_t *scaled);
 
 /* lrg_requested_render_mode is declared in lisp.h (reachable from core).  */
 

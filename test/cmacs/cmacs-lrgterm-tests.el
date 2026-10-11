@@ -31,6 +31,30 @@
   "Non-nil when the selected frame is an output_lrg frame."
   (eq (framep-on-display) 'lrg))
 
+;;;; Source guards ------------------------------------------------------
+
+(defconst cmacs-lrgterm-tests--root
+  (expand-file-name "../.." (file-name-directory
+                             (or load-file-name buffer-file-name)))
+  "Repository root, captured at load.")
+
+(ert-deftest cmacs-lrgterm-glyph-keys-never-use-a-font-address ()
+  "Glyph-atlas keys name a font by `lrg_font_atlas_id', not its address.
+A closed font's address is reused by the next font opened, whose glyph
+indices then hit the old font's cached bitmaps: Doom's startup font swap
+drew the whole frame in the wrong letters."
+  (let ((dir (expand-file-name "cmacs/lrgterm" cmacs-lrgterm-tests--root))
+        (keys 0))
+    (skip-unless (file-directory-p dir))
+    (dolist (file (directory-files dir t "\\.c\\'"))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (while (re-search-forward "lrg_glyph_key_new *(\\([^,]*\\)," nil t)
+          (setq keys (1+ keys))
+          (should-not (string-match-p "uintptr_t\\|\\_<font\\_>"
+                                      (match-string 1))))))
+    (should (> keys 0))))
+
 ;;;; Presence -----------------------------------------------------------
 
 (ert-deftest cmacs-lrgterm-feature-provided ()

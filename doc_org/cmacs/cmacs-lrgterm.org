@@ -244,6 +244,16 @@ uploaded as straight un-premultiplied RGBA with the ~is_color~ atlas metric
 set, which makes the engine draw them *untinted* so colour emoji keep their
 own colours.
 
+Atlas entries are keyed by (font id, glyph index), and the font id is a
+serial stored on the ~cr_scaled_font~ as cairo user data
+(~lrg_font_atlas_id~), *never* the ~struct font~ address.  A glyph index
+only means something with its font, and when Emacs closes a font (on a face
+change, or when the font cache is compacted at GC) the next font opened can
+reuse its address.  With address keys the new font's indices then hit the old
+font's bitmaps and the frame is drawn in the wrong letters.  Doom's startup
+swap to ~doom-font~ did exactly that.  Cairo returns the same scaled font
+for the same face, size and options, so reopening a font keeps its cache.
+
 *** Rendering / presentation model (full repaint, present on unblock)
 
 lrg presents through a *double-buffered swap* of the default framebuffer (the

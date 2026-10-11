@@ -10688,6 +10688,10 @@ as an alpha-coverage RGBA mask and tinted by the face foreground; glyphs
 from colour fonts (CBDT/COLR tables --- e.g. Noto Color Emoji) are detected
 per glyph and stored as straight un-premultiplied RGBA, drawn untinted, so
 colour emoji render in full colour under @code{--lrg} just as under pgtk.
+Atlas entries are keyed by a serial stored on the @code{cr_scaled_font}
+(@code{lrg_font_atlas_id}), never by the font's address: a closed font's
+address is reused by the next font opened, whose glyph indices would then
+hit the old font's bitmaps and draw the wrong letters.
 Full font-lock colour, the region, the
 modeline (with its 3D box), text decorations (underline, overline,
 strike-through, box), the graphical fringes (continuation/truncation arrows)
