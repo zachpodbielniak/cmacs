@@ -294,5 +294,25 @@ within double-click-time regardless of the real interval)."
     (let ((t2 (plist-get (cmacs-lrgterm-input-state) :timestamp-ms)))
       (should (> t2 t1)))))
 
+;; The in-world keyboard: either hand types, and a modifier held with
+;; one trigger stays down for the other hand's keys.  The modifier hand's
+;; trigger is otherwise a layer, so it could not press Meta at all.
+(ert-deftest cmacs-lrgvr-keyboard-chords ()
+  "Both hands type on the VR keyboard; a held modifier key chords."
+  (let ((file (expand-file-name "cmacs/lrgterm/cmacs-lrgvr.c"
+                                cmacs-lrgterm-tests--root)))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((src (buffer-string)))
+        ;; The keyboard branch is not behind `!modhand'.
+        (should (string-match-p
+                 "if (hand->grab == GRAB_NONE && hand->kb_row >= 0" src))
+        ;; vr_read_layer: a trigger on the keyboard is typing, not Shift.
+        (should (string-match-p "!mh->kb_trigger" src))
+        ;; A held modifier survives the key it modifies.
+        (should (string-match-p "!kb_held (VK_META)" src))
+        (should (string-match-p "kb_trigger_up (hand)" src))))))
+
 (provide 'cmacs-lrgterm-tests)
 ;;; cmacs-lrgterm-tests.el ends here

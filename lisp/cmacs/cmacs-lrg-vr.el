@@ -244,9 +244,10 @@ super (released after a hold).")
 ;;;###autoload
 (defun cmacs-lrg-vr-toggle-keyboard ()
   "Show or hide the in-world keyboard.
-Point at a key and pull the trigger to type; Ctrl, Meta and Super stick
-until the next key, Shift cycles once -> locked -> off.  Grab the keyboard
-with the grip to move it."
+Point at a key and pull either trigger to type.  Tap Ctrl, Meta or Super
+to latch it for the next key (Shift cycles once -> locked -> off), or hold
+it down with one trigger while the other hand types: Meta held + x is
+M-x.  Grab the keyboard with the grip to move it."
   (interactive)
   (cmacs-lrg-vr--require-active)
   (cmacs-lrg-vr-keyboard))
@@ -366,7 +367,8 @@ Layers (the modifier hand): S- trigger, M- grip, C- both, by default."
   "S-<vr-flick-right>"     #'cmacs-lrg-vr-workspace-next
   ;; Bumper layer (M-): files and buffers.
   "M-<vr-a>"               #'cmacs-lrg-vr-find-file
-  "M-<vr-b>"               #'cmacs-lrg-vr-kill-buffer
+  "M-<vr-b>"               #'cmacs-lrg-vr-close-window
+  "M-<vr-b-hold>"          #'cmacs-lrg-vr-kill-buffer
   "M-<vr-x>"               #'cmacs-lrg-vr-recent-file
   "M-<vr-y>"               #'save-buffer
   "M-<vr-dpad-left>"       #'previous-buffer
@@ -375,7 +377,7 @@ Layers (the modifier hand): S- trigger, M- grip, C- both, by default."
   "M-<vr-flick-right>"     #'next-buffer
   ;; Both (C-): windows.
   "C-<vr-a>"               #'cmacs-lrg-vr-split-right
-  "C-<vr-b>"               #'delete-window
+  "C-<vr-b>"               #'cmacs-lrg-vr-close-window
   "C-<vr-x>"               #'delete-other-windows
   "C-<vr-y>"               #'cmacs-lrg-vr-split-below
   "C-<vr-menu>"            #'cmacs-lrg-vr-cycle-arrangement

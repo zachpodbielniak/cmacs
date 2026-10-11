@@ -463,7 +463,7 @@ left controller shows the layer: blue, green, orange.
 | X                    | select the pointed-at window      | *peek* at every workspace, release to return |
 | Y                    | =M-x=                             | *voice command* -- speak, release: done  |
 | Menu                 | *quick menu* at the laser         | recenter the scene ahead of you          |
-| View                 | workspace overview                | controller help                          |
+| View                 | workspace overview                | controller help (again: hide it)         |
 | Right bumper         | switch buffer                     |                                          |
 | D-pad                | arrow keys, repeating while held  |                                          |
 | Left stick press     | reset the view                    | controller help                          |
@@ -474,7 +474,7 @@ left controller shows the layer: blue, green, orange.
 | Button | Shift (left trigger) | Meta (left bumper) | Control (both) |
 |--------+----------------------+--------------------+----------------|
 | A      | new workspace        | find file (in the project) | split right |
-| B      | close workspace      | kill buffer        | close window   |
+| B      | close workspace      | close window (hold: kill buffer) | close window |
 | X      | switch workspace...  | recent files       | only this window |
 | Y      | switch buffer        | save               | split below    |
 | Menu   | controller help      |                    | cycle panel arrangement |
@@ -548,9 +548,12 @@ the flat desktop's carousel.  =-desk-radius=, =-desk-height= and
   They are grabbed while the VR session has focus and released when the
   dashboard is up; one connected later is picked up within two seconds.
 - *The in-world keyboard* (=A=) floats below eye level: point at a key and
-  pull the right trigger.  Ctrl, Meta and Super stick until the next key;
-  Shift cycles once → locked → off, or hold the left trigger.  Grip moves
-  it.
+  pull either trigger.  Modifiers work two ways: tap Ctrl, Meta, Super or
+  Shift and it latches for the next key (Shift: once → locked → off), or
+  hold it down with one trigger and press keys with the other hand --
+  Meta held + =x= is =M-x=, Ctrl held + =x=, =s= is =C-x C-s=, and letting
+  go releases it.  The left trigger is only the Shift layer while it is
+  not on the keyboard.  Grip moves it.
 
 Every controller action has a key, under =C-c v= (shared with the voice
 recorder's =r R p x d s S=):

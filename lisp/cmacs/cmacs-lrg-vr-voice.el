@@ -61,6 +61,7 @@
 (declare-function cmacs-lrg-vr-undo "cmacs-lrg-vr-ui")
 (declare-function cmacs-lrg-vr-split-right "cmacs-lrg-vr-ui")
 (declare-function cmacs-lrg-vr-split-below "cmacs-lrg-vr-ui")
+(declare-function cmacs-lrg-vr-close-window "cmacs-lrg-vr-ui")
 (defvar cmacs-audio-default-rate)
 (defvar cmacs-audio-capture-source)
 (defvar cmacs-audio-default-device)
@@ -614,7 +615,7 @@ understood.  Off a controller, toggles like \\[cmacs-lrg-vr-voice-command]."
              ("split\\(?: \\(?:the \\)?window\\)?\\(?: \\(?:below\\|down\\|horizontally\\)\\)?"
               ,(cmacs-lrg-vr-voice--do 'cmacs-lrg-vr-split-below) "split [below]")
              ("\\(?:close\\|delete\\) \\(?:this \\)?window"
-              ,(cmacs-lrg-vr-voice--do 'delete-window) "close window")
+              ,(cmacs-lrg-vr-voice--do 'cmacs-lrg-vr-close-window) "close window")
              ("\\(?:only\\|maximize\\|maximise\\|one\\) window\\|maximi[sz]e\\|full screen"
               ,(cmacs-lrg-vr-voice--do 'delete-other-windows) "maximize window")
              ("\\(?:other\\|next\\|switch\\) window" ,(cmacs-lrg-vr-voice--do 'other-window)

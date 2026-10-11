@@ -139,8 +139,8 @@ extern void SetTraceLogLevel (int log_level);
 
 /* ----------------------------------------------------------- keyboard ---- */
 
-enum vr_key_kind { VK_CHAR, VK_SYM, VK_SHIFT, VK_CTRL, VK_META, VK_SUPER,
-                   VK_HIDE };
+enum vr_key_kind { VK_NONE, VK_CHAR, VK_SYM, VK_SHIFT, VK_CTRL, VK_META,
+                   VK_SUPER, VK_HIDE };
 
 struct vr_key
 {
@@ -206,6 +206,9 @@ struct vr_hand
   int fx, fy;                    /* frame pixel under the laser */
   guint64 key;                   /* panel under the laser */
   int kb_row, kb_col;            /* keyboard key under the laser, or -1 */
+  bool kb_trigger;               /* the trigger is down on the keyboard */
+  int kb_hold;                   /* modifier key it holds, or VK_NONE */
+  bool kb_hold_used;             /* a key was typed while it was held */
 
   guint buttons, prev;
   bool trigger_mouse;            /* trigger press went to Emacs as mouse-1 */
@@ -610,42 +613,109 @@ vr_emit_wheel (struct input_event *hold_quit, bool horizontal, bool up,
   return vr_store (hold_quit, &ie);
 }
 
-/* Sticky keyboard modifiers, consumed by the next non-modifier key. */
+/* Whether a hand holds modifier key KIND down with its trigger.  */
+static bool
+kb_held (enum vr_key_kind kind)
+{
+  return kind != VK_NONE && (vr.hand[0].kb_hold == (int) kind
+                            || vr.hand[1].kb_hold == (int) kind);
+}
+
+/* A key was typed: every modifier held down now has been used, so letting
+   go of it releases it (a chord) instead of leaving it latched.  */
+static void
+kb_note_used (void)
+{
+  vr.hand[0].kb_hold_used |= vr.hand[0].kb_hold != VK_NONE;
+  vr.hand[1].kb_hold_used |= vr.hand[1].kb_hold != VK_NONE;
+}
+
+/* Keyboard modifiers for the next non-modifier key.  A tapped (latched)
+   modifier is consumed by it; one held down with a trigger stays down
+   until that trigger lets go, so Meta held + x is M-x and Ctrl held +
+   x, s is C-x C-s.  */
 static int
 kb_take_mods (void)
 {
   int m = (vr.kb_ctrl ? ctrl_modifier : 0) | (vr.kb_meta ? meta_modifier : 0)
           | (vr.kb_super ? super_modifier : 0);
-  if (vr.kb_ctrl || vr.kb_meta || vr.kb_super)
-    vr.kb_dirty = true;
-  vr.kb_ctrl = vr.kb_meta = vr.kb_super = false;
+  kb_note_used ();
+  if (vr.kb_ctrl && !kb_held (VK_CTRL))
+    vr.kb_ctrl = false, vr.kb_dirty = true;
+  if (vr.kb_meta && !kb_held (VK_META))
+    vr.kb_meta = false, vr.kb_dirty = true;
+  if (vr.kb_super && !kb_held (VK_SUPER))
+    vr.kb_super = false, vr.kb_dirty = true;
   return m;
 }
 
+/* After a key: a one-shot shift is spent, unless a trigger holds it.  */
+static void
+kb_spend_shift (void)
+{
+  if (vr.kb_shift == 1 && !kb_held (VK_SHIFT))
+    {
+      vr.kb_shift = 0;
+      vr.kb_dirty = true;
+    }
+}
+
+/* Hand H's trigger let go of the keyboard.  A modifier it held is
+   released if a key was typed meanwhile, and stays latched if not -- a
+   tap, as before.  */
+static void
+kb_trigger_up (struct vr_hand *hand)
+{
+  if (hand->kb_hold != VK_NONE && hand->kb_hold_used)
+    {
+      switch ((enum vr_key_kind) hand->kb_hold)
+        {
+        case VK_SHIFT: vr.kb_shift = 0; break;
+        case VK_CTRL:  vr.kb_ctrl = false; break;
+        case VK_META:  vr.kb_meta = false; break;
+        case VK_SUPER: vr.kb_super = false; break;
+        default: break;
+        }
+      vr.kb_dirty = true;
+    }
+  hand->kb_trigger = false;
+  hand->kb_hold = VK_NONE;
+  hand->kb_hold_used = false;
+}
+
 static int
-kb_press (struct input_event *hold_quit, int row, int col)
+kb_press (struct input_event *hold_quit, struct vr_hand *hand, int row,
+          int col)
 {
   const struct vr_key *k = &vr_rows[row].keys[col];
   int count = 0, mods;
+  bool on = false;
 
   switch (k->kind)
     {
     case VK_SHIFT:
       vr.kb_shift = (vr.kb_shift + 1) % 3;   /* off -> once -> locked -> off */
-      vr.kb_dirty = true;
+      on = vr.kb_shift != 0;
       break;
-    case VK_CTRL:  vr.kb_ctrl = !vr.kb_ctrl;   vr.kb_dirty = true; break;
-    case VK_META:  vr.kb_meta = !vr.kb_meta;   vr.kb_dirty = true; break;
-    case VK_SUPER: vr.kb_super = !vr.kb_super; vr.kb_dirty = true; break;
+    case VK_CTRL:  on = vr.kb_ctrl = !vr.kb_ctrl;   break;
+    case VK_META:  on = vr.kb_meta = !vr.kb_meta;   break;
+    case VK_SUPER: on = vr.kb_super = !vr.kb_super; break;
+    default: break;
+    }
+
+  switch (k->kind)
+    {
+    case VK_SHIFT: case VK_CTRL: case VK_META: case VK_SUPER:
+      vr.kb_dirty = true;
+      /* Held down while the trigger is: see kb_trigger_up.  */
+      hand->kb_hold = on ? (int) k->kind : VK_NONE;
+      hand->kb_hold_used = false;
+      break;
     case VK_HIDE:  kb_set_visible (false); break;
     case VK_SYM:
       mods = kb_take_mods () | (vr.kb_shift ? shift_modifier : 0) | vr.layer;
       count += vr_emit_keysym (hold_quit, k->code, mods);
-      if (vr.kb_shift == 1)
-        {
-          vr.kb_shift = 0;
-          vr.kb_dirty = true;
-        }
+      kb_spend_shift ();
       break;
     case VK_CHAR:
       {
@@ -658,11 +728,7 @@ kb_press (struct input_event *hold_quit, int row, int col)
         if ((mods & ctrl_modifier) && ch >= 'A' && ch <= 'Z')
           ch += 'a' - 'A';
         count += vr_emit_char (hold_quit, ch, mods);
-        if (vr.kb_shift == 1)
-          {
-            vr.kb_shift = 0;
-            vr.kb_dirty = true;
-          }
+        kb_spend_shift ();
       }
       break;
     }
@@ -1061,12 +1127,21 @@ vr_read_layer (void)
 {
   guint b;
   bool trig, grip;
+  const struct vr_hand *mh = &vr.hand[vr.move_hand];
 
   if (!vr.modifier_hand)
     return 0;
   b = lrg_vr_service_get_controller_buttons (vr_service (),
                                              (LrgVRHand) vr.move_hand);
-  trig = (b & LRG_VR_CONTROLLER_BUTTON_TRIGGER) != 0;
+  /* A trigger pressing a key on the in-world keyboard is typing, not the
+     layer: one held down there (kb_trigger), or one going down on a key
+     this frame -- this runs before vr_hand_input sees it, and MH->buttons
+     is still last frame's.  A trigger already held as the layer stays
+     the layer when the laser wanders onto the keyboard.  */
+  trig = (b & LRG_VR_CONTROLLER_BUTTON_TRIGGER) != 0
+         && !mh->kb_trigger
+         && !(mh->kb_row >= 0
+              && !(mh->buttons & LRG_VR_CONTROLLER_BUTTON_TRIGGER));
   grip = (b & (vr.second_is_bumper ? LRG_VR_CONTROLLER_BUTTON_BUMPER
                                    : LRG_VR_CONTROLLER_BUTTON_GRIP)) != 0;
   return trig && grip ? vr.mod_both : trig ? vr.mod_trigger
@@ -1250,23 +1325,30 @@ vr_hand_input (struct input_event *hold_quit, int h)
   sy = lrg_vr_service_get_controller_axis (svc, (LrgVRHand) h,
                                            LRG_VR_AXIS_THUMBSTICK_Y);
 
-  /* Trigger: type on the keyboard, or click in a buffer -- unless this is
-     the modifier hand, whose trigger is a layer (vr_read_layer).  */
-  /* While carrying, the trigger turns the stick into resize (grab_update):
-     it does not click.  */
-  if (!modhand && hand->grab == GRAB_NONE
+  /* Trigger on the keyboard: type, with either hand -- the modifier
+     hand's trigger is a key press there, not its layer (vr_read_layer), so
+     one hand can hold Meta while the other presses x.  */
+  if (hand->grab == GRAB_NONE && hand->kb_row >= 0
       && pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
     {
-      if (hand->kb_row >= 0)
-        {
-          count += kb_press (hold_quit, hand->kb_row, hand->kb_col);
-          vr_pulse (h, 0.015f, 0.4f);
-        }
+      hand->kb_trigger = true;
+      count += kb_press (hold_quit, hand, hand->kb_row, hand->kb_col);
+      vr_pulse (h, 0.015f, 0.4f);
+    }
+  else if (hand->kb_trigger
+           && !(hand->buttons & LRG_VR_CONTROLLER_BUTTON_TRIGGER))
+    kb_trigger_up (hand);
+  /* Trigger elsewhere: click in a buffer -- unless this is the modifier
+     hand, whose trigger is a layer.  While carrying, the trigger turns the
+     stick into resize (grab_update): it does not click.  */
+  else if (!modhand && hand->grab == GRAB_NONE
+           && pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
+    {
       /* Another workspace's panel on the ring: switch to it, as a
          Ctrl+double-click on it does on the desktop.  It is a picture of
          that workspace, not the live frame, so it gets no mouse events.  */
-      else if (hand->hit_panel
-               && cmacs_lrgterm_select_workspace_panel (hand->key))
+      if (hand->hit_panel
+          && cmacs_lrgterm_select_workspace_panel (hand->key))
         vr_pulse (h, 0.03f, 0.6f);
       else if (hand->hit_panel)
         {

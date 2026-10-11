@@ -143,11 +143,13 @@ the build would still link and VR would fail only at runtime."
     ;; Releases always land somewhere; holds fall back to the tap.
     (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-b-release])
                 #'cmacs-lrg-vr-button-released))
-    (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-b-hold])
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-x-hold])
                 #'cmacs-lrg-vr-hold-as-tap))
     ;; Explicit holds are kept.
     (should (eq (lookup-key cmacs-lrg-vr-mode-map [vr-a-hold])
-                #'cmacs-lrg-vr-voice-dictate-hold))))
+                #'cmacs-lrg-vr-voice-dictate-hold))
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-b-hold])
+                #'cmacs-lrg-vr-kill-buffer))))
 
 (ert-deftest cmacs-lrg-vr-hold-without-binding-does-the-tap ()
   "A slow press of a button whose hold is unbound still does the tap."
@@ -323,6 +325,40 @@ the build would still link and VR would fail only at runtime."
       (with-current-buffer "*VR Controls*"
         (should (string-search "D-pad left" (buffer-string))))
       (kill-buffer "*VR Controls*"))))
+
+(ert-deftest cmacs-lrg-vr-controller-help-toggles ()
+  "The help button shows the sheet, and the same button hides it."
+  (skip-unless (require 'cmacs-lrg-vr-ui nil t))
+  (save-window-excursion
+    (delete-other-windows)
+    (cmacs-lrg-vr-controller-help)
+    (should (get-buffer-window "*VR Controls*"))
+    (should (string-search "Meta held + x"
+                           (with-current-buffer "*VR Controls*"
+                             (buffer-string))))
+    (cmacs-lrg-vr-controller-help)
+    (should-not (get-buffer-window "*VR Controls*"))
+    (should (one-window-p t))
+    (cmacs-lrg-vr-controller-help)
+    (should (get-buffer-window "*VR Controls*"))
+    (kill-buffer "*VR Controls*")))
+
+(ert-deftest cmacs-lrg-vr-close-window ()
+  "Closing removes the cursor's window, but never the frame's last one."
+  (skip-unless (require 'cmacs-lrg-vr-ui nil t))
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((home (selected-window)))
+      (select-window (split-window-right))
+      (cmacs-lrg-vr-close-window)
+      (should (one-window-p t))
+      (should (eq (selected-window) home))
+      (cmacs-lrg-vr-close-window)
+      (should (window-live-p home))))
+  (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-b])
+              'cmacs-lrg-vr-close-window))
+  (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-b-hold])
+              'cmacs-lrg-vr-kill-buffer)))
 
 (ert-deftest cmacs-lrg-vr-every-bound-command-exists ()
   "Nothing in the VR keymap names a function that is not defined."

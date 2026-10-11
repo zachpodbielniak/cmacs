@@ -10993,7 +10993,8 @@ cmacs-lrg-vr-start} moves a running 3D frame into the headset.
 The right hand points and acts; the left hand moves and is the
 @emph{modifier hand}.  Buttons tell a tap from a hold (0.35@tie{}s,
 @code{cmacs-lrg-vr-hold-seconds}); holding the left stick or @kbd{C-c v h}
-shows every binding (@code{cmacs-lrg-vr-controller-help}).
+shows every binding (@code{cmacs-lrg-vr-controller-help}); the same
+button again hides it.
 
 @table @asis
 @item right trigger, grip, stick
@@ -11030,8 +11031,9 @@ Tap: reset the view.  Hold: controller help.
 @end table
 
 With the Shift layer A, B and X make, close and switch workspaces and Y
-switches buffer; with Meta A finds a file, B kills the buffer, X opens a
-recent file and Y saves; with Control A and Y split, B closes the window,
+switches buffer; with Meta A finds a file, B closes the window the cursor
+is in (hold B: kill the buffer), X opens a recent file and Y saves; with Control A and Y
+split, B closes the window,
 X keeps only it and menu cycles the panel arrangement.
 
 The grip carries what the laser is on: the grabbed point stays on the
@@ -11077,8 +11079,10 @@ The quick menu lists them.
 reset, @kbd{k} keyboard, @kbd{+}/@kbd{-} scale, @kbd{?} status.
 
 The in-world keyboard appears in front of you below eye level: point and
-pull the right trigger.  Ctrl, Meta and Super stick until the next key;
-Shift cycles once, locked, off, and the left trigger is Shift while held.  Physical keyboards (Bluetooth, USB, the
+pull either trigger.  A tapped Ctrl, Meta or Super latches for the next
+key (Shift cycles once, locked, off); one held down with a trigger stays
+down for the keys the other hand presses, so Meta held and @kbd{x} is
+@kbd{M-x}.  The left trigger is the Shift layer only off the keyboard.  Physical keyboards (Bluetooth, USB, the
 headset's own) are read from @file{/dev/input} (the @code{input} group)
 through the system XKB layout, grabbed while the VR session has focus.
 The frame's desktop window is hidden in VR -- under SteamVR's gamescope

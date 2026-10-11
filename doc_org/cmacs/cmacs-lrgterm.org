@@ -635,13 +635,14 @@ rebindings.
 | X =<vr-x>=                      | select the pointed-at window | peek at every workspace               |
 | Y =<vr-y>=                      | =M-x=                        | voice command                         |
 | menu =<vr-menu>=                | quick menu                   | recenter                              |
-| view =<vr-view>=                | workspace overview           | controller help                       |
+| view =<vr-view>=                | workspace overview           | controller help / hide it             |
 | right bumper =<vr-bumper>=      | switch buffer                |                                       |
 | D-pad                           | arrow keys, repeating        |                                       |
 | left stick press =<vr-left-stick>= | reset the view            | controller help                       |
 
 With a layer: Shift (left trigger) A new / B close / X switch workspace, Y
-switch buffer; Meta (left bumper) A find file, B kill buffer, X recent
+switch buffer; Meta (left bumper) A find file, B close the window the
+cursor is in (hold B: kill buffer), X recent
 files, Y save, flick ←/→ previous/next buffer; Control (both) A split
 right, B close window, X only window, Y split below, menu cycle
 arrangement, flick ←/→ other window.  The D-pad's arrows take the layer
@@ -746,9 +747,18 @@ help, =o= overview, =n= / =]= / =[= / =w= / =q= workspaces, =c= recenter,
 =0= reset, =k= keyboard, =+= / =-= scale, =?= status.
 
 *The in-world keyboard* (=A=) appears in front of you below eye level: point at
-a key and pull the right trigger.  =Ctrl=, =Meta= and =Super= stick until the
-next key; =Shift= cycles once → locked → off, and the left trigger is Shift
-while held.
+a key and pull either trigger.  A tapped =Ctrl=, =Meta=, =Super= latches for
+the next key (=Shift= cycles once → locked → off); one held down with a
+trigger stays down for every key pressed meanwhile and is released with
+that trigger, so Meta held + =x= is =M-x= (~kb_take_mods~, ~kb_trigger_up~).
+The modifier hand's trigger types on the keyboard instead of being the
+Shift layer when it goes down on a key (~vr_read_layer~); one already held
+as the layer stays the layer.
+
+~cmacs-lrg-vr-controller-help~ toggles: the button that shows the sheet
+hides it.  ~cmacs-lrg-vr-close-window~ (Meta / Control + B, the quick
+menu, the voice command "close window") closes the selected window --
+=quit-window= for one made for its buffer, never the frame's last one.
 
 *Physical keyboards* (Bluetooth, USB, the headset's own virtual keyboard) are
 read straight from =/dev/input= (you need the =input= group) and translated

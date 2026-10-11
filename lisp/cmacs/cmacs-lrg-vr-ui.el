@@ -120,6 +120,20 @@ INITIAL, when given (a spoken file name), is typed into the prompt."
   (kill-buffer (current-buffer)))
 
 ;;;###autoload
+(defun cmacs-lrg-vr-close-window ()
+  "Close the window the cursor is in.
+A window that was made to show its buffer -- help, the VR controls, a
+popup -- goes the way \[quit-window] takes it, back to what it replaced.
+The last window on the frame is not deleted; its buffer is buried."
+  (interactive)
+  (let ((w (selected-window)))
+    (cond ((window-minibuffer-p w) (abort-recursive-edit))
+          ((window-parameter w 'quit-restore) (quit-window nil w))
+          ((one-window-p t) (bury-buffer)
+           (message "Last window: buried its buffer instead"))
+          (t (delete-window w)))))
+
+;;;###autoload
 (defun cmacs-lrg-vr-split-right ()
   "Split the window side by side and show the other half."
   (interactive)
@@ -333,7 +347,7 @@ Off a controller, a toggle like \\[cmacs-lrg-vr-workspace-overview]."
        ("Split right" . cmacs-lrg-vr-split-right)
        ("Split below" . cmacs-lrg-vr-split-below)
        ("Other window" . other-window)
-       ("Close window" . delete-window)
+       ("Close window" . cmacs-lrg-vr-close-window)
        ("Only this window" . delete-other-windows)
        nil
        ,@(mapcar (lambda (a)
@@ -437,9 +451,15 @@ it.  Off an lrg frame, a completion list of the same items."
 
 ;;;###autoload
 (defun cmacs-lrg-vr-controller-help ()
-  "Show every controller binding, layer by layer.
+  "Show every controller binding, layer by layer; again, hide it.
 Read from `cmacs-lrg-vr-mode-map', so it shows your own bindings too."
   (interactive)
+  (if-let* ((w (get-buffer-window "*VR Controls*")))
+      (quit-window nil w)
+    (cmacs-lrg-vr--show-controller-help)))
+
+(defun cmacs-lrg-vr--show-controller-help ()
+  "Pop up the *VR Controls* sheet."
   (let ((layers `((nil . "")
                   ((,cmacs-lrg-vr-trigger-modifier) . "trigger")
                   ((,cmacs-lrg-vr-bumper-modifier) . "bumper")
@@ -462,7 +482,11 @@ Read from `cmacs-lrg-vr-mode-map', so it shows your own bindings too."
         (princ "D-pad = arrow keys, repeating while held (S-, M-, C- with a layer).\n"))
       (princ "Grip carries what the laser is on: point to move it (up and down\n")
       (princ "too); its stick pushes / pulls (up/down) and turns (left/right);\n")
-      (princ "with its trigger held, up/down resizes.\n\n")
+      (princ "with its trigger held, up/down resizes.\n")
+      (princ "Keyboard: either trigger types.  Tap Ctrl/Meta/Super/Shift to latch\n")
+      (princ "it for the next key, or hold it down with one trigger and press\n")
+      (princ "keys with the other (Meta held + x = M-x).  This sheet: same button\n")
+      (princ "again hides it.\n\n")
       (pcase-dolist (`(,mods . ,lname) layers)
         (princ (if (string-empty-p lname) "--- No layer ---\n"
                  (format "--- %s layer (%s held) ---\n"
