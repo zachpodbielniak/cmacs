@@ -17,6 +17,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 
 (defconst cmacs-lrg-vr-tests--root
   (expand-file-name "../.." (file-name-directory
@@ -82,6 +83,8 @@ the build would still link and VR would fail only at runtime."
   (should (eq (keymap-lookup cmacs-lrg-vr-mode-map "<vr-left-y>")
               #'execute-extended-command))
   (should (eq (keymap-lookup cmacs-lrg-vr-mode-map "<vr-menu>")
+              #'cmacs-lrg-vr-quick-menu))
+  (should (eq (keymap-lookup cmacs-lrg-vr-mode-map "<vr-menu-hold>")
               #'cmacs-lrg-vr-recenter-view)))
 
 (ert-deftest cmacs-lrg-vr-commands-refuse-outside-vr ()
@@ -91,6 +94,215 @@ the build would still link and VR would fail only at runtime."
   (should-error (cmacs-lrg-vr-recenter-view) :type 'user-error)
   (should-error (cmacs-lrg-vr-toggle-keyboard) :type 'user-error)
   (should (stringp (cmacs-lrg-vr-describe))))
+
+;;;; Layers, holds and releases
+
+(ert-deftest cmacs-lrg-vr-set-option-layer-modifiers ()
+  "The modifier hand's layers take shift/meta/control/alt, not hyper/super."
+  (skip-unless (cmacs-lrg-vr-tests--built-p))
+  (should (eq 'shift (cmacs-lrg-vr-set-option 'mod-trigger 'shift)))
+  (should (eq 'control (cmacs-lrg-vr-set-option 'mod-both 'control)))
+  (should (eq t (cmacs-lrg-vr-set-option 'modifier-hand t)))
+  (should (= 0.35 (cmacs-lrg-vr-set-option 'hold-seconds 0.35)))
+  ;; Hyper and super mark holds and releases.
+  (should-error (cmacs-lrg-vr-set-option 'mod-grip 'hyper))
+  (should-error (cmacs-lrg-vr-set-option 'mod-grip 'super))
+  (should-error (cmacs-lrg-vr-set-option 'hold-seconds 10)
+                :type 'args-out-of-range)
+  (cmacs-lrg-vr-set-option 'mod-grip 'meta)
+  (should-not (cmacs-lrg-vr-layer))
+  (should-error (cmacs-lrg-vr-set-indicator 'left "red"))
+  (should (equal "#ff3030" (cmacs-lrg-vr-set-indicator 'left "#ff3030")))
+  (should-not (cmacs-lrg-vr-set-indicator 'left nil)))
+
+(ert-deftest cmacs-lrg-vr-translations-cover-every-layer ()
+  "Each button, in each layer, tap / hold / release, gets its name."
+  (skip-unless (require 'cmacs-lrg-vr nil t))
+  (let ((function-key-map (make-sparse-keymap))
+        (cmacs-lrg-vr-mode-map (copy-keymap cmacs-lrg-vr-mode-map)))
+    (cmacs-lrg-vr--install-translations)
+    (should (equal (lookup-key function-key-map [f25]) [vr-right-a]))
+    (should (equal (lookup-key function-key-map [H-f25]) [vr-right-a-hold]))
+    (should (equal (lookup-key function-key-map [s-f25]) [vr-right-a-release]))
+    (should (equal (lookup-key function-key-map [S-H-f28]) [S-vr-left-y-hold]))
+    (should (equal (lookup-key function-key-map [C-s-f29]) [C-vr-menu-release]))
+    (should (equal (lookup-key function-key-map [M-f33]) [M-vr-flick-right]))
+    (should (equal (lookup-key function-key-map [f31]) [vr-right-stick]))
+    ;; Releases always land somewhere; holds fall back to the tap.
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-right-b-release])
+                #'cmacs-lrg-vr-button-released))
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [M-vr-right-b-hold])
+                #'cmacs-lrg-vr-hold-as-tap))
+    ;; Explicit holds are kept.
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [vr-right-a-hold])
+                #'cmacs-lrg-vr-voice-dictate-hold))))
+
+(ert-deftest cmacs-lrg-vr-hold-without-binding-does-the-tap ()
+  "A slow press of a button whose hold is unbound still does the tap."
+  (skip-unless (require 'cmacs-lrg-vr nil t))
+  (let* ((ran nil)
+         (map (make-sparse-keymap)))
+    (define-key map [S-vr-right-b] (lambda () (interactive) (setq ran 'tap)))
+    (let ((minor-mode-overriding-map-alist `((cmacs-lrg-vr-mode . ,map)))
+          (cmacs-lrg-vr-mode t)
+          (last-command-event 'S-vr-right-b-hold))
+      (cmacs-lrg-vr-hold-as-tap))
+    (should (eq ran 'tap))))
+
+(ert-deftest cmacs-lrg-vr-release-runs-what-the-hold-asked ()
+  "A hold registers a release action; the release runs it once."
+  (skip-unless (require 'cmacs-lrg-vr nil t))
+  (let ((cmacs-lrg-vr--release-actions nil)
+        (count 0))
+    (let ((last-command-event 'M-vr-left-y-hold))
+      (should (cmacs-lrg-vr-on-release (lambda () (cl-incf count)))))
+    (let ((last-command-event 'M-vr-left-y-release))
+      (cmacs-lrg-vr-button-released)
+      (cmacs-lrg-vr-button-released))
+    (should (= count 1))
+    ;; Outside a hold there is nothing to register.
+    (let ((last-command-event ?a))
+      (should-not (cmacs-lrg-vr-on-release #'ignore)))))
+
+;;;; Voice
+
+(ert-deftest cmacs-lrg-vr-voice-normalizes-speech ()
+  "Punctuation goes, case folds, and numbers after a keyword become digits."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (should (equal (cmacs-lrg-vr-voice--normalize "Workspace two.")
+                 "workspace 2"))
+  (should (equal (cmacs-lrg-vr-voice--normalize "Go to line Twelve!")
+                 "go to line 12"))
+  (should (equal (cmacs-lrg-vr-voice--normalize "Open two files")
+                 "open two files"))
+  (should (equal (cmacs-lrg-vr-voice--clean " [BLANK_AUDIO] hello  (music) world ")
+                 "hello world")))
+
+(ert-deftest cmacs-lrg-vr-voice-commands-dispatch ()
+  "Spoken phrases reach the right function with their arguments."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (let (calls)
+    (cl-letf (((symbol-function 'cmacs-lrg-vr-workspace-new)
+               (lambda (&optional name) (push (list 'new name) calls)))
+              ((symbol-function 'cmacs-lrg-vr-workspace-goto)
+               (lambda (w) (push (list 'goto w) calls)))
+              ((symbol-function 'cmacs-lrg-vr-split-right)
+               (lambda () (interactive) (push '(split) calls))))
+      (cmacs-lrg-vr-voice-run "New workspace called notes.")
+      (cmacs-lrg-vr-voice-run "new workspace")
+      (cmacs-lrg-vr-voice-run "Go to workspace three")
+      (cmacs-lrg-vr-voice-run "Split window right"))
+    (should (equal (reverse calls)
+                   '((new "notes") (new nil) (goto "3") (split))))))
+
+(ert-deftest cmacs-lrg-vr-voice-command-names-and-fallback ()
+  "Unregistered phrases are tried as command names, then M-x."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (let ((ran nil))
+    (cl-letf (((symbol-function 'cmacs-lrg-vr-test-command)
+               (lambda () (interactive) (setq ran t))))
+      (cmacs-lrg-vr-voice-run "cmacs lrg vr test command"))
+    (should ran))
+  (let ((cmacs-lrg-vr-voice-unmatched 'message))
+    (should-not (cmacs-lrg-vr-voice-run "zzqx unknown phrase"))))
+
+(ert-deftest cmacs-lrg-vr-voice-user-commands-win ()
+  "A user's voice command is tried before the shipped ones."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (let ((cmacs-lrg-vr-voice-commands (copy-sequence cmacs-lrg-vr-voice-commands))
+        (got nil))
+    (cmacs-lrg-vr-define-voice-command "save\\(?: file\\)?"
+                                       (lambda () (setq got 'mine)))
+    (cmacs-lrg-vr-voice-run "Save file.")
+    (should (eq got 'mine))))
+
+(ert-deftest cmacs-lrg-vr-voice-dictation-fits-the-text ()
+  "Dictation spaces itself from what is there and starts sentences capitalised."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (with-temp-buffer
+    (insert "Hello")
+    (cmacs-lrg-vr-voice-insert "world" (cmacs-lrg-vr-voice--target))
+    (should (equal (buffer-string) "Hello world"))
+    (insert ". ")
+    (cmacs-lrg-vr-voice-insert "next one" (cmacs-lrg-vr-voice--target))
+    (should (equal (buffer-string) "Hello world. Next one"))
+    (goto-char (point-min))
+    (cmacs-lrg-vr-voice-insert "well" (cmacs-lrg-vr-voice--target))
+    (should (string-prefix-p "Well Hello" (buffer-string))))
+  (with-temp-buffer
+    (insert "x")
+    (setq buffer-read-only t)
+    (let ((kill-ring nil))
+      (cmacs-lrg-vr-voice-insert "copied" (cmacs-lrg-vr-voice--target))
+      (should (equal (car kill-ring) "copied"))
+      (should (equal (buffer-string) "x")))))
+
+(ert-deftest cmacs-lrg-vr-voice-results-run-as-commands ()
+  "A transcription is queued to run from the command loop, never in the callback."
+  (skip-unless (require 'cmacs-lrg-vr-voice nil t))
+  (let ((cmacs-lrg-vr--deferred nil)
+        (unread-command-events nil)
+        (got nil))
+    (funcall (cmacs-lrg-vr-voice--finish (lambda (text) (setq got text)))
+             '((:text . " [BLANK_AUDIO] split right ")))
+    (should-not got)
+    (should (equal unread-command-events '(cmacs-lrg-vr-deferred)))
+    (should (eq (lookup-key cmacs-lrg-vr-mode-map [cmacs-lrg-vr-deferred])
+                #'cmacs-lrg-vr--run-deferred))
+    (cmacs-lrg-vr--run-deferred)
+    (should (equal got "split right"))
+    ;; Silence and errors queue nothing.
+    (setq unread-command-events nil)
+    (funcall (cmacs-lrg-vr-voice--finish #'ignore) '((:text . "[BLANK_AUDIO]")))
+    (funcall (cmacs-lrg-vr-voice--finish #'ignore) '((:error . "boom")))
+    (should-not unread-command-events)))
+
+;;;; The quick menu and help
+
+(ert-deftest cmacs-lrg-vr-quick-menu-tree-indexes-leaves ()
+  "The menu tree's leaf indices point at the right functions."
+  (skip-unless (require 'cmacs-lrg-vr-ui nil t))
+  (let* ((values (list nil))
+         (tree (cmacs-lrg-vr--menu-tree
+                '(("A" . a-fn) nil ("Sub" ("B" . b-fn) ("C" . c-fn)))
+                values)))
+    (should (equal tree '(("A" . 0) nil ("Sub" ("B" . 1) ("C" . 2)))))
+    (should (equal (car values) '(a-fn b-fn c-fn))))
+  ;; The real menu builds, and every leaf is callable.
+  (let ((values (list nil)))
+    (cmacs-lrg-vr--menu-tree (cmacs-lrg-vr--menu-spec) values)
+    (should (> (length (car values)) 20))
+    (should (cl-every #'functionp (car values)))))
+
+(ert-deftest cmacs-lrg-vr-controller-help-lists-the-layers ()
+  "The help sheet names the buttons, the layers and their commands."
+  (skip-unless (require 'cmacs-lrg-vr-ui nil t))
+  (save-window-excursion
+    (cmacs-lrg-vr-controller-help)
+    (with-current-buffer "*VR Controls*"
+      (let ((s (buffer-string)))
+        (should (string-search "A (right)" s))
+        (should (string-search "voice-dictate-hold" s))
+        (should (string-search "shift layer" s))
+        (should (string-search "workspace-new" s))))
+    (kill-buffer "*VR Controls*")))
+
+(ert-deftest cmacs-lrg-vr-every-bound-command-exists ()
+  "Nothing in the VR keymap names a function that is not defined."
+  (skip-unless (and (require 'cmacs-lrg-vr-ui nil t)
+                    (require 'cmacs-lrg-vr-voice nil t)))
+  (let (missing)
+    (map-keymap
+     (lambda (_ev def)
+       (cond ((keymapp def)
+              (map-keymap (lambda (_e d)
+                            (when (and (symbolp d) d (not (fboundp d)))
+                              (push d missing)))
+                          def))
+             ((and (symbolp def) def (not (fboundp def)))
+              (push def missing))))
+     cmacs-lrg-vr-mode-map)
+    (should-not missing)))
 
 ;;;; The Steam shortcut (just steam-vr-shortcut)
 

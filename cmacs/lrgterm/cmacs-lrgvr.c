@@ -74,7 +74,24 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #define VR_XK_F27       0xffd8   /* <vr-left-x> */
 #define VR_XK_F28       0xffd9   /* <vr-left-y> */
 #define VR_XK_F29       0xffda   /* <vr-menu> */
-#define VR_XK_F30       0xffdb   /* <vr-left-stick> */
+#define VR_XK_F30       0xffdb   /* <vr-left-stick> (the move hand's) */
+#define VR_XK_F31       0xffdc   /* <vr-right-stick> (the pointer hand's, off a panel) */
+#define VR_XK_F32       0xffdd   /* <vr-flick-left> */
+#define VR_XK_F33       0xffde   /* <vr-flick-right> */
+#define VR_XK_F34       0xffdf   /* <vr-flick-up> */
+#define VR_XK_F35       0xffe0   /* <vr-flick-down> */
+
+/* Buttons distinguish a tap from a hold.  A tap is sent on release, as the
+   button's plain keysym; holding past the hold time sends the keysym with
+   the hyper bit at once, and the release after that the keysym with the
+   super bit.  cmacs-lrg-vr.el translates them to <vr-right-a>,
+   <vr-right-a-hold> and <vr-right-a-release>.  Hyper and super are
+   reserved for this on these keysyms; the layer modifiers below are
+   shift, meta, control or alt.  */
+#define VR_HOLD_MOD     hyper_modifier
+#define VR_RELEASE_MOD  super_modifier
+
+enum vr_button { VB_A, VB_B, VB_MENU, VB_STICK, VB_COUNT };
 
 #define VR_DEADZONE      0.25f
 #define VR_SNAP_ARM      0.75f
@@ -190,6 +207,18 @@ struct vr_hand
 
   float scroll_acc, hscroll_acc;
   bool snap_used;
+
+  /* Tap / hold (enum vr_button).  */
+  gint64 btn_down_us[VB_COUNT];  /* 0: not down */
+  bool btn_held[VB_COUNT];       /* the hold event was sent */
+  bool btn_consumed[VB_COUNT];   /* handled at press (mouse-3): no tap */
+  int btn_mods[VB_COUNT];        /* layer modifiers when it went down */
+
+  bool flick_x_used, flick_y_used;
+
+  /* Indicator above the controller (cmacs-lrg-vr-set-indicator).  */
+  bool indicator;
+  guint8 indicator_rgb[3];
 };
 
 static struct
@@ -232,10 +261,22 @@ static struct
   float scroll_rate;             /* wheel events/second at full stick */
   bool haptics;
   int move_hand;                 /* hand that moves and turns */
+
+  /* The modifier hand: while `modifier_hand' is on, the move hand's
+     trigger and grip are layer modifiers instead of click and grab --
+     trigger, grip, or both held add mod_trigger, mod_grip or mod_both
+     to everything the other hand sends.  */
+  bool modifier_hand;
+  int mod_trigger, mod_grip, mod_both;
+  int layer;                     /* modifiers in effect this frame */
+  gint64 hold_us;                /* tap / hold threshold */
 } vr = {
   .frame_fd = -1, .pointer_hand = LRG_VR_HAND_RIGHT,
   .snap_degrees = 30.0f, .move_speed = 1.5f, .scroll_rate = 10.0f,
   .haptics = true, .move_hand = LRG_VR_HAND_LEFT, .kb_tilt = 50.0f,
+  .modifier_hand = true, .hold_us = 350000,
+  .mod_trigger = shift_modifier, .mod_grip = meta_modifier,
+  .mod_both = ctrl_modifier,
 };
 
 static LrgVRService *
@@ -250,6 +291,14 @@ vr_pulse (int hand, float seconds, float amplitude)
   if (vr.haptics && vr.xr != NULL)
     lrg_vr_service_trigger_haptic (vr_service (), (LrgVRHand) hand, seconds,
                                    amplitude);
+}
+
+/* True while H is the modifier hand: its trigger and grip are layer
+   modifiers, not click and grab.  */
+static bool
+vr_is_modifier_hand (int h)
+{
+  return vr.modifier_hand && h == vr.move_hand;
 }
 
 /* --------------------------------------------------------- vector math -- */
@@ -530,7 +579,7 @@ vr_emit_wheel (struct input_event *hold_quit, bool horizontal, bool up,
   struct input_event ie;
   EVENT_INIT (ie);
   ie.kind = horizontal ? HORIZ_WHEEL_EVENT : WHEEL_EVENT;
-  ie.modifiers = up ? up_modifier : down_modifier;
+  ie.modifiers = (up ? up_modifier : down_modifier) | vr.layer;
   XSETINT (ie.x, x);
   XSETINT (ie.y, y);
   XSETFRAME (ie.frame_or_window, vr.f);
@@ -568,7 +617,7 @@ kb_press (struct input_event *hold_quit, int row, int col)
     case VK_SUPER: vr.kb_super = !vr.kb_super; vr.kb_dirty = true; break;
     case VK_HIDE:  kb_set_visible (false); break;
     case VK_SYM:
-      mods = kb_take_mods () | (vr.kb_shift ? shift_modifier : 0);
+      mods = kb_take_mods () | (vr.kb_shift ? shift_modifier : 0) | vr.layer;
       count += vr_emit_keysym (hold_quit, k->code, mods);
       if (vr.kb_shift == 1)
         {
@@ -578,8 +627,11 @@ kb_press (struct input_event *hold_quit, int row, int col)
       break;
     case VK_CHAR:
       {
-        int ch = vr.kb_shift ? k->shifted : k->code;
-        mods = kb_take_mods ();
+        int ch;
+        mods = kb_take_mods () | vr.layer;
+        /* A held shift layer is the keyboard's shift too.  */
+        ch = (vr.kb_shift || (mods & shift_modifier)) ? k->shifted : k->code;
+        mods &= ~shift_modifier;
         /* As lrgterm does for a physical keyboard: C-A is C-a. */
         if ((mods & ctrl_modifier) && ch >= 'A' && ch <= 'Z')
           ch += 'a' - 'A';
@@ -792,6 +844,31 @@ vr_overlay (Lrg3DSurface *s3, guint view, gpointer data)
       grl_draw_cube (a, 0.03f / mpu, 0.03f / mpu, 0.03f / mpu, body);
       if (aiming)
         grl_draw_sphere (b, (pressed ? 0.010f : 0.007f) / mpu, beam);
+
+      /* The modifier hand shows its layer: blue trigger, green grip,
+         orange both.  */
+      if (vr_is_modifier_hand (h) && vr.layer != 0)
+        {
+          g_autoptr (GrlVector3) at
+            = grl_vector3_new (hand->origin[0], hand->origin[1] + 0.035f / mpu,
+                               hand->origin[2]);
+          g_autoptr (GrlColor) c
+            = vr.layer == vr.mod_both ? grl_color_new (255, 150, 60, 255)
+              : vr.layer == vr.mod_grip ? grl_color_new (90, 220, 120, 255)
+              : grl_color_new (80, 160, 255, 255);
+          grl_draw_sphere (at, 0.008f / mpu, c);
+        }
+      /* Status from Lisp (cmacs-lrg-vr-set-indicator): recording, ...  */
+      if (hand->indicator)
+        {
+          g_autoptr (GrlVector3) at
+            = grl_vector3_new (hand->origin[0], hand->origin[1] + 0.055f / mpu,
+                               hand->origin[2]);
+          g_autoptr (GrlColor) c
+            = grl_color_new (hand->indicator_rgb[0], hand->indicator_rgb[1],
+                             hand->indicator_rgb[2], 255);
+          grl_draw_sphere (at, 0.012f / mpu, c);
+        }
     }
 
   if (view == 0 && vr.shot_path != NULL)
@@ -931,13 +1008,137 @@ grab_update (struct vr_hand *hand, int which)
                                         hand->grab_w, hand->grab_h);
 }
 
+/* The layer modifiers the modifier hand holds right now.  */
+static int
+vr_read_layer (void)
+{
+  guint b;
+  bool trig, grip;
+
+  if (!vr.modifier_hand)
+    return 0;
+  b = lrg_vr_service_get_controller_buttons (vr_service (),
+                                             (LrgVRHand) vr.move_hand);
+  trig = (b & LRG_VR_CONTROLLER_BUTTON_TRIGGER) != 0;
+  grip = (b & LRG_VR_CONTROLLER_BUTTON_GRIP) != 0;
+  return trig && grip ? vr.mod_both : trig ? vr.mod_trigger
+         : grip ? vr.mod_grip : 0;
+}
+
+static int
+vr_button_keysym (int h, enum vr_button b)
+{
+  bool right = h == LRG_VR_HAND_RIGHT;
+
+  switch (b)
+    {
+    case VB_A: return right ? VR_XK_F25 : VR_XK_F27;
+    case VB_B: return right ? VR_XK_F26 : VR_XK_F28;
+    case VB_MENU: return VR_XK_F29;
+    default: return h == vr.move_hand ? VR_XK_F30 : VR_XK_F31;
+    }
+}
+
+/* One button's tap / hold / release.  BIT is its controller bit.  */
+static int
+vr_button (struct input_event *hold_quit, int h, enum vr_button b, guint bit)
+{
+  struct vr_hand *hand = &vr.hand[h];
+  gint64 now = g_get_monotonic_time ();
+  int count = 0, sym = vr_button_keysym (h, b);
+
+  if (pressed_now (hand, bit))
+    {
+      hand->btn_down_us[b] = now;
+      hand->btn_held[b] = false;
+      hand->btn_consumed[b] = false;
+      hand->btn_mods[b] = vr.layer;
+      /* The pointer hand's stick click on a panel is mouse-3 at the laser
+         (context menus), at once: a click has no hold.  */
+      if (b == VB_STICK && h != vr.move_hand && hand->hit_panel)
+        {
+          count += vr_emit_mouse (hold_quit, 2, true, hand->fx, hand->fy,
+                                  vr.layer);
+          count += vr_emit_mouse (hold_quit, 2, false, hand->fx, hand->fy,
+                                  vr.layer);
+          hand->btn_consumed[b] = true;
+        }
+    }
+  else if ((hand->buttons & bit) && hand->btn_down_us[b] != 0
+           && !hand->btn_held[b] && !hand->btn_consumed[b]
+           && now - hand->btn_down_us[b] >= vr.hold_us)
+    {
+      hand->btn_held[b] = true;
+      vr_pulse (h, 0.02f, 0.45f);
+      count += vr_emit_keysym (hold_quit, sym, hand->btn_mods[b] | VR_HOLD_MOD);
+    }
+  if (released_now (hand, bit) && hand->btn_down_us[b] != 0)
+    {
+      if (!hand->btn_consumed[b])
+        count += vr_emit_keysym (hold_quit, sym,
+                                 hand->btn_mods[b]
+                                 | (hand->btn_held[b] ? VR_RELEASE_MOD : 0));
+      hand->btn_down_us[b] = 0;
+    }
+  return count;
+}
+
+/* An edge-triggered stick flick, like the snap turn: one event when the
+   stick crosses the arm threshold, re-armed near the centre.  */
+static int
+vr_flick (struct input_event *hold_quit, float v, bool *used, int sym_neg,
+          int sym_pos)
+{
+  if (!*used && fabsf (v) > VR_SNAP_ARM)
+    {
+      *used = true;
+      return vr_emit_keysym (hold_quit, v > 0.0f ? sym_pos : sym_neg, vr.layer);
+    }
+  if (*used && fabsf (v) < VR_SNAP_REARM)
+    *used = false;
+  return 0;
+}
+
+static int
+vr_scroll (struct input_event *hold_quit, struct vr_hand *hand, float sx,
+           float sy, bool vertical, bool horizontal)
+{
+  int count = 0;
+
+  if (vertical && fabsf (sy) > VR_DEADZONE)
+    {
+      hand->scroll_acc += sy * vr.scroll_rate * vr.dt;
+      while (fabsf (hand->scroll_acc) >= 1.0f)
+        {
+          bool up = hand->scroll_acc > 0.0f;
+          count += vr_emit_wheel (hold_quit, false, up, hand->fx, hand->fy);
+          hand->scroll_acc += up ? -1.0f : 1.0f;
+        }
+    }
+  else
+    hand->scroll_acc = 0.0f;
+  if (horizontal && fabsf (sx) > VR_DEADZONE)
+    {
+      hand->hscroll_acc += sx * vr.scroll_rate * vr.dt;
+      while (fabsf (hand->hscroll_acc) >= 1.0f)
+        {
+          bool r = hand->hscroll_acc > 0.0f;
+          count += vr_emit_wheel (hold_quit, true, !r, hand->fx, hand->fy);
+          hand->hscroll_acc += r ? -1.0f : 1.0f;
+        }
+    }
+  else
+    hand->hscroll_acc = 0.0f;
+  return count;
+}
+
 static int
 vr_hand_input (struct input_event *hold_quit, int h)
 {
   struct vr_hand *hand = &vr.hand[h];
   LrgVRService *svc = vr_service ();
-  bool right = h == LRG_VR_HAND_RIGHT;
   bool mover = h == vr.move_hand;
+  bool modhand = vr_is_modifier_hand (h);
   float sx, sy;
   int count = 0;
 
@@ -948,8 +1149,9 @@ vr_hand_input (struct input_event *hold_quit, int h)
   sy = lrg_vr_service_get_controller_axis (svc, (LrgVRHand) h,
                                            LRG_VR_AXIS_THUMBSTICK_Y);
 
-  /* Trigger: type on the keyboard, or click in a buffer. */
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
+  /* Trigger: type on the keyboard, or click in a buffer -- unless this is
+     the modifier hand, whose trigger is a layer (vr_read_layer).  */
+  if (!modhand && pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER))
     {
       if (hand->kb_row >= 0)
         {
@@ -967,7 +1169,7 @@ vr_hand_input (struct input_event *hold_quit, int h)
           vr.mouse_y = hand->fy;
           lrg_3d_surface_set_focus_window (vr.s3, hand->key);
           count += vr_emit_mouse (hold_quit, 0, true, hand->fx, hand->fy,
-                                  kb_take_mods ());
+                                  kb_take_mods () | vr.layer);
           vr_pulse (h, 0.012f, 0.35f);
         }
     }
@@ -975,7 +1177,7 @@ vr_hand_input (struct input_event *hold_quit, int h)
     {
       hand->trigger_mouse = false;
       count += vr_emit_mouse (hold_quit, 0, false, hand->last_fx, hand->last_fy,
-                              0);
+                              vr.layer);
     }
 
   /* Pointer motion (drag while the trigger is held, hover otherwise). */
@@ -995,25 +1197,33 @@ vr_hand_input (struct input_event *hold_quit, int h)
       note_mouse_highlight (vr.f, hand->fx, hand->fy);
       unblock_input ();
     }
-  /* A hand that points at a panel while the other is idle takes the mouse. */
-  if (hand->hit_panel && h != vr.pointer_hand
+  /* A hand that points at a panel while the other is idle takes the mouse --
+     never the modifier hand, which does not click.  */
+  if (!modhand && hand->hit_panel && h != vr.pointer_hand
       && !vr.hand[vr.pointer_hand].trigger_mouse
       && !vr.hand[vr.pointer_hand].hit_panel)
     vr.pointer_hand = h;
 
   /* Grip: carry the panel / keyboard under the laser, or the world. */
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_GRIP))
-    grab_begin (hand, h);
-  if (hand->grab != GRAB_NONE && (hand->buttons & LRG_VR_CONTROLLER_BUTTON_GRIP))
-    grab_update (hand, h);
-  if (released_now (hand, LRG_VR_CONTROLLER_BUTTON_GRIP))
+  if (!modhand)
     {
-      if (hand->grab == GRAB_PANEL)
-        lrg_3d_surface_release_panel (vr.s3);
-      hand->grab = GRAB_NONE;
+      if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_GRIP))
+        grab_begin (hand, h);
+      if (hand->grab != GRAB_NONE
+          && (hand->buttons & LRG_VR_CONTROLLER_BUTTON_GRIP))
+        grab_update (hand, h);
+      if (released_now (hand, LRG_VR_CONTROLLER_BUTTON_GRIP))
+        {
+          if (hand->grab == GRAB_PANEL)
+            lrg_3d_surface_release_panel (vr.s3);
+          hand->grab = GRAB_NONE;
+        }
     }
 
-  /* Sticks.  The moving hand walks and turns; the other scrolls. */
+  /* Sticks.  The moving hand walks and turns; the other scrolls on a
+     panel, and flicks -- <vr-flick-left> etc. -- off one, or on one while a
+     layer is held (vertical still scrolls then, with the layer: C-wheel
+     zooms text).  */
   if (hand->grab == GRAB_NONE)
     {
       if (mover)
@@ -1029,55 +1239,28 @@ vr_hand_input (struct input_event *hold_quit, int h)
           else if (hand->snap_used && fabsf (sx) < VR_SNAP_REARM)
             hand->snap_used = false;
         }
+      else if (hand->hit_panel && vr.layer == 0)
+        count += vr_scroll (hold_quit, hand, sx, sy, true, true);
       else if (hand->hit_panel)
         {
-          if (fabsf (sy) > VR_DEADZONE)
-            {
-              hand->scroll_acc += sy * vr.scroll_rate * vr.dt;
-              while (fabsf (hand->scroll_acc) >= 1.0f)
-                {
-                  bool up = hand->scroll_acc > 0.0f;
-                  count += vr_emit_wheel (hold_quit, false, up, hand->fx,
-                                          hand->fy);
-                  hand->scroll_acc += up ? -1.0f : 1.0f;
-                }
-            }
-          else
-            hand->scroll_acc = 0.0f;
-          if (fabsf (sx) > VR_DEADZONE)
-            {
-              hand->hscroll_acc += sx * vr.scroll_rate * vr.dt;
-              while (fabsf (hand->hscroll_acc) >= 1.0f)
-                {
-                  bool r = hand->hscroll_acc > 0.0f;
-                  count += vr_emit_wheel (hold_quit, true, !r, hand->fx,
-                                          hand->fy);
-                  hand->hscroll_acc += r ? -1.0f : 1.0f;
-                }
-            }
-          else
-            hand->hscroll_acc = 0.0f;
+          count += vr_scroll (hold_quit, hand, sx, sy, true, false);
+          count += vr_flick (hold_quit, sx, &hand->flick_x_used,
+                             VR_XK_F32, VR_XK_F33);
+        }
+      else
+        {
+          count += vr_flick (hold_quit, sx, &hand->flick_x_used,
+                             VR_XK_F32, VR_XK_F33);
+          count += vr_flick (hold_quit, sy, &hand->flick_y_used,
+                             VR_XK_F35, VR_XK_F34);
         }
     }
 
-  /* Buttons. */
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_A))
-    count += vr_emit_keysym (hold_quit, right ? VR_XK_F25 : VR_XK_F27, 0);
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_B))
-    count += vr_emit_keysym (hold_quit, right ? VR_XK_F26 : VR_XK_F28, 0);
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_MENU))
-    count += vr_emit_keysym (hold_quit, VR_XK_F29, 0);
-  if (pressed_now (hand, LRG_VR_CONTROLLER_BUTTON_THUMBSTICK))
-    {
-      if (!mover && hand->hit_panel)
-        {
-          /* mouse-3 at the laser: context menus. */
-          count += vr_emit_mouse (hold_quit, 2, true, hand->fx, hand->fy, 0);
-          count += vr_emit_mouse (hold_quit, 2, false, hand->fx, hand->fy, 0);
-        }
-      else
-        count += vr_emit_keysym (hold_quit, VR_XK_F30, 0);
-    }
+  /* Buttons: tap, hold, release (vr_button).  */
+  count += vr_button (hold_quit, h, VB_A, LRG_VR_CONTROLLER_BUTTON_A);
+  count += vr_button (hold_quit, h, VB_B, LRG_VR_CONTROLLER_BUTTON_B);
+  count += vr_button (hold_quit, h, VB_MENU, LRG_VR_CONTROLLER_BUTTON_MENU);
+  count += vr_button (hold_quit, h, VB_STICK, LRG_VR_CONTROLLER_BUTTON_THUMBSTICK);
   return count;
 }
 
@@ -1375,6 +1558,18 @@ cmacs_lrgvr_tick (struct frame *f, struct input_event *hold_quit)
     vr_update_pointers ();
   vr.pointers_fresh = false;
 
+  /* The modifier hand's layer applies to everything the other hand sends
+     this frame; a change is felt in the modifier hand.  The modifier hand
+     never holds the mouse.  */
+  {
+    int layer = vr_read_layer ();
+    if (layer != vr.layer)
+      vr_pulse (vr.move_hand, 0.01f, layer != 0 ? 0.3f : 0.15f);
+    vr.layer = layer;
+    if (vr.modifier_hand && vr.pointer_hand == vr.move_hand)
+      vr.pointer_hand = 1 - vr.move_hand;
+  }
+
   for (h = 0; h < 2; h++)
     count += vr_hand_input (hold_quit, h);
 
@@ -1534,6 +1729,77 @@ SECONDS defaults to 0.05 and AMPLITUDE (0..1) to 0.5.  */)
   return Qnil;
 }
 
+/* A layer modifier named by SYM.  Hyper and super are taken: they mark a
+   button's hold and release (VR_HOLD_MOD, VR_RELEASE_MOD).  */
+static int
+vr_modifier_bit (Lisp_Object sym)
+{
+  CHECK_SYMBOL (sym);
+  if (EQ (sym, intern_c_string ("shift")))
+    return shift_modifier;
+  if (EQ (sym, intern_c_string ("meta")))
+    return meta_modifier;
+  if (EQ (sym, intern_c_string ("control")))
+    return ctrl_modifier;
+  if (EQ (sym, intern_c_string ("alt")))
+    return alt_modifier;
+  xsignal2 (Qwrong_type_argument, intern_c_string ("vr-layer-modifier-p"), sym);
+}
+
+DEFUN ("cmacs-lrg-vr-set-indicator", Fcmacs_lrg_vr_set_indicator,
+       Scmacs_lrg_vr_set_indicator, 2, 2, 0,
+       doc: /* Show a status light above the controller in HAND.
+HAND is `left' or `right'.  COLOR is a string "#RRGGBB", or nil to turn
+the light off.  Used for voice: red while listening, amber while
+transcribing.  */)
+  (Lisp_Object hand, Lisp_Object color)
+{
+  int h, i;
+  guint8 rgb[3];
+
+  CHECK_SYMBOL (hand);
+  h = EQ (hand, intern_c_string ("left")) ? LRG_VR_HAND_LEFT : LRG_VR_HAND_RIGHT;
+  if (NILP (color))
+    {
+      vr.hand[h].indicator = false;
+      return Qnil;
+    }
+  CHECK_STRING (color);
+  if (SBYTES (color) != 7 || SREF (color, 0) != '#')
+    error ("Indicator colour must be \"#RRGGBB\"");
+  for (i = 0; i < 3; i++)
+    {
+      int hi = g_ascii_xdigit_value (SREF (color, 1 + 2 * i));
+      int lo = g_ascii_xdigit_value (SREF (color, 2 + 2 * i));
+      if (hi < 0 || lo < 0)
+        error ("Indicator colour must be \"#RRGGBB\"");
+      rgb[i] = (guint8) (hi * 16 + lo);
+    }
+  memcpy (vr.hand[h].indicator_rgb, rgb, sizeof rgb);
+  vr.hand[h].indicator = true;
+  return color;
+}
+
+DEFUN ("cmacs-lrg-vr-layer", Fcmacs_lrg_vr_layer, Scmacs_lrg_vr_layer,
+       0, 0, 0,
+       doc: /* Return the controller layer held now, as a list of modifiers.
+For example (shift) while the modifier hand's trigger is held, nil when
+no layer is.  */)
+  (void)
+{
+  Lisp_Object mods = Qnil;
+
+  if (vr.layer & shift_modifier)
+    mods = Fcons (intern_c_string ("shift"), mods);
+  if (vr.layer & meta_modifier)
+    mods = Fcons (intern_c_string ("meta"), mods);
+  if (vr.layer & ctrl_modifier)
+    mods = Fcons (intern_c_string ("control"), mods);
+  if (vr.layer & alt_modifier)
+    mods = Fcons (intern_c_string ("alt"), mods);
+  return mods;
+}
+
 DEFUN ("cmacs-lrg-vr-set-option", Fcmacs_lrg_vr_set_option,
        Scmacs_lrg_vr_set_option, 2, 2, 0,
        doc: /* Set VR option KEY to VALUE.
@@ -1545,12 +1811,25 @@ KEY is one of:
   `move-hand'     `left' or `right': the hand that moves and turns; the
                   other hand's stick scrolls (default `left')
   `keyboard-tilt' degrees the keyboard leans away from you (default 50)
+  `modifier-hand' non-nil: the move hand's trigger and grip are layer
+                  modifiers for everything the other hand sends, instead
+                  of click and grab (default t)
+  `mod-trigger', `mod-grip', `mod-both'
+                  the modifier for the trigger, the grip and both held:
+                  `shift', `meta', `control' or `alt' (defaults shift,
+                  meta, control)
+  `hold-seconds'  how long a button is held before it is a hold, not a
+                  tap (default 0.35)
 Return VALUE.  */)
   (Lisp_Object key, Lisp_Object value)
 {
   CHECK_SYMBOL (key);
   if (!EQ (key, intern_c_string ("haptics"))
-      && !EQ (key, intern_c_string ("move-hand")))
+      && !EQ (key, intern_c_string ("move-hand"))
+      && !EQ (key, intern_c_string ("modifier-hand"))
+      && !EQ (key, intern_c_string ("mod-trigger"))
+      && !EQ (key, intern_c_string ("mod-grip"))
+      && !EQ (key, intern_c_string ("mod-both")))
     CHECK_NUMBER (value);
   if (EQ (key, intern_c_string ("snap-degrees")))
     vr.snap_degrees = (float) XFLOATINT (value);
@@ -1565,6 +1844,21 @@ Return VALUE.  */)
                                                          : LRG_VR_HAND_LEFT;
   else if (EQ (key, intern_c_string ("keyboard-tilt")))
     vr.kb_tilt = (float) XFLOATINT (value);
+  else if (EQ (key, intern_c_string ("modifier-hand")))
+    vr.modifier_hand = !NILP (value);
+  else if (EQ (key, intern_c_string ("mod-trigger")))
+    vr.mod_trigger = vr_modifier_bit (value);
+  else if (EQ (key, intern_c_string ("mod-grip")))
+    vr.mod_grip = vr_modifier_bit (value);
+  else if (EQ (key, intern_c_string ("mod-both")))
+    vr.mod_both = vr_modifier_bit (value);
+  else if (EQ (key, intern_c_string ("hold-seconds")))
+    {
+      double sec = XFLOATINT (value);
+      if (sec < 0.1 || sec > 3.0)
+        args_out_of_range (value, make_float (3.0));
+      vr.hold_us = (gint64) (sec * 1e6);
+    }
   else
     error ("Unknown VR option");
   return value;
@@ -1657,6 +1951,8 @@ void
 syms_of_cmacs_lrgvr (void)
 {
   defsubr (&Scmacs_lrg_vr_supported_p);
+  defsubr (&Scmacs_lrg_vr_set_indicator);
+  defsubr (&Scmacs_lrg_vr_layer);
   defsubr (&Scmacs_lrg_vr_active_p);
   defsubr (&Scmacs_lrg_vr_start);
   defsubr (&Scmacs_lrg_vr_stop);

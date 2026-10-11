@@ -10990,29 +10990,66 @@ Monado, WiVRn.  The SPEC tail is the same as @code{--lrg=3d}'s
 stays a desktop 3D frame and says why on stderr; @kbd{M-x
 cmacs-lrg-vr-start} moves a running 3D frame into the headset.
 
+The right hand points and acts; the left hand moves and is the
+@emph{modifier hand}.  Buttons tell a tap from a hold (0.35@tie{}s,
+@code{cmacs-lrg-vr-hold-seconds}); holding the left stick or @kbd{C-c v h}
+shows every binding (@code{cmacs-lrg-vr-controller-help}).
+
 @table @asis
-@item trigger
-@code{mouse-1} at the laser: click, drag to select, double-click.
-@item grip
-On a panel: carry it (right stick pushes/pulls and resizes it).  On the
-keyboard: carry the keyboard.  On empty space: grab the world and pull
-yourself around.
-@item right stick
-Scroll at the laser; pressing it is @code{mouse-3} (context menus).
+@item right trigger, grip, stick
+@code{mouse-1} at the laser; carry the panel, keyboard or world under the
+laser; scroll on a panel, and off one flick left/right for the previous
+or next workspace, up/down for the overview.  The stick press is
+@code{mouse-3} on a panel, the overview off one.
 @item left stick
-Walk, and snap-turn 30@textdegree{} (@code{cmacs-lrg-vr-move-hand} picks the
-hand).
-@item A, B, X, Y, menu, left stick press
-@code{<vr-right-a>} (in-world keyboard), @code{<vr-right-b>} (escape),
-@code{<vr-left-x>} (bring the pointed-at window front and centre),
-@code{<vr-left-y>} (@kbd{M-x}), @code{<vr-menu>} (recenter),
-@code{<vr-left-stick>} (reset the view).  They are ordinary events in
-@code{cmacs-lrg-vr-mode-map}; rebind them like any key.
+Walk, and snap-turn 30@textdegree{} (@code{cmacs-lrg-vr-move-hand}).
+@item left trigger, grip, both
+Shift, Meta and Control @emph{layers} for everything the right hand
+sends: buttons, clicks, the wheel, the in-world keyboard
+(@code{cmacs-lrg-vr-modifier-hand}, @code{cmacs-lrg-vr-trigger-modifier}
+and friends).
+@item A
+Tap: in-world keyboard.  Hold: dictate at the cursor.
+@item B
+Tap: escape.  Hold: undo.
+@item X
+Tap: select the pointed-at window.  Hold: peek at every workspace.
+@item Y
+Tap: @kbd{M-x}.  Hold: voice command.
+@item menu
+Tap: the quick menu.  Hold: recenter.
+@item left stick press
+Tap: reset the view.  Hold: controller help.
 @end table
 
+With the Shift layer A, B and X make, close and switch workspaces and Y
+switches buffer; with Meta A finds a file, B kills the buffer, X opens a
+recent file and Y saves; with Control A and Y split, B closes the window,
+X keeps only it and menu cycles the panel arrangement.  Buttons arrive as
+F25--F31 (flicks F32--F35), with hyper for a hold and super for the
+release after one, and are translated to @code{<vr-right-a>},
+@code{<vr-right-a-hold>} and @code{<vr-right-a-release>} with the layer's
+modifiers; an unbound hold does the tap, and a release runs what the hold
+registered with @code{cmacs-lrg-vr-on-release}.
+
+Voice is push-to-talk and offline: audio from cmacs-audio is transcribed
+by whisper off the main thread, and a light above the controller is red
+while listening, amber while transcribing.  Dictation types where the
+cursor was, spaced and capitalised to fit.  Voice commands
+(@code{cmacs-lrg-vr-voice-commands}; @code{cmacs-lrg-vr-define-voice-command}
+adds yours) cover workspaces, buffers, files, windows, navigation and the
+view; anything else is tried as a command name, then opens @kbd{M-x}
+with the words typed.  Results run as commands, queued with
+@code{cmacs-lrg-vr-run-later}.  Doom workspaces (tab-bar tabs without
+Doom) stand on the 3D carousel around you; the quick menu lists them.
+@kbd{C-c v} holds the keyboard equivalents: @kbd{SPC} voice command,
+@kbd{i} dictate, @kbd{m} menu, @kbd{h} help, @kbd{o} overview, @kbd{n},
+@kbd{]}, @kbd{[}, @kbd{w}, @kbd{q} workspaces, @kbd{c} recenter, @kbd{0}
+reset, @kbd{k} keyboard, @kbd{+}/@kbd{-} scale, @kbd{?} status.
+
 The in-world keyboard appears in front of you below eye level: point and
-pull the trigger.  Ctrl, Meta and Super stick until the next key; Shift
-cycles once, locked, off.  Physical keyboards (Bluetooth, USB, the
+pull the right trigger.  Ctrl, Meta and Super stick until the next key;
+Shift cycles once, locked, off, and the left trigger is Shift while held.  Physical keyboards (Bluetooth, USB, the
 headset's own) are read from @file{/dev/input} (the @code{input} group)
 through the system XKB layout, grabbed while the VR session has focus.
 The frame's desktop window is hidden in VR -- under SteamVR's gamescope
@@ -11030,8 +11067,6 @@ that (1 for the runtime's size, 1.5 to supersample), read when VR starts.
 @code{(plist-get (cmacs-lrg-vr-status) :eye-size)} shows the size in use.
 The VR frame size is independent of the hidden window, which a host
 compositor may clamp to its display.
-@kbd{C-c v} holds recenter (@kbd{r}), keyboard (@kbd{k}), scale
-(@kbd{+}/@kbd{-}) and status (@kbd{?}).
 
 You sit in a @emph{seat} that follows the 3D camera, at the height of what
 it looks at, with its pitch dropped so the horizon never tilts.

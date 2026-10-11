@@ -415,56 +415,99 @@ the /VR mode/ section of [[file:doc_org/cmacs/cmacs-lrgterm.org][the lrgterm man
 
 ** Controllers
 
-The right hand points by default; pulling either trigger makes that hand's
-laser the mouse.
+The right hand points and acts; the left hand moves and is a *modifier
+hand*.  Every button tells a *tap* (press and let go) from a *hold*
+(0.35 s or longer).  Hold the left stick, or press =C-c v h=, for the full
+sheet, generated from your actual bindings.
 
-*** Pointing and clicking
+*** Right hand: pointing
 
-| Control                    | Action                                                                     |
-|----------------------------+----------------------------------------------------------------------------|
-| Trigger (either hand)      | =mouse-1= at the laser: click, hold to drag-select, release                |
-| Right stick press          | =mouse-3= at the laser (context menu)                                      |
-| Point the other hand       | if the current mouse hand is off every panel, the other hand takes over   |
+| Control                     | Action                                                        |
+|-----------------------------+---------------------------------------------------------------|
+| Trigger                     | =mouse-1= at the laser: click, hold to drag-select            |
+| Grip                        | grab the panel or keyboard under the laser, or the world      |
+| Stick up / down             | scroll at the laser                                           |
+| Stick left / right          | horizontal scroll                                             |
+| Stick while gripping        | push / pull the panel (Y), resize it (X)                      |
+| Stick press on a panel      | =mouse-3= (context menu)                                      |
+| Stick flick, laser off a panel | left / right: previous / next workspace; up: overview; down: back |
 
-*** Grip
+*** Left hand: moving and modifiers
 
-| Control                        | Action                                                 |
-|--------------------------------+--------------------------------------------------------|
-| Grip on a panel or the keyboard | grab it and carry it; it stays where you let go       |
-| Grip on empty space            | grab the world and pull yourself through it            |
+| Control              | Action                                                          |
+|----------------------+-----------------------------------------------------------------|
+| Stick up / down      | walk forward / back                                             |
+| Stick left / right   | snap turn (30°)                                                 |
+| *Trigger held*       | *Shift layer* for everything the right hand does                |
+| *Grip held*          | *Meta layer*                                                    |
+| *Trigger + grip*     | *Control layer*                                                 |
 
-*** Sticks
-
-The left hand moves and the right hand scrolls (swap with
-=cmacs-lrg-vr-move-hand=).
-
-| Control                         | Action                                          |
-|---------------------------------+-------------------------------------------------|
-| Left stick up / down            | walk forward / back                             |
-| Left stick left / right         | snap turn (30°)                                 |
-| Right stick up / down           | scroll at the laser                             |
-| Right stick left / right        | horizontal scroll                               |
-| Right stick while gripping      | push / pull the panel (Y), resize it (X)        |
+A layer reaches clicks (=S-mouse-1= extends the region), the wheel
+(=C-wheel= zooms text), the in-world keyboard (trigger = Shift) and every
+button below.  With a layer held the right stick flicks even on a panel.
+A dot on the left controller shows the layer: blue, green, orange.
 
 *** Buttons
 
-| Button             | Event             | Command                                                                     |
-|--------------------+-------------------+-----------------------------------------------------------------------------|
-| A (right)          | =<vr-right-a>=    | =cmacs-lrg-vr-toggle-keyboard=: show / hide the in-world keyboard            |
-| B (right)          | =<vr-right-b>=    | =cmacs-lrg-vr-escape=: =<escape>= under Evil, =keyboard-quit= otherwise      |
-| X (left)           | =<vr-left-x>=     | =cmacs-lrg-vr-focus-pointed-window=: select the pointed-at window, bring it front and centre |
-| Y (left)           | =<vr-left-y>=     | =execute-extended-command= (=M-x=)                                          |
-| Menu (left)        | =<vr-menu>=       | =cmacs-lrg-vr-recenter-view=: put the scene where you are facing            |
-| Left stick press   | =<vr-left-stick>= | =cmacs-lrg-vr-reset-view=: reset the camera to its seat, then recenter      |
+| Button               | Tap                               | Hold                                     |
+|----------------------+-----------------------------------+------------------------------------------|
+| A (right)            | in-world keyboard                 | *dictate* -- speak, release: typed at the cursor |
+| B (right)            | escape (=<escape>= under Evil)    | undo                                     |
+| X (left)             | select the pointed-at window      | *peek* at every workspace, release to return |
+| Y (left)             | =M-x=                             | *voice command* -- speak, release: done  |
+| Menu (left)          | *quick menu* at the laser         | recenter the scene ahead of you          |
+| Left stick press     | reset the view                    | controller help                          |
+| Right stick press, off a panel | workspace overview       |                                          |
 
-The system (Steam) button belongs to the runtime's dashboard.
+*** With a layer
+
+| Button | Shift (left trigger) | Meta (left grip) | Control (both) |
+|--------+----------------------+------------------+----------------|
+| A      | new workspace        | find file (in the project) | split right |
+| B      | close workspace      | kill buffer      | close window   |
+| X      | switch workspace...  | recent files     | only this window |
+| Y      | switch buffer        | save             | split below    |
+| Menu   | controller help      |                  | cycle panel arrangement |
+| Right stick flick left / right | previous / next workspace | previous / next buffer | other window |
+
+A hold with nothing bound does what the tap does, so a slow press is never
+lost.
 
 *** Popup menus
 
-Context menus (=mouse-3=) and other popup menus appear in the headset.
-Point at an item and pull the trigger to choose it; B, the right-stick press,
-=C-g= or =Escape= dismisses; the arrow keys and =Return= work from a
-keyboard.
+Context menus, the quick menu and other popup menus appear in the
+headset.  Point at an item and pull the trigger; B, the right-stick press,
+=C-g= or =Escape= dismisses; arrows and =Return= work from a keyboard.
+
+** Voice
+
+Push-to-talk, offline (whisper).  A light above the controller is red
+while listening and amber while transcribing.
+
+- *Dictation*: hold A, speak, let go -- the words are typed where the
+  cursor was, spaced and capitalised to fit.  Works in the minibuffer and
+  in terminals (sent to the process); in a read-only buffer the text goes
+  to the kill ring.  Say "new line", "period" etc. on their own for those.
+- *Voice commands*: hold Y, speak, let go.  For example: "new workspace
+  called notes", "next workspace", "workspace two", "show workspaces",
+  "buffer scratch", "open file readme", "recent files", "save", "save
+  all", "undo", "split right", "close window", "maximize", "go to line
+  42", "search for TODO", "type hello world", "recenter",
+  "keyboard", "menu", "help".  Anything else is tried as a command name
+  ("org agenda" runs =org-agenda=), then opens =M-x= with your words typed.
+  =M-x cmacs-lrg-vr-voice-help= lists them;
+  =cmacs-lrg-vr-define-voice-command= adds your own.
+- The first use needs a speech model; it offers to download
+  =ggml-base.en.bin= (about 140 MB) into
+  =~/.local/share/cmacs/whisper-models/=.
+
+** Workspaces
+
+Doom workspaces (persp-mode; tab-bar tabs without Doom) are panels on a 3D
+carousel around you: the current one in front, the others to its sides.
+Flick the right stick left / right off a panel (or anywhere with the left
+trigger held) to cycle, hold X to pull back and see them all, Shift+A for
+a new one.  The quick menu lists them by name.
 
 ** Keyboards
 
@@ -473,15 +516,26 @@ keyboard.
   They are grabbed while the VR session has focus and released when the
   dashboard is up; one connected later is picked up within two seconds.
 - *The in-world keyboard* (=A=) floats below eye level: point at a key and
-  pull the trigger.  Ctrl, Meta and Super stick until the next key; Shift
-  cycles once → locked → off.  Grip moves it.
+  pull the right trigger.  Ctrl, Meta and Super stick until the next key;
+  Shift cycles once → locked → off, or hold the left trigger.  Grip moves
+  it.
 
-| Keys          | Command                                     |
-|---------------+---------------------------------------------|
-| =C-c v r=     | recenter the scene                          |
-| =C-c v k=     | toggle the in-world keyboard                |
-| =C-c v += / =-= | world scale up / down 15%                 |
-| =C-c v ?=     | status: runtime, headset, controllers, scale |
+Every controller action has a key, under =C-c v= (shared with the voice
+recorder's =r R p x d s S=):
+
+| Keys                | Command                                       |
+|---------------------+-----------------------------------------------|
+| =C-c v SPC=         | voice command (press again to stop)           |
+| =C-c v i=           | dictate at the cursor (press again to stop)   |
+| =C-c v m=           | quick menu                                    |
+| =C-c v h=           | controller help                               |
+| =C-c v o=           | workspace overview                            |
+| =C-c v n= / =]= / =[= | new / next / previous workspace             |
+| =C-c v w= / =q=     | switch to / close a workspace                 |
+| =C-c v c= / =0=     | recenter / reset the view                     |
+| =C-c v k=           | toggle the in-world keyboard                  |
+| =C-c v += / =-=     | world scale up / down 15%                     |
+| =C-c v ?=           | status: runtime, headset, controllers, scale  |
 
 ** Rebinding and tuning
 
@@ -489,8 +543,14 @@ The buttons are ordinary events in =cmacs-lrg-vr-mode-map=:
 
 #+begin_src emacs-lisp
 (with-eval-after-load 'cmacs-lrg-vr
-  (keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer))
+  (keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer)
+  ;; Layers are modifiers; holds and releases have their own events.
+  (keymap-set cmacs-lrg-vr-mode-map "M-<vr-left-x>" #'magit-status)
+  (keymap-set cmacs-lrg-vr-mode-map "<vr-right-b-hold>" #'kill-current-buffer))
 #+end_src
+
+A hold command can act on release with =cmacs-lrg-vr-on-release= (that is
+how push-to-talk works).
 
 Customize the group =cmacs-lrg-vr=:
 
@@ -505,6 +565,12 @@ Customize the group =cmacs-lrg-vr=:
 | =cmacs-lrg-vr-scale=         | =nil= (0.3) | metres per scene unit                                |
 | =cmacs-lrg-vr-frame-size=    | =(1240 . 880)= | frame pixels on the fixed-size panel; about one per display pixel on a Steam Frame |
 | =cmacs-lrg-vr-escape-key=    | =nil=       | what B sends                                         |
+| =cmacs-lrg-vr-modifier-hand= | =t=         | left trigger / grip are layers, not click / grab     |
+| =cmacs-lrg-vr-trigger-modifier=, =-grip-=, =-both-= | =shift=, =meta=, =control= | the layers' modifiers (=alt= also allowed) |
+| =cmacs-lrg-vr-hold-seconds=  | 0.35        | tap / hold threshold                                 |
+| =cmacs-lrg-vr-carousel=      | =t=         | show workspaces on the 3D carousel in VR             |
+| =cmacs-lrg-vr-voice-speak-feedback= | =nil= | say voice-command results aloud (piper)            |
+| =cmacs-lrg-vr-voice-unmatched= | =minibuffer= | unknown voice command: open =M-x= with the words, or just say so |
 
 Environment, read when VR starts:
 
