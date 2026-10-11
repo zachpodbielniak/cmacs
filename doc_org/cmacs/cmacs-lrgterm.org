@@ -727,6 +727,17 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
   gets at most 15 frames a second, with SteamVR reprojecting in between,
   because each frame blocks in ~xrEndFrame~ until the GPU finishes it.  Idle,
   every frame renders.
+- *Popup menus drive the headset.*  ~lrg-popup-menu~ is a modal loop in
+  C, and nothing else calls ~read_socket~ while it runs.  In VR it used to
+  poll only the hidden window, which gets no input, and rendered no headset
+  frames: a context menu (=mouse-3=, the right-stick press) froze the view
+  and swallowed every input until the loop's 96-second safety cap.  In VR
+  the loop now calls ~cmacs_lrgvr_tick~ on every pass, so every frame
+  renders and the laser is the menu's pointer.  ~lrg_store~ hands the
+  controllers' and keyboard's events to the menu instead of Emacs while it
+  is open: trigger chooses, B, right-stick press, =C-g= and =Escape=
+  dismiss, and arrows and =Return= navigate.  Any other modal loop must do
+  the same; ~cmacs-lrgterm-modal-loops-drive-vr~ checks it.
 - *Panel textures are trilinear-filtered.*  raylib loads textures with
   NEAREST filters, and its anisotropic setting changes only the anisotropy
   level, so the panels' mipmaps were generated and never sampled.  Text was

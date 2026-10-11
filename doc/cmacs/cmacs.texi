@@ -11053,7 +11053,10 @@ SIGIO when a due frame goes unclaimed for 4@tie{}ms: the next
 Without that, a slow command left the headset frameless, and SteamVR
 timed the app out to its white environment.  While a command runs the
 headset gets at most 15 frames a second (the runtime reprojects in
-between), so Lisp keeps the main thread.  Panel textures are
+between), so Lisp keeps the main thread.  Popup menus (@code{lrg-popup-menu}, a modal loop) drive the headset
+themselves: they call the VR tick every pass and take the controllers'
+and keyboard's events, so a context menu is chosen with the laser and
+dismissed with B instead of freezing the view.  Panel textures are
 trilinear-filtered: raylib's anisotropic setting alone left them sampled
 nearest-texel, and text crawled with every head movement.  Controller input arrives as ordinary
 mouse, wheel and function-key events.

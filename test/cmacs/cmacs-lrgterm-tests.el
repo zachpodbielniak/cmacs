@@ -75,6 +75,33 @@ the text comes out scrambled."
         (should surface)
         (should (< call surface))))))
 
+(ert-deftest cmacs-lrgterm-modal-loops-drive-vr ()
+  "Every modal loop in lrgterm drives the VR tick while it runs.
+Nothing calls read_socket during a modal loop, and read_socket is where
+headset frames render and the controllers and evdev keyboard are read.
+`lrg-popup-menu' polled only the hidden window: in VR a context menu
+froze the view and swallowed all input until its 96 s safety cap.  A
+modal loop here is one that polls the window itself."
+  (let ((file (expand-file-name "cmacs/lrgterm/cmacs-lrgterm.c"
+                                cmacs-lrgterm-tests--root))
+        (loops 0))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      ;; Each top-level function body that polls the window in a loop.
+      (goto-char (point-min))
+      (while (re-search-forward "^\\(?:DEFUN (\\|[a-z_]+ (\\)" nil t)
+        (let* ((start (match-beginning 0))
+               (end (save-excursion
+                      (if (re-search-forward "^}" nil t) (point) (point-max))))
+               (body (buffer-substring-no-properties start end)))
+          (when (and (string-match-p "while (!done)" body)
+                     (string-match-p "grl_window_poll_events" body))
+            (setq loops (1+ loops))
+            (should (string-match-p "cmacs_lrgvr_tick (" body)))
+          (goto-char end))))
+    (should (> loops 0))))
+
 ;;;; Presence -----------------------------------------------------------
 
 (ert-deftest cmacs-lrgterm-feature-provided ()

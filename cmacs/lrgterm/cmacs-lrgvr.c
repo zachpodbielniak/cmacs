@@ -200,6 +200,7 @@ static struct
   Lrg3DSurface *s3;
   LrgOpenXRService *xr;
   int frame_fd;
+  bool modal;                    /* a modal loop (popup menu) runs: no throttle */
   GThread *watch_thread;         /* vr_watch_thread */
   gint watch_quit;               /* atomic */
   bool quit_sent;
@@ -1088,6 +1089,15 @@ cmacs_lrgvr_active_p (void)
   return vr.active;
 }
 
+/* A modal loop (lrg-popup-menu) drives the headset itself: it calls
+   cmacs_lrgvr_tick every pass, and every frame renders -- the laser is
+   how the menu is used, so it must not drop to the busy rate.  */
+void
+cmacs_lrgvr_set_modal (bool on)
+{
+  vr.modal = on;
+}
+
 /* True while the headset session has input focus -- the frame is
    "focused" for Emacs (solid cursor) then, whatever the hidden window
    reports.  */
@@ -1341,7 +1351,7 @@ cmacs_lrgvr_tick (struct frame *f, struct input_event *hold_quit)
   /* Busy = a command is running (not idle in the command loop).
      `waiting_for_input' cannot tell: process.c clears it as soon as pselect
      returns, before read_socket runs, so it reads false even when idle.  */
-  if (NILP (Fcurrent_idle_time ())
+  if (!vr.modal && NILP (Fcurrent_idle_time ())
       && g_get_monotonic_time () - vr.last_frame_us < VR_BUSY_FRAME_US)
     return count;
 

@@ -240,6 +240,7 @@ extern bool cmacs_lrgvr_active_p (void);
 extern int cmacs_lrgvr_tick (struct frame *, struct input_event *);
 extern bool cmacs_lrgvr_mouse_position (struct frame *, int *, int *);
 extern bool cmacs_lrgvr_focused_p (void);
+extern void cmacs_lrgvr_set_modal (bool);
 extern void syms_of_cmacs_lrgvr (void);
 
 /* Physical keyboards read from evdev while the window is hidden

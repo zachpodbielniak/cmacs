@@ -396,6 +396,129 @@ pairs the org doc with the sibling =.pdf= for side-by-side reading.
 and =pdfinfo=, =glib2= / =libglib2.0-bin= for =gdbus=, =cups= for
 the print spooler.  =install-deps= picks them up.
 
+* VR
+
+=emacs --lrg=3dvr= puts the lrg 3D scene in a VR headset through OpenXR
+(SteamVR, including the Steam Frame; Monado; WiVRn).  Each Emacs window is a
+panel floating in front of you; the motion controllers point, click, scroll
+and carry panels, and a physical or in-world keyboard types.  Full details:
+the /VR mode/ section of [[file:doc_org/cmacs/cmacs-lrgterm.org][the lrgterm manual]].
+
+** Launching
+
+- From a shell: =emacs --lrg=3dvr= (the SPEC tail of =--lrg=3d= works too,
+  e.g. =--lrg=3dvr:per-window:workshop=).
+- On SteamOS / the Steam Frame: =just distrobox 44= builds cmacs in a Fedora
+  box and exports =emacs= to =~/bin/export=; =just steam-vr-shortcut= then
+  adds *Emacs VR* to the Steam library (starts in your home directory, logs to
+  =~/.local/state/cmacs/emacs-vr.log=).
+
+** Controllers
+
+The right hand points by default; pulling either trigger makes that hand's
+laser the mouse.
+
+*** Pointing and clicking
+
+| Control                    | Action                                                                     |
+|----------------------------+----------------------------------------------------------------------------|
+| Trigger (either hand)      | =mouse-1= at the laser: click, hold to drag-select, release                |
+| Right stick press          | =mouse-3= at the laser (context menu)                                      |
+| Point the other hand       | if the current mouse hand is off every panel, the other hand takes over   |
+
+*** Grip
+
+| Control                        | Action                                                 |
+|--------------------------------+--------------------------------------------------------|
+| Grip on a panel or the keyboard | grab it and carry it; it stays where you let go       |
+| Grip on empty space            | grab the world and pull yourself through it            |
+
+*** Sticks
+
+The left hand moves and the right hand scrolls (swap with
+=cmacs-lrg-vr-move-hand=).
+
+| Control                         | Action                                          |
+|---------------------------------+-------------------------------------------------|
+| Left stick up / down            | walk forward / back                             |
+| Left stick left / right         | snap turn (30°)                                 |
+| Right stick up / down           | scroll at the laser                             |
+| Right stick left / right        | horizontal scroll                               |
+| Right stick while gripping      | push / pull the panel (Y), resize it (X)        |
+
+*** Buttons
+
+| Button             | Event             | Command                                                                     |
+|--------------------+-------------------+-----------------------------------------------------------------------------|
+| A (right)          | =<vr-right-a>=    | =cmacs-lrg-vr-toggle-keyboard=: show / hide the in-world keyboard            |
+| B (right)          | =<vr-right-b>=    | =cmacs-lrg-vr-escape=: =<escape>= under Evil, =keyboard-quit= otherwise      |
+| X (left)           | =<vr-left-x>=     | =cmacs-lrg-vr-focus-pointed-window=: select the pointed-at window, bring it front and centre |
+| Y (left)           | =<vr-left-y>=     | =execute-extended-command= (=M-x=)                                          |
+| Menu (left)        | =<vr-menu>=       | =cmacs-lrg-vr-recenter-view=: put the scene where you are facing            |
+| Left stick press   | =<vr-left-stick>= | =cmacs-lrg-vr-reset-view=: reset the camera to its seat, then recenter      |
+
+The system (Steam) button belongs to the runtime's dashboard.
+
+*** Popup menus
+
+Context menus (=mouse-3=) and other popup menus appear in the headset.
+Point at an item and pull the trigger to choose it; B, the right-stick press,
+=C-g= or =Escape= dismisses; the arrow keys and =Return= work from a
+keyboard.
+
+** Keyboards
+
+- *Physical keyboards* (Bluetooth, USB, the headset's own) are read from
+  =/dev/input= (you need the =input= group) with the system XKB layout.
+  They are grabbed while the VR session has focus and released when the
+  dashboard is up; one connected later is picked up within two seconds.
+- *The in-world keyboard* (=A=) floats below eye level: point at a key and
+  pull the trigger.  Ctrl, Meta and Super stick until the next key; Shift
+  cycles once → locked → off.  Grip moves it.
+
+| Keys          | Command                                     |
+|---------------+---------------------------------------------|
+| =C-c v r=     | recenter the scene                          |
+| =C-c v k=     | toggle the in-world keyboard                |
+| =C-c v += / =-= | world scale up / down 15%                 |
+| =C-c v ?=     | status: runtime, headset, controllers, scale |
+
+** Rebinding and tuning
+
+The buttons are ordinary events in =cmacs-lrg-vr-mode-map=:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'cmacs-lrg-vr
+  (keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer))
+#+end_src
+
+Customize the group =cmacs-lrg-vr=:
+
+| Option                       | Default     | Meaning                                              |
+|------------------------------+-------------+------------------------------------------------------|
+| =cmacs-lrg-vr-move-hand=     | =left=      | which hand walks; the other scrolls                  |
+| =cmacs-lrg-vr-snap-degrees=  | 30          | snap-turn step                                       |
+| =cmacs-lrg-vr-move-speed=    | 1.5         | walking speed, metres/second                         |
+| =cmacs-lrg-vr-scroll-rate=   | 10          | wheel events/second at full stick                    |
+| =cmacs-lrg-vr-haptics=       | =t=         | controller vibration                                 |
+| =cmacs-lrg-vr-keyboard-tilt= | 50          | in-world keyboard tilt, degrees                      |
+| =cmacs-lrg-vr-scale=         | =nil= (0.3) | metres per scene unit                                |
+| =cmacs-lrg-vr-frame-size=    | =(1240 . 880)= | frame pixels on the fixed-size panel; about one per display pixel on a Steam Frame |
+| =cmacs-lrg-vr-escape-key=    | =nil=       | what B sends                                         |
+
+Environment, read when VR starts:
+
+| Variable                     | Effect                                                              |
+|------------------------------+---------------------------------------------------------------------|
+| =CMACS_LRG_VR_RESOLUTION=    | eye image size × the runtime's recommendation (default 1.25 = Steam Frame native; 1 = runtime's size; 1.5 supersamples) |
+| =CMACS_LRG_VR_SHOW_WINDOW=1= | keep the desktop window (it is hidden in VR)                        |
+| =CMACS_LRG_VR_NATIVE_GL=1=   | do not switch Mesa to zink (SteamVR needs zink's timeline semaphores) |
+| =CMACS_LRG_ZINK_REORDER=1=   | keep zink's upload reordering, which scrambles text on Mesa 26.2    |
+| =CMACS_LRG_VR_GL_LOG=1=      | keep raylib's GL object log                                         |
+
+=(cmacs-lrg-vr-screenshot "/tmp/vr")= writes =/tmp/vr-eye.png= (what the
+headset is sent) and =/tmp/vr-frame.png= (the flat frame).
+
 * Building
 
 ** Quick Start (any distro)

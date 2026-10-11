@@ -1841,12 +1841,28 @@ lrg_ctrl_or_meta_down (void)
   return (lrg_event_modifiers () & (ctrl_modifier | meta_modifier)) != 0;
 }
 
+/* While lrg-popup-menu runs in VR, input is the menu's: the controllers
+   and the evdev keyboard reach Emacs only through lrg_store (via
+   cmacs_lrgvr_tick, which the menu loop calls), so lrg_store hands their
+   events to the menu here instead of to Emacs.  Anything the menu does
+   not use is dropped, as a desktop menu drops the window's other events. */
+#define LRG_MENU_QUEUE 32
+static bool lrg_menu_capture;
+static struct input_event lrg_menu_queue[LRG_MENU_QUEUE];
+static int lrg_menu_queued;
+
 /* Store a translated key/mouse event; returns 1 (events stored counter).  */
 static int
 lrg_store (struct frame *f, struct input_event *hold_quit,
            struct input_event *ie)
 {
   XSETFRAME (ie->frame_or_window, f);
+  if (lrg_menu_capture)
+    {
+      if (lrg_menu_queued < LRG_MENU_QUEUE)
+        lrg_menu_queue[lrg_menu_queued++] = *ie;
+      return 0;
+    }
   kbd_buffer_store_event_hold (ie, hold_quit);
   return 1;
 }
@@ -3210,6 +3226,53 @@ check_lrg_display_info (Lisp_Object object)
   return lrg_display_list;
 }
 
+/* End VR input capture for lrg-popup-menu, however the menu returns.  */
+static void
+lrg_menu_end_capture (void)
+{
+  lrg_menu_capture = false;
+  lrg_menu_queued = 0;
+#ifdef HAVE_CMACS_LRGVR
+  cmacs_lrgvr_set_modal (false);
+#endif
+}
+
+/* The menu's view of one VR input event: a GRL_KEY_* for keyboard
+   navigation (0 for none), and whether it is a left or right press.  The
+   physical keyboard arrives as Emacs keysyms (cmacs-lrgvr-kbd.c), the
+   controller's B button as F26 -- escape, as it is outside the menu.  */
+static int
+lrg_menu_vr_event (const struct input_event *ie, bool *left, bool *right)
+{
+  if (ie->kind == MOUSE_CLICK_EVENT && (ie->modifiers & down_modifier))
+    {
+      if (ie->code == 0)
+        *left = true;
+      else if (ie->code == 2)
+        *right = true;
+      return 0;
+    }
+  if (ie->kind == NON_ASCII_KEYSTROKE_EVENT)
+    switch (ie->code)
+      {
+      case 0xff1b: case 0xffd7: return GRL_KEY_ESCAPE;   /* Escape, F26 = B */
+      case 0xff51: return GRL_KEY_LEFT;
+      case 0xff52: return GRL_KEY_UP;
+      case 0xff53: return GRL_KEY_RIGHT;
+      case 0xff54: return GRL_KEY_DOWN;
+      case 0xff0d: case 0xff8d: return GRL_KEY_ENTER;   /* Return, KP_Enter */
+      default: return 0;
+      }
+  if (ie->kind == ASCII_KEYSTROKE_EVENT)
+    {
+      if (ie->code == 'g' && (ie->modifiers & ctrl_modifier))
+        return GRL_KEY_ESCAPE;                           /* C-g */
+      if (ie->code == '\r')
+        return GRL_KEY_ENTER;
+    }
+  return 0;
+}
+
 DEFUN ("lrg-popup-menu", Flrg_popup_menu, Slrg_popup_menu, 1, 3, 0,
        doc: /* Show an in-engine popup menu of ITEMS; return the chosen index.
 ITEMS is a nested list; each element is nil (a separator row), a cons
@@ -3228,7 +3291,8 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
   GrlWindow *win;
   LrgMenuState st;
   int i, result = -1, settle = 2, ax, ay;
-  bool done = false;
+  bool done = false, vr = false;
+  specpdl_ref count = SPECPDL_INDEX ();
 
   if (f == NULL || !FRAME_LRG_P (f) || FRAME_LRG_SURFACE (f) == NULL)
     return Qnil;
@@ -3247,6 +3311,16 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
 
   ax = FIXNUMP (x) ? (int) XFIXNUM (x) : grl_input_get_mouse_x ();
   ay = FIXNUMP (y) ? (int) XFIXNUM (y) : grl_input_get_mouse_y ();
+#ifdef HAVE_CMACS_LRGVR
+  /* In VR the pointer is the laser, not the hidden window's mouse.  */
+  vr = cmacs_lrgvr_active_p ();
+  if (vr && !(FIXNUMP (x) && FIXNUMP (y)))
+    {
+      int lx, ly;
+      if (cmacs_lrgvr_mouse_position (f, &lx, &ly))
+        ax = lx, ay = ly;
+    }
+#endif
 
   st.panel[0].items = st.root;
   st.panel[0].n = st.root_n;
@@ -3263,6 +3337,20 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
   lrg_active_menu = &st;
   grl_window_poll_events (win);   /* drain the click that opened the menu */
 
+  /* In VR the menu loop must drive the headset: the hidden window gets no
+     input, and nothing else calls read_socket while this loop runs -- the
+     menu used to sit there, unusable and the headset frozen, until the
+     safety cap below let it go.  */
+  if (vr)
+    {
+      lrg_menu_queued = 0;
+      lrg_menu_capture = true;
+#ifdef HAVE_CMACS_LRGVR
+      cmacs_lrgvr_set_modal (true);
+#endif
+      record_unwind_protect_void (lrg_menu_end_capture);
+    }
+
   /* Safety cap: ~12 ms/iteration, so ~8000 iterations is ~96 s.  Normal exit
      is via a click / RET / ESC / right-click / click-outside / window-close;
      the cap only guarantees the modal loop can never hard-hang Emacs.  */
@@ -3270,7 +3358,9 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
   int iters = 0;
   while (!done)
     {
-      int mx, my, k, a, d;
+      int mx, my, k, a, d, q, nkeys = 0;
+      int keys[LRG_MENU_QUEUE];
+      bool lpress = false, rpress = false;
 
       if (++iters > 8000 || !FRAME_LIVE_P (f))
         done = true;
@@ -3278,6 +3368,27 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
       grl_window_poll_events (win);
       mx = grl_input_get_mouse_x ();
       my = grl_input_get_mouse_y ();
+#ifdef HAVE_CMACS_LRGVR
+      if (vr)
+        {
+          struct input_event hold_quit;
+
+          /* One headset frame (when due) and the controllers' and the
+             keyboard's events, which lrg_store queues for us.  */
+          EVENT_INIT (hold_quit);
+          hold_quit.kind = NO_EVENT;
+          cmacs_lrgvr_tick (f, &hold_quit);
+          if (!cmacs_lrgvr_mouse_position (f, &mx, &my))
+            mx = my = -1;
+          for (q = 0; q < lrg_menu_queued; q++)
+            {
+              k = lrg_menu_vr_event (&lrg_menu_queue[q], &lpress, &rpress);
+              if (k != 0)
+                keys[nkeys++] = k;
+            }
+          lrg_menu_queued = 0;
+        }
+#endif
 
       /* Which open panel is the mouse over (deepest first -- children sit to
          the right of their parent)?  */
@@ -3316,7 +3427,12 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
         settle--;
       else
         {
-          if (grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT))
+          if (!vr)
+            {
+              lpress = grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_LEFT);
+              rpress = grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_RIGHT);
+            }
+          if (lpress)
             {
               if (a >= 0)
                 {
@@ -3334,12 +3450,14 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
               else
                 done = true;            /* click outside dismisses */
             }
-          if (grl_input_is_mouse_button_pressed (GRL_MOUSE_BUTTON_RIGHT))
+          if (rpress)
             done = true;
         }
 
       /* Keyboard navigation acts on the deepest open panel.  */
-      while ((k = grl_input_get_key_pressed ()) != 0)
+      q = 0;
+      while ((k = vr ? (q < nkeys ? keys[q++] : 0)
+                     : grl_input_get_key_pressed ()) != 0)
         {
           LrgMenuPanel *p = &st.panel[st.depth - 1];
           if (k == GRL_KEY_ESCAPE)
@@ -3401,7 +3519,10 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
 
       lrg_present_frame (f);          /* draws the frame + the menu overlay */
       if (!done)
-        usleep (12000);               /* ~80 Hz; keep CPU idle while modal */
+        /* ~80 Hz; keep CPU idle while modal.  In VR poll faster: the tick
+           renders only when the headset wants a frame, and a long sleep
+           would make it late.  */
+        usleep (vr ? 3000 : 12000);
     }
   }
 
@@ -3410,7 +3531,7 @@ dismissed.  Only meaningful while an `lrg' frame is live.  */)
 
   lrg_menu_free_items (st.root, st.root_n);
 
-  return result >= 0 ? make_fixnum (result) : Qnil;
+  return unbind_to (count, result >= 0 ? make_fixnum (result) : Qnil);
 }
 
 DEFUN ("lrg-capture-screen", Flrg_capture_screen, Slrg_capture_screen, 1, 2, 0,
