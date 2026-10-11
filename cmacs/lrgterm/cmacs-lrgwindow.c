@@ -15,6 +15,7 @@ the terminal/redisplay code, which talks only to the abstract surface vtable
 
 #ifdef HAVE_CMACS_LRGTERM
 
+#include <stdlib.h>
 #include <libregnum.h>
 
 #include "lisp.h"
@@ -61,9 +62,25 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
   grl_window_set_config_flags (GRL_FLAG_WINDOW_TRANSPARENT
                                | GRL_FLAG_WINDOW_ALWAYS_RUN);
 
-  /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  Pick the matching surface subclass
-     (both own the single raylib window).  3dvr currently falls back to the 3D
-     surface (mono) until an LrgVRSurface exists -- a graceful degrade.  */
+#ifdef HAVE_CMACS_LRGVR
+  /* --lrg=3dvr on Mesa: use zink (GL on the Vulkan driver).  SteamVR's GL
+     path synchronises with its Vulkan compositor through
+     GL_NV_timeline_semaphore, which only zink (and NVIDIA's own driver)
+     provide; with a native Mesa GL driver every frame is rejected ("GL
+     timeline semaphore requested but no support") and the headset never
+     shows the app.  Must happen before the first GL context exists, which
+     is the surface constructor below.  MESA_LOADER_DRIVER_OVERRIDE set by
+     the user wins; CMACS_LRG_VR_NATIVE_GL=1 opts out.  Non-Mesa drivers
+     ignore the variable.  */
+  if (FRAME_LRG_OUTPUT (f)->render_mode == 2
+      && getenv ("MESA_LOADER_DRIVER_OVERRIDE") == NULL
+      && getenv ("CMACS_LRG_VR_NATIVE_GL") == NULL)
+    setenv ("MESA_LOADER_DRIVER_OVERRIDE", "zink", 0);
+#endif
+
+  /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  3d and 3dvr share the 3D surface
+     (it owns the single raylib window); 3dvr then attaches an OpenXR service
+     to it below, once the GL context exists.  */
   if (FRAME_LRG_OUTPUT (f)->render_mode != 0)
     {
       Lrg3DSurface *s3 = lrg_3d_surface_new (width, height, title);
@@ -115,6 +132,23 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
     }
   grl_window_set_state (win, GRL_FLAG_WINDOW_RESIZABLE);
 
+#ifdef HAVE_CMACS_LRGVR
+  /* --lrg=3dvr: the 3D surface and its GL context exist now, which is what
+     OpenXR binds to.  Without a headset runtime, stay a desktop 3D frame
+     rather than refusing to start.  */
+  if (FRAME_LRG_OUTPUT (f)->render_mode == 2)
+    {
+      char *err = NULL;
+
+      if (!cmacs_lrgvr_attach (f, &err))
+        {
+          fprintf (stderr, "emacs: --lrg=3dvr: no VR (%s); showing 3D on the "
+                   "desktop instead\n", err != NULL ? err : "unknown error");
+          xfree (err);
+        }
+    }
+#endif
+
   return win;
 }
 
@@ -157,6 +191,9 @@ lrg_window_destroy (struct frame *f)
   LrgFrameSurface *s = FRAME_LRG_SURFACE (f);
   if (s != NULL)
     {
+#ifdef HAVE_CMACS_LRGVR
+      cmacs_lrgvr_detach ();
+#endif
       g_clear_object (&s);
       FRAME_LRG_OUTPUT (f)->surface = NULL;
     }

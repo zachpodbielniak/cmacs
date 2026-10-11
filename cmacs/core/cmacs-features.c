@@ -61,6 +61,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_LRGTERM
   "lrgterm",
 #endif
+#ifdef HAVE_CMACS_LRGVR
+  "lrgvr",
+#endif
 #ifdef HAVE_CMACS_IMGEDIT
   "imgedit",
 #endif
@@ -237,6 +240,13 @@ syms_of_cmacs_features (void)
     doc: /* Non-nil if this build was configured --with-cmacs-lrgterm.  */);
 #ifdef HAVE_CMACS_LRGTERM
   is_cmacs_lrgterm = true;
+#endif
+
+  DEFVAR_BOOL ("IS-CMACS-LRGVR", is_cmacs_lrgvr,
+    doc: /* Non-nil if this build was configured --with-cmacs-lrgvr
+(OpenXR headset presentation for `emacs --lrg=3dvr').  */);
+#ifdef HAVE_CMACS_LRGVR
+  is_cmacs_lrgvr = true;
 #endif
 
   DEFVAR_BOOL ("IS-CMACS-IMGEDIT", is_cmacs_imgedit,
@@ -418,6 +428,7 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-ai-brigade",  "IS-CMACS-AI-BRIGADE");
   cmacs_features__alias ("is-cmacs-libregnum",   "IS-CMACS-LIBREGNUM");
   cmacs_features__alias ("is-cmacs-lrgterm",     "IS-CMACS-LRGTERM");
+  cmacs_features__alias ("is-cmacs-lrgvr",       "IS-CMACS-LRGVR");
   cmacs_features__alias ("is-cmacs-imgedit",     "IS-CMACS-IMGEDIT");
   cmacs_features__alias ("is-cmacs-calculator",  "IS-CMACS-CALCULATOR");
   cmacs_features__alias ("is-cmacs-lsp",         "IS-CMACS-LSP");

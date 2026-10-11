@@ -80,6 +80,13 @@ path (`window-system-initialization') and the on-demand path
     (when (require 'cmacs-lrg-3d nil t)
       (cmacs-lrg-3d-mode 1))
 
+    ;; VR (`--lrg=3dvr'): controller button bindings, the in-world keyboard,
+    ;; recenter.  Its keys only arrive from controllers, so enabling it on
+    ;; any lrg frame costs nothing.
+    (when (and (fboundp 'cmacs-lrg-vr-supported-p)
+               (require 'cmacs-lrg-vr nil t))
+      (cmacs-lrg-vr-mode 1))
+
     (setq lrg-initialized t)))
 
 (cl-defmethod window-system-initialization (&context (window-system lrg)

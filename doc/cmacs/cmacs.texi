@@ -10826,7 +10826,8 @@ pixel-exact.  @code{3d} (@code{Lrg3DSurface}) captures the flat frame to a
 texture each redisplay and draws it as textured @emph{panels} in a perspective
 scene viewed from a gentle elevated 3/4 camera angle (so the panels show real
 perspective and the environment floor recedes on launch; orbit/zoom with
-@kbd{C-c 3}).  @code{3dvr} is reserved (today it builds the 3D surface, mono).
+@kbd{C-c 3}).  @code{3dvr} shows the 3D scene in a VR headset through OpenXR (see
+``VR mode'' below).
 
 @section 3D mode
 
@@ -10962,6 +10963,78 @@ Tuning (@code{customize-group cmacs-lrg-3d-workspaces}):
 @code{-frame-zoom} (optional camera pull-back on enable, 1.0 = none),
 @code{-live} (keep panels live via the round-robin updater, t), and
 @code{-update-interval} (seconds between updater ticks, 0.12).
+
+@section VR mode (--lrg=3dvr)
+
+@code{emacs --lrg=3dvr} shows the 3D scene in a VR headset: the frame's
+panels float around you, and the motion controllers are the pointer --
+everything you do with a mouse in a buffer (click, drag-select, scroll,
+context menus) you do with a laser.  Built with
+@option{--with-cmacs-lrgvr} (in the default flag set; needs the OpenXR
+loader).  Any OpenXR runtime works: SteamVR (including the Steam Frame),
+Monado, WiVRn.  The SPEC tail is the same as @code{--lrg=3d}'s
+(@code{--lrg=3dvr:per-window:workshop}).  Without a runtime the frame
+stays a desktop 3D frame and says why on stderr; @kbd{M-x
+cmacs-lrg-vr-start} moves a running 3D frame into the headset.
+
+@table @asis
+@item trigger
+@code{mouse-1} at the laser: click, drag to select, double-click.
+@item grip
+On a panel: carry it (right stick pushes/pulls and resizes it).  On the
+keyboard: carry the keyboard.  On empty space: grab the world and pull
+yourself around.
+@item right stick
+Scroll at the laser; pressing it is @code{mouse-3} (context menus).
+@item left stick
+Walk, and snap-turn 30@textdegree{} (@code{cmacs-lrg-vr-move-hand} picks the
+hand).
+@item A, B, X, Y, menu, left stick press
+@code{<vr-right-a>} (in-world keyboard), @code{<vr-right-b>} (escape),
+@code{<vr-left-x>} (bring the pointed-at window front and centre),
+@code{<vr-left-y>} (@kbd{M-x}), @code{<vr-menu>} (recenter),
+@code{<vr-left-stick>} (reset the view).  They are ordinary events in
+@code{cmacs-lrg-vr-mode-map}; rebind them like any key.
+@end table
+
+The in-world keyboard appears in front of you below eye level: point and
+pull the trigger.  Ctrl, Meta and Super stick until the next key; Shift
+cycles once, locked, off.  A Bluetooth keyboard works as on the desktop.
+@kbd{C-c v} holds recenter (@kbd{r}), keyboard (@kbd{k}), scale
+(@kbd{+}/@kbd{-}) and status (@kbd{?}).
+
+You sit in a @emph{seat} that follows the 3D camera, at the height of what
+it looks at, with its pitch dropped so the horizon never tilts.
+@code{cmacs-lrg-vr-scale} (default 0.3 metres per scene unit) puts a
+whole-frame panel 1.5@tie{}m tall about 2@tie{}m away.  Customize the group
+@code{cmacs-lrg-vr} for snap angle, walking speed, scroll rate, haptics and
+keyboard tilt.
+
+Implementation: libregnum's @code{LrgOpenXRService} (built with
+@code{OPENXR=1}) binds to the GL context raylib made current (GLX or EGL),
+renders through one swapchain per eye and reads the controllers through an
+action set; @code{Lrg3DSurface}'s VR path draws the cached panel textures
+once per eye plus an overlay (lasers, keyboard).  @code{xrWaitFrame} runs
+on a thread of its own and wakes Emacs's @code{pselect} through an eventfd,
+so frame pacing never blocks Emacs; while a command runs, the headset
+gets at most 10 frames a second (the runtime reprojects in between), so
+Lisp keeps the main thread.  Controller input arrives as ordinary
+mouse, wheel and function-key events.
+
+On Mesa, @code{--lrg=3dvr} sets @env{MESA_LOADER_DRIVER_OVERRIDE} to
+@code{zink} before the GL context exists: SteamVR's GL path needs
+@code{GL_NV_timeline_semaphore}, which only zink and NVIDIA's driver
+provide, and without it every frame is rejected.  Set the variable yourself,
+or @env{CMACS_LRG_VR_NATIVE_GL}=1, to override.  SteamVR does not show an
+app, or deliver controller input, while the headset is in standby.
+
+On SteamOS / the Steam Frame, @command{just distrobox 44} builds cmacs in a
+Fedora box, links the host's @file{/opt/steamvr} into it and exports
+@command{emacs} & co.@: to @file{~/bin/export}; @command{just
+steam-vr-shortcut} then adds @samp{Emacs VR} to the Steam library (a VR app
+starting in your home directory, logging to
+@file{~/.local/state/cmacs/emacs-vr.log}).  @kbd{M-x cmacs-lrg-vr-describe}
+reports the runtime, headset and controller profiles.
 
 @section Commands
 
@@ -11872,6 +11945,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-gsurf \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-lrgvr \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
   --with-cmacs-calculator \

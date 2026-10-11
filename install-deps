@@ -307,7 +307,9 @@ set_packages_fedora () {
 	# mesa-libEGL-devel: gowl links egl.pc directly (mesa-libGL-devel
 	# only carries gl.pc).  libpng-devel: required by gowl's MCP
 	# screenshot path and by libregnum.
-	PKGS_LIBREGNUM=(mesa-libGL-devel mesa-libEGL-devel libpng-devel
+	# openxr-devel: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
+	# openssl-devel: libregnum links OpenSSL (MMO datagram TLS).
+	PKGS_LIBREGNUM=(mesa-libGL-devel mesa-libEGL-devel openxr-devel openssl-devel libpng-devel
 	                libX11-devel libXrandr-devel
 	                libXcursor-devel libXinerama-devel libXi-devel)
 	# libregnum scripting backends for the in-Emacs level editor: luajit-devel
@@ -434,7 +436,9 @@ set_packages_debian () {
 	            python3-venv pipx espeak-ng)
 	# libegl1-mesa-dev: gowl links egl.pc (libgl1-mesa-dev is gl.pc only).
 	# libpng-dev: gowl's MCP screenshot path and libregnum both need it.
-	PKGS_LIBREGNUM=(libgl1-mesa-dev libegl1-mesa-dev libpng-dev
+	# libopenxr-dev: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
+	# libssl-dev: libregnum links OpenSSL (MMO datagram TLS).
+	PKGS_LIBREGNUM=(libgl1-mesa-dev libegl1-mesa-dev libopenxr-dev libssl-dev libpng-dev
 	                libx11-dev libxrandr-dev
 	                libxcursor-dev libxinerama-dev libxi-dev)
 	# cmacs-cad: OCCT splits into per-module -dev packages on Debian.
@@ -509,7 +513,9 @@ set_packages_arch () {
 	# libglvnd supplies gl.pc/egl.pc (mesa depends on it, but gowl and
 	# libregnum link them directly, so name it).  libpng: gowl's MCP
 	# screenshot path and libregnum both require libpng.pc.
-	PKGS_LIBREGNUM=(mesa libglvnd libx11 libxrandr libxcursor libxinerama
+	# openxr: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
+	# openssl: libregnum links OpenSSL (MMO datagram TLS).
+	PKGS_LIBREGNUM=(mesa libglvnd openxr openssl libx11 libxrandr libxcursor libxinerama
 	                libxi libpng)
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
@@ -756,7 +762,7 @@ CHECK_REQUIRED=(
 	gnutls harfbuzz freetype2 fontconfig tree-sitter
 	gtk+-3.0 webkit2gtk-4.1 javascriptcoregtk-4.1
 	wayland-server wayland-client wayland-protocols xkbcommon libinput
-	cairo pango pixman-1 egl gl
+	cairo pango pixman-1 egl gl openxr openssl zlib
 )
 
 # Absent -> a feature narrows or compiles out; the build still succeeds.

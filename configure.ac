@@ -692,6 +692,8 @@ OPTION_DEFAULT_OFF([cmacs-gsurf],
   [CMacs gsurf embedded web browser (WebKitGTK buffers, modules, MCP)])
 OPTION_DEFAULT_OFF([cmacs-gsurf-lrg],
   [gsurf libregnum backend for emacs --lrg (offscreen WebKit -> GrlTexture; requires --with-cmacs-libregnum)])
+OPTION_DEFAULT_OFF([cmacs-lrgvr],
+  [OpenXR VR presentation for emacs --lrg=3dvr (SteamVR/Monado headsets + motion controllers; requires --with-cmacs-lrgterm and openxr)])
 
 # Accept --with-gsurf as a convenience alias for --with-cmacs-gsurf.
 AC_ARG_WITH([gsurf],
@@ -1098,8 +1100,11 @@ if test "$with_cmacs_libregnum" != "no"; then
   # CMACS_LIBREGNUM_DEPS_LIBS, appended immediately below the archive --
   # required under ld's --as-needed default (Debian/Ubuntu), where a
   # -ldex-1 that appears before the archive is dropped as "unneeded".
+  # zlib/libpq/openssl/sqlite3: libregnum's own DEP_LIBS (its networking,
+  # MMO datagram TLS and persistence modules) -- the whole-archived
+  # liblibregnum.a references them, so they must follow it on the link.
   PKG_CHECK_MODULES([CMACS_LIBREGNUM_DEPS],
-    [glib-2.0 gobject-2.0 gio-2.0 cairo libdex-1])
+    [glib-2.0 gobject-2.0 gio-2.0 cairo libdex-1 zlib libpq openssl sqlite3])
   CMACS_LIBREGNUM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
     -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
@@ -1187,6 +1192,29 @@ if test "$with_cmacs_lrgterm" != "no"; then
   AC_DEFINE([HAVE_CMACS_LRGTERM], 1, [CMacs independent libregnum/raylib display backend (output_lrg)])
   CMACS_LRGTERM_OBJ="cmacs-lrgterm.o cmacs-lrgfns.o cmacs-lrgfont.o cmacs-lrgwindow.o"
 fi
+dnl lrgvr: `emacs --lrg=3dvr' in a headset.  libregnum's LrgOpenXRService is
+dnl compiled into the archive only when the sub-make gets OPENXR=1, and the
+dnl archive does not carry -lopenxr_loader, so both are decided here: the flag
+dnl goes to the libregnum sub-make (CMACS_LIBREGNUM_OPENXR in src/Makefile.in)
+dnl and the loader onto the archive's own link line.
+CMACS_LIBREGNUM_OPENXR=0
+if test "$with_cmacs_lrgvr" != "no"; then
+  if test "$with_cmacs_lrgterm" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lrgvr requires --with-cmacs-lrgterm (VR is a presentation mode of the lrg display backend)])
+  fi
+  PKG_CHECK_MODULES([CMACS_LRGVR], [openxr], [],
+    [AC_MSG_ERROR([--with-cmacs-lrgvr requires the OpenXR loader (Fedora: openxr-devel; Debian/Ubuntu: libopenxr-dev; Arch: openxr)])])
+  AC_CHECK_HEADER([EGL/egl.h], [],
+    [AC_MSG_ERROR([--with-cmacs-lrgvr requires the EGL headers (Fedora: mesa-libEGL-devel; Debian/Ubuntu: libegl-dev)])])
+  AC_DEFINE([HAVE_CMACS_LRGVR], 1, [CMacs OpenXR VR mode for emacs --lrg=3dvr])
+  CMACS_LRGTERM_OBJ="$CMACS_LRGTERM_OBJ cmacs-lrgvr.o"
+  dnl On the ARCHIVE's link line, not lrgterm's: every binary that whole-
+  dnl archives liblibregnum.a (emacs, cmacs-screensaver-render) pulls the
+  dnl OpenXR object in and needs the loader after it.
+  CMACS_LIBREGNUM_LIBS="$CMACS_LIBREGNUM_LIBS $CMACS_LRGVR_LIBS"
+  CMACS_LIBREGNUM_OPENXR=1
+fi
+AC_SUBST(CMACS_LIBREGNUM_OPENXR)
 if test "$with_cmacs_imgedit" != "no"; then
   # The 2D image / sprite editor is built on libregnum's LrgImageDocument /
   # LrgImageLayer (CPU layer compositing) -- it reuses the libregnum archive

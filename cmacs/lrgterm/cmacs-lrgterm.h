@@ -224,5 +224,20 @@ extern LrgGlyphMetrics *lrg_font_bake (LrgGlyphAtlas *atlas,
 
 /* lrg_requested_render_mode is declared in lisp.h (reachable from core).  */
 
+/* Event plumbing shared with cmacs-lrgvr.c (cmacs-lrgterm.c).  */
+extern int cmacs_lrgterm_store_event (struct frame *, struct input_event *,
+                                      struct input_event *);
+extern Time cmacs_lrgterm_now_ms (void);
+
+#ifdef HAVE_CMACS_LRGVR
+/* VR presentation of a 3D lrg frame (cmacs-lrgvr.c).  */
+extern bool cmacs_lrgvr_attach (struct frame *, char **);
+extern void cmacs_lrgvr_detach (void);
+extern bool cmacs_lrgvr_active_p (void);
+extern int cmacs_lrgvr_tick (struct frame *, struct input_event *);
+extern bool cmacs_lrgvr_mouse_position (struct frame *, int *, int *);
+extern void syms_of_cmacs_lrgvr (void);
+#endif
+
 #endif /* HAVE_CMACS_LRGTERM */
 #endif /* CMACS_LRGTERM_H */

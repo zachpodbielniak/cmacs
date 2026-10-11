@@ -119,6 +119,7 @@ configure_flags := """
     --with-cmacs-gsurf-lrg
     --with-cmacs-emacsctl
     --with-cmacs-lrgterm
+    --with-cmacs-lrgvr
     --with-cmacs-imgedit
     --with-cmacs-vidstudio
     --with-cmacs-transcode

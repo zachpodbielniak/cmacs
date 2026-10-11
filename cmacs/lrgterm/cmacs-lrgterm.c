@@ -1851,6 +1851,20 @@ lrg_store (struct frame *f, struct input_event *hold_quit,
   return 1;
 }
 
+/* The same, for cmacs-lrgvr.c (controller input).  */
+int
+cmacs_lrgterm_store_event (struct frame *f, struct input_event *hold_quit,
+                           struct input_event *ie)
+{
+  return lrg_store (f, hold_quit, ie);
+}
+
+Time
+cmacs_lrgterm_now_ms (void)
+{
+  return lrg_now_ms ();
+}
+
 /* Emit a character keystroke CP (already layout/shift-resolved) on F.  */
 static int
 lrg_store_char (struct frame *f, struct input_event *hold_quit, int cp,
@@ -2652,8 +2666,20 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
   lrg_gamepad_tick (f);
 
   /* Advance any in-progress 3D transition animation (camera / focus / resize)
-     and recompose, so eases play out smoothly between redisplays.  */
-  lrg_animate_tick ();
+     and recompose, so eases play out smoothly between redisplays.  In VR the
+     headset frame advances them instead (cmacs_lrgvr_tick).  */
+#ifdef HAVE_CMACS_LRGVR
+  if (!cmacs_lrgvr_active_p ())
+#endif
+    lrg_animate_tick ();
+
+#ifdef HAVE_CMACS_LRGVR
+  /* One headset frame, when the runtime wants one: the frame thread's eventfd
+     woke this pselect.  Never mid-redisplay -- the flat frame is half drawn
+     into the default framebuffer then.  */
+  if (!lrg_drawing)
+    count += cmacs_lrgvr_tick (f, hold_quit);
+#endif
 
   return count;
 }
@@ -2674,7 +2700,13 @@ lrg_mouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
     {
       int pfx, pfy;
       /* Report the frame pixel under the pointer (ray-cast in 3D, identity in
-         2D); fall back to raw coords if a 3D ray misses every panel.  */
+         2D); fall back to raw coords if a 3D ray misses every panel.  In VR
+         the pointer is the active controller's laser.  */
+#ifdef HAVE_CMACS_LRGVR
+      if (cmacs_lrgvr_mouse_position (f, &pfx, &pfy))
+        ;
+      else
+#endif
       if (!lrg_pick_xy (f, grl_input_get_mouse_x (), grl_input_get_mouse_y (),
                         &pfx, &pfy))
         {
@@ -4257,6 +4289,9 @@ syms_of_cmacs_lrgterm (void)
 {
   DEFSYM (Qlrg, "lrg");
   Fprovide (Qlrg, Qnil);
+#ifdef HAVE_CMACS_LRGVR
+  syms_of_cmacs_lrgvr ();
+#endif
   staticpro (&lrg_cockpit_wall_buffer);
   lrg_cockpit_wall_buffer = Qnil;
   defsubr (&Slrg_capture_screen);

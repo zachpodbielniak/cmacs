@@ -109,6 +109,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-cintrospect=    | Runtime C self-introspection (libdw+JIT)|
 | =--with-cmacs-emacsctl=       | emacsctl/cmacsctl CLI (standalone binary)|
 | =--with-cmacs-lrgterm=        | output_lrg libregnum/raylib display backend (=emacs --lrg=) |
+| =--with-cmacs-lrgvr=          | OpenXR VR headset mode for =emacs --lrg=3dvr= (needs lrgterm + openxr) |
 | =--with-cmacs-lrgscript=      | Emacs Lisp scripting + full game authoring for libregnum (requires libregnum + glib) |
 | =--with-cmacs-roamgraph=      | Native org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum + glib) |
 | =--with-cmacs-secondbrain=    | ARMS second-brain visualiser, 2D + 3D (requires libregnum + glib) |
@@ -163,6 +164,7 @@ Example with explicit flags:
   --with-cmacs-screensaver \
   --with-cmacs-emacsctl \
   --with-cmacs-lrgterm \
+  --with-cmacs-lrgvr \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
   --with-cmacs-calculator \

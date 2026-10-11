@@ -113,16 +113,21 @@ the Emacs glue.
   pose + arrangement + buffer set); AI-composable.  An arg-taking
   ~lrgterm_3d_move_panel~ MCP tool for "Jarvis, move it left".
 
+- *VR* (~--lrg=3dvr~, ~--with-cmacs-lrgvr~): not a separate surface after all --
+  ~Lrg3DSurface~ gained a VR present path (~lrg_3d_surface_set_vr_service~ /
+  ~render_vr~) that draws the cached panel textures once per eye through an
+  ~LrgVRService~; libregnum's ~LrgOpenXRService~ is the OpenXR implementation
+  (GLX/EGL binding, per-eye swapchains, action-set controllers, threaded
+  ~xrWaitFrame~).  The viewer's *seat* follows the spatial camera, so every
+  existing camera intent moves you.  Controllers drive the same intents plus
+  ordinary mouse events (laser = pointer), panel grab, world grab, snap turn,
+  and an in-world keyboard (~cmacs/lrgterm/cmacs-lrgvr.c~).  See the *VR mode*
+  section of ~cmacs-lrgterm.org~.
+
 * Deferred — later
 
-- *VR* (~3dvr~ → ~LrgVRSurface~): reuse the panel / camera / arrangement / environment
-  substrate; render the scene per-eye via the ~LrgVRService~ (OpenXR) interface.  The
-  content-capture (flat → texture) is shared; only the scene present becomes
-  per-eye-camera → swapchain submit.  Honor the design note that the
-  glReadPixels→Cairo blit path cannot present VR.
 - Real depth-of-field *blur* (a separable-gaussian ~LrgPostEffect~) instead of the
   tint dim; SDF glyphs for crisper angled text; live ~2d~ ↔ ~3d~ surface swap without
   restart.
-- *VR controller* intents (bind the OpenXR controller poses/buttons to the same
-  spatial intents); *gesture* (Wayland pinch/swipe, hand-pose) and *voice* intent
+- *Gesture* (Wayland pinch/swipe, hand-pose) and *voice* intent
   wiring through the ai → MCP chain; drag-to-detach a window into its own free panel.

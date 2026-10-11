@@ -19,7 +19,7 @@ is selected only by the ~--lrg[=MODE]~ command-line flag (or by setting
 ./src/emacs --lrg=2d       # explicit
 ./src/emacs --lrg=3d       # 3D: the frame as floating panel(s) in a scene
 ./src/emacs --lrg=3d:per-window:workshop   # one panel per window, grid floor
-./src/emacs --lrg=3dvr     # reserved -- builds the 3D surface (mono) for now
+./src/emacs --lrg=3dvr     # 3D, in a VR headset (OpenXR: SteamVR, Monado)
 #+end_src
 
 See [[*3D mode]] for the full SPEC grammar, arrangements, environments and
@@ -358,7 +358,7 @@ handlers, and — while a page holds focus
 =lrg_route_keys_to_gsurf= instead of =lrg_drain_keys= (Escape releases focus
 back to Emacs).  See *CMacs Gsurf* → *Render backends* for the full model.
 
-* Render modes (2D + 3D; VR reserved)
+* Render modes (2D, 3D, VR)
 
 The abstract ~LrgFrameSurface~ + ~LrgRenderMode~ + ~pick~ seam makes each mode
 additive: Layer 3 (the Emacs glue) only ever calls the base surface vtable, the
@@ -375,8 +375,8 @@ glyph atlas / ~LrgTextRenderer~ are projection-free, and input routes through
   real perspective and the environment floor recedes into the distance on launch
   rather than looking head-on/flat; orbit/zoom it with =C-c 3= (arrows / =+= /
   =-=, =0= to reset).
-- ~3dvr~ — reserved; today it builds the 3D surface (mono).  A future
-  ~LrgVRSurface~ renders the same scene per-eye.
+- ~3dvr~ — the 3D scene in a VR headset, rendered once per eye through
+  OpenXR, with motion controllers as the pointer.  See [[*VR mode (--lrg=3dvr)]].
 
 ** 3D mode
 
@@ -569,6 +569,125 @@ Tuning (=M-x customize-group RET cmacs-lrg-3d-workspaces=):
 | ~cmacs-lrg-3d-workspaces-frame-zoom~ | optional camera pull-back on enable to show more of the ring (1.0 = none) |
 | ~cmacs-lrg-3d-workspaces-live~ | keep panels live via the round-robin updater (t) |
 | ~cmacs-lrg-3d-workspaces-update-interval~ | seconds between updater ticks (0.12) |
+
+* VR mode (--lrg=3dvr)
+
+~emacs --lrg=3dvr~ shows the 3D scene in a VR headset: the frame's panels float
+around you, you point at them with the controllers, and everything you can do
+with a mouse in a buffer -- click, drag-select, scroll, context menus -- you do
+with a laser.  Built with ~--with-cmacs-lrgvr~ (part of the default flag set;
+needs the OpenXR loader, ~openxr-devel~).  Any OpenXR runtime works: SteamVR
+(including the Steam Frame), Monado/WiVRn.
+
+#+begin_src sh
+emacs --lrg=3dvr                        # single panel, void environment
+emacs --lrg=3dvr:per-window:workshop    # one panel per window, grid floor
+just steam-vr-shortcut                  # "Emacs VR" in the Steam library
+#+end_src
+
+The SPEC tail is the same as ~--lrg=3d~'s.  Without a runtime or headset the
+frame stays a desktop 3D frame and says why on stderr.  From a running 3D frame
+~M-x cmacs-lrg-vr-start~ moves it into the headset and ~cmacs-lrg-vr-stop~ back.
+
+** Controls
+
+| Control                   | Does                                                          |
+|---------------------------+---------------------------------------------------------------|
+| trigger                   | =mouse-1= at the laser: click, drag to select, double-click     |
+| grip (on a panel)         | carry the panel; right stick pushes/pulls (Y) and resizes (X) |
+| grip (on the keyboard)    | carry the keyboard                                            |
+| grip (on empty space)     | grab the world: pull yourself around                          |
+| right stick               | scroll at the laser (Y), horizontal scroll (X)                |
+| right stick press         | =mouse-3= at the laser (context menu)                         |
+| left stick                | walk (Y), snap-turn 30° (X)                                   |
+| A  =<vr-right-a>=         | toggle the in-world keyboard                                  |
+| B  =<vr-right-b>=         | escape: =<escape>= under Evil, =keyboard-quit= otherwise        |
+| X  =<vr-left-x>=          | select the pointed-at window and bring it front and centre    |
+| Y  =<vr-left-y>=          | =M-x=                                                         |
+| menu =<vr-menu>=          | recenter the scene ahead of you                               |
+| left stick press          | =<vr-left-stick>=: reset the view                             |
+
+Which hand walks is ~cmacs-lrg-vr-move-hand~ (default ~left~); the other hand's
+stick scrolls.  The face buttons are ordinary events -- the C side sends them
+as F25..F30 and ~cmacs-lrg-vr-mode~ translates them -- so rebind them like any
+key: ~(keymap-set cmacs-lrg-vr-mode-map "<vr-left-y>" #'consult-buffer)~.
+=C-c v= holds the same commands for a physical keyboard: =r= recenter, =k=
+keyboard, =+= / =-= scale, =?= status.
+
+*The in-world keyboard* (=A=) appears in front of you below eye level: point at
+a key and pull the trigger.  =Ctrl=, =Meta= and =Super= stick until the next
+key; =Shift= cycles once → locked → off.  A Bluetooth keyboard works as on the
+desktop -- the frame's window keeps the keyboard focus.
+
+** Comfort and scale
+
+You sit in a *seat* that follows the 3D camera: at the camera's eye, at the
+height of what it looks at, facing its heading.  The camera's pitch is dropped
+so the horizon never tilts.  Every camera intent therefore moves the seat --
+focusing a panel flies you to face it -- and head tracking adds on top.
+
+The scene is in abstract units; ~cmacs-lrg-vr-scale~ (default 0.3 m per unit)
+puts a whole-frame panel 1.5 m tall about 2 m away, the same angular size as
+the desktop 3D view.  =C-c v += / =C-c v -= change it by 15%.  Panel text is
+the frame's own pixels, so a larger frame window means sharper panels.
+
+Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
+~-move-speed~, ~-scroll-rate~, ~-haptics~, ~-move-hand~, ~-keyboard-tilt~,
+~-scale~, ~-escape-key~.
+
+** How it works
+
+- ~LrgOpenXRService~ (libregnum ~src/vr/~, built with ~OPENXR=1~) implements
+  ~LrgVRService~ over OpenXR.  It binds to the GL context raylib already made
+  current -- GLX through ~XR_KHR_opengl_enable~, EGL through ~XR_MNDX_egl_enable~
+  -- renders through one sRGB swapchain per eye, and reads the controllers
+  through an action set with suggested bindings for the Index, Touch, Vive,
+  simple and Frame profiles (SteamVR remaps them onto anything else).
+- ~Lrg3DSurface~ gained a VR present path (~lrg_3d_surface_render_vr~): per eye
+  it loads the view and projection the runtime reports, draws the environment
+  and the panels from their cached textures, then an overlay callback (lasers,
+  cursors, keyboard).  Redisplay is unchanged -- it keeps refreshing the panel
+  textures exactly as in 3D -- and the desktop window keeps a mono mirror.
+- *Frame pacing never blocks Emacs.*  ~xrWaitFrame~ runs on a thread of the
+  service's own and signals an eventfd that is a keyboard wait descriptor, so
+  ~pselect~ wakes exactly when the headset wants a frame and ~lrg_read_socket~
+  renders it (never mid-redisplay).  While a command runs (Emacs is not idle
+  in the command loop) the headset gets at most 10 frames a second and the
+  runtime reprojects in between: each frame blocks in ~xrEndFrame~ until the
+  GPU finishes it, and ~read_socket~ runs constantly while Lisp works, so
+  rendering every frame would leave Lisp a fraction of the main thread.  Idle,
+  every frame renders.
+- Controller input becomes ordinary events: =MOUSE_CLICK_EVENT=s and wheel
+  events at the frame pixel the laser hits (~lrg_3d_surface_pick_ray~), motion
+  through ~mouse-position~ (so drag-select and ~track-mouse~ work), and F-key
+  events for the buttons.
+- Quitting from the SteamVR dashboard closes the frame like its close button.
+- *On Mesa, VR uses zink.*  SteamVR's GL path synchronises with its Vulkan
+  compositor through ~GL_NV_timeline_semaphore~, which only zink (GL on the
+  Vulkan driver) and NVIDIA's driver provide.  With a native Mesa GL driver
+  every frame is rejected ("GL timeline semaphore requested but no support"
+  in SteamVR's =xrclient_emacs.txt=) and the headset never shows Emacs.
+  ~--lrg=3dvr~ therefore sets ~MESA_LOADER_DRIVER_OVERRIDE=zink~ before the GL
+  context exists, unless you set that variable yourself or
+  ~CMACS_LRG_VR_NATIVE_GL=1~.  ~cmacs-lrg-vr-start~ from a running ~--lrg=3d~
+  frame cannot switch drivers: start that frame with the variable set.
+- SteamVR keeps the session /synchronized/ (not shown, no controller input)
+  while the headset is in standby -- off your head.  Put it on.
+
+** Running it from a distrobox (Steam Frame / SteamOS)
+
+~just distrobox 44~ builds cmacs in a Fedora box, links the host's
+~/opt/steamvr~ into it (OpenXR's runtime manifest and SteamVR's own config both
+name that path), and exports ~emacs~ & co. to =~/bin/export=.  Then
+~just steam-vr-shortcut~ writes =~/bin/export/emacs-vr= and adds *Emacs VR* to
+the Steam library as a VR app starting in your home directory.  Restart Steam
+(or pass ~--restart-steam~) for it to appear.  Its output goes to
+=~/.local/state/cmacs/emacs-vr.log=.
+
+~M-x cmacs-lrg-vr-describe~ reports the runtime, headset, session state,
+refresh rate and the controller profiles the runtime bound.  Controllers only
+deliver input while the session is *focused* -- launched from a shell rather
+than Steam, SteamVR may keep it merely visible.
 
 * Commands and DEFUNs
 
