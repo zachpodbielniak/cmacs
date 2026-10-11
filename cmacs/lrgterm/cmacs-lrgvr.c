@@ -1135,7 +1135,11 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
       return false;
     }
 
-  SetTraceLogLevel (VR_RAYLIB_LOG_WARNING);
+  /* CMACS_LRG_VR_GL_LOG keeps raylib's log of every texture and FBO it
+     creates and frees, with GL names: the record needed to tell which
+     object a frame was drawn into.  */
+  if (g_getenv ("CMACS_LRG_VR_GL_LOG") == NULL)
+    SetTraceLogLevel (VR_RAYLIB_LOG_WARNING);
   vr.xr = xr;
   vr.f = f;
   vr.s3 = LRG_3D_SURFACE (surf);
@@ -1161,7 +1165,7 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
      needs the window; physical keyboards are read from evdev instead.
      CMACS_LRG_VR_SHOW_WINDOW=1 keeps it (and its keyboard focus).  */
   vr.window_hidden = false;
-  if (getenv ("CMACS_LRG_VR_SHOW_WINDOW") == NULL)
+  if (g_getenv ("CMACS_LRG_VR_SHOW_WINDOW") == NULL)
     {
       GrlWindow *win = lrg_frame_surface_get_window (surf);
       if (win != NULL)

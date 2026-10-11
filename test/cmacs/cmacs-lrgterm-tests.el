@@ -41,8 +41,8 @@
 (ert-deftest cmacs-lrgterm-glyph-keys-never-use-a-font-address ()
   "Glyph-atlas keys name a font by `lrg_font_atlas_id', not its address.
 A closed font's address is reused by the next font opened, whose glyph
-indices then hit the old font's cached bitmaps: Doom's startup font swap
-drew the whole frame in the wrong letters."
+indices would then hit the old font's cached bitmaps and draw the wrong
+letters."
   (let ((dir (expand-file-name "cmacs/lrgterm" cmacs-lrgterm-tests--root))
         (keys 0))
     (skip-unless (file-directory-p dir))
@@ -54,6 +54,26 @@ drew the whole frame in the wrong letters."
           (should-not (string-match-p "uintptr_t\\|\\_<font\\_>"
                                       (match-string 1))))))
     (should (> keys 0))))
+
+(ert-deftest cmacs-lrgterm-zink-reorder-off-before-the-context ()
+  "lrg_window_create turns zink's upload reordering off before any surface.
+zink reads ZINK_DEBUG when the GL context is made, inside the surface
+constructor; set later, it does nothing.  With reordering on, raylib's
+batch flushes hand glyph quads another batch's texture coordinates and
+the text comes out scrambled."
+  (let ((file (expand-file-name "cmacs/lrgterm/cmacs-lrgwindow.c"
+                                cmacs-lrgterm-tests--root)))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (should (re-search-forward "^lrg_window_create (" nil t))
+      (let ((call (save-excursion
+                    (re-search-forward "lrg_zink_disable_reorder ();" nil t)))
+            (surface (save-excursion
+                       (re-search-forward "lrg_[23]d_surface_new (" nil t))))
+        (should call)
+        (should surface)
+        (should (< call surface))))))
 
 ;;;; Presence -----------------------------------------------------------
 

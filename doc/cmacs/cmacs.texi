@@ -10692,6 +10692,15 @@ Atlas entries are keyed by a serial stored on the @code{cr_scaled_font}
 (@code{lrg_font_atlas_id}), never by the font's address: a closed font's
 address is reused by the next font opened, whose glyph indices would then
 hit the old font's bitmaps and draw the wrong letters.
+
+Scrambled text under zink (Mesa's GL on Vulkan, which @code{--lrg=3dvr}
+selects on Mesa) is a driver bug: zink reorders buffer uploads ahead of
+draws already recorded, and raylib refills one vertex buffer at every
+batch flush, so glyph quads take another batch's texture coordinates and
+sample the wrong atlas cells.  The native driver renders the same calls
+correctly.  Whenever the driver will be zink, lrgterm adds
+@code{noreorder} to @env{ZINK_DEBUG} before the GL context exists;
+@env{CMACS_LRG_ZINK_REORDER}=1 skips that, to test a newer Mesa.
 Full font-lock colour, the region, the
 modeline (with its 3D box), text decorations (underline, overline,
 strike-through, box), the graphical fringes (continuation/truncation arrows)
@@ -11059,6 +11068,10 @@ rendering problem can be told from a runtime one without wearing the
 headset.  The offscreen target the frame is drawn into is cleared to the
 frame background each time it is bound; redisplay's own clear comes
 earlier, and without that each frame was drawn over the previous one.
+Scrambled text in the headset is the zink upload-reordering bug (see the
+glyph atlas above), which lrgterm works around.
+@env{CMACS_LRG_VR_GL_LOG}=1 keeps raylib's log of every texture and
+framebuffer it creates and frees, with GL names.
 
 @section Commands
 

@@ -57,8 +57,8 @@ lrg_frame_glyph_atlas (struct frame *f)
    The `struct font' address cannot be it: when Emacs closes a font (a
    face change, the font cache being compacted at GC) the next font can be
    allocated at the same address, and its glyph indices then hit the old
-   font's bitmaps -- text drawn in the wrong letters.  Doom's startup does
-   exactly that, swapping the initial font for `doom-font'.
+   font's bitmaps -- text drawn in the wrong letters.  (Scrambled text
+   under zink is a different bug: see lrg_zink_disable_reorder.)
 
    The id is instead a serial attached to the cairo scaled font as user
    data, so it lives and dies with the rasteriser the bitmaps came from.

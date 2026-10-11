@@ -250,9 +250,24 @@ serial stored on the ~cr_scaled_font~ as cairo user data
 only means something with its font, and when Emacs closes a font (on a face
 change, or when the font cache is compacted at GC) the next font opened can
 reuse its address.  With address keys the new font's indices then hit the old
-font's bitmaps and the frame is drawn in the wrong letters.  Doom's startup
-swap to ~doom-font~ did exactly that.  Cairo returns the same scaled font
-for the same face, size and options, so reopening a font keeps its cache.
+font's bitmaps and the frame is drawn in the wrong letters.  Cairo returns
+the same scaled font for the same face, size and options, so reopening a
+font keeps its cache.
+
+*Scrambled text under zink* is a different bug, in the driver.  zink (Mesa's
+GL on Vulkan, which ~--lrg=3dvr~ selects on Mesa) reorders buffer uploads
+ahead of draws already recorded in the current pass.  raylib refills one
+vertex buffer at every batch flush, several times a frame, so earlier draws
+get a later batch's texture coordinates: each glyph quad samples another
+atlas cell, and the text reads as the first glyphs ever baked, in order
+("tionabo utGNuEm" for "For information about GNU Emacs").  GL guarantees
+those uploads stay ordered, and the native freedreno driver renders the same
+calls correctly.  Seen with Mesa 26.2 on Turnip (Adreno 750); reproducible
+headless on a weston/Xwayland with ~MESA_LOADER_DRIVER_OVERRIDE=zink emacs
+--lrg~.  Whenever the driver will be zink, lrgterm adds ~noreorder~ to
+~ZINK_DEBUG~ before the GL context exists (keeping any flags already
+there).  ~CMACS_LRG_ZINK_REORDER=1~ skips that, to check whether a newer
+Mesa has fixed it.
 
 *** Rendering / presentation model (full repaint, present on unblock)
 
@@ -706,6 +721,13 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
 - The offscreen target is cleared to the frame's background on every bind.
   Redisplay's own clear comes before the target is bound, so without that
   every frame drew over the last one and stale text bled through.
+- Scrambled text in the headset (every glyph a piece of some other word) is
+  the zink upload-reordering bug described under the glyph atlas above;
+  lrgterm turns that reordering off.  The eye image is written only while
+  the headset renders frames, so it is missing in standby.
+- ~CMACS_LRG_VR_GL_LOG=1~ keeps raylib's log of every texture and
+  framebuffer it creates and frees, with GL names (VR otherwise drops it to
+  warnings so the log does not grow without bound).
 
 ** Running it from a distrobox (Steam Frame / SteamOS)
 

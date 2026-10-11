@@ -29,7 +29,6 @@ nothing breaks -- there is just no physical keyboard in VR.  */
 
 #ifdef HAVE_CMACS_LRGVR
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -132,21 +131,21 @@ drop (int i)
 static void
 scan (void)
 {
-  DIR *dir = opendir ("/dev/input");
-  struct dirent *de;
+  g_autoptr (GDir) dir = g_dir_open ("/dev/input", 0, NULL);
+  const gchar *name;
 
   kbd.last_scan = g_get_monotonic_time ();
   if (dir == NULL)
     return;
-  while ((de = readdir (dir)) != NULL && kbd.n < KBD_MAX)
+  while (kbd.n < KBD_MAX && (name = g_dir_read_name (dir)) != NULL)
     {
-      char path[64];
+      g_autofree gchar *path = NULL;
       struct stat st;
       int fd;
 
-      if (strncmp (de->d_name, "event", 5) != 0)
+      if (!g_str_has_prefix (name, "event"))
         continue;
-      snprintf (path, sizeof path, "/dev/input/%s", de->d_name);
+      path = g_build_filename ("/dev/input", name, NULL);
       if (stat (path, &st) != 0 || known (st.st_rdev))
         continue;
       fd = open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -164,7 +163,6 @@ scan (void)
       add_keyboard_wait_descriptor (fd);
       kbd.n++;
     }
-  closedir (dir);
 }
 
 void

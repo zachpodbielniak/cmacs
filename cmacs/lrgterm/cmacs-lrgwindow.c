@@ -15,12 +15,44 @@ the terminal/redisplay code, which talks only to the abstract surface vtable
 
 #ifdef HAVE_CMACS_LRGTERM
 
-#include <stdlib.h>
 #include <libregnum.h>
 
 #include "lisp.h"
 #include "frame.h"
 #include "cmacs-lrgterm.h"
+
+/* zink (Mesa's GL on Vulkan) reorders buffer uploads ahead of the draws
+   already recorded in the current pass.  raylib refills one vertex buffer
+   several times a frame (every batch flush), so a reordered upload hands
+   earlier draws a later batch's texture coordinates: each glyph quad
+   samples some other glyph's atlas cell, and the text reads as a jumble
+   of the first glyphs ever baked.  GL guarantees those uploads stay in
+   order; this is a zink bug (seen on Mesa 26.2, Turnip / Adreno 750), and
+   ZINK_DEBUG=noreorder turns the reordering off.  Applied whenever the
+   GL driver will be zink -- --lrg=3dvr selects it, a user may too -- and
+   before the context exists, which is when zink reads it.
+   CMACS_LRG_ZINK_REORDER=1 keeps zink's default, to check a newer Mesa.  */
+static void
+lrg_zink_disable_reorder (void)
+{
+  const gchar *debug = g_getenv ("ZINK_DEBUG");
+  g_auto (GStrv) flags = NULL;
+  g_autofree gchar *both = NULL;
+
+  if (g_strcmp0 (g_getenv ("MESA_LOADER_DRIVER_OVERRIDE"), "zink") != 0
+      || g_getenv ("CMACS_LRG_ZINK_REORDER") != NULL)
+    return;
+  if (debug == NULL || *debug == '\0')
+    {
+      g_setenv ("ZINK_DEBUG", "noreorder", TRUE);
+      return;
+    }
+  flags = g_strsplit (debug, ",", -1);
+  if (g_strv_contains ((const gchar * const *) flags, "noreorder"))
+    return;
+  both = g_strconcat (debug, ",noreorder", NULL);
+  g_setenv ("ZINK_DEBUG", both, TRUE);
+}
 
 /* Create the libregnum surface that backs frame F (size WIDTH x HEIGHT,
    window title TITLE).  Stores it on the frame's output.  Returns the
@@ -73,10 +105,12 @@ lrg_window_create (struct frame *f, int width, int height, const char *title)
      the user wins; CMACS_LRG_VR_NATIVE_GL=1 opts out.  Non-Mesa drivers
      ignore the variable.  */
   if (FRAME_LRG_OUTPUT (f)->render_mode == 2
-      && getenv ("MESA_LOADER_DRIVER_OVERRIDE") == NULL
-      && getenv ("CMACS_LRG_VR_NATIVE_GL") == NULL)
-    setenv ("MESA_LOADER_DRIVER_OVERRIDE", "zink", 0);
+      && g_getenv ("MESA_LOADER_DRIVER_OVERRIDE") == NULL
+      && g_getenv ("CMACS_LRG_VR_NATIVE_GL") == NULL)
+    g_setenv ("MESA_LOADER_DRIVER_OVERRIDE", "zink", FALSE);
 #endif
+
+  lrg_zink_disable_reorder ();
 
   /* render_mode: 0 = 2d, 1 = 3d, 2 = 3dvr.  3d and 3dvr share the 3D surface
      (it owns the single raylib window); 3dvr then attaches an OpenXR service
