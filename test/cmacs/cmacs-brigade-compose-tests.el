@@ -736,7 +736,10 @@ discussing."
   (skip-unless (featurep 'cmacs-brigade-compose))
   (cmacs-brigade-agent-reload)
   (cmacs-brigade-register-agent :name 'researcher :prompt "p")
-  (let ((e (cmacs-brigade-compose--extract "use grok, model grok-4.5")))
+  ;; grok's model list is a live, authenticated API call; seed it, or
+  ;; the test passes only where an xAI key is in the environment.
+  (let* ((cmacs-brigade-compose--model-cache '((grok "grok-4" "grok-4.5")))
+         (e (cmacs-brigade-compose--extract "use grok, model grok-4.5")))
     (should (equal "grok" (plist-get e :provider)))
     (should (equal "grok-4.5" (plist-get e :model))))
   (should (equal "researcher"
@@ -751,7 +754,9 @@ Stripping it to nothing would make the menu refuse to create anything
 with no hint why."
   (skip-unless (featurep 'cmacs-brigade-compose))
   (cmacs-brigade-agent-reload)
-  (let ((out (cmacs-brigade-compose--strip-choices "use grok, model grok-4.5")))
+  (let* ((cmacs-brigade-compose--model-cache '((grok "grok-4" "grok-4.5")))
+         (out (cmacs-brigade-compose--strip-choices
+               "use grok, model grok-4.5")))
     (should (string-match-p "[[:alnum:]]" out))
     (should (equal out "use grok, model grok-4.5"))))
 

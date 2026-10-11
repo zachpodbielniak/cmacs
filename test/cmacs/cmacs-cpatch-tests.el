@@ -133,7 +133,12 @@
           (should (stringp diff))
           (should (string-match-p "current bytes" diff))
           (should (string-match-p "new bytes" diff))
-          (should (string-match-p "48 b8" diff))) ;; mov rax, imm64
+          ;; The trampoline's opening bytes, per architecture.
+          (should (string-match-p
+                   (if (string-prefix-p "aarch64" system-configuration)
+                       "new bytes: +50 00 00 58 00 02 1f d6" ; ldr x16; br x16
+                     "48 b8")                              ; mov rax, imm64
+                   diff)))
       (cmacs-c-handle-dispose h))))
 
 (ert-deftest cpatch-diff-defun-form ()

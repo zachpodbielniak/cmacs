@@ -343,7 +343,7 @@ stop."
 (ert-deftest cmacs-gowl-test-list-clients-all-gobjects ()
   "Test that all items in client list are GObjects."
   (skip-unless (cmacs-feature-p 'gowl))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (skip-unless (gowl-running-p))
   (let ((clients (gowl-list-clients)))
     (dolist (c clients)
@@ -404,7 +404,7 @@ stop."
 (ert-deftest cmacs-gowl-test-move-client-non-integer-coords ()
   "Test that `gowl-move-client' rejects non-integer coordinates."
   (skip-unless (cmacs-feature-p 'gowl))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (skip-unless (gowl-running-p))
   (let ((clients (gowl-list-clients)))
     (skip-unless clients)
@@ -422,7 +422,7 @@ stop."
 (ert-deftest cmacs-gowl-test-resize-client-non-integer-dims ()
   "Test that `gowl-resize-client' rejects non-integer dimensions."
   (skip-unless (cmacs-feature-p 'gowl))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (skip-unless (gowl-running-p))
   (let ((clients (gowl-list-clients)))
     (skip-unless clients)
@@ -454,7 +454,7 @@ stop."
 (ert-deftest cmacs-gowl-test-set-tags-requires-fixnat ()
   "Test that `gowl-set-tags' requires a non-negative integer bitmask."
   (skip-unless (cmacs-feature-p 'gowl))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (skip-unless (gowl-running-p))
   (let ((clients (gowl-list-clients)))
     (skip-unless clients)
@@ -479,7 +479,7 @@ stop."
 (ert-deftest cmacs-gowl-test-list-monitors-all-gobjects ()
   "Test that all items in monitor list are GObjects."
   (skip-unless (cmacs-feature-p 'gowl))
-  (skip-unless (cmacs-feature-p 'gobject))
+  (skip-unless (fboundp 'gobject-new))
   (skip-unless (gowl-running-p))
   (let ((monitors (gowl-list-monitors)))
     (dolist (m monitors)

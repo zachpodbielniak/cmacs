@@ -335,9 +335,14 @@ than warn."
        (delete-directory idx t))))
 
 (defmacro cmacs-brigade-memory-tests--with-stub-embedder (&rest body)
-  "Run BODY with the embedder replaced by a local one that always works."
+  "Run BODY with the embedder replaced by a local one that always works.
+
+The stub replaces the curl command line, so the curl backend is pinned:
+under the default `ai-glib' one BODY talked to a real embedding server,
+and passed only on a machine running one."
   (declare (indent 0))
-  `(cl-letf (((symbol-function 'cmacs-brigade-memory--embed-argv)
+  `(cl-letf (((default-value 'cmacs-brigade-embed-backend) 'curl)
+             ((symbol-function 'cmacs-brigade-memory--embed-argv)
               (lambda (tmp)
                 ;; Emit one all-zero vector per input, so the shape is
                 ;; right and no server is involved.

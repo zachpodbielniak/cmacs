@@ -131,9 +131,14 @@ have noticed."
     (skip-unless src)
     ;; Loading an eln that is already loaded is the ordinary case (it is
     ;; how a `require' of an already-loaded feature behaves), and must
-    ;; stay quiet.
-    (should (native-elisp-load src))
-    (should (native-elisp-load src))))
+    ;; stay quiet.  Quiet means no signal: the return value is whatever
+    ;; the unit's last top-level form returned, and plenty return nil
+    ;; (`4Corner', a quail table, is the first file on some trees).
+    (dotimes (_ 2)
+      (should (eq 'loaded
+                  (condition-case err
+                      (progn (native-elisp-load src) 'loaded)
+                    (error err)))))))
 
 (provide 'cmacs-comp-tests)
 
