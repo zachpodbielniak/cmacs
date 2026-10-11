@@ -229,8 +229,11 @@ container TARGET='44' *EXTRA:
 # runs that distro's cmacs.  An existing box is reused; rerunning resumes
 # whatever step a previous run stopped at.  The build happens in
 # build/distrobox/<box>/, a sources-only copy of this checkout, so the
-# host's own build is never touched.  EXTRA: --jobs N, --force-packages,
-# --enter, --dry-run.  Details: admin/cmacs-distrobox.sh --help.
+# host's own build is never touched.  The box's emacs, emacsclient,
+# emacsctl, cmacsctl, cmacs-mcp, etags and ebrowse are then exported to
+# ~/bin/export on the host (distrobox-export), so `emacs' there runs the
+# box's build.  EXTRA: --jobs N, --force-packages, --enter, --dry-run,
+# --export-path DIR, --no-export.  Details: admin/cmacs-distrobox.sh --help.
 
 # Build + install cmacs into a distrobox (44, 24.04, arch, ...).
 [group('build')]

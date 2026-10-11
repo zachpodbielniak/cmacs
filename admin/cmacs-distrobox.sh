@@ -31,9 +31,9 @@
 # (so a new file you have not committed yet still builds).  Never build
 # artifacts: a host .o, .d or .pc in the copy is the same leak
 # .containerignore exists to stop -- a .d naming a header this distro
-# lacks, a .pc carrying the host's link line.  rsync -a keeps source
-# mtimes, so a rerun rewrites only what changed and the box's make is
-# incremental.  Files that disappear from the source list are removed
+# lacks, a .pc carrying the host's link line.  The sync compares content
+# and stamps what changed with the current time, so a rerun rewrites only
+# what changed and the box's make is incremental.  Files that disappear from the source list are removed
 # from the copy, so a deleted or renamed source cannot linger.
 #
 # ── Resuming ─────────────────────────────────────────────────────────
@@ -75,6 +75,8 @@ DRY_RUN=0
 INSIDE=0
 FORCE_PACKAGES=0
 ENTER_AFTER=0
+EXPORT_BINS=1
+EXPORT_PATH="${HOME}/bin/export"
 
 # Filled by resolve_target.
 BASE_IMAGE=""
@@ -86,6 +88,19 @@ BOX=""
 # pick them up on their next run.  install-deps and the Wayland script
 # are hashed directly.
 PACKAGES_REV=1
+
+# The commands exported from the box to the host (distrobox-export --bin)
+# after every install, so `emacs' on the host runs the box's build.  Only
+# those the install actually produced are exported.
+CMACS_EXPORTED_BINS=(
+	emacs
+	emacsclient
+	emacsctl
+	cmacsctl
+	cmacs-mcp
+	etags
+	ebrowse
+)
 
 # The deps the Containerfile builds and installs into /usr before
 # configuring cmacs.  Order matters: ai-glib before podomation and
@@ -114,6 +129,9 @@ install it into the box's /usr so `emacs' in the box runs that build.
   --force-packages  Reinstall system packages even if the stamp says
                     this box already has them
   --enter           Open a shell in the box when the install finishes
+  --export-path DIR Export the box's emacs, emacsclient, emacsctl, ...
+                    to DIR on the host (default: ~/bin/export)
+  --no-export       Do not export any commands
   --dry-run         Print the box, image and build tree; change nothing
   -h, --help        Show this help
   --license         Show the license
@@ -250,9 +268,16 @@ source_list () {
 	local out="${1}"
 	local path
 
+	# Untracked files too, in the superproject AND every checked-out
+	# submodule: a new source file in deps/libregnum is otherwise left out
+	# of the copy until it is committed, and the box build fails on a
+	# Makefile that names it.
 	{
 		git -C "${SRC_ROOT}" ls-files -z --recurse-submodules
 		git -C "${SRC_ROOT}" ls-files -z --others --exclude-standard
+		git -C "${SRC_ROOT}" submodule foreach --quiet --recursive \
+			'git ls-files -z --others --exclude-standard \
+				| while IFS= read -r -d "" f; do printf "%s/%s\0" "${displaypath}" "${f}"; done'
 	} | while IFS= read -r -d '' path
 	do
 		if [[ -e "${SRC_ROOT}/${path}" || -L "${SRC_ROOT}/${path}" ]]
@@ -277,7 +302,14 @@ sync_tree () {
 	log "syncing sources into ${tree#"${SRC_ROOT}"/}"
 	source_list "${new_list}"
 
-	rsync -a --from0 --files-from="${new_list}" \
+	# Compare by content and do NOT copy modification times (-rlpD, no -t).
+	# A changed file lands with the current time, so make always rebuilds
+	# what depends on it; an unchanged one is left alone, keeping the build
+	# incremental.  Preserving the host's mtimes (-a) is wrong here: a file
+	# edited while a box build ran -- after this sync -- arrives on the next
+	# sync OLDER than the object that build produced from the previous
+	# version, and make links the stale object.
+	rsync -rlpD --checksum --from0 --files-from="${new_list}" \
 		"${SRC_ROOT}/" "${tree}/"
 
 	# Anything copied last time that is no longer a source goes.  Only
@@ -316,6 +348,44 @@ configure_flags () {
 	fi
 	die "CMACS_CONFIGURE_FLAGS is unset and \`just' is not installed" \
 	    "to read the Justfile's configure_flags"
+}
+
+# export_binaries
+#
+# Put host wrappers for the box's commands in EXPORT_PATH (distrobox-export
+# --bin), so `emacs' on the host -- or a Steam shortcut -- runs this build.
+# distrobox-export has to run INSIDE the box, with the normal distrobox
+# environment (it reads the container id from it), so this is a separate
+# enter, not part of the env -i build.  Rerunning refreshes the wrappers.
+export_binaries () {
+	local dest="${EXPORT_PATH}"
+
+	if [[ "${EXPORT_BINS}" -ne 1 ]]
+	then
+		return
+	fi
+	case "${dest}" in
+		"~"/*) dest="${HOME}/${dest#"~/"}" ;;
+	esac
+	mkdir -p "${dest}"
+
+	log "exporting ${CMACS_EXPORTED_BINS[*]} to ${dest}"
+	# shellcheck disable=SC2016
+	distrobox enter "${BOX}" 9>&- -- bash -c '
+		dest="$1"; shift
+		for b in "$@"
+		do
+			if [ -x "/usr/bin/${b}" ]
+			then
+				distrobox-export --bin "/usr/bin/${b}" --export-path "${dest}" \
+					>/dev/null || echo "    could not export ${b}" >&2
+			fi
+		done' _ "${dest}" "${CMACS_EXPORTED_BINS[@]}"
+
+	case ":${PATH}:" in
+		*":${dest}:"*) ;;
+		*) echo "    NOTE: ${dest} is not on your PATH" ;;
+	esac
 }
 
 # run_host
@@ -376,6 +446,8 @@ run_host () {
 		CMACS_DBOX_FORCE_PACKAGES="${FORCE_PACKAGES}" \
 		bash "${tree}/admin/cmacs-distrobox.sh" --inside "${TARGET}"
 
+	export_binaries
+
 	log "done: \`distrobox enter ${BOX} -- emacs' runs this build"
 	if [[ "${ENTER_AFTER}" -eq 1 ]]
 	then
@@ -419,6 +491,22 @@ check_box_matches_target () {
 				|| die "${BOX} is ${id} ${version_id}, expected arch"
 			;;
 	esac
+}
+
+# link_host_vr_runtime
+#
+# OpenXR finds SteamVR through ~/.config/openxr/1/active_runtime.json, which
+# the box shares with the host -- but it names /opt/steamvr, and the box's
+# /opt is its own.  SteamVR's client also reads its install path from
+# ~/.config/openvr and fails with VRInitError_Init_FileNotFound when that
+# path is missing.  Link the host's copy in, so `emacs --lrg=3dvr' in the
+# box reaches the headset.  Nothing to do on a host without SteamVR.
+link_host_vr_runtime () {
+	if [[ -d /run/host/opt/steamvr && ! -e /opt/steamvr ]]
+	then
+		log "linking the host's SteamVR (/opt/steamvr) into the box"
+		sudo ln -s /run/host/opt/steamvr /opt/steamvr
+	fi
 }
 
 # install_packages <state-dir>
@@ -695,6 +783,7 @@ run_inside () {
 	cd -- "${tree}" >/dev/null
 	mkdir -p "${state}"
 	check_box_matches_target
+	link_host_vr_runtime
 
 	install_packages "${state}"
 	build_deps "${jobs}"
@@ -718,6 +807,8 @@ main () {
 			--jobs)           JOBS="${2:?--jobs needs a number}"; shift ;;
 			--force-packages) FORCE_PACKAGES=1 ;;
 			--enter)          ENTER_AFTER=1 ;;
+			--export-path)    EXPORT_PATH="${2:?--export-path needs a directory}"; shift ;;
+			--no-export)      EXPORT_BINS=0 ;;
 			--dry-run)        DRY_RUN=1 ;;
 			--inside)         INSIDE=1 ;;
 			-*)               usage >&2; die "unknown option ${1}" ;;
