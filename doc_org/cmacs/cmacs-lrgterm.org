@@ -616,8 +616,18 @@ keyboard, =+= / =-= scale, =?= status.
 
 *The in-world keyboard* (=A=) appears in front of you below eye level: point at
 a key and pull the trigger.  =Ctrl=, =Meta= and =Super= stick until the next
-key; =Shift= cycles once → locked → off.  A Bluetooth keyboard works as on the
-desktop -- the frame's window keeps the keyboard focus.
+key; =Shift= cycles once → locked → off.
+
+*Physical keyboards* (Bluetooth, USB, the headset's own virtual keyboard) are
+read straight from =/dev/input= (you need the =input= group) and translated
+with the system XKB layout (=XKB_DEFAULT_LAYOUT= etc. override it).  They are
+grabbed while the VR session has focus and released when the dashboard comes
+up, and a keyboard connected later is picked up within two seconds.  This is
+because the frame's desktop window is *hidden* in VR: a compositor hosting the
+headset (gamescope under SteamVR) would otherwise show it as a flat black
+"desktop game" in front of the scene and give it the input focus.  The flat
+frame is rendered offscreen instead.  ~CMACS_LRG_VR_SHOW_WINDOW=1~ keeps the
+window (and its ordinary keyboard focus).
 
 ** Comfort and scale
 
@@ -673,6 +683,9 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
   frame cannot switch drivers: start that frame with the variable set.
 - SteamVR keeps the session /synchronized/ (not shown, no controller input)
   while the headset is in standby -- off your head.  Put it on.
+- ~CMACS_LRG_VR_DUMP=/tmp/eye.ppm~ (with ~CMACS_LRG_VR_DUMP_FRAME=N~, default
+  120) writes the left eye of frame N as sent to the headset -- the way to tell
+  a rendering problem from a runtime one without wearing it.
 
 ** Running it from a distrobox (Steam Frame / SteamOS)
 

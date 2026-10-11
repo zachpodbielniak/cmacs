@@ -1202,12 +1202,15 @@ if test "$with_cmacs_lrgvr" != "no"; then
   if test "$with_cmacs_lrgterm" = "no"; then
     AC_MSG_ERROR([--with-cmacs-lrgvr requires --with-cmacs-lrgterm (VR is a presentation mode of the lrg display backend)])
   fi
-  PKG_CHECK_MODULES([CMACS_LRGVR], [openxr], [],
-    [AC_MSG_ERROR([--with-cmacs-lrgvr requires the OpenXR loader (Fedora: openxr-devel; Debian/Ubuntu: libopenxr-dev; Arch: openxr)])])
+  dnl xkbcommon: in VR the frame's window is hidden, so physical keyboards
+  dnl are read from evdev and translated with the system XKB layout.
+  PKG_CHECK_MODULES([CMACS_LRGVR], [openxr xkbcommon], [],
+    [AC_MSG_ERROR([--with-cmacs-lrgvr requires the OpenXR loader and xkbcommon (Fedora: openxr-devel libxkbcommon-devel; Debian/Ubuntu: libopenxr-dev libxkbcommon-dev; Arch: openxr libxkbcommon)])])
   AC_CHECK_HEADER([EGL/egl.h], [],
     [AC_MSG_ERROR([--with-cmacs-lrgvr requires the EGL headers (Fedora: mesa-libEGL-devel; Debian/Ubuntu: libegl-dev)])])
   AC_DEFINE([HAVE_CMACS_LRGVR], 1, [CMacs OpenXR VR mode for emacs --lrg=3dvr])
-  CMACS_LRGTERM_OBJ="$CMACS_LRGTERM_OBJ cmacs-lrgvr.o"
+  CMACS_LRGTERM_OBJ="$CMACS_LRGTERM_OBJ cmacs-lrgvr.o cmacs-lrgvr-kbd.o"
+  CMACS_LRGTERM_CFLAGS="$CMACS_LRGTERM_CFLAGS $CMACS_LRGVR_CFLAGS"
   dnl On the ARCHIVE's link line, not lrgterm's: every binary that whole-
   dnl archives liblibregnum.a (emacs, cmacs-screensaver-render) pulls the
   dnl OpenXR object in and needs the loader after it.

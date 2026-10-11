@@ -2216,6 +2216,11 @@ lrg_read_socket (struct terminal *terminal, struct input_event *hold_quit)
     static guint last_focus_gen;
     bool focused = grl_window_is_focused (win);
     guint gen = grl_input_get_focus_generation ();
+#ifdef HAVE_CMACS_LRGVR
+    /* In VR the window is hidden: the headset session's focus counts.  */
+    if (cmacs_lrgvr_active_p ())
+      focused = cmacs_lrgvr_focused_p ();
+#endif
 
     if (focused != (dpyinfo->pgtk.x_focus_frame != NULL))
       {

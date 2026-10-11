@@ -10999,7 +10999,13 @@ hand).
 
 The in-world keyboard appears in front of you below eye level: point and
 pull the trigger.  Ctrl, Meta and Super stick until the next key; Shift
-cycles once, locked, off.  A Bluetooth keyboard works as on the desktop.
+cycles once, locked, off.  Physical keyboards (Bluetooth, USB, the
+headset's own) are read from @file{/dev/input} (the @code{input} group)
+through the system XKB layout, grabbed while the VR session has focus.
+The frame's desktop window is hidden in VR -- under SteamVR's gamescope
+it would otherwise appear as a black ``desktop game'' in front of the
+scene and take the focus -- and the frame is rendered offscreen;
+@env{CMACS_LRG_VR_SHOW_WINDOW}=1 keeps it.
 @kbd{C-c v} holds recenter (@kbd{r}), keyboard (@kbd{k}), scale
 (@kbd{+}/@kbd{-}) and status (@kbd{?}).
 

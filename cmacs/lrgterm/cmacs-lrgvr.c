@@ -45,6 +45,7 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #include <unistd.h>
 #include <libregnum.h>
 #include <rlgl.h>
+#include <GL/gl.h>
 
 #include "lisp.h"
 #include "frame.h"
@@ -187,6 +188,7 @@ struct vr_hand
 static struct
 {
   bool active;
+  bool window_hidden;            /* desktop window hidden; evdev keyboard */
   struct frame *f;
   Lrg3DSurface *s3;
   LrgOpenXRService *xr;
@@ -723,6 +725,37 @@ vr_overlay (Lrg3DSurface *s3, guint view, gpointer data)
   if (view == 0)
     vr_update_pointers ();
 
+  /* Diagnostic: CMACS_LRG_VR_DUMP=/path.ppm writes the left eye of frame
+     CMACS_LRG_VR_DUMP_FRAME (default 120), as the headset is sent it, to a
+     binary PPM (rows top-down).  It is how a rendering problem is told
+     apart from a runtime or compositor one without wearing the headset.  */
+  if (view == 0 && getenv ("CMACS_LRG_VR_DUMP") != NULL)
+    {
+      const char *fs = getenv ("CMACS_LRG_VR_DUMP_FRAME");
+      guint64 want = fs != NULL ? (guint64) g_ascii_strtoull (fs, NULL, 10) : 120;
+      if (vr.frame_no == want)
+        {
+          int vp[4] = { 0, 0, 0, 0 };
+          unsigned char *px;
+          rlDrawRenderBatchActive ();
+          glGetIntegerv (GL_VIEWPORT, vp);
+          px = rlReadScreenPixels (vp[2], vp[3]);
+          if (px != NULL)
+            {
+              FILE *fp = fopen (getenv ("CMACS_LRG_VR_DUMP"), "wb");
+              if (fp != NULL)
+                {
+                  int i;
+                  fprintf (fp, "P6\n%d %d\n255\n", vp[2], vp[3]);
+                  for (i = 0; i < vp[2] * vp[3]; i++)
+                    fwrite (px + i * 4, 1, 3, fp);
+                  fclose (fp);
+                }
+              free (px);
+            }
+        }
+    }
+
   if (vr.kb_visible)
     draw_keyboard ();
 
@@ -1047,6 +1080,15 @@ cmacs_lrgvr_active_p (void)
   return vr.active;
 }
 
+/* True while the headset session has input focus -- the frame is
+   "focused" for Emacs (solid cursor) then, whatever the hidden window
+   reports.  */
+bool
+cmacs_lrgvr_focused_p (void)
+{
+  return vr.active && vr.xr != NULL && lrg_openxr_service_is_focused (vr.xr);
+}
+
 bool
 cmacs_lrgvr_mouse_position (struct frame *f, int *x, int *y)
 {
@@ -1110,6 +1152,25 @@ cmacs_lrgvr_attach (struct frame *f, char **err)
   vr.frame_fd = lrg_openxr_service_start_frame_thread (xr);
   if (vr.frame_fd >= 0)
     add_keyboard_wait_descriptor (vr.frame_fd);
+
+  /* Hide the desktop window.  The headset is the display, and a compositor
+     that hosts it (gamescope under SteamVR) shows any mapped window as a
+     flat "desktop game" in the dashboard, in front of the scene -- black,
+     since VR does not present it -- and gives that, not us, input focus.
+     The flat frame is rasterised offscreen in VR (Lrg3DSurface), so nothing
+     needs the window; physical keyboards are read from evdev instead.
+     CMACS_LRG_VR_SHOW_WINDOW=1 keeps it (and its keyboard focus).  */
+  vr.window_hidden = false;
+  if (getenv ("CMACS_LRG_VR_SHOW_WINDOW") == NULL)
+    {
+      GrlWindow *win = lrg_frame_surface_get_window (surf);
+      if (win != NULL)
+        {
+          grl_window_set_state (win, GRL_FLAG_WINDOW_HIDDEN);
+          vr.window_hidden = true;
+          cmacs_lrgvr_kbd_start ();
+        }
+    }
   return true;
 }
 
@@ -1121,6 +1182,15 @@ cmacs_lrgvr_detach (void)
   if (vr.frame_fd >= 0)
     delete_keyboard_wait_descriptor (vr.frame_fd);
   vr.frame_fd = -1;
+  if (vr.window_hidden)
+    {
+      GrlWindow *win = vr.s3 != NULL
+        ? lrg_frame_surface_get_window (LRG_FRAME_SURFACE (vr.s3)) : NULL;
+      cmacs_lrgvr_kbd_stop ();
+      if (win != NULL)
+        grl_window_clear_state (win, GRL_FLAG_WINDOW_HIDDEN);
+      vr.window_hidden = false;
+    }
   if (vr.s3 != NULL)
     {
       lrg_3d_surface_set_vr_overlay_func (vr.s3, NULL, NULL, NULL);
@@ -1148,6 +1218,15 @@ cmacs_lrgvr_tick (struct frame *f, struct input_event *hold_quit)
 
   if (!vr.active || f != vr.f || vr.s3 == NULL)
     return 0;
+
+  /* Physical keyboards, on every wakeup -- a key press must not wait for
+     the next headset frame.  Grabbed only while VR has focus, so the
+     dashboard gets the keyboard when it is up.  */
+  if (vr.window_hidden)
+    {
+      cmacs_lrgvr_kbd_set_grab (cmacs_lrgvr_focused_p ());
+      count += cmacs_lrgvr_kbd_read (f, hold_quit);
+    }
 
   if (lrg_vr_service_should_quit (vr_service ()))
     {
@@ -1400,8 +1479,9 @@ DEFUN ("cmacs-lrg-vr-status", Fcmacs_lrg_vr_status, Scmacs_lrg_vr_status,
        0, 0, 0,
        doc: /* Return a plist describing the VR session, or nil when inactive.
 Keys: :runtime :system :state :refresh-rate :scale :keyboard
-:left-profile :right-profile :left-tracked :right-tracked, and :frames
-(headset frames rendered so far).  */)
+:left-profile :right-profile :left-tracked :right-tracked, :frames
+(headset frames rendered so far), :keyboards (physical keyboards read
+from evdev) and :window-hidden.  */)
   (void)
 {
   Lisp_Object plist = Qnil;
@@ -1414,6 +1494,8 @@ Keys: :runtime :system :state :refresh-rate :scale :keyboard
   rp = lrg_openxr_service_get_interaction_profile (vr.xr, LRG_VR_HAND_RIGHT);
 #define PUT(k, v) plist = Fcons (intern_c_string (k), Fcons ((v), plist))
   PUT (":frames", make_fixnum (vr.frame_no));
+  PUT (":keyboards", make_fixnum (cmacs_lrgvr_kbd_count ()));
+  PUT (":window-hidden", vr.window_hidden ? Qt : Qnil);
   PUT (":right-tracked", vr.hand[1].tracked ? Qt : Qnil);
   PUT (":left-tracked", vr.hand[0].tracked ? Qt : Qnil);
   PUT (":right-profile", rp != NULL ? build_string (rp) : Qnil);
