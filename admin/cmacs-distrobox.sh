@@ -398,12 +398,15 @@ export_binaries () {
 # XDG_RUNTIME_DIR, which the box shares, so host and box clients reach the
 # same server.  Steam injects LD_PRELOAD / LD_LIBRARY_PATH, which distrobox
 # would forward into the box, where they name the host's Steam runtime.
-# The icon is copied out of the box, since the host may have no Emacs.
+# The icon is copied out of the box, since the host may have no Emacs, and
+# installed as the theme icon `cmacs-emacs' in every hicolor size: Steam
+# (the Frame's launcher) looks Icon= up as a name under
+# icons/hicolor/NxN/apps, and showed no icon for an absolute path.
 export_desktop_entries () {
 	local dest="${EXPORT_PATH}"
 	local apps="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 	local icons="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
-	local icon="${icons}/128x128/apps/cmacs-emacs.png"
+	local icon=cmacs-emacs
 	local env="env -u LD_PRELOAD -u LD_LIBRARY_PATH"
 
 	if [[ "${EXPORT_BINS}" -ne 1 ]]
@@ -416,12 +419,33 @@ export_desktop_entries () {
 	[[ -x "${dest}/emacs" && -x "${dest}/emacsclient" ]] || return 0
 
 	log "adding Emacs and Emacs (Client) to the application menu"
-	mkdir -p "${apps}" "${icons}/128x128/apps" "${icons}/scalable/apps"
+	mkdir -p "${apps}"
+	# Sizes the box ships are copied; the rest are rendered from the SVG.
+	# shellcheck disable=SC2016
 	distrobox enter "${BOX}" 9>&- -- sh -c '
-		cp -f /usr/share/icons/hicolor/128x128/apps/emacs.png "$1"
-		cp -f /usr/share/icons/hicolor/scalable/apps/emacs.svg "$2"' \
-		_ "${icon}" "${icons}/scalable/apps/cmacs-emacs.svg" \
+		icons="$1" name="$2" src=/usr/share/icons/hicolor
+		mkdir -p "${icons}/scalable/apps"
+		cp -f "${src}/scalable/apps/emacs.svg" \
+			"${icons}/scalable/apps/${name}.svg" || exit 1
+		for n in 16 22 24 32 48 64 96 128 192 256 512
+		do
+			d="${icons}/${n}x${n}/apps"
+			mkdir -p "${d}"
+			if [ -f "${src}/${n}x${n}/apps/emacs.png" ]
+			then
+				cp -f "${src}/${n}x${n}/apps/emacs.png" "${d}/${name}.png"
+			elif command -v magick >/dev/null 2>&1
+			then
+				magick -background none -density 384 \
+					"${src}/scalable/apps/emacs.svg" \
+					-resize "${n}x${n}" "${d}/${name}.png"
+			fi
+		done' _ "${icons}" "${icon}" \
 		|| echo "    could not copy the Emacs icon out of the box" >&2
+	if command -v gtk-update-icon-cache >/dev/null 2>&1
+	then
+		gtk-update-icon-cache -f -t "${icons}" >/dev/null 2>&1 || true
+	fi
 
 	cat >"${apps}/cmacs-emacs.desktop" <<EOF2
 [Desktop Entry]
