@@ -283,7 +283,18 @@ redraw_idle (gpointer user)
 static void
 view_present_now (CmacsLibregnumView *v)
 {
-  if (!v || !v->render || !v->back_data) return;
+  if (!v || !v->render) return;
+#ifdef HAVE_CMACS_LRGTERM
+  /* lrg backend: as redraw_idle -- into the FBO the present blits, with no
+     readback into cairo buffers nothing reads.  */
+  if (cmacs_lrgterm_active_p != NULL && cmacs_lrgterm_active_p ())
+    {
+      if (cmacs_libregnum_render_ctx_render_into_fbo (v->render))
+        notify_frame_ready (v);
+      return;
+    }
+#endif
+  if (!v->back_data) return;
   if (!cmacs_libregnum_render_ctx_render_to_bgra (v->render, v->back_data,
                                                   v->width, v->height))
     return;

@@ -233,6 +233,15 @@ extern int cmacs_lrgterm_store_event (struct frame *, struct input_event *,
 extern Time cmacs_lrgterm_now_ms (void);
 extern bool cmacs_lrgterm_workspace_key_p (guint64 key);
 extern bool cmacs_lrgterm_select_workspace_panel (guint64 key);
+/* Offer a pointer event at frame pixel (FX, FY) to an embedded view -- a
+   libregnum 3D buffer (gnuseye's globe orbits on a drag), then a gsurf-lrg
+   page -- as the desktop mouse path does.  True when it took it, and the
+   caller sends Emacs nothing.  BUTTON is X11-numbered (1 left, 3 right).  */
+extern bool cmacs_lrgterm_offer_button (struct frame *, int button,
+                                        bool press, int fx, int fy);
+extern bool cmacs_lrgterm_offer_motion (struct frame *, int fx, int fy);
+extern bool cmacs_lrgterm_offer_scroll (struct frame *, double dx,
+                                        double dy, int fx, int fy);
 
 #ifdef HAVE_CMACS_LRGVR
 /* VR presentation of a 3D lrg frame (cmacs-lrgvr.c).  */

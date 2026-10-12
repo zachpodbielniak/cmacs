@@ -1669,6 +1669,54 @@ lrg_over_libregnum_view (struct frame *f, int fx, int fy)
   return false;
 }
 
+bool
+cmacs_lrgterm_offer_button (struct frame *f, int button, bool press,
+                            int fx, int fy)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  if (cmacs_libregnum_handle_button (f, button, press ? 1 : 0, fx, fy))
+    return true;
+#endif
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (cmacs_gsurf_lrg_handle_button (f, button, press ? 1 : 0, fx, fy))
+    return true;
+#endif
+  (void) f; (void) button; (void) press; (void) fx; (void) fy;
+  return false;
+}
+
+bool
+cmacs_lrgterm_offer_motion (struct frame *f, int fx, int fy)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  if (cmacs_libregnum_handle_motion (f, fx, fy))
+    return true;
+#endif
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (cmacs_gsurf_lrg_handle_motion (f, fx, fy))
+    return true;
+#endif
+  (void) f; (void) fx; (void) fy;
+  return false;
+}
+
+/* DX, DY as GDK smooth scroll: wheel-up is negative.  */
+bool
+cmacs_lrgterm_offer_scroll (struct frame *f, double dx, double dy,
+                            int fx, int fy)
+{
+#ifdef HAVE_CMACS_LIBREGNUM
+  if (cmacs_libregnum_handle_scroll (f, dx, dy, fx, fy))
+    return true;
+#endif
+#ifdef HAVE_CMACS_GSURF_LRG
+  if (cmacs_gsurf_lrg_handle_scroll (f, dx, dy, fx, fy))
+    return true;
+#endif
+  (void) f; (void) dx; (void) dy; (void) fx; (void) fy;
+  return false;
+}
+
 /* --- Gamepad / 6DOF spatial control (the device-agnostic binding backend) ---
    A libregnum LrgInputMap maps named actions to gamepad axes; each tick we read
    the SIGNED axis values and drive the SAME orbit / pan / dolly intents the mouse

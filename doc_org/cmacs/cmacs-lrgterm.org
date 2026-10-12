@@ -844,6 +844,23 @@ Options (customize group ~cmacs-lrg-vr~): ~cmacs-lrg-vr-snap-degrees~,
   gets at most 15 frames a second, with SteamVR reprojecting in between,
   because each frame blocks in ~xrEndFrame~ until the GPU finishes it.  Idle,
   every frame renders.
+- *Embedded views get the laser.*  The desktop mouse path offers every
+  press, motion and wheel to a libregnum view (GNU's Eye's globe, the
+  editor, CAD) or a gsurf-lrg page before Emacs sees it; the VR path sent
+  Emacs events straight away, so the globe would not orbit.  Both now go
+  through ~cmacs_lrgterm_offer_button~ / ~_motion~ / ~_scroll~: the
+  trigger drags and picks, the laser hovers, the stick zooms.
+- *3D views must leave the depth test off.*  A libregnum view renders in
+  the frame's GL context.  Its label pass ended with the depth test on, and
+  only ~render_into_fbo~ turned it off again -- the animation fallback
+  (~view_present_now~, which runs while the minibuffer is open) read the
+  frame back and left it on.  raylib's 2D draws restart their depth at the
+  back after every batch flush, so with the test on, text drawn over an
+  earlier batch's background failed it: whole runs of letters missing, the
+  same ones on every redraw.  The desktop's per-frame scene pass hid it; in
+  VR nothing resets the state.  ~render_to_bgra~ now leaves the test off
+  on every path, the fallback renders into the FBO under =--lrg=, and
+  binding the VR content target resets depth, scissor and blending.
 - *Popup menus drive the headset.*  ~lrg-popup-menu~ is a modal loop in
   C, and nothing else calls ~read_socket~ while it runs.  In VR it used to
   poll only the hidden window, which gets no input, and rendered no headset

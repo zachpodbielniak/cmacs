@@ -314,5 +314,49 @@ within double-click-time regardless of the real interval)."
         (should (string-match-p "!kb_held (VK_META)" src))
         (should (string-match-p "kb_trigger_up (hand)" src))))))
 
+;; gnuseye under VR: text vanished in runs and the globe would not drag.
+(ert-deftest cmacs-lrgterm-3d-views-leave-depth-test-off ()
+  "A libregnum render never leaves the depth test on for the text pass.
+The label pass turns it on; with it on, raylib's 2D draws after a batch
+flush fail it, and whole runs of text go missing on every redraw."
+  (let ((render (expand-file-name "cmacs/libregnum/cmacs-libregnum-render.c"
+                                  cmacs-lrgterm-tests--root))
+        (view (expand-file-name "cmacs/libregnum/cmacs-libregnum-view.c"
+                                cmacs-lrgterm-tests--root))
+        (surf (expand-file-name "deps/libregnum/src/term/lrg-3d-surface.c"
+                                cmacs-lrgterm-tests--root)))
+    (skip-unless (and (file-readable-p render) (file-readable-p view)))
+    (with-temp-buffer
+      (insert-file-contents render)
+      (should (re-search-forward
+               "render_to_bgra_1 (r, dst, dst_w, dst_h);\n  rlDisableDepthTest ();"
+               nil t)))
+    ;; The animation fallback renders into the FBO under --lrg.
+    (with-temp-buffer
+      (insert-file-contents view)
+      (should (re-search-forward "^view_present_now" nil t))
+      (should (re-search-forward "render_into_fbo" (+ (point) 600) t)))
+    (when (file-readable-p surf)
+      (with-temp-buffer
+        (insert-file-contents surf)
+        (should (re-search-forward "^content_target_bind" nil t))
+        (should (re-search-forward "rlDisableDepthTest ();"
+                                   (save-excursion
+                                     (re-search-forward "^}" nil t))
+                                   t))))))
+
+(ert-deftest cmacs-lrgvr-offers-pointer-to-views ()
+  "The VR trigger, laser and stick reach embedded views, as the mouse does."
+  (let ((file (expand-file-name "cmacs/lrgterm/cmacs-lrgvr.c"
+                                cmacs-lrgterm-tests--root)))
+    (skip-unless (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((src (buffer-string)))
+        (should (string-search "cmacs_lrgterm_offer_button (vr.f, 1, true" src))
+        (should (string-search "cmacs_lrgterm_offer_button (vr.f, 1, false" src))
+        (should (string-search "cmacs_lrgterm_offer_motion (vr.f" src))
+        (should (string-search "cmacs_lrgterm_offer_scroll (vr.f" src))))))
+
 (provide 'cmacs-lrgterm-tests)
 ;;; cmacs-lrgterm-tests.el ends here

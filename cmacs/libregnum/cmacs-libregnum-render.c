@@ -4753,10 +4753,33 @@ cmacs_editor_rotation_for_draw (float rx, float ry, float rz,
   return axis;
 }
 
+static gboolean render_to_bgra_1 (CmacsLibregnumRenderCtx *r,
+                                  unsigned char *dst, int dst_w, int dst_h);
+
+/* Render the scene into the FBO, and read it into DST unless it is NULL.
+
+   Leaves the depth test OFF -- raylib's state outside BeginMode3D -- on
+   every path.  The label pass ends by turning it back on, and under `emacs
+   --lrg' the GL context is the editor's: the frame's 2D text pass that
+   follows ran with the depth test on, and raylib's 2D draws rely on their
+   per-draw-call depth, which restarts at the back after each batch flush.
+   Every glyph drawn after a flush over an earlier batch's background
+   failed the test -- whole runs of text missing, the same holes on every
+   redraw, in VR (where no 3D pass resets it per frame) from the first
+   time an animated view fell back to view_present_now.  */
 gboolean
 cmacs_libregnum_render_ctx_render_to_bgra (CmacsLibregnumRenderCtx *r,
                                            unsigned char *dst,
                                            int dst_w, int dst_h)
+{
+  gboolean ok = render_to_bgra_1 (r, dst, dst_w, dst_h);
+  rlDisableDepthTest ();
+  return ok;
+}
+
+static gboolean
+render_to_bgra_1 (CmacsLibregnumRenderCtx *r, unsigned char *dst,
+                  int dst_w, int dst_h)
 {
   /* DST may be NULL: callers that only want the scene rendered INTO the FBO
      (the lrg overlay, which then draws fbo.texture directly) pass NULL to

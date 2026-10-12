@@ -430,9 +430,9 @@ bindings apply.
 
 | Control                     | Action                                                        |
 |-----------------------------+---------------------------------------------------------------|
-| Trigger                     | =mouse-1= at the laser: click, hold to drag-select            |
+| Trigger                     | =mouse-1= at the laser: click, hold to drag-select; on a 3D view (GNU's Eye's globe) drag to orbit, click to pick |
 | Grip                        | carry the panel or keyboard under the laser (or pull the world) |
-| Stick up / down             | scroll at the laser                                           |
+| Stick up / down             | scroll at the laser (zoom, on a 3D view)                      |
 | Stick left / right          | horizontal scroll                                             |
 | Stick while gripping        | push / pull (up/down), turn (left/right); trigger held: resize |
 | Stick press on a panel      | =mouse-3= (context menu)                                      |

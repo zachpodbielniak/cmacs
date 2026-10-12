@@ -10998,8 +10998,9 @@ button again hides it.
 
 @table @asis
 @item right trigger, grip, stick
-@code{mouse-1} at the laser; carry the panel, keyboard or world under the
-laser; scroll on a panel, and off one flick left/right for the previous
+@code{mouse-1} at the laser (on a 3D view such as GNU's Eye's globe: drag
+to orbit, click to pick, the stick zooms); carry the panel, keyboard or
+world under the laser; scroll on a panel, and off one flick left/right for the previous
 or next workspace, up/down for the overview.  The stick press is
 @code{mouse-3} on a panel, the overview off one.
 @item left stick, grip

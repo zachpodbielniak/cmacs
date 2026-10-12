@@ -212,6 +212,7 @@ struct vr_hand
 
   guint buttons, prev;
   bool trigger_mouse;            /* trigger press went to Emacs as mouse-1 */
+  bool trigger_view;             /* ... or to an embedded view (the globe) */
   int last_fx, last_fy;
 
   /* Grip: carrying a panel (grab_key), the keyboard, or the world. */
@@ -1287,7 +1288,10 @@ vr_scroll (struct input_event *hold_quit, struct vr_hand *hand, float sx,
       while (fabsf (hand->scroll_acc) >= 1.0f)
         {
           bool up = hand->scroll_acc > 0.0f;
-          count += vr_emit_wheel (hold_quit, false, up, hand->fx, hand->fy);
+          /* An embedded view (gnuseye's globe) zooms on the wheel.  */
+          if (!cmacs_lrgterm_offer_scroll (vr.f, 0.0, up ? -1.0 : 1.0,
+                                           hand->fx, hand->fy))
+            count += vr_emit_wheel (hold_quit, false, up, hand->fx, hand->fy);
           hand->scroll_acc += up ? -1.0f : 1.0f;
         }
     }
@@ -1299,7 +1303,9 @@ vr_scroll (struct input_event *hold_quit, struct vr_hand *hand, float sx,
       while (fabsf (hand->hscroll_acc) >= 1.0f)
         {
           bool r = hand->hscroll_acc > 0.0f;
-          count += vr_emit_wheel (hold_quit, true, !r, hand->fx, hand->fy);
+          if (!cmacs_lrgterm_offer_scroll (vr.f, r ? 1.0 : -1.0, 0.0,
+                                           hand->fx, hand->fy))
+            count += vr_emit_wheel (hold_quit, true, !r, hand->fx, hand->fy);
           hand->hscroll_acc += r ? -1.0f : 1.0f;
         }
     }
@@ -1353,15 +1359,22 @@ vr_hand_input (struct input_event *hold_quit, int h)
       else if (hand->hit_panel)
         {
           vr.pointer_hand = h;
-          hand->trigger_mouse = true;
           hand->last_fx = hand->fx;
           hand->last_fy = hand->fy;
           vr.mouse_valid = true;
           vr.mouse_x = hand->fx;
           vr.mouse_y = hand->fy;
           lrg_3d_surface_set_focus_window (vr.s3, hand->key);
-          count += vr_emit_mouse (hold_quit, 0, true, hand->fx, hand->fy,
-                                  kb_take_mods () | vr.layer);
+          /* An embedded view takes the press first, as on the desktop:
+             a drag orbits gnuseye's globe, a click picks on it.  */
+          if (cmacs_lrgterm_offer_button (vr.f, 1, true, hand->fx, hand->fy))
+            hand->trigger_view = true;
+          else
+            {
+              hand->trigger_mouse = true;
+              count += vr_emit_mouse (hold_quit, 0, true, hand->fx, hand->fy,
+                                      kb_take_mods () | vr.layer);
+            }
           vr_pulse (h, 0.012f, 0.35f);
         }
     }
@@ -1370,6 +1383,11 @@ vr_hand_input (struct input_event *hold_quit, int h)
       hand->trigger_mouse = false;
       count += vr_emit_mouse (hold_quit, 0, false, hand->last_fx, hand->last_fy,
                               vr.layer);
+    }
+  if (released_now (hand, LRG_VR_CONTROLLER_BUTTON_TRIGGER) && hand->trigger_view)
+    {
+      hand->trigger_view = false;
+      cmacs_lrgterm_offer_button (vr.f, 1, false, hand->last_fx, hand->last_fy);
     }
 
   /* Pointer motion (drag while the trigger is held, hover otherwise) --
@@ -1381,20 +1399,26 @@ vr_hand_input (struct input_event *hold_quit, int h)
       vr.mouse_valid = true;
       vr.mouse_x = hand->fx;
       vr.mouse_y = hand->fy;
-      if (hand->trigger_mouse)
+      if (hand->trigger_mouse || hand->trigger_view)
         {
           hand->last_fx = hand->fx;
           hand->last_fy = hand->fy;
         }
       vr.f->mouse_moved = true;
-      block_input ();
-      note_mouse_highlight (vr.f, hand->fx, hand->fy);
-      unblock_input ();
+      /* An embedded view follows the laser (orbit while dragging, hover
+         ids); text gets the mouse-face highlight.  */
+      if (!cmacs_lrgterm_offer_motion (vr.f, hand->fx, hand->fy))
+        {
+          block_input ();
+          note_mouse_highlight (vr.f, hand->fx, hand->fy);
+          unblock_input ();
+        }
     }
   /* A hand that points at a panel while the other is idle takes the mouse --
      never the modifier hand, which does not click.  */
   if (!modhand && hand->hit_panel && h != vr.pointer_hand
       && !vr.hand[vr.pointer_hand].trigger_mouse
+      && !vr.hand[vr.pointer_hand].trigger_view
       && !vr.hand[vr.pointer_hand].hit_panel)
     vr.pointer_hand = h;
 
