@@ -11147,6 +11147,10 @@ reports the runtime, headset and controller profiles.
 The box's fontconfig also reads the host's @file{/usr/share/fonts}
 (through @file{/run/host}): a config naming a font the box lacks, such as
 Doom's @code{doom-font}, otherwise aborts UI setup before the theme loads.
+The host's Homebrew is linked in at @file{/home/linuxbrew} (its bottles
+only run from that prefix), so @command{brew} and the programs it
+installed work in the box; the build itself runs under @command{env -i}
+and never sees them.
 
 @code{(cmacs-lrg-vr-screenshot "/tmp/vr")} writes @file{/tmp/vr-eye.png}
 (the left eye of the next frame as sent to the headset) and

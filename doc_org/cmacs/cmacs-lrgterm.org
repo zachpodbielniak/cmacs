@@ -926,6 +926,13 @@ and =/run/host/usr/local/share/fonts= to the box's fontconfig (your
 config naming a font the box cannot find -- Doom's ~doom-font~ -- otherwise
 aborts UI setup before the theme loads, and the frame comes up white.
 
+Homebrew works in the box too: ~just distrobox~ links the host's
+=/home/linuxbrew= in at the same path (brew's bottles only run from
+=/home/linuxbrew/.linuxbrew=), and distrobox already forwards the host ~PATH~,
+so ~brew~ and whatever it installed run as they do on the host.  The build
+itself still runs under ~env -i~ with a system ~PATH~, so brew's libraries
+never reach configure.
+
 ~M-x cmacs-lrg-vr-describe~ reports the runtime, headset, session state,
 refresh rate and the controller profiles the runtime bound.  Controllers only
 deliver input while the session is *focused* -- launched from a shell rather

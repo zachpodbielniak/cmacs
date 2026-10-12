@@ -509,6 +509,34 @@ link_host_vr_runtime () {
 	fi
 }
 
+# link_host_linuxbrew
+#
+# Homebrew on Linux only works from /home/linuxbrew/.linuxbrew: bottles
+# are built against that prefix (ELF interpreter, rpaths, shebangs), so
+# it cannot be relocated.  The box shares the user's home but not the
+# rest of /home, so brew's directory -- and every program installed with
+# it -- is missing inside, even though the host PATH (which distrobox
+# forwards) still names it.  Link the host's copy in at the same path.
+# This is for running brew programs in the box; the build itself stays
+# under `env -i' with a system PATH, so brew never leaks into configure.
+link_host_linuxbrew () {
+	local host=/run/host/home/linuxbrew
+
+	[[ -d "${host}/.linuxbrew" ]] || return 0
+	if [[ -L /home/linuxbrew ]]
+	then
+		return
+	fi
+	if [[ -e /home/linuxbrew ]]
+	then
+		log "note: /home/linuxbrew already exists in the box; not" \
+		    "linking the host's Homebrew over it"
+		return
+	fi
+	log "linking the host's Homebrew (/home/linuxbrew) into the box"
+	sudo ln -s "${host}" /home/linuxbrew
+}
+
 # share_host_fonts
 #
 # The box has its own /usr/share/fonts, so a font the host has (installed
@@ -811,6 +839,7 @@ run_inside () {
 	mkdir -p "${state}"
 	check_box_matches_target
 	link_host_vr_runtime
+	link_host_linuxbrew
 
 	install_packages "${state}"
 	share_host_fonts

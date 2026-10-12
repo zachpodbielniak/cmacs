@@ -461,7 +461,9 @@ distrobox and installs into that box's `/usr` (`admin/cmacs-distrobox.sh`). It b
 `build/distrobox/<box>/`, a **sources-only** copy (tracked files, never host artifacts),
 never in the checkout -- the build is in-tree, so the host's objects would be replaced.
 Every step is resumable; the inside step runs under `env -i` so host
-`PKG_CONFIG_PATH`/linuxbrew cannot leak in. The Wayland-from-source step lives in
+`PKG_CONFIG_PATH`/linuxbrew cannot leak in -- yet the host's `/home/linuxbrew` is
+symlinked into the box (brew bottles only run from that prefix), so brew programs
+work there interactively. The Wayland-from-source step lives in
 `admin/cmacs-build-wayland.sh`, shared with the Containerfile -- edit it there, once.
 
 The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubuntu),
