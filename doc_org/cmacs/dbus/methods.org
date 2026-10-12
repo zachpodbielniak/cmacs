@@ -176,6 +176,7 @@ resolve at all.
 | =ListKeybinds=             | =() -> (s)=     | Bound keys with action nick, arg and desc      |
 | =RunMacro=                 | =(sas) -> (s)=  | Run a gowl macro by name with arguments        |
 | =Lock= / =Unlock=          | =() -> (s)=     | Toggle the session lock                        |
+| =PointerConfine=           | =(s) -> (s)=    | Keep the pointer in the focused window: =on=, =off=, =toggle=, or =state= / =""= to only ask; answers =on= or =off=.  Signal =PointerConfineChanged= =(bss)= (active, app-id, reason) on every change |
 | =Screenshot=               | =(ssss) -> (s)= | mode, client, by, file                         |
 | =ReloadConfig=             | =() -> (s)=     | Reload the gowl config                         |
 | =ConfigGet=                | =(s) -> (s)=    | Read a top-level config property               |

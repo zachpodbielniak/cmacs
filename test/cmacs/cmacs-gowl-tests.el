@@ -891,8 +891,69 @@ window, pinning, screens-off, and a resize key mode registered through
     ;; the mistake the f keys made.
     (should (member '("Super+Alt+b" toggle-below nil) captured))
     (should (member '("Super+Ctrl+Alt+b" toggle-below-all nil) captured))
+    ;; Keep the pointer in the focused window.  The escape is the
+    ;; compositor's own, not a bind: a bind can be swallowed by a key
+    ;; mode or a game inhibiting shortcuts, and the escape must not be.
+    (should (member '("Super+g" toggle-pointer-confine nil) captured))
+    (should-not (assoc "Super+Ctrl+Escape" captured))
     ;; The scratchpad's keys are untouched by the additions.
     (should (member '("Super+Ctrl+s" ipc-command "scratchpad-remove") captured))))
+
+(ert-deftest cmacs-gowl-test-pointer-confine-indicator ()
+  "The mode line shows the pointer held in a window, and only then.
+Driven through the hook the compositor's `pointer-confine-changed'
+signal runs, with the lighter's text taken from the option."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((mode-line-misc-info nil)
+        (cmacs-gowl-pointer-confine-changed-functions nil)
+        (cmacs-gowl--pointer-confine-mode-line nil)
+        (cmacs-gowl-pointer-confine-lighter " Held"))
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda () nil)))
+      (cmacs-gowl--pointer-confine-indicator t))
+    (should (member cmacs-gowl--pointer-confine-mode-line-entry
+                    mode-line-misc-info))
+    (should (memq #'cmacs-gowl--pointer-confine-update
+                  cmacs-gowl-pointer-confine-changed-functions))
+    (should-not cmacs-gowl--pointer-confine-mode-line)
+    ;; Confined: the lighter, in the warning face.
+    (run-hook-with-args 'cmacs-gowl-pointer-confine-changed-functions
+                        t nil "rule")
+    (should (equal (substring-no-properties
+                    cmacs-gowl--pointer-confine-mode-line)
+                   " Held"))
+    (should (eq (get-text-property 0 'face
+                                   cmacs-gowl--pointer-confine-mode-line)
+                'warning))
+    ;; Let go: nothing.
+    (run-hook-with-args 'cmacs-gowl-pointer-confine-changed-functions
+                        nil nil "escape")
+    (should-not cmacs-gowl--pointer-confine-mode-line)
+    ;; A nil lighter shows nothing even while confined.
+    (let ((cmacs-gowl-pointer-confine-lighter nil))
+      (run-hook-with-args 'cmacs-gowl-pointer-confine-changed-functions
+                          t nil "manual")
+      (should-not cmacs-gowl--pointer-confine-mode-line))
+    ;; Taken down with the mode: entry and hook both gone.
+    (cmacs-gowl--pointer-confine-indicator nil)
+    (should-not (member cmacs-gowl--pointer-confine-mode-line-entry
+                        mode-line-misc-info))
+    (should-not cmacs-gowl-pointer-confine-changed-functions)))
+
+(ert-deftest cmacs-gowl-test-pointer-confine-command ()
+  "`cmacs-gowl-toggle-pointer-confine' maps its prefix to a mode.
+No prefix toggles, a positive one confines, zero or negative lets go."
+  (skip-unless (cmacs-feature-p 'gowl))
+  (require 'cmacs-gowl)
+  (let ((asked nil))
+    (cl-letf (((symbol-function 'gowl-running-p) (lambda () t))
+              ((symbol-function 'gowl-pointer-confine)
+               (lambda (mode) (push mode asked) (not (eq mode 'off)))))
+      (cmacs-gowl-toggle-pointer-confine nil)
+      (cmacs-gowl-toggle-pointer-confine '(4))
+      (cmacs-gowl-toggle-pointer-confine 0)
+      (cmacs-gowl-toggle-pointer-confine -1))
+    (should (equal (nreverse asked) '(toggle on off off)))))
 
 (ert-deftest cmacs-gowl-test-default-keybinds-grab-keys ()
   "OCR, the colour picker, the macro recorder, voice and the clipboard

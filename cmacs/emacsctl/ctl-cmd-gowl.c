@@ -110,6 +110,9 @@ static const CtlMethodSpec gowl_specs[] = {
     CTL_IFACE_COMPOSITOR, "FocusLast", NULL, CTL_REPLY_STRING },
   { "compositor power", "Power every output on|off|toggle",
     CTL_IFACE_COMPOSITOR, "OutputPower", "s:mode", CTL_REPLY_STRING },
+  { "compositor confine", "Keep the pointer in the focused window "
+    "(on|off|toggle|state; default state)",
+    CTL_IFACE_COMPOSITOR, "PointerConfine", "s?:mode", CTL_REPLY_STRING },
   { "compositor reload", "Reload the compositor config",
     CTL_IFACE_COMPOSITOR, "ReloadConfig", NULL, CTL_REPLY_STRING },
   { "compositor config", "Read a compositor config property",

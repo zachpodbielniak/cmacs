@@ -5028,8 +5028,10 @@ fits every screen), `opacity' (a float 0.0-1.0), and the booleans
 `floating', `regex', `center' (defaults to t), `sticky' (pin to every
 tag of its monitor), `no-focus' (map without taking focus), `focus'
 (take it, viewing the tags the rule assigns), `fullscreen', `no-blur',
-`no-shadow', `no-anim' and `idle-inhibit' (the match keeps the screen
-awake while it is mapped).
+`no-shadow', `no-anim', `idle-inhibit' (the match keeps the screen
+awake while it is mapped) and `confine-pointer' (the pointer is held
+inside the window whenever it has the keyboard -- a game; see
+`gowl-pointer-confine').
 
 A rule that assigns `tags' does not switch the view to them; use
 `focus' when it should.
@@ -5115,6 +5117,8 @@ This is the form with every field a YAML `rules:' entry has.  */)
   rule.no_anim = !NILP (Fcdr (Fassq (intern_c_string ("no-anim"), alist)));
   rule.idle_inhibit =
     !NILP (Fcdr (Fassq (intern_c_string ("idle-inhibit"), alist)));
+  rule.confine_pointer =
+    !NILP (Fcdr (Fassq (intern_c_string ("confine-pointer"), alist)));
   rule.focus = !NILP (Fcdr (Fassq (intern_c_string ("focus"), alist)));
   v = Fcdr (Fassq (intern_c_string ("width-pct"), alist));
   if (NUMBERP (v)) rule.width_pct = CLAMP (XFLOATINT (v), 0.0, 1.0);
@@ -12026,6 +12030,70 @@ was one. */)
   return moved ? Qt : Qnil;
 }
 
+DEFUN ("gowl-pointer-confine", Fgowl_pointer_confine,
+       Sgowl_pointer_confine, 0, 1, 0,
+       doc: /* Confine the pointer to the focused window, or let it go.
+MODE is `on' (or t) to confine, `off' to let go, and nil or `toggle'
+to flip.  Return t if the pointer is confined afterwards.
+
+This is the compositor's own confinement -- for a program that never
+asks for pointer-constraints-v1 itself, a game under Proton being the
+case it exists for.  The cursor stays inside the window's surface
+whatever moves it, and with `pointer-confine-focus-pin' (the default)
+sloppy focus, new windows and other programs' activation requests
+cannot take the keyboard away either.  A client's own lock still wins
+while it holds one.
+
+It goes through the same command as `gowl-msg pointer-confine', so
+letting go here is exactly what the escape key (Super+Ctrl+Escape)
+does: a window confined by a `confine-pointer' rule is not taken
+straight back by that rule.  The compositor emits
+`pointer-confine-changed', which runs
+`cmacs-gowl-pointer-confine-changed-functions'. */)
+  (Lisp_Object mode)
+{
+  const gchar *line;
+  gchar *reply;
+  gboolean active;
+
+  GOWL_CHECK_RUNNING ();
+  if (NILP (mode) || EQ (mode, intern_c_string ("toggle")))
+    line = "pointer-confine toggle";
+  else if (EQ (mode, Qt) || EQ (mode, intern_c_string ("on")))
+    line = "pointer-confine on";
+  else if (EQ (mode, intern_c_string ("off")))
+    line = "pointer-confine off";
+  else
+    error ("MODE must be on, off, toggle or nil");
+
+  cmacs_gowl_lock ();
+  reply = gowl_compositor_run_command (cmacs_gowl_compositor, line);
+  active = gowl_compositor_pointer_confine_is_active (cmacs_gowl_compositor);
+  cmacs_gowl_unlock ();
+  g_free (reply);
+  return active ? Qt : Qnil;
+}
+
+DEFUN ("gowl-pointer-confine-client", Fgowl_pointer_confine_client,
+       Sgowl_pointer_confine_client, 0, 0, 0,
+       doc: /* Return the client the pointer is confined to, or nil.
+Only the compositor's own confinement (`gowl-pointer-confine', a
+`confine-pointer' rule); a client's pointer-constraints-v1 lock is not
+reported here.  `(gowl-run-command "pointer-confine")' answers the
+whole state as JSON. */)
+  (void)
+{
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
+  GowlClient *c;
+
+  if (cmacs_gowl_compositor == NULL)
+    return unbind_to (lock_count, Qnil);
+  c = gowl_compositor_get_pointer_confine_client (cmacs_gowl_compositor);
+  if (c == NULL)
+    return unbind_to (lock_count, Qnil);
+  return unbind_to (lock_count, cmacs_gobject_wrap (G_OBJECT (c)));
+}
+
 DEFUN ("gowl-set-outputs-powered", Fgowl_set_outputs_powered,
        Sgowl_set_outputs_powered, 1, 1, 0,
        doc: /* Power every output on (ON non-nil) or off.
@@ -12677,6 +12745,24 @@ cmacs_gowl_on_lock_changed_dbus (GowlCompositor *comp, gboolean locked,
                           "LockChanged", g_variant_new ("(b)", locked));
 }
 
+/* The compositor started or stopped holding the pointer in a window.
+   App id rather than the client: D-Bus has no object to hand over, and
+   the id is what a script keys on.  */
+static void
+cmacs_gowl_on_pointer_confine_dbus (GowlCompositor *comp, gboolean active,
+                                    GowlClient *c, const gchar *reason,
+                                    gpointer data)
+{
+  const gchar *app_id = c != NULL ? gowl_client_get_app_id (c) : NULL;
+
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "PointerConfineChanged",
+                          g_variant_new ("(bss)", active,
+                                         app_id != NULL ? app_id : "",
+                                         reason != NULL ? reason : ""));
+}
+
 static void
 cmacs_gowl_on_output_power_dbus (GowlCompositor *comp, GowlMonitor *m,
                                  gboolean on, gpointer data)
@@ -12718,6 +12804,8 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
                     G_CALLBACK (cmacs_gowl_on_title_changed_dbus), NULL);
   g_signal_connect (comp, "lock-changed",
                     G_CALLBACK (cmacs_gowl_on_lock_changed_dbus), NULL);
+  g_signal_connect (comp, "pointer-confine-changed",
+                    G_CALLBACK (cmacs_gowl_on_pointer_confine_dbus), NULL);
 }
 
 void
@@ -13022,6 +13110,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_focus_last);
   defsubr (&Sgowl_set_outputs_powered);
   defsubr (&Sgowl_outputs_powered_off_p);
+  defsubr (&Sgowl_pointer_confine);
+  defsubr (&Sgowl_pointer_confine_client);
   defsubr (&Sgowl_client_sticky_p);
   defsubr (&Sgowl_set_client_sticky);
   defsubr (&Sgowl_add_keybind_ex);

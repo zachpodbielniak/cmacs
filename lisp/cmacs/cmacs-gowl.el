@@ -1081,6 +1081,16 @@ goes to the focused window as usual."
   :type 'boolean
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-pointer-confine-lighter " Confined"
+  "Mode-line text while the compositor holds the pointer in a window.
+Shown in `mode-line-misc-info' from the moment `Super+g', a
+`confine-pointer' window rule or `gowl-pointer-confine' takes the
+pointer until it is let go -- the escape key (Super+Ctrl+Escape), the
+window closing, a workspace switch.  Without a bar this is the only
+lasting sign the pointer is held.  nil shows nothing."
+  :type '(choice (string :tag "Text") (const :tag "Nothing" nil))
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-default-keybindings t
   "When non-nil, install the standard dwm-style compositor keybindings
 on `cmacs-gowl-mode' enable.
@@ -1126,6 +1136,8 @@ standalone gowl ships with (see
   Super+Alt+v         the menu's clipboard history
   Super+, / Super+.   focus previous / next monitor
   Super+Ctrl+Shift+, / . move focused client to previous / next monitor
+  Super+g             keep the pointer in this window (toggle)
+  Super+Ctrl+Escape   let go of the pointer, whatever has the keyboard
   Super+Shift+l       lock the session
   Super+Shift+q       quit the compositor
   Super+Shift+r       reload config
@@ -1641,6 +1653,14 @@ authoritative and keeps re-runs idempotent."
         (bind "Super+Shift+t" 'toggle-sticky nil "Pin / unpin the window")
         ;; Screens off by hand; any input half a second later wakes them.
         (bind "Super+Ctrl+o" 'output-power "off" "Screens off")
+        ;; Keep the pointer inside the focused window -- a game that
+        ;; never locks it itself, streamed by Steam, which switches to
+        ;; the desktop the moment focus leaves the game.  The way out,
+        ;; Super+Ctrl+Escape, is the compositor's own and not a bind:
+        ;; it works under a key mode, under a game inhibiting shortcuts,
+        ;; and only while something is confined.
+        (bind "Super+g" 'toggle-pointer-confine nil
+              "Keep the pointer in this window")
         ;; A resize mode: Super+r enters, the keys inside act on the
         ;; master area, Escape/Return leave.  Registered with the mode
         ;; through `gowl-add-keybind-ex'; a C layer without it (an
@@ -1846,6 +1866,9 @@ thread is running and applies configuration."
     (cmacs-gowl--install-default-keybinds))
   ;; The compositor's events as Emacs hooks.
   (cmacs-gowl--install-hook-bridges)
+  ;; And the one of them the mode line shows: the pointer held in a
+  ;; window.  There is no bar to light up under cmacs --gowl.
+  (cmacs-gowl--pointer-confine-indicator t)
   ;; Serve org.freedesktop.Notifications.  Nothing else does in a gowl
   ;; session, which is why cmacs's own notification senders are silent
   ;; in it.  A no-op when something already owns the name.
@@ -1994,6 +2017,7 @@ thread is running and applies configuration."
   (cmacs-gowl--save-session-if-configured)
   (remove-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
   (cmacs-gowl-focus-teardown)
+  (cmacs-gowl--pointer-confine-indicator nil)
   (cmacs-gowl--remove-hook-bridges)
   (when (and (gowl-running-p)
              (fboundp 'gowl-uninstall-workspace-provider))
@@ -3232,6 +3256,14 @@ Fires wherever it came from: the keybind, the idle timer, `loginctl
 lock-session', a suspend, or the lock program finishing.  A good place
 to put secrets away -- and to get them back out.")
 
+(defvar cmacs-gowl-pointer-confine-changed-functions nil
+  "Functions run when the compositor starts or stops holding the pointer.
+Each gets ACTIVE (t or nil), the CLIENT confined to (nil when ACTIVE is
+nil) and REASON, a string: \"manual\", \"rule\", \"escape\",
+\"focus\", \"unmap\", \"destroy\", \"workspace\", \"lock\" or
+\"menu\".  Fires however it happened: `Super+g', a `confine-pointer'
+window rule, `gowl-pointer-confine', the IPC socket, D-Bus.")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -3289,7 +3321,9 @@ this runs from `cmacs-gowl-monitor-added-functions' as well."
                       ("monitor-hdr-changed"
                        . cmacs-gowl-monitor-hdr-changed-functions)
                       ("lock-changed"
-                       . cmacs-gowl-lock-changed-functions)))
+                       . cmacs-gowl-lock-changed-functions)
+                      ("pointer-confine-changed"
+                       . cmacs-gowl-pointer-confine-changed-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))
@@ -3374,6 +3408,74 @@ Pinning a tiled window floats it in place; only floating windows pin."
         (message "No focused window")
       (gowl-set-client-sticky c (not (gowl-client-sticky-p c)))
       (message "%s" (if (gowl-client-sticky-p c) "Pinned" "Unpinned")))))
+
+(defun cmacs-gowl-toggle-pointer-confine (&optional arg)
+  "Keep the pointer inside the focused window, or let it go.
+With a positive prefix ARG confine, with zero or negative let go;
+without one, toggle.
+
+For a program that never locks the pointer itself -- a game under
+Proton, streamed by Steam, which switches the stream to the desktop the
+moment keyboard focus leaves the game.  While confined, the cursor
+cannot leave the window and (with `pointer-confine-focus-pin', the
+default) nothing else takes the keyboard.  Super+Ctrl+Escape always
+lets go."
+  (interactive "P")
+  (unless (gowl-running-p)
+    (user-error "Gowl compositor is not running"))
+  (let ((mode (cond ((null arg) 'toggle)
+                    ((> (prefix-numeric-value arg) 0) 'on)
+                    (t 'off))))
+    (if (gowl-pointer-confine mode)
+        (message "Pointer confined (Super+Ctrl+Escape lets go)")
+      (message "Pointer released"))))
+
+(defvar cmacs-gowl--pointer-confine-mode-line nil
+  "What the mode line shows for the pointer confinement, or nil.")
+
+(defun cmacs-gowl--pointer-confine-update (active client _reason)
+  "Show or hide `cmacs-gowl-pointer-confine-lighter' for ACTIVE.
+CLIENT, when confined, names the window in the help echo.  Runs from
+`cmacs-gowl-pointer-confine-changed-functions'."
+  (setq cmacs-gowl--pointer-confine-mode-line
+        (and active cmacs-gowl-pointer-confine-lighter
+             (propertize cmacs-gowl-pointer-confine-lighter
+                         'face 'warning
+                         'help-echo
+                         (format "Pointer confined to %s\nSuper+Ctrl+Escape lets go"
+                                 (or (and client
+                                          (ignore-errors
+                                            (alist-get 'app-id
+                                                       (gowl-client-info
+                                                        client))))
+                                     "the window")))))
+  (force-mode-line-update t))
+
+(defconst cmacs-gowl--pointer-confine-mode-line-entry
+  '(:eval cmacs-gowl--pointer-confine-mode-line)
+  "The `mode-line-misc-info' entry for the pointer confinement.")
+
+(defun cmacs-gowl--pointer-confine-indicator (on)
+  "Install the pointer-confinement mode-line indicator, or remove it with ON nil."
+  (if on
+      (progn
+        (add-hook 'cmacs-gowl-pointer-confine-changed-functions
+                  #'cmacs-gowl--pointer-confine-update)
+        (add-to-list 'mode-line-misc-info
+                     cmacs-gowl--pointer-confine-mode-line-entry t)
+        ;; A confinement already in force -- a rule that matched before
+        ;; the hook was connected -- is shown, not waited for.
+        (when (and (fboundp 'gowl-pointer-confine-client)
+                   (gowl-running-p))
+          (let ((c (gowl-pointer-confine-client)))
+            (cmacs-gowl--pointer-confine-update (and c t) c nil))))
+    (remove-hook 'cmacs-gowl-pointer-confine-changed-functions
+                 #'cmacs-gowl--pointer-confine-update)
+    (setq mode-line-misc-info
+          (delete cmacs-gowl--pointer-confine-mode-line-entry
+                  mode-line-misc-info))
+    (setq cmacs-gowl--pointer-confine-mode-line nil)
+    (force-mode-line-update t)))
 
 (defun cmacs-gowl-screens-off ()
   "Power every output off.  Any input half a second later wakes them."

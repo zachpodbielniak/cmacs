@@ -116,6 +116,11 @@ static const gchar *iface_xml =
   "  <method name='OutputPower'>"
   "    <arg type='s' name='mode' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* The compositor's pointer confinement: "on", "off", "toggle", or
+     "state" (or "") to only ask.  Answers "on" or "off". */
+  "  <method name='PointerConfine'>"
+  "    <arg type='s' name='mode' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   /* Signals: what a script outside the process used to have to poll
      for.  Emitted from cmacs-gowl.c on the compositor's own signals. */
   "  <signal name='ClientAdded'>"
@@ -138,6 +143,9 @@ static const gchar *iface_xml =
   "    <arg type='s' name='app_id'/><arg type='s' name='title'/></signal>"
   "  <signal name='LockChanged'>"
   "    <arg type='b' name='locked'/></signal>"
+  "  <signal name='PointerConfineChanged'>"
+  "    <arg type='b' name='active'/><arg type='s' name='app_id'/>"
+  "    <arg type='s' name='reason'/></signal>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"
@@ -369,6 +377,30 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         "(cond ((equal m \"on\") t) ((equal m \"off\") nil) "
         "(t (gowl-outputs-powered-off-p)))) "
         "(if (gowl-outputs-powered-off-p) \"off\" \"on\"))", args, 1);
+    }
+  else if (g_strcmp0 (m, "PointerConfine") == 0)
+    {
+      /* The mode picks one of four fixed forms; nothing the caller
+         sent is ever spliced into the Lisp.  */
+      const gchar *mode;
+      const gchar *form;
+      g_variant_get (p, "(&s)", &mode);
+      if (g_strcmp0 (mode, "on") == 0)
+        form = "(if (gowl-pointer-confine 'on) \"on\" \"off\")";
+      else if (g_strcmp0 (mode, "off") == 0)
+        form = "(if (gowl-pointer-confine 'off) \"on\" \"off\")";
+      else if (g_strcmp0 (mode, "toggle") == 0)
+        form = "(if (gowl-pointer-confine 'toggle) \"on\" \"off\")";
+      else if (*mode == '\0' || g_strcmp0 (mode, "state") == 0)
+        form = "(if (gowl-pointer-confine-client) \"on\" \"off\")";
+      else
+        {
+          g_dbus_method_invocation_return_error (iv, G_DBUS_ERROR,
+            G_DBUS_ERROR_INVALID_ARGS,
+            "mode must be on, off, toggle or state");
+          return;
+        }
+      cmacs_dbus_eval_to_reply_string (iv, form, NULL, 0);
     }
   else if (g_strcmp0 (m, "ReloadConfig") == 0)
     RETURN_STR (cmacs_dispatch_gowl_reload_config (&err));

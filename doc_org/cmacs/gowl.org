@@ -712,6 +712,8 @@ holds focus.
 | =Super+Shift+t=         | Pin the focused window to every tag, or unpin it |
 | =Super+r=               | Resize mode: h/l master factor, j/k master count, Escape or Return leave |
 | =Super+Ctrl+o=          | Screens off; any input half a second later wakes them |
+| =Super+g=               | Keep the pointer in the focused window, or let it go ([[#pointer-confine][below]]) |
+| =Super+Ctrl+Escape=     | Let go of the pointer, whatever has the keyboard (the compositor's, not a bind) |
 | =Super+Tab=             | Next layout (=Super+Shift+Tab= previous)|
 | =Super+[= / =Super+]=   | Scroll the column strip                 |
 | =Super+v=               | Vsplit on (master on top, stack below)  |
@@ -775,7 +777,7 @@ gowl's =modes:=, =mousebinds:=, =gestures:= and =input:= sections (see =deps/gow
 (gowl-apply-input-config)
 #+end_src
 
-=gowl-set-key-mode= enters or leaves a mode (=M-x cmacs-gowl-set-key-mode= completes over the modes the live binds name), =gowl-key-mode= reads it, and =gowl-list-keybinds= now carries each bind's =mode=, =locked=, =release= and =repeat=, which the cheatsheet uses to label a mode's binds =[resize] ...=.  The keyboard layout list comes from the config's =xkb-layout= (=gowl-config-get= / a YAML file); =gowl-switch-keyboard-layout= steps through it and =gowl-keyboard-layout= returns =(NAME . INDEX)=.  =gowl-focus-direction=, =gowl-focus-urgent=, =gowl-focus-last=, =gowl-set-client-sticky= / =gowl-client-sticky-p= and =gowl-set-outputs-powered= / =gowl-outputs-powered-off-p= cover the rest of the new actions; =gowl-add-rule-entry= takes an alist with every rule field the YAML =rules:= section has: the matchers =app-id=, =title=, =initial-title=, =xwayland=, =pid=, =is-floating=, =is-fullscreen= and =on-tag=, and the properties =tags=, =monitor=, =width= / =height=, =width-pct= / =height-pct=, =opacity=, =floating=, =regex=, =center=, =sticky=, =no-focus=, =focus=, =fullscreen=, =no-blur=, =no-shadow=, =no-anim= and =idle-inhibit=.
+=gowl-set-key-mode= enters or leaves a mode (=M-x cmacs-gowl-set-key-mode= completes over the modes the live binds name), =gowl-key-mode= reads it, and =gowl-list-keybinds= now carries each bind's =mode=, =locked=, =release= and =repeat=, which the cheatsheet uses to label a mode's binds =[resize] ...=.  The keyboard layout list comes from the config's =xkb-layout= (=gowl-config-get= / a YAML file); =gowl-switch-keyboard-layout= steps through it and =gowl-keyboard-layout= returns =(NAME . INDEX)=.  =gowl-focus-direction=, =gowl-focus-urgent=, =gowl-focus-last=, =gowl-set-client-sticky= / =gowl-client-sticky-p= and =gowl-set-outputs-powered= / =gowl-outputs-powered-off-p= cover the rest of the new actions; =gowl-add-rule-entry= takes an alist with every rule field the YAML =rules:= section has: the matchers =app-id=, =title=, =initial-title=, =xwayland=, =pid=, =is-floating=, =is-fullscreen= and =on-tag=, and the properties =tags=, =monitor=, =width= / =height=, =width-pct= / =height-pct=, =opacity=, =floating=, =regex=, =center=, =sticky=, =no-focus=, =focus=, =fullscreen=, =no-blur=, =no-shadow=, =no-anim=, =idle-inhibit= and =confine-pointer=.
 
 #+begin_src elisp
 (gowl-add-rule-entry '((app-id . "mpv") (floating . t) (sticky . t)))
@@ -1205,6 +1207,7 @@ The compositor's events are Emacs hooks as well as GObject signals, so =add-hook
 | =cmacs-gowl-monitor-removed-functions=        | monitor          | an output was unplugged (readable only during the hook) |
 | =cmacs-gowl-monitor-hdr-changed-functions=    | monitor, on      | an output switched between HDR and SDR  |
 | =cmacs-gowl-lock-changed-functions=           | locked           | the session locked or unlocked, from any route (keybind, idle timer, =loginctl lock-session=, a suspend, the lock program finishing) |
+| =cmacs-gowl-pointer-confine-changed-functions= | active, client, reason | the compositor started or stopped holding the pointer in a window; =client= is nil when =active= is; =reason= is ="manual"=, ="rule"=, ="escape"=, ="focus"=, ="unmap"=, ="destroy"=, ="workspace"=, ="lock"= or ="menu"= |
 | =cmacs-gowl-tag-changed-functions=            | monitor          | the tags a monitor views changed       |
 | =cmacs-gowl-layout-changed-functions=         | monitor          | a monitor's layout changed             |
 
@@ -1244,7 +1247,7 @@ The function receives the monitor, the window area as =(X Y WIDTH HEIGHT)= and t
 
 ** D-Bus signals and =emacsctl=
 
-=org.cmacs.Editor1.Compositor= gained signals, so a script outside the process no longer polls: =ClientAdded=, =ClientRemoved= and =FocusChanged= (app-id, title), =ModeChanged= (mode), =KeyboardLayoutChanged= (name, index) and =OutputPowerChanged= (output, on).  New methods, and their =emacsctl= spellings: =SetKeyMode= / =KeyMode= (=compositor mode= / =mode-get=), =SwitchKeyboardLayout= / =KeyboardLayout= (=compositor keyboard-layout= / =keyboard-layout-get=), =FocusDirection=, =FocusUrgent=, =FocusLast= (=compositor focus-dir= / =focus-urgent= / =focus-last=) and =OutputPower= (=compositor power on|off|toggle=).
+=org.cmacs.Editor1.Compositor= gained signals, so a script outside the process no longer polls: =ClientAdded=, =ClientRemoved= and =FocusChanged= (app-id, title), =ModeChanged= (mode), =KeyboardLayoutChanged= (name, index) and =OutputPowerChanged= (output, on).  New methods, and their =emacsctl= spellings: =SetKeyMode= / =KeyMode= (=compositor mode= / =mode-get=), =SwitchKeyboardLayout= / =KeyboardLayout= (=compositor keyboard-layout= / =keyboard-layout-get=), =FocusDirection=, =FocusUrgent=, =FocusLast= (=compositor focus-dir= / =focus-urgent= / =focus-last=) and =OutputPower= (=compositor power on|off|toggle=).  =PointerConfine= (=compositor confine on|off|toggle|state=) keeps the pointer in the focused window, and =PointerConfineChanged= (active, app-id, reason) says when that starts or stops --- see [[#pointer-confine][Confining the pointer yourself]].
 
 ** The keybind cheatsheet
 :PROPERTIES:
@@ -1281,6 +1284,38 @@ answers.  Worth knowing only for one reason: while a client holds the
 lock the cursor deliberately does not move, which is indistinguishable
 from a frozen cursor if you do not know a constraint exists.
 =gowl_compositor_pointer_is_locked()= reports it.
+
+*** Confining the pointer yourself
+:PROPERTIES:
+:CUSTOM_ID: pointer-confine
+:END:
+
+A game that never asks --- anything under Proton is an X11 client that does not --- gets nothing from the protocol, and streaming one is where that hurts: Steam's capture follows *keyboard focus*, and with sloppy focus the mouse drifting off the game moves focus and switches the stream to the desktop.
+
+=Super+g= (=cmacs-gowl-toggle-pointer-confine=, the gowl action =toggle-pointer-confine=) keeps the pointer inside the focused window until you let go.  =Super+Ctrl+Escape= always lets go: it is gowl's own escape (=pointer-confine-escape= in the gowl config), checked before every bind, key mode and keyboard-shortcuts inhibitor, and only taken while something is confined.  While confined:
+
+- the cursor cannot leave the window's surface, from any pointing device; the window still gets every relative delta;
+- the box follows the window --- moved, resized, fullscreened, sent to another output;
+- keyboard focus is pinned (=pointer-confine-focus-pin=, on by default): sloppy focus, new windows and other programs' activation requests cannot take it.  The game's own windows are let through.  This is the half that keeps the stream on the game;
+- a client's own pointer lock still wins while it holds one, and the box is back when it lets go.
+
+It lets go by itself when the window closes, when you focus something else yourself, on a workspace switch, on lock, and when the menu opens.  The mode line shows =cmacs-gowl-pointer-confine-lighter= (" Confined") the whole time --- there is no bar under =cmacs --gowl= --- and the compositor toasts each change.
+
+To confine a game whenever it has the keyboard, give it a window rule.  An X11 window's app-id is its =WM_CLASS= class; =gowl-msg clients= shows it while the game runs:
+
+#+begin_src elisp
+(gowl-add-rule-entry '((app-id . "wow.exe") (confine-pointer . t)))
+#+end_src
+
+or, in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+rules:
+  - app-id: "wow.exe"
+    confine-pointer: true
+#+end_src
+
+From Lisp: =(gowl-pointer-confine 'on)= / ='off= / ='toggle= returns t while confined, =(gowl-pointer-confine-client)= the window held, and =(gowl-run-command "pointer-confine")= the whole state as JSON.  From outside: =gowl-msg pointer-confine [on|off|toggle|state]=, =emacsctl compositor confine [on|off|toggle|state]= (D-Bus =PointerConfine=), and the =PointerConfineChanged= signal (active, app-id, reason).
 
 ** Layouts and motion
 :PROPERTIES:
