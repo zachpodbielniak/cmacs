@@ -388,6 +388,85 @@ export_binaries () {
 	esac
 }
 
+# export_desktop_entries
+#
+# "Emacs" and "Emacs (Client)" launcher entries in the host's application
+# menu -- which is also what SteamVR's "Launch a program" list (Steam
+# Frame) shows -- running this build as an ordinary 2D window through the
+# wrappers export_binaries wrote.  The client starts a daemon in the box
+# when none is running (--alternate-editor=); its socket is under
+# XDG_RUNTIME_DIR, which the box shares, so host and box clients reach the
+# same server.  Steam injects LD_PRELOAD / LD_LIBRARY_PATH, which distrobox
+# would forward into the box, where they name the host's Steam runtime.
+# The icon is copied out of the box, since the host may have no Emacs.
+export_desktop_entries () {
+	local dest="${EXPORT_PATH}"
+	local apps="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+	local icons="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
+	local icon="${icons}/128x128/apps/cmacs-emacs.png"
+	local env="env -u LD_PRELOAD -u LD_LIBRARY_PATH"
+
+	if [[ "${EXPORT_BINS}" -ne 1 ]]
+	then
+		return
+	fi
+	case "${dest}" in
+		"~"/*) dest="${HOME}/${dest#"~/"}" ;;
+	esac
+	[[ -x "${dest}/emacs" && -x "${dest}/emacsclient" ]] || return 0
+
+	log "adding Emacs and Emacs (Client) to the application menu"
+	mkdir -p "${apps}" "${icons}/128x128/apps" "${icons}/scalable/apps"
+	distrobox enter "${BOX}" 9>&- -- sh -c '
+		cp -f /usr/share/icons/hicolor/128x128/apps/emacs.png "$1"
+		cp -f /usr/share/icons/hicolor/scalable/apps/emacs.svg "$2"' \
+		_ "${icon}" "${icons}/scalable/apps/cmacs-emacs.svg" \
+		|| echo "    could not copy the Emacs icon out of the box" >&2
+
+	cat >"${apps}/cmacs-emacs.desktop" <<EOF2
+[Desktop Entry]
+# Written by \`just distrobox' (admin/cmacs-distrobox.sh); rerunning it
+# overwrites this file.  Runs cmacs from the ${BOX} distrobox.
+Type=Application
+Name=Emacs
+GenericName=Text Editor
+Comment=Edit text (cmacs, from the ${BOX} distrobox)
+Exec=${env} ${dest}/emacs %F
+Path=${HOME}
+Icon=${icon}
+Terminal=false
+Categories=Development;TextEditor;
+StartupNotify=true
+StartupWMClass=Emacs
+Keywords=emacs;cmacs;editor;
+MimeType=text/plain;text/x-csrc;text/x-chdr;text/x-c++src;text/x-makefile;application/x-shellscript;
+EOF2
+
+	cat >"${apps}/cmacs-emacsclient.desktop" <<EOF2
+[Desktop Entry]
+# Written by \`just distrobox' (admin/cmacs-distrobox.sh); rerunning it
+# overwrites this file.  Opens a frame of the Emacs server in the ${BOX}
+# distrobox, starting the server first if it is not running.
+Type=Application
+Name=Emacs (Client)
+GenericName=Text Editor
+Comment=New frame of the running Emacs (cmacs, from the ${BOX} distrobox)
+Exec=${env} ${dest}/emacsclient --alternate-editor= --create-frame %F
+Path=${HOME}
+Icon=${icon}
+Terminal=false
+Categories=Development;TextEditor;
+StartupNotify=true
+StartupWMClass=Emacs
+Keywords=emacsclient;emacs;cmacs;editor;
+EOF2
+
+	if command -v update-desktop-database >/dev/null 2>&1
+	then
+		update-desktop-database "${apps}" >/dev/null 2>&1 || true
+	fi
+}
+
 # run_host
 #
 # Everything outside the box: create it, copy the tree, then re-run
@@ -447,6 +526,7 @@ run_host () {
 		bash "${tree}/admin/cmacs-distrobox.sh" --inside "${TARGET}"
 
 	export_binaries
+	export_desktop_entries
 
 	log "done: \`distrobox enter ${BOX} -- emacs' runs this build"
 	if [[ "${ENTER_AFTER}" -eq 1 ]]

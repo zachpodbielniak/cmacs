@@ -11144,6 +11144,10 @@ steam-vr-shortcut} then adds @samp{Emacs VR} to the Steam library (a VR app
 starting in your home directory, logging to
 @file{~/.local/state/cmacs/emacs-vr.log}).  @kbd{M-x cmacs-lrg-vr-describe}
 reports the runtime, headset and controller profiles.
+@command{just distrobox} also adds @samp{Emacs} and @samp{Emacs (Client)}
+to the application menu, and so to the Frame's @samp{Launch a program}
+list: an ordinary 2D window, and a new frame of the box's Emacs server
+(started first if it is not running).
 The box's fontconfig also reads the host's @file{/usr/share/fonts}
 (through @file{/run/host}): a config naming a font the box lacks, such as
 Doom's @code{doom-font}, otherwise aborts UI setup before the theme loads.

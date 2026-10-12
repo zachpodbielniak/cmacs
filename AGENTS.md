@@ -465,7 +465,8 @@ Every step is resumable; the inside step runs under `env -i` so host
 symlinked into the box (brew bottles only run from that prefix), so brew programs
 work there interactively, and host tools (`podman`, `systemctl`, `journalctl`, `steam`,
 …) are symlinked to `distrobox-host-exec` in the box's `/usr/local/bin`
-(`forward_host_commands`). The Wayland-from-source step lives in
+(`forward_host_commands`). It also writes *Emacs* / *Emacs (Client)* `.desktop` entries
+(`export_desktop_entries`), which the Steam Frame's *Launch a program* list shows. The Wayland-from-source step lives in
 `admin/cmacs-build-wayland.sh`, shared with the Containerfile -- edit it there, once.
 
 The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubuntu),

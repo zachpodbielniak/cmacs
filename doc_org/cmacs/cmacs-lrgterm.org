@@ -920,6 +920,14 @@ the Steam library as a VR app starting in your home directory.  Restart Steam
 (or pass ~--restart-steam~) for it to appear.  Its output goes to
 =~/.local/state/cmacs/emacs-vr.log=.
 
+~just distrobox~ also adds *Emacs* and *Emacs (Client)* to the application
+menu (=~/.local/share/applications/cmacs-emacs*.desktop=), which is what the
+Frame's /Launch a program/ list shows next to Konsole and Chromium.  Both open
+an ordinary 2D window, not VR.  The client opens a new frame of the Emacs
+server in the box, starting one first (~--alternate-editor=~) if none is
+running; the socket is under ~XDG_RUNTIME_DIR~, which the box shares, so every
+client reaches the same server.
+
 The box sees the host's fonts: ~just distrobox~ adds =/run/host/usr/share/fonts=
 and =/run/host/usr/local/share/fonts= to the box's fontconfig (your
 =~/.local/share/fonts= is already shared through the home directory).  A
