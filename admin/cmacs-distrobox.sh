@@ -537,6 +537,86 @@ link_host_linuxbrew () {
 	sudo ln -s "${host}" /home/linuxbrew
 }
 
+# Host commands run from the box through distrobox-host-exec, which runs
+# the host command named by its basename when invoked through a symlink
+# (distrobox itself does this for flatpak and xdg-open).  The first list
+# is linked only where the box has no command of that name; the second
+# shadows the box's own copies, which talk to a systemd and a system bus
+# the box does not have.  A command the host lacks is skipped.
+CMACS_DBOX_HOST_COMMANDS=(
+	podman docker buildah skopeo
+	steam steamos-session-select steamos-update gamescope
+	nmcli bluetoothctl pactl udisksctl powerprofilesctl
+	rpm-ostree bootc ujust
+)
+CMACS_DBOX_HOST_SYSTEMD=(
+	systemctl journalctl loginctl systemd-run systemd-inhibit
+	hostnamectl timedatectl
+)
+
+# host_has <command>
+#
+# True when the host has an executable of that name in a system bin dir.
+host_has () {
+	local d
+
+	for d in /usr/bin /usr/sbin /usr/local/bin /bin /sbin
+	do
+		[[ -x "/run/host${d}/${1}" ]] && return 0
+	done
+	return 1
+}
+
+# box_has <command>
+#
+# True when the box has its own command of that name -- anything but the
+# links this script puts in /usr/local/bin.
+box_has () {
+	local d
+
+	for d in /usr/bin /usr/sbin /bin /sbin
+	do
+		[[ -x "${d}/${1}" && ! -L "${d}/${1}" ]] && return 0
+	done
+	return 1
+}
+
+# forward_host_commands
+#
+# Link the commands above into /usr/local/bin, which precedes /usr/bin on
+# the box's PATH, so `podman', `systemctl --user' or `journalctl' typed
+# in the box -- or run by Emacs -- reach the host.  A real file already
+# in /usr/local/bin is never replaced.
+forward_host_commands () {
+	local exec=/usr/bin/distrobox-host-exec
+	local b link shadow linked=()
+
+	[[ -x "${exec}" ]] || return 0
+	for b in "${CMACS_DBOX_HOST_COMMANDS[@]}" "${CMACS_DBOX_HOST_SYSTEMD[@]}"
+	do
+		link="/usr/local/bin/${b}"
+		shadow=0
+		[[ " ${CMACS_DBOX_HOST_SYSTEMD[*]} " == *" ${b} "* ]] && shadow=1
+		if ! host_has "${b}" \
+			|| { [[ "${shadow}" -eq 0 ]] && box_has "${b}"; }
+		then
+			# The host lost it, or the box gained its own: drop our link.
+			if [[ "$(readlink "${link}" 2>/dev/null)" == "${exec}" ]]
+			then
+				sudo rm -f -- "${link}"
+			fi
+			continue
+		fi
+		[[ -e "${link}" || -L "${link}" ]] && continue
+		sudo ln -s "${exec}" "${link}"
+		linked+=("${b}")
+	done
+	if [[ "${#linked[@]}" -gt 0 ]]
+	then
+		log "running these on the host from the box: ${linked[*]}"
+	fi
+}
+
 # share_host_fonts
 #
 # The box has its own /usr/share/fonts, so a font the host has (installed
@@ -840,6 +920,7 @@ run_inside () {
 	check_box_matches_target
 	link_host_vr_runtime
 	link_host_linuxbrew
+	forward_host_commands
 
 	install_packages "${state}"
 	share_host_fonts

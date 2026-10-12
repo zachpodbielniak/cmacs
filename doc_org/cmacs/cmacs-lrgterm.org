@@ -933,6 +933,21 @@ so ~brew~ and whatever it installed run as they do on the host.  The build
 itself still runs under ~env -i~ with a system ~PATH~, so brew's libraries
 never reach configure.
 
+Host tools are reachable from the box as well.  ~distrobox-host-exec~ runs the
+host command named by its basename when called through a symlink, and
+~just distrobox~ links these into the box's =/usr/local/bin= (ahead of =/usr/bin=
+on its ~PATH~): ~podman~, ~docker~, ~buildah~, ~skopeo~, ~steam~,
+~steamos-session-select~, ~steamos-update~, ~gamescope~, ~nmcli~,
+~bluetoothctl~, ~pactl~, ~udisksctl~, ~powerprofilesctl~, ~rpm-ostree~, ~bootc~
+and ~ujust~ -- each only where the host has it and the box does not.
+~systemctl~, ~journalctl~, ~loginctl~, ~systemd-run~, ~systemd-inhibit~,
+~hostnamectl~ and ~timedatectl~ are forwarded even though the box has its own,
+because those talk to a systemd and a system bus the box does not run.  Emacs
+inside the box (~M-x shell~, ~call-process~, ~compile~) gets the host's versions
+the same way.  distrobox already does this for ~flatpak~ and ~xdg-open~.  The
+lists are ~CMACS_DBOX_HOST_COMMANDS~ and ~CMACS_DBOX_HOST_SYSTEMD~ in
+=admin/cmacs-distrobox.sh=.
+
 ~M-x cmacs-lrg-vr-describe~ reports the runtime, headset, session state,
 refresh rate and the controller profiles the runtime bound.  Controllers only
 deliver input while the session is *focused* -- launched from a shell rather

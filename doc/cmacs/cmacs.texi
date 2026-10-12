@@ -11150,7 +11150,18 @@ Doom's @code{doom-font}, otherwise aborts UI setup before the theme loads.
 The host's Homebrew is linked in at @file{/home/linuxbrew} (its bottles
 only run from that prefix), so @command{brew} and the programs it
 installed work in the box; the build itself runs under @command{env -i}
-and never sees them.
+and never sees them.  Host tools are symlinked to
+@command{distrobox-host-exec} in the box's @file{/usr/local/bin}, which
+runs the host command of the same name: @command{podman},
+@command{docker}, @command{buildah}, @command{skopeo}, @command{steam},
+@command{steamos-session-select}, @command{steamos-update},
+@command{gamescope}, @command{nmcli}, @command{bluetoothctl},
+@command{pactl}, @command{udisksctl}, @command{powerprofilesctl},
+@command{rpm-ostree}, @command{bootc} and @command{ujust} where the host
+has them and the box does not, and the systemd tools
+(@command{systemctl}, @command{journalctl}, @command{loginctl},
+@command{systemd-run}, @command{systemd-inhibit}, @command{hostnamectl},
+@command{timedatectl}) always, since the box runs no systemd of its own.
 
 @code{(cmacs-lrg-vr-screenshot "/tmp/vr")} writes @file{/tmp/vr-eye.png}
 (the left eye of the next frame as sent to the headset) and

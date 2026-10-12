@@ -463,7 +463,9 @@ never in the checkout -- the build is in-tree, so the host's objects would be re
 Every step is resumable; the inside step runs under `env -i` so host
 `PKG_CONFIG_PATH`/linuxbrew cannot leak in -- yet the host's `/home/linuxbrew` is
 symlinked into the box (brew bottles only run from that prefix), so brew programs
-work there interactively. The Wayland-from-source step lives in
+work there interactively, and host tools (`podman`, `systemctl`, `journalctl`, `steam`,
+…) are symlinked to `distrobox-host-exec` in the box's `/usr/local/bin`
+(`forward_host_commands`). The Wayland-from-source step lives in
 `admin/cmacs-build-wayland.sh`, shared with the Containerfile -- edit it there, once.
 
 The target is inferred from its **shape** — `arch`/`archlinux`, `NN.NN` (Ubuntu),
