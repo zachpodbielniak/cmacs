@@ -63,6 +63,13 @@ static const gchar *iface_xml =
   "  <method name='Broadcast'>"
   "    <arg type='s' name='verb' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* The floating desktop: VERB is the floatdesk module's command
+     without its prefix (toggle, on, off, default, status, minimize,
+     restore, maximize, snap, dock-*); ARGS its one-line arguments. */
+  "  <method name='Floatdesk'>"
+  "    <arg type='s' name='verb' direction='in'/>"
+  "    <arg type='s' name='args' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='AddRule'>"
   "    <arg type='s' name='app_id' direction='in'/>"
   "    <arg type='s' name='title' direction='in'/>"
@@ -282,6 +289,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       const gchar *verb;
       g_variant_get (p, "(&s)", &verb);
       RETURN_STR (cmacs_dispatch_gowl_broadcast (verb, &err));
+    }
+  else if (g_strcmp0 (m, "Floatdesk") == 0)
+    {
+      const gchar *verb, *args;
+      g_variant_get (p, "(&s&s)", &verb, &args);
+      RETURN_STR (cmacs_dispatch_gowl_floatdesk (verb, args, &err));
     }
   else if (g_strcmp0 (m, "AddRule") == 0)
     {

@@ -56,6 +56,11 @@ static const CtlMethodSpec gowl_specs[] = {
   { "compositor broadcast", "Input broadcasting: status, list, on, "
     "off, toggle or panic (loads the opt-in broadcast module)",
     CTL_IFACE_COMPOSITOR, "Broadcast", "s:verb", CTL_REPLY_STRING },
+  { "compositor floatdesk", "Floating desktop: toggle/on/off [TAG], "
+    "default on|off, status, minimize/restore/maximize [ID], snap "
+    "'left|right|max [ID]', dock-position/-autohide/-pin/-unpin/"
+    "-launch/-apps (several words of ARGS go in one quoted argument)",
+    CTL_IFACE_COMPOSITOR, "Floatdesk", "s:verb s?:args", CTL_REPLY_STRING },
   { "compositor mfact", "Set the master area factor",
     CTL_IFACE_COMPOSITOR, "SetMfact", "d:mfact", CTL_REPLY_STRING },
   { "compositor nmaster", "Set the number of master windows",

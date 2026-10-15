@@ -2431,6 +2431,11 @@ Slide the scratchpad up, or roll it away (@pxref{Gowl Scratchpad}).
 @kbd{Super+Alt+s} sends the focused window to it, and
 @kbd{Super+Ctrl+s} brings the focused window back onto the tags
 in view.
+@item Super+w
+Make this workspace a floating desktop, or tile it again
+(@pxref{gowl Floatdesk}).  @kbd{Super+n} minimizes the focused window
+there, @kbd{Super+Shift+n} brings back the one minimized last, and
+@kbd{Super+Shift+w} opens the dock's all-applications grid.
 @item Super+Ctrl+h / j / k / l
 Focus the nearest window in that direction, or the top window of the
 next monitor that way when there is none.  @kbd{Super+Ctrl+u} focuses
@@ -3045,6 +3050,90 @@ compositor's @code{module-event} signal, bridged to
 @code{ModuleEvent}.  The @code{broadcast-} module words are reachable
 from the IPC socket, D-Bus (@code{Broadcast}; @command{emacsctl
 compositor broadcast toggle}) and MCP (@code{gowl_broadcast_*}).
+
+@section Floating Desktop
+@anchor{gowl Floatdesk}
+@cindex floating desktop
+@cindex floatdesk
+@cindex dock
+@cindex minimize, windows
+@cindex title bars
+
+gowl's @code{floatdesk} module turns individual workspaces (tags) into
+a @emph{floating desktop}: every window on one floats, new windows
+open centred at a sensible size and cascade, floating windows get title
+bars (minimize, maximize, close; double-click to maximize; drag to the
+left or right edge to snap to that half, to the top to maximize;
+borders resize), focus follows the click, minimize hides a window and
+leaves you where you were, and a dock of pinned and running
+applications sits along one edge of the output.  Leaving the mode tiles
+again exactly the windows the mode floated; a dialog, a window a rule
+floated, one you floated yourself and a pinned one stay as they are.
+@file{lisp/cmacs/cmacs-gowl-floatdesk.el} is its Elisp surface.
+
+The module is in cmacs's default set and floats nothing until a
+workspace is switched.  Standalone gowl opts in with
+@code{modules: floatdesk: enabled: true}.
+
+@table @kbd
+@item Super+w
+This workspace: floating desktop or tiling.
+@item Super+n
+Minimize the focused window (floating desktops only; a no-op on a
+tiling workspace).
+@item Super+Shift+n
+Bring back the window minimized last, on the workspace in view.
+@item Super+Shift+w
+The dock's all-applications grid; @kbd{Escape} closes it.
+@item Super+< @r{and} Super+>
+The layout cycle, which includes the mode as @code{desktop}.
+@end table
+
+Both ways in are the same transition: @kbd{Super+w} sets the mode and
+the layout; picking @code{desktop} from the cycle sets the mode;
+picking any other layout on a floating workspace leaves it.  Layout
+changes replace the one toast on screen rather than stacking.  Which
+workspaces float is saved to @file{~/.local/state/gowl/floatdesk.yaml}
+at once and restored at the next start; a failed save or load is
+reported with a toast and a warning.
+
+The dock shows only on an output viewing a floating desktop, hides
+under a fullscreen window, and slides away under a maximized one (and
+always, with auto-hide) until the pointer touches its edge.  It lists
+pinned apps (faded when not running, pulsing after a launch until the
+first window maps), every other running app (a minimized window always
+included), and an all-apps button.  A left click raises the app's
+window, restoring it if minimized; repeated clicks walk its windows,
+this workspace first, then minimized ones, then other workspaces.
+Middle click opens a new window; right click offers Keep in dock, New
+window and Quit; dragging reorders and pins; right click on the
+all-apps button sets the position and auto-hide.  A terminal program
+started from the dock runs with the app id @samp{tui.@var{entry}} so it
+shows as itself.
+
+Options: @code{cmacs-gowl-floatdesk-default-floating} (@code{saved},
+the default, keeps what was last set at run time; @code{t} or
+@code{nil} decide it at each start), @code{-width-pct},
+@code{-height-pct}, @code{-cascade}, @code{-focus-follows-click},
+@code{-titlebars}, @code{-titlebar-height}, @code{-snap-threshold},
+@code{-dock}, @code{-dock-position}, @code{-dock-autohide},
+@code{-dock-pins}, @code{-dock-icon-size}, @code{-terminal} and
+@code{-lighter}; @kbd{M-x cmacs-gowl-floatdesk-apply-settings} pushes
+them into a running session.  Commands:
+@code{cmacs-gowl-floatdesk-toggle} (a numeric prefix names a tag),
+@code{-on}, @code{-off}, @code{-default-toggle}, @code{-status},
+@code{-minimize}, @code{-restore}, @code{-maximize}, @code{-snap},
+@code{-dock-position}, @code{-dock-autohide}, @code{-dock-pin},
+@code{-dock-unpin}, @code{-dock-launch}, @code{-dock-apps} and
+@code{-dock-items}.  The hook @code{cmacs-gowl-floatdesk-changed-functions}
+runs with @code{mode}, @code{default} or @code{dock} and the rest of the
+module's announcement.
+
+The module's @code{floatdesk-} words are reachable from the IPC socket,
+D-Bus (@code{Floatdesk}; @command{emacsctl compositor floatdesk
+toggle}) and bacon (@command{cmacsgi floatdesk toggle}), all through
+@code{cmacs-gowl-floatdesk-rpc}.  Behaviour, the state file and the
+module's settings are documented in @file{deps/gowl/docs/floatdesk.org}.
 
 @section Macros
 @anchor{gowl Macros}

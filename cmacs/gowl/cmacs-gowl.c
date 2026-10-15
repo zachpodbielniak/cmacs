@@ -1761,7 +1761,17 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               nowhere to put -- no power menu, no
                               network picker, no way to find the layout
                               whose name you have forgotten. */
-                           "menu" };
+                           "menu",
+                           /* The floating desktop: a workspace whose
+                              windows all float, with title bars, a
+                              dock and minimize.  Standalone gowl opts
+                              in through modules.floatdesk.enabled;
+                              here Super+w, Super+n and the `desktop'
+                              entry of the layout cycle reach it, and a
+                              key bound to a module nobody loaded does
+                              nothing.  Loading it floats nothing: every
+                              workspace tiles until one is switched. */
+                           "floatdesk" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)

@@ -121,6 +121,50 @@ cmd_gowl(CmacsApiTransport *transport, gint argc, gchar **argv)
     return cmacs_api_eval_print(transport, expr);
 }
 
+/* floatdesk VERB [ARGS...] --- the floating desktop (gowl's floatdesk
+   module): the module's command words without their `floatdesk-'
+   prefix.  The verb list is checked in Elisp
+   (`cmacs-gowl-floatdesk-rpc'); here the words are only joined and
+   escaped into a string literal, so nothing typed reaches the reader as
+   code. */
+static gint
+cmd_floatdesk(CmacsApiTransport *transport, gint argc, gchar **argv)
+{
+    g_autofree gchar *verb = NULL;
+    g_autofree gchar *args = NULL;
+    g_autofree gchar *expr = NULL;
+    GString          *joined;
+    gint              i;
+
+    if (argc < 3)
+    {
+        fprintf(stderr,
+                "cmacsgi floatdesk: missing verb\n"
+                "  usage: floatdesk {toggle|on|off [TAG] | default on|off|toggle"
+                " | status | minimize|restore|maximize [ID]"
+                " | snap left|right|max [ID] | dock-position POS"
+                " | dock-autohide on|off|toggle | dock-pin APP [INDEX]"
+                " | dock-unpin APP | dock-launch APP | dock-activate APP"
+                " | dock-apps | dock-status}\n");
+        return 1;
+    }
+
+    joined = g_string_new(NULL);
+    for (i = 3; i < argc; i++)
+    {
+        if (joined->len > 0)
+            g_string_append_c(joined, ' ');
+        g_string_append(joined, argv[i]);
+    }
+    verb = cmacs_gi_lisp_escape(argv[2]);
+    args = cmacs_gi_lisp_escape(joined->str);
+    g_string_free(joined, TRUE);
+    expr = g_strdup_printf("(progn (require 'cmacs-gowl-floatdesk)"
+                           " (cmacs-gowl-floatdesk-rpc \"%s\" \"%s\"))",
+                           verb, args);
+    return cmacs_api_eval_print(transport, expr);
+}
+
 static gint
 cmd_find_file(CmacsApiTransport *transport, gint argc, gchar **argv)
 {
@@ -439,6 +483,12 @@ static const CmacsApiSubcmd subcmds[] = {
       "|screensaver-configs|screensaver-status|screensaver-restart"
       "|screensaver-pause|screensaver-resume|screensaver-fps N}",
       "compositor session lock/unlock + animated screensaver wallpaper" },
+
+    /* ── gowl compositor: floating desktop workspaces ──────────────── */
+    { "floatdesk",    cmd_floatdesk,
+      "floatdesk VERB [ARGS...]",
+      "floating desktop: toggle/on/off [TAG], default, minimize, restore,"
+      " maximize, snap, dock-*" },
 
     /* ── ripgrep ────────────────────────────────────────────────────── */
     { "rg",           cmd_rg,

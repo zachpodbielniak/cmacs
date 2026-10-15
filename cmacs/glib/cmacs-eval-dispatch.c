@@ -1160,6 +1160,45 @@ cmacs_dispatch_gowl_broadcast (const gchar *verb, GError **error)
   return cmacs_dispatch_eval_string (form, error);
 }
 
+/* The floating desktop, through Elisp like broadcast (above): no gowl
+   call from here, so no lock -- `gowl-run-command' on the Lisp side
+   takes it.  VERB is checked against the short list before anything is
+   built; ARGS is spliced only escaped (cmacs_dispatch_lisp_escape) and
+   must be one line, since the module's command framing is a line. */
+gchar *
+cmacs_dispatch_gowl_floatdesk (const gchar *verb, const gchar *args,
+                               GError **error)
+{
+  static const gchar * const verbs[] = {
+    "status", "toggle", "on", "off", "default", "minimize", "restore",
+    "maximize", "snap", "dock-position", "dock-autohide", "dock-pin",
+    "dock-unpin", "dock-launch", "dock-activate", "dock-apps",
+    "dock-status", NULL
+  };
+  g_autofree gchar *form = NULL;
+  g_autofree gchar *escaped = NULL;
+
+  GOWL_DISPATCH_CHECK ();
+  if (verb == NULL || !g_strv_contains (verbs, verb))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Floatdesk takes status, toggle, on, off, default, "
+                   "minimize, restore, maximize, snap or dock-*");
+      return NULL;
+    }
+  if (args != NULL && strpbrk (args, "\n\r") != NULL)
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Floatdesk arguments must be one line");
+      return NULL;
+    }
+  escaped = cmacs_dispatch_lisp_escape (args);
+  form = g_strdup_printf ("(progn (require 'cmacs-gowl-floatdesk)"
+                          " (cmacs-gowl-floatdesk-rpc \"%s\" \"%s\"))",
+                          verb, escaped);
+  return cmacs_dispatch_eval_string (form, error);
+}
+
 gchar *
 cmacs_dispatch_gowl_list_keybinds (GError **error)
 {

@@ -176,6 +176,7 @@ resolve at all.
 | =ListKeybinds=             | =() -> (s)=     | Bound keys with action nick, arg and desc      |
 | =RunMacro=                 | =(sas) -> (s)=  | Run a gowl macro by name with arguments        |
 | =Broadcast=                | =(s) -> (s)=    | Input broadcasting: =status=, =list=, =on=, =off=, =toggle=, =panic=.  Signal =ModuleEvent= =(ss)= (module, text) on every module announcement, e.g. =broadcast= / =on eq= |
+| =Floatdesk=                | =(ss) -> (s)=   | The floating desktop: verb (=toggle=, =on=, =off=, =default=, =status=, =minimize=, =restore=, =maximize=, =snap=, =dock-position=, =dock-autohide=, =dock-pin=, =dock-unpin=, =dock-launch=, =dock-activate=, =dock-apps=, =dock-status=) and its one-line arguments.  Announcements arrive as =ModuleEvent= with module =floatdesk= (=mode 3 floating=, =default tiled=, =dock position left=) |
 | =Lock= / =Unlock=          | =() -> (s)=     | Toggle the session lock                        |
 | =PointerConfine=           | =(s) -> (s)=    | Keep the pointer in the focused window: =on=, =off=, =toggle=, or =state= / =""= to only ask; answers =on= or =off=.  Signal =PointerConfineChanged= =(bss)= (active, app-id, reason) on every change |
 | =Screenshot=               | =(ssss) -> (s)= | mode, client, by, file                         |
@@ -204,6 +205,17 @@ It goes through Elisp, so the opt-in macro module is loaded on first
 use exactly as by any other caller.  From the shell:
 =emacsctl compositor macro sort-windows reverse=.  See the Macros
 section of the gowl chapter.
+
+=Floatdesk= drives the floating desktop: VERB is the floatdesk module's
+command word without its =floatdesk-= prefix and ARGS its arguments on
+one line (a tag number, a client id, =left 12=, an app id).  The verb is
+checked against a fixed list in C before anything is built, ARGS is
+escaped into a string literal, and the call goes through Elisp
+(=cmacs-gowl-floatdesk-rpc=), which loads the module if it is not.  The
+reply is the module's line, =OK ...= or =ERROR ...=; =status= answers
+=key=value= words.  From the shell: =emacsctl compositor floatdesk
+toggle=, =emacsctl compositor floatdesk snap "left 12"=.  See the
+Floating desktop section of the gowl chapter.
 
 =Broadcast= drives input broadcasting (multiboxing): =status= and
 =list= answer JSON, =on=, =off= and =toggle= switch it (with a toast),

@@ -217,6 +217,13 @@ gchar *cmacs_dispatch_gowl_run_macro (const gchar *name,
    module when needed.  Returns the module's reply text or "ERROR ...". */
 gchar *cmacs_dispatch_gowl_broadcast (const gchar *verb, GError **error);
 
+/* The floating desktop: VERB is one of the floatdesk module's command
+   words without the `floatdesk-' prefix, ARGS (nullable) its arguments
+   on one line.  Through Elisp (`cmacs-gowl-floatdesk-rpc'), which loads
+   the module if needed.  Returns the module's reply or "ERROR ...". */
+gchar *cmacs_dispatch_gowl_floatdesk (const gchar *verb, const gchar *args,
+                                      GError **error);
+
 /* Add a window rule. */
 gchar *cmacs_dispatch_gowl_add_rule (const gchar *app_id,
                                       const gchar *title,

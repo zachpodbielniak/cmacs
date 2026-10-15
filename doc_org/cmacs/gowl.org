@@ -706,6 +706,10 @@ holds focus.
 | =Super+s=               | Scratchpad: slide it up / roll it away  |
 | =Super+Alt+s=           | Scratchpad: send the focused window     |
 | =Super+Ctrl+s=          | Scratchpad: bring the focused window back |
+| =Super+w=               | This workspace: floating desktop / tiling |
+| =Super+n=               | Minimize the focused window (floating desktop) |
+| =Super+Shift+n=         | Bring back the window minimized last    |
+| =Super+Shift+w=         | Dock: all applications                  |
 | =Super+Ctrl+h/j/k/l=    | Focus the nearest window that way; the next monitor when none |
 | =Super+Ctrl+u=          | Focus the urgent window, viewing its tags |
 | =Super+Ctrl+Tab=        | Focus the window that had focus before   |
@@ -1326,6 +1330,81 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 
 The macro API, lookup order, both run modes, every setting and the shipped examples are in =deps/gowl/docs/macros.org=.
 
+** Floating desktop
+:PROPERTIES:
+:CUSTOM_ID: gowl-floatdesk
+:END:
+
+gowl's =floatdesk= module turns individual workspaces (tags) into a /floating desktop/: every window on one floats, new windows open centred at a sensible size and cascade, floating windows get title bars (minimize, maximize, close; double-click to maximize; drag to the left or right edge to snap to that half, to the top to maximize; borders resize), focus follows the click, minimize hides a window and leaves you where you were, and a dock of pinned and running applications sits along one edge of the output.  Leaving the mode tiles again exactly the windows the mode floated: a dialog, a window a rule floated, one you floated yourself and a pinned one stay as they are.  =lisp/cmacs/cmacs-gowl-floatdesk.el= is its Elisp surface; the module is modelled on Omarchy's floating layout and dock.
+
+*Loaded, and floating nothing.*  The module is in cmacs's default set (standalone gowl opts in with =modules: floatdesk: enabled: true=).  Every workspace tiles until you switch one:
+
+| Key             | Does                                                         |
+|-----------------+--------------------------------------------------------------|
+| =Super+w=       | This workspace: floating desktop <-> tiling                  |
+| =Super+n=       | Minimize the focused window (floating desktops only)         |
+| =Super+Shift+n= | Bring back the window minimized last, where you are          |
+| =Super+Shift+w= | The dock's all-applications grid (=Escape= closes it)        |
+| =Super+< / >=   | The layout cycle, which includes the mode as =desktop=       |
+
+Both ways in are the same transition: =Super+w= sets the mode and the layout, picking =desktop= from the cycle sets the mode, and picking any other layout on a floating workspace leaves it.  Layout changes replace the one toast on screen rather than stacking.  Which workspaces float is saved to =~/.local/state/gowl/floatdesk.yaml= at once and restored at the next start; a save or load that fails is reported with a toast and a warning, never silently.
+
+=Super+n= on a tiling workspace does nothing --- a window vanishing from a layout would be a puzzle.  A restored window comes back on the workspace you are looking at: floating there if that workspace floats, tiled if it tiles.
+
+*** The dock
+:PROPERTIES:
+:CUSTOM_ID: gowl-floatdesk-dock
+:END:
+
+Shown on an output only while it views a floating desktop; hidden under a fullscreen window, sliding away under a maximized one (and always, with auto-hide) until the pointer touches its edge.  Pinned apps first (faded when not running, pulsing after a launch until the first window maps), then every other running app, a minimized window always included, then the all-apps button.  Left click raises the app's window, restoring it if minimized, and again walks its windows: this workspace first, then minimized, then other workspaces.  Middle click opens a new window, right click offers Keep in dock / New window / Quit, dragging reorders (a running app dropped there is pinned, as is one dragged in from the grid), and right click on the all-apps button sets the position and auto-hide.  Windows are grouped by desktop entry through app_id and =StartupWMClass=; a terminal program started from the dock runs in a terminal whose app id is =tui.<entry id>=, so btop shows as btop.
+
+*** Options and commands
+:PROPERTIES:
+:CUSTOM_ID: gowl-floatdesk-options
+:END:
+
+#+begin_src elisp
+;; Float every workspace not set on its own, at every start (the default,
+;; `saved', keeps whatever M-x cmacs-gowl-floatdesk-default-toggle set).
+(setq cmacs-gowl-floatdesk-default-floating 'saved)
+(setq cmacs-gowl-floatdesk-width-pct 0.55        ; a new window's size
+      cmacs-gowl-floatdesk-height-pct 0.7
+      cmacs-gowl-floatdesk-titlebar-height 30
+      cmacs-gowl-floatdesk-dock-position 'bottom ; bottom left right top
+      cmacs-gowl-floatdesk-dock-autohide nil
+      cmacs-gowl-floatdesk-dock-pins '("firefox" "org.gnome.Nautilus" "btop")
+      cmacs-gowl-floatdesk-terminal nil)         ; nil: the session terminal
+#+end_src
+
+| Option                                     | Default  | Meaning                                         |
+|--------------------------------------------+----------+-------------------------------------------------|
+| =cmacs-gowl-floatdesk-default-floating=    | =saved=  | =t= / =nil= decide the default at each start    |
+| =cmacs-gowl-floatdesk-width-pct=, =-height-pct= | 0.6, 0.7 | A new window's size, of the usable area     |
+| =cmacs-gowl-floatdesk-cascade=             | 32       | Offset of each new window from the last         |
+| =cmacs-gowl-floatdesk-focus-follows-click= | =t=      | No sloppy focus among overlapping windows       |
+| =cmacs-gowl-floatdesk-titlebars=, =-titlebar-height= | =t=, 28 |                                          |
+| =cmacs-gowl-floatdesk-snap-threshold=      | 6        | How close to an edge a drop snaps               |
+| =cmacs-gowl-floatdesk-dock=                | =t=      | Show the dock                                   |
+| =cmacs-gowl-floatdesk-dock-position=, =-dock-autohide=, =-dock-icon-size= | =bottom=, =nil=, 48 | Initial; the dock's own menu wins once used |
+| =cmacs-gowl-floatdesk-dock-pins=           | =nil=    | Initial pins; drags and menus win once used     |
+| =cmacs-gowl-floatdesk-terminal=            | =nil=    | Where TUIs from the dock run                    |
+| =cmacs-gowl-floatdesk-lighter=             | " Desk"  | Mode line while the view floats                 |
+
+After changing one at run time, =M-x cmacs-gowl-floatdesk-apply-settings=.
+
+Commands: =cmacs-gowl-floatdesk-toggle= (a numeric prefix names a tag, in view or not), =-on=, =-off=, =-default-toggle=, =-status= (an alist), =-minimize=, =-restore=, =-maximize=, =-snap=, =-dock-position=, =-dock-autohide=, =-dock-pin=, =-dock-unpin=, =-dock-launch=, =-dock-apps= and =-dock-items= (a list of plists).  =cmacs-gowl-floatdesk-changed-functions= runs with =mode=, =default= or =dock= and the rest of the module's announcement (="3 floating"=, ="tiled"=, ="position left"=).
+
+The same commands from elsewhere, all reaching the module's =floatdesk-= words through =cmacs-gowl-floatdesk-rpc=:
+
+#+begin_src sh
+emacsctl compositor floatdesk toggle
+emacsctl compositor floatdesk snap "left 12"
+gdbus call --session --dest org.cmacs.Editor1 --object-path /org/cmacs/Editor1 \
+  --method org.cmacs.Editor1.Compositor.Floatdesk toggle ""
+#+end_src
+
+and from bacon: =cmacsgi floatdesk toggle=, =cmacsgi floatdesk dock-pin firefox 0=.  Behaviour, the state file and the module's own settings are documented in =deps/gowl/docs/floatdesk.org=.
+
 ** Hooks
 :PROPERTIES:
 :CUSTOM_ID: gowl-hooks
@@ -1471,7 +1550,9 @@ per window on the tag, clickable; =Super+Shift+m= selects it.
 
 =Super+<= and =Super+>= (Super+Shift+comma/period) cycle backward and
 forward through active layouts. =Super+Tab= and =Super+Shift+Tab= remain
-aliases. =Super+t= selects tile and =Super+m= monocle.
+aliases. =Super+t= selects tile and =Super+m= monocle.  The cycle ends at
+=desktop=, the floating desktop, which also has its own toggle,
+=Super+w= ([[#gowl-floatdesk][Floating desktop]]).
 
 *Both =f= keys are the WINDOW, not the layout.* =Super+f= fullscreens the
 focused window and =Super+Shift+f= floats or unfloats it. Floating one

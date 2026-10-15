@@ -48,6 +48,7 @@
 (defvar cmacs-gowl-input-remap-rules)
 (declare-function cmacs-gowl-macro--on-start "cmacs-gowl-macro" ())
 (declare-function cmacs-gowl-broadcast--on-start "cmacs-gowl-broadcast" ())
+(declare-function cmacs-gowl-floatdesk--on-start "cmacs-gowl-floatdesk" ())
 (defvar cmacs-gowl-broadcast-enable)
 (defvar cmacs-gowl-broadcast-teams)
 (defvar cmacs-gowl-broadcast-rules)
@@ -1115,7 +1116,8 @@ standalone gowl ships with (see
   Super+i / Super+d   increment / decrement master count
   Super+Shift+Return  zoom (promote to master)
   Super+t / f / m     tile / float / monocle layout
-  Super+< / Super+>   previous / next layout on this tag (scrolling too)
+  Super+< / Super+>   previous / next layout on this tag (scrolling and
+                      the floating desktop too)
   Super+Tab           next layout (Super+Shift+Tab for previous)
   Super+[ / Super+]   scroll the column strip
   Super+Alt+b         this floating window behind the tiling (toggle)
@@ -1123,6 +1125,10 @@ standalone gowl ships with (see
   Super+s             scratchpad: slide it up / roll it away
   Super+Alt+s         scratchpad: send the focused window to it
   Super+Ctrl+s        scratchpad: bring the focused window back
+  Super+w             this workspace: floating desktop <-> tiling
+  Super+n             minimize this window (floating desktops only)
+  Super+Shift+n       bring back the window minimized last
+  Super+Shift+w       the dock's all-applications grid
   Super+0             view all tags
   Super+Shift+0       tag focused client to all tags
   Super+1..9          view tag N
@@ -1644,6 +1650,22 @@ authoritative and keeps re-runs idempotent."
               "Scratchpad: bring the focused window back")
         (bind "Super+Ctrl+Shift+s" 'ipc-command "scratchpad-remove"
               "Scratchpad: bring the focused window back")
+        ;; The floating desktop (the `floatdesk' module, in cmacs's
+        ;; default set).  Its own toggle beside the layout cycle, which
+        ;; reaches it too as `desktop': it is the one layout that changes
+        ;; how windows open and adds a dock, so it earns a key.  w for
+        ;; windowed.  Minimize does nothing on a tiling workspace, where
+        ;; a window vanishing from the layout would be a puzzle, not a
+        ;; feature.  All four reach the module by name, so without it
+        ;; they do nothing.
+        (bind "Super+w" 'ipc-command "floatdesk-toggle"
+              "This workspace: floating desktop / tiling")
+        (bind "Super+n" 'ipc-command "floatdesk-minimize"
+              "Minimize this window (floating desktop)")
+        (bind "Super+Shift+n" 'ipc-command "floatdesk-restore"
+              "Bring back the window minimized last")
+        (bind "Super+Shift+w" 'ipc-command "floatdesk-dock-apps"
+              "Dock: all applications")
         ;; Focus by direction, the previous window, the urgent one.
         ;; Super+Ctrl+<digit> toggles a tag's visibility; the letters
         ;; are free.
@@ -1968,6 +1990,12 @@ thread is running and applies configuration."
     (require 'cmacs-gowl-broadcast))
   (when (fboundp 'cmacs-gowl-broadcast--on-start)
     (cmacs-gowl-broadcast--on-start))
+  ;; The floating desktop (cmacs-gowl-floatdesk.el).  Its module is in
+  ;; the default set, so this only pushes the `cmacs-gowl-floatdesk-*'
+  ;; options and starts the lighter; nothing floats until a workspace is
+  ;; switched (Super+w) or the default says so.
+  (when (require 'cmacs-gowl-floatdesk nil t)
+    (cmacs-gowl-floatdesk--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.
