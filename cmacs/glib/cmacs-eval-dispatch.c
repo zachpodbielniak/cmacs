@@ -1134,6 +1134,32 @@ cmacs_dispatch_gowl_run_macro (const gchar *name,
   return cmacs_dispatch_eval_string (form->str, error);
 }
 
+/* Input broadcasting, through Elisp for the same reasons as a macro
+   (above): `cmacs-gowl-broadcast-rpc' loads the opt-in module and the
+   cmacs settings on first use and never signals.  No gowl call from
+   here, so no lock; the Lisp side reaches the compositor through
+   `gowl-run-command', which takes it.  VERB is checked against the
+   short list before it goes anywhere near a form. */
+gchar *
+cmacs_dispatch_gowl_broadcast (const gchar *verb, GError **error)
+{
+  static const gchar * const verbs[] = {
+    "status", "list", "on", "off", "toggle", "panic", NULL
+  };
+  g_autofree gchar *form = NULL;
+
+  GOWL_DISPATCH_CHECK ();
+  if (verb == NULL || !g_strv_contains (verbs, verb))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Broadcast takes status, list, on, off, toggle or panic");
+      return NULL;
+    }
+  form = g_strdup_printf ("(progn (require 'cmacs-gowl-broadcast)"
+                          " (cmacs-gowl-broadcast-rpc \"%s\"))", verb);
+  return cmacs_dispatch_eval_string (form, error);
+}
+
 gchar *
 cmacs_dispatch_gowl_list_keybinds (GError **error)
 {

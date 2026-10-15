@@ -12774,6 +12774,20 @@ cmacs_gowl_on_output_power_dbus (GowlCompositor *comp, GowlMonitor *m,
                           g_variant_new ("(sb)", name != NULL ? name : "", on));
 }
 
+/* A module's own announcement (gowl_compositor_emit_module_event()),
+   relayed as-is: the broadcast module's "on eq" / "off panic". */
+static void
+cmacs_gowl_on_module_event_dbus (GowlCompositor *comp, const gchar *module,
+                                 const gchar *text, gpointer data)
+{
+  (void) comp; (void) data;
+  cmacs_dbus_emit_signal (CMACS_GOWL_DBUS_PATH, CMACS_GOWL_DBUS_IFACE,
+                          "ModuleEvent",
+                          g_variant_new ("(ss)",
+                                         module != NULL ? module : "",
+                                         text != NULL ? text : ""));
+}
+
 /* Connect once per compositor; the handlers hold nothing that outlives
    it. */
 static void
@@ -12806,6 +12820,8 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
                     G_CALLBACK (cmacs_gowl_on_lock_changed_dbus), NULL);
   g_signal_connect (comp, "pointer-confine-changed",
                     G_CALLBACK (cmacs_gowl_on_pointer_confine_dbus), NULL);
+  g_signal_connect (comp, "module-event",
+                    G_CALLBACK (cmacs_gowl_on_module_event_dbus), NULL);
 }
 
 void

@@ -477,6 +477,57 @@ Return how many were told to stop."
             (replace-regexp-in-string "[\"\\]" "\\\\\\&" s)
             "\"")))
 
+(defun cmacs-gowl-filter-form (form fields what)
+  "The gowl filter text for FORM, over the field names FIELDS.
+WHAT names the caller in errors (\"Macro filter\", \"Broadcast\").
+FORM is a string (used as it is), or a list:
+
+  (and FORM...)   (or FORM...)   (not FORM)
+  (FIELD VALUE)            glob match, e.g. (app-id \"firefox*\")
+  (FIELD OP VALUE)         OP is one of = != ~ !~ < <= > >=
+
+Shared by macro trigger filters and the broadcast module's slot
+matches and rule conditions: the language is gowl's one filter
+language (src/util/gowl-filter.c), each caller supplying its fields."
+  (cond
+   ((stringp form) form)
+   ((not (consp form))
+    (user-error "%s: %S is not a filter form" what form))
+   ((memq (car form) '(and or))
+    (unless (cdr form)
+      (user-error "%s: (%s) needs at least one condition" what (car form)))
+    (if (null (cddr form))
+        (cmacs-gowl-filter-form (cadr form) fields what)
+      (concat "("
+              (mapconcat (lambda (f) (cmacs-gowl-filter-form f fields what))
+                         (cdr form)
+                         (format " %s " (car form)))
+              ")")))
+   ((eq (car form) 'not)
+    (unless (= (length form) 2)
+      (user-error "%s: (not FORM) takes one form" what))
+    (concat "not " (let ((inner (cmacs-gowl-filter-form (cadr form)
+                                                        fields what)))
+                     (if (string-prefix-p "(" inner) inner
+                       (concat "(" inner ")")))))
+   ((memq (car form) fields)
+    (pcase (cdr form)
+      (`(,value)
+       (concat (symbol-name (car form)) "="
+               (cmacs-gowl-macro--filter-value value)))
+      (`(,op ,value)
+       (unless (memq op cmacs-gowl-macro--filter-ops)
+         (user-error "%s: unknown operator %S (one of %s)" what op
+                     (mapconcat #'symbol-name cmacs-gowl-macro--filter-ops
+                                " ")))
+       (concat (symbol-name (car form)) (symbol-name op)
+               (cmacs-gowl-macro--filter-value value)))
+      (_ (user-error "%s: %S is (FIELD VALUE) or (FIELD OP VALUE)"
+                     what form))))
+   (t (user-error "%s: unknown field or form %S (fields: %s)"
+                  what (car form)
+                  (mapconcat #'symbol-name fields " ")))))
+
 (defun cmacs-gowl-macro-filter (form)
   "The gowl trigger filter text for FORM.
 FORM is a string (used as it is), or a list:
@@ -494,44 +545,8 @@ quoted for you, so any string is safe.  For example
 
 An unknown field or operator is a `user-error' here rather than a
 refused trigger in the compositor's log."
-  (cond
-   ((stringp form) form)
-   ((not (consp form))
-    (user-error "Macro filter: %S is not a filter form" form))
-   ((memq (car form) '(and or))
-    (unless (cdr form)
-      (user-error "Macro filter: (%s) needs at least one condition"
-                  (car form)))
-    (if (null (cddr form))
-        (cmacs-gowl-macro-filter (cadr form))
-      (concat "("
-              (mapconcat #'cmacs-gowl-macro-filter (cdr form)
-                         (format " %s " (car form)))
-              ")")))
-   ((eq (car form) 'not)
-    (unless (= (length form) 2)
-      (user-error "Macro filter: (not FORM) takes one form"))
-    (concat "not " (let ((inner (cmacs-gowl-macro-filter (cadr form))))
-                     (if (string-prefix-p "(" inner) inner
-                       (concat "(" inner ")")))))
-   ((memq (car form) cmacs-gowl-macro--filter-fields)
-    (pcase (cdr form)
-      (`(,value)
-       (concat (symbol-name (car form)) "="
-               (cmacs-gowl-macro--filter-value value)))
-      (`(,op ,value)
-       (unless (memq op cmacs-gowl-macro--filter-ops)
-         (user-error "Macro filter: unknown operator %S (one of %s)" op
-                     (mapconcat #'symbol-name cmacs-gowl-macro--filter-ops
-                                " ")))
-       (concat (symbol-name (car form)) (symbol-name op)
-               (cmacs-gowl-macro--filter-value value)))
-      (_ (user-error "Macro filter: %S is (FIELD VALUE) or (FIELD OP VALUE)"
-                     form))))
-   (t (user-error "Macro filter: unknown field or form %S (fields: %s)"
-                  (car form)
-                  (mapconcat #'symbol-name cmacs-gowl-macro--filter-fields
-                             " ")))))
+  (cmacs-gowl-filter-form form cmacs-gowl-macro--filter-fields
+                          "Macro filter"))
 
 (defun cmacs-gowl-macro-trigger-string (event filter macro &rest args)
   "The trigger line for EVENT, FILTER, MACRO and ARGS.

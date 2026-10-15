@@ -917,6 +917,147 @@ Remapped keys and clicks go through the compositor's own decisions, so keybinds,
 
 Everything goes through =gowl-run-command= and the module's =inputremap-= words, so the same rules are reachable from the socket (=gowl-msg inputremap-devices=), from D-Bus (=RunCommand= on =org.cmacs.Editor1.Compositor=), from MCP (gowl's =input_remap_*= tools, or =eval= on cmacs's), and from a script.  The rule schema, the claim/release lifecycle and the C side are in =deps/gowl/docs/input-remap.org=; standalone gowl's YAML and C versions of the WoW example are =deps/gowl/data/example-input-remap.{yaml,c}=.
 
+** Input broadcasting
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast
+:END:
+
+gowl's =broadcast= module repeats keys --- and, where a rule asks, clicks --- typed into one window of a /team/ into its other windows, as the same key or another per window: multiboxing, the way ISBoxer or an AutoHotkey script does it on Windows.  The compositor is the one place on Linux that can put real input into a window without focusing it, which is why this lives there.  =lisp/cmacs/cmacs-gowl-broadcast.el= is its Elisp surface.
+
+*Nothing is on by default.*  cmacs ships no team or rule and loads no module for this.  The module is loaded when =cmacs-gowl-broadcast-enable= is set, a team or rule is defined, or =cmacs-gowl-broadcast-start= is called --- and even loaded it repeats nothing until switched on with its toggle key, =Super+b=, which shows a toast either way.  =Super+Shift+b= switches it off and releases every key it holds in any window.  Both keys work while a fullscreen game inhibits shortcuts.
+
+*Check the game's rules first.*  EverQuest's live servers allow boxing; its truebox servers allow two characters per PC and no automation; World of Warcraft (since November 2020), EVE Online and Final Fantasy XIV forbid broadcasting.  Strict mode ([[#gowl-broadcast-strict][below]]) refuses any rule that could turn one key press into input for more than one window.
+
+*** An EverQuest group
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-eq
+:END:
+
+Three clients under Wine --- a tank you play, a cleric and a wizard that follow:
+
+#+begin_src elisp
+(setq cmacs-gowl-broadcast-enable t)
+
+(with-eval-after-load 'cmacs-gowl-broadcast
+  ;; Every EverQuest window is titled "EverQuest": the three slots take
+  ;; the clients in the order they opened.  Pin one by hand with
+  ;; M-x cmacs-gowl-broadcast-assign while it has focus.
+  (cmacs-gowl-broadcast-define-team "eq"
+    :slots '((tank   :match (app-id "eqgame.exe") :focus-key "Super+F1")
+             (cleric :match (app-id "eqgame.exe") :focus-key "Super+F2")
+             (wizard :match (app-id "eqgame.exe") :focus-key "Super+F3"))
+    :groups '((casters cleric wizard)))
+  ;; Movement and the hotbar follow the tank -- only from the tank
+  (cmacs-gowl-broadcast-define-rule "follow"
+    :team "eq" :when '(focused-slot "tank")
+    :keys '("1-9" w a s d space) :exclude '(Return slash)
+    :modifiers 'none :targets 'all-other)
+  ;; H: the cleric presses 3, the tank nothing
+  (cmacs-gowl-broadcast-define-rule "heal"
+    :team "eq" :keys '(h) :targets '(slot cleric) :local 'block
+    :translate '((cleric (h . "3"))))
+  ;; F12: one window per press, in turn
+  (cmacs-gowl-broadcast-define-rule "cycle-target"
+    :team "eq" :keys '(F12) :mode 'round-robin :reset-ms 2000
+    :targets 'all :local 'block))
+(require 'cmacs-gowl-broadcast)
+#+end_src
+
+Focus the tank, press =Super+b= (a toast: /Broadcast ON --- team eq, 3 window(s)/, and =BC= in the mode line), and play.  =M-x cmacs-gowl-broadcast-show= lists every slot and the window in it.  Teams and rules defined before the compositor is up are kept and installed when =cmacs-gowl-mode= starts it; =cmacs-gowl-broadcast-teams= and =cmacs-gowl-broadcast-rules= hold the same thing as data, for =customize=.
+
+*** Teams
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-teams
+:END:
+
+=(cmacs-gowl-broadcast-define-team NAME :slots SLOTS :groups GROUPS)=, replacing a team of the same name.  Each slot is a name, or =(NAME :match FORM :focus-key KEY :delivery D)=:
+
+- =:match= --- which window fills the slot: a filter form over =app-id= (the X11 class for an X11 window: =eqgame.exe= under Wine), =title=, =pid=, =xwayland=, =tag=, =tags=, =monitor=, =floating=, =fullscreen= --- =(app-id "eqgame.exe")=, =(and (app-id "eqgame.exe") (title ~ "Cleric"))=, =(not (floating "true"))= --- or filter text.  Slots are filled in order, each by the first window its match accepts that holds no other slot; a slot without =:match= is filled only by hand.
+- =:focus-key= --- a key that focuses the slot's window from anywhere, broadcasting or not.
+- =:delivery= --- =auto= (the default), =seat= or =activate=; see /How a key gets there/ below.
+
+=:groups= are =(NAME SLOT...)= subsets, for =(group NAME)= targets.  =M-x cmacs-gowl-broadcast-assign= puts the focused window (or a window id) in a slot by hand, until that window closes; =cmacs-gowl-broadcast-unassign= hands the slot back to its match.
+
+*** Rules
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-rules
+:END:
+
+=(cmacs-gowl-broadcast-define-rule NAME &rest PLIST)=, replacing a rule of the same name.  Only =:team= is required:
+
+| Key          | Value                                                                       |
+|--------------+-----------------------------------------------------------------------------|
+| =:team=      | the team whose windows it is about                                          |
+| =:when=      | a filter over the focused window, plus =team= and =focused-slot=: usually =(focused-slot "tank")= |
+| =:enabled=   | nil keeps it defined but out of force                                       |
+| =:keys=      | key names or ranges (="1-9"=, ="F1-F12"=, =w=, =space=); =all= or omitted for every key; nil (given) for none --- a clicks-only rule |
+| =:exclude=   | keys never repeated                                                         |
+| =:modifiers= | =none=: repeat only while no Ctrl, Alt or Super is held                     |
+| =:targets=   | =all=, =all-other= (default), =current=, =under-mouse=, =(slot NAME)=, =(group NAME)=, or a list |
+| =:translate= | =((SLOT (FROM . TO)...)...)=, SLOT =*= for every target without its own; TO may carry modifiers (="Shift+2"=) |
+| =:mode=      | =mirror= (default) or =round-robin=: each press to the next target only      |
+| =:reset-ms=  | round-robin starts over after this long without a press                     |
+| =:delivery=  | =auto=, =seat= or =activate=, over the slots' own                           |
+| =:mouse=     | =off= (default), =same= or =scaled=: repeat clicks, at the same point or the same relative point |
+| =:delay-ms=  | a pause between one target and the next (at most 1000)                      |
+| =:local=     | =pass= (default) or =block=: keep the key from the focused window           |
+
+Key names are xkb keysym names, matched on the key's own symbol and its shifted one, case-folded.  Modifier keys are never repeated on their own; the modifiers a key was typed with travel with it.  Bad values are a =user-error= here, before anything is sent; a rule whose team, slot or group does not exist is kept, reported (=M-x cmacs-gowl-broadcast-status=, and the =!= after its name in =cmacs-gowl-broadcast-show=), and never used.  Synthetic input --- a KVM, a macro --- is never repeated.
+
+**** Strict mode
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-strict
+:END:
+
+=cmacs-gowl-broadcast-strict= (or =M-x cmacs-gowl-broadcast-strict=) refuses every rule by which one press could reach more than one window, the focused window counting when the key reaches it too.  What remains is =:local 'block= with =round-robin=, or with a single =(slot NAME)=, =current= or =under-mouse= target: one press, one window.  Focus keys always work.
+
+*** How a key gets there
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-delivery
+:END:
+
+A Wayland window gets the key through a brief seat focus.  An X11 window --- every game under Wine/Proton --- cannot be reached that way, because Xwayland gives every key to the window holding X input focus whatever surface the seat entered.  So gowl moves X focus to the target, waits until the X server agrees, sends the key, waits until the X server has processed it (an XI2 raw key event), and moves focus back; without the waits the key lands in the wrong window about half the time.  =cmacs-gowl-broadcast-timeout-ms= bounds each wait.  Each key is also a focus change to the target, which a game that pauses in the background will notice.
+
+Two limits come from the protocols.  A Wayland client forgets its held keys when it loses focus, so to a Wayland target a broadcast press is a tap: holding a movement key works into X11 windows, not native Wayland ones.  And an X server has one key state for all its windows, so a target may see a key pressed twice (autorepeat, to it); what is guaranteed is that every key a target was given is released in it when the physical key is.  The full account is =deps/gowl/docs/broadcast.org=.
+
+*** Commands and options
+:PROPERTIES:
+:CUSTOM_ID: gowl-broadcast-commands
+:END:
+
+| Command / function                             | What it does                                               |
+|------------------------------------------------+------------------------------------------------------------|
+| =cmacs-gowl-broadcast-toggle= / =-on= / =-off= | Switch broadcasting (the toggle key's job)                 |
+| =cmacs-gowl-broadcast-panic=                   | Off, and every held key released everywhere                |
+| =cmacs-gowl-broadcast-show=                    | Buffer of every slot and its window (=t= toggle, =p= panic, =s= strict, =RET= focus, =a= assign, =u= unassign) |
+| =cmacs-gowl-broadcast-status=                  | State, teams, slots and rules, as an alist (summary interactively) |
+| =cmacs-gowl-broadcast-define-team= / =-rule=   | Define or replace a team or rule                           |
+| =cmacs-gowl-broadcast-remove-team= / =-rule=   | Remove one                                                 |
+| =cmacs-gowl-broadcast-set-rule-enabled=        | Put a rule in or out of force                              |
+| =cmacs-gowl-broadcast-assign= / =-unassign=    | A window in a slot by hand, and back                       |
+| =cmacs-gowl-broadcast-focus-slot=              | Focus a slot's window                                      |
+| =cmacs-gowl-broadcast-strict=                  | Toggle strict mode                                         |
+| =cmacs-gowl-broadcast-clear=                   | Forget every runtime team, rule and assignment             |
+| =cmacs-gowl-broadcast-start= / =-stop=         | Load the module / switch it off without losing anything    |
+| =cmacs-gowl-broadcast-team-json= / =-rule-json= | The text a team or rule becomes                           |
+
+| Option                                    | Default          | Meaning                                       |
+|-------------------------------------------+------------------+-----------------------------------------------|
+| =cmacs-gowl-broadcast-enable=             | nil              | Load the module at every compositor start      |
+| =cmacs-gowl-broadcast-toggle-key=         | ="Super+b"=      | On/off, with a toast; nil for none             |
+| =cmacs-gowl-broadcast-panic-key=          | ="Super+Shift+b"= | Off and release everything; nil for none      |
+| =cmacs-gowl-broadcast-start-on=           | nil              | Broadcast from the start                       |
+| =cmacs-gowl-broadcast-strict=             | nil              | One press, one window                          |
+| =cmacs-gowl-broadcast-toast=              | t                | Toasts on toggle, panic and empty slots        |
+| =cmacs-gowl-broadcast-log=                | nil              | Every repeated key to the journal              |
+| =cmacs-gowl-broadcast-max-targets=        | 16               | Windows per key, at most                       |
+| =cmacs-gowl-broadcast-timeout-ms=         | 80               | Per-step wait for Xwayland                     |
+| =cmacs-gowl-broadcast-teams= / =-rules=   | nil              | Installed at every compositor start            |
+| =cmacs-gowl-broadcast-lighter=            | =" BC"=          | Mode line while on                             |
+| =cmacs-gowl-broadcast-changed-functions=  | nil              | Hook: =on= / =off= and a detail                |
+
+The module announces every switch as the compositor's =module-event= signal, which cmacs bridges to =cmacs-gowl-module-event-functions= (any gowl module's announcements, as =MODULE TEXT=) and relays on D-Bus as =ModuleEvent=.  Everything else goes through =gowl-run-command= and the module's =broadcast-= words, so the same teams and rules are reachable from the socket (=gowl-msg broadcast-status=), D-Bus (=Broadcast= on =org.cmacs.Editor1.Compositor=; =emacsctl compositor broadcast toggle=), and MCP (cmacs's =gowl_broadcast_*= tools, or gowl's =broadcast_*=).  The schema and the C and YAML sides are in =deps/gowl/docs/broadcast.org=; standalone gowl's versions of the EverQuest example are =deps/gowl/data/example-broadcast.{yaml,c}=.
+
 ** Macros
 :PROPERTIES:
 :CUSTOM_ID: gowl-macros

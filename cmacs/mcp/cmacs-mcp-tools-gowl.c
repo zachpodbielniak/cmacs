@@ -700,6 +700,202 @@ handle_gowl_macro_voice_status (McpServer *s, const gchar *n,
   return gowl_eval_line ("cmacs-gowl-macro-command", "macro-voice status");
 }
 
+/* ── Input broadcasting (multiboxing) ──────────────────────────────
+ *
+ * Each tool is one `broadcast-' module command run through
+ * `cmacs-gowl-broadcast-command' (cmacs-gowl-broadcast.el), which loads
+ * the opt-in module when a command needs it and never signals: an error
+ * comes back as "ERROR ..." text, turned into an MCP error here. */
+
+static McpToolResult *
+gowl_broadcast_line (const gchar *line)
+{
+  g_autofree gchar *el = cmacs_dispatch_lisp_escape (line);
+  g_autofree gchar *expr = g_strdup_printf (
+    "(progn (require 'cmacs-gowl-broadcast) "
+    "(cmacs-gowl-broadcast-command \"%s\"))", el);
+  GError *error = NULL;
+  gchar *str = cmacs_dispatch_eval_string (expr, &error);
+  McpToolResult *r;
+
+  if (str != NULL && g_str_has_prefix (str, "ERROR"))
+    {
+      r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, str + (str[5] == ' ' ? 6 : 5));
+      g_free (str);
+      return r;
+    }
+  r = gowl_result (str, error);
+  g_clear_error (&error);
+  return r;
+}
+
+/* A name that goes on the command line: one word. */
+static gboolean
+gowl_broadcast_word (const gchar *w)
+{
+  const gchar *p;
+
+  if (w == NULL || *w == '\0')
+    return FALSE;
+  for (p = w; *p != '\0'; p++)
+    if (g_ascii_isspace (*p) || g_ascii_iscntrl (*p))
+      return FALSE;
+  return TRUE;
+}
+
+static McpToolResult *
+handle_gowl_broadcast_status (McpServer *s, const gchar *n,
+                              JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_broadcast_line ("broadcast-status");
+}
+
+static McpToolResult *
+handle_gowl_broadcast_list (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_broadcast_line ("broadcast-list");
+}
+
+static McpToolResult *
+handle_gowl_broadcast_set (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  static const gchar * const states[] = {
+    "on", "off", "toggle", "panic", NULL
+  };
+  const gchar *state, *strict;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  strict = json_object_get_string_member_with_default (a, "strict", NULL);
+  if (strict != NULL)
+    {
+      if (g_strcmp0 (strict, "on") != 0 && g_strcmp0 (strict, "off") != 0
+          && g_strcmp0 (strict, "toggle") != 0)
+        return gowl_missing ("strict (on, off or toggle)");
+      line = g_strdup_printf ("broadcast-strict %s", strict);
+      return gowl_broadcast_line (line);
+    }
+  state = json_object_get_string_member_with_default (a, "state", NULL);
+  if (state == NULL || !g_strv_contains (states, state))
+    return gowl_missing ("state (on, off, toggle or panic)");
+  line = g_strdup_printf ("broadcast-%s", state);
+  return gowl_broadcast_line (line);
+}
+
+/* broadcast-add-team / -add-rule from an object or one line of YAML */
+static McpToolResult *
+gowl_broadcast_define (JsonObject *a, const gchar *member,
+                       const gchar *verb)
+{
+  g_autofree gchar *text = NULL;
+  g_autofree gchar *line = NULL;
+  const gchar *yaml;
+
+  if (a != NULL && json_object_has_member (a, member))
+    {
+      JsonNode *node = json_object_get_member (a, member);
+      g_autoptr (JsonGenerator) gen = json_generator_new ();
+
+      if (!JSON_NODE_HOLDS_OBJECT (node))
+        return gowl_missing (member);
+      json_generator_set_root (gen, node);
+      text = json_generator_to_data (gen, NULL);
+    }
+  else
+    {
+      yaml = json_object_get_string_member_with_default (a, "yaml", NULL);
+      if (yaml == NULL || *yaml == '\0' || strchr (yaml, '\n') != NULL)
+        return gowl_missing ("an object, or yaml (one line of flow YAML)");
+      text = g_strdup (yaml);
+    }
+  line = g_strdup_printf ("%s %s", verb, text);
+  return gowl_broadcast_line (line);
+}
+
+static McpToolResult *
+handle_gowl_broadcast_add_team (McpServer *s, const gchar *n,
+                                JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  return gowl_broadcast_define (a, "team", "broadcast-add-team");
+}
+
+static McpToolResult *
+handle_gowl_broadcast_add_rule (McpServer *s, const gchar *n,
+                                JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  return gowl_broadcast_define (a, "rule", "broadcast-add-rule");
+}
+
+static McpToolResult *
+handle_gowl_broadcast_remove (McpServer *s, const gchar *n,
+                              JsonObject *a, gpointer u)
+{
+  const gchar *kind, *name;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  kind = json_object_get_string_member_with_default (a, "kind", NULL);
+  name = json_object_get_string_member_with_default (a, "name", NULL);
+  if (g_strcmp0 (kind, "team") != 0 && g_strcmp0 (kind, "rule") != 0)
+    return gowl_missing ("kind (team or rule)");
+  if (!gowl_broadcast_word (name))
+    return gowl_missing ("name");
+  line = g_strdup_printf ("broadcast-remove-%s %s", kind, name);
+  return gowl_broadcast_line (line);
+}
+
+static McpToolResult *
+handle_gowl_broadcast_assign (McpServer *s, const gchar *n,
+                              JsonObject *a, gpointer u)
+{
+  const gchar *team, *slot;
+  gint64 id = -1;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  team = json_object_get_string_member_with_default (a, "team", NULL);
+  slot = json_object_get_string_member_with_default (a, "slot", NULL);
+  if (!gowl_broadcast_word (team) || !gowl_broadcast_word (slot))
+    return gowl_missing ("team and slot");
+  if (json_object_has_member (a, "client_id"))
+    id = json_object_get_int_member (a, "client_id");
+  if (id == 0)
+    line = g_strdup_printf ("broadcast-unassign %s %s", team, slot);
+  else if (id > 0)
+    line = g_strdup_printf ("broadcast-assign %s %s %" G_GINT64_FORMAT,
+                            team, slot, id);
+  else
+    line = g_strdup_printf ("broadcast-assign %s %s", team, slot);
+  return gowl_broadcast_line (line);
+}
+
+static McpToolResult *
+handle_gowl_broadcast_focus_slot (McpServer *s, const gchar *n,
+                                  JsonObject *a, gpointer u)
+{
+  const gchar *team, *slot;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  team = json_object_get_string_member_with_default (a, "team", NULL);
+  slot = json_object_get_string_member_with_default (a, "slot", NULL);
+  if (!gowl_broadcast_word (slot))
+    return gowl_missing ("slot");
+  if (team != NULL && !gowl_broadcast_word (team))
+    return gowl_missing ("team (one word)");
+  line = team != NULL
+    ? g_strdup_printf ("broadcast-focus-slot %s %s", team, slot)
+    : g_strdup_printf ("broadcast-focus-slot %s", slot);
+  return gowl_broadcast_line (line);
+}
+
 static gboolean
 gowl_int_member (JsonObject *a, const gchar *name, gint64 *out)
 {
@@ -1126,6 +1322,64 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
         handle_gowl_macro_list,
         "Every macro runnable by name, as JSON: name, kind (file, "
         "registered, custom = Elisp, ...), path, held-back." },
+      { "gowl_broadcast_status", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_broadcast_status,
+        "Input broadcasting (multiboxing): whether it is on, strict mode, "
+        "the toggle and panic keys, every team with the window in each "
+        "slot, every rule with the reason it cannot run if any, and "
+        "delivery counters (JSON). The module is opt-in." },
+      { "gowl_broadcast_list", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_broadcast_list,
+        "The broadcast teams and rules in force, each as YAML (JSON)." },
+      { "gowl_broadcast_set", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"state\":{\"type\":\"string\",\"enum\":[\"on\",\"off\","
+        "\"toggle\",\"panic\"]},"
+        "\"strict\":{\"type\":\"string\",\"enum\":[\"on\",\"off\","
+        "\"toggle\"]}}}",
+        handle_gowl_broadcast_set,
+        "Switch input broadcasting on, off or toggle it (a toast shows the "
+        "result), or panic: off, and every key held in any window "
+        "released. Or set strict one-press-one-window mode instead." },
+      { "gowl_broadcast_add_team", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"team\":{\"type\":\"object\",\"description\":\"{name, "
+        "slots: [{name, match, focus-key, delivery}], groups: {NAME: "
+        "[slot]}}; match is a filter such as app-id = eqgame.exe\"},"
+        "\"yaml\":{\"type\":\"string\"}}}",
+        handle_gowl_broadcast_add_team,
+        "Add, or replace by name, a broadcast team for this session." },
+      { "gowl_broadcast_add_rule", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"rule\":{\"type\":\"object\",\"description\":\"{name, "
+        "team, when, keys: {include, exclude}, modifiers, targets, "
+        "translate, mode, reset-ms, delivery, mouse, delay-ms, local}\"},"
+        "\"yaml\":{\"type\":\"string\"}}}",
+        handle_gowl_broadcast_add_rule,
+        "Add, or replace by name, a broadcast rule for this session; the "
+        "reply says when it cannot run." },
+      { "gowl_broadcast_remove", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"kind\":{\"type\":\"string\",\"enum\":[\"team\",\"rule\"]},"
+        "\"name\":{\"type\":\"string\"}},\"required\":[\"kind\","
+        "\"name\"]}",
+        handle_gowl_broadcast_remove, "Remove a broadcast team or rule." },
+      { "gowl_broadcast_assign", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"team\":{\"type\":\"string\"},\"slot\":{\"type\":\"string\"},"
+        "\"client_id\":{\"type\":\"integer\",\"description\":\"The "
+        "window (default: the focused one); 0 hands the slot back to its "
+        "match\"}},\"required\":[\"team\",\"slot\"]}",
+        handle_gowl_broadcast_assign,
+        "Put a window in a broadcast team's slot by hand." },
+      { "gowl_broadcast_focus_slot", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"team\":{\"type\":\"string\"},\"slot\":{\"type\":\"string\"}},"
+        "\"required\":[\"slot\"]}",
+        handle_gowl_broadcast_focus_slot,
+        "Focus the window in a broadcast team's slot, viewing its tag." },
       { "gowl_macro_status", TRUE, "{\"type\":\"object\",\"properties\":{}}",
         handle_gowl_macro_status,
         "Running macros, held-back ones and why, the fault count, the "

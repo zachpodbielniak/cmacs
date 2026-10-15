@@ -47,6 +47,10 @@
 (declare-function cmacs-gowl-input-remap--on-start "cmacs-gowl-input-remap" ())
 (defvar cmacs-gowl-input-remap-rules)
 (declare-function cmacs-gowl-macro--on-start "cmacs-gowl-macro" ())
+(declare-function cmacs-gowl-broadcast--on-start "cmacs-gowl-broadcast" ())
+(defvar cmacs-gowl-broadcast-enable)
+(defvar cmacs-gowl-broadcast-teams)
+(defvar cmacs-gowl-broadcast-rules)
 (defvar cmacs-gowl-macro-definitions)
 (defvar cmacs-gowl-macro-triggers)
 (declare-function cmacs-tray-mode-global "cmacs-tray" (&optional arg))
@@ -1954,6 +1958,16 @@ thread is running and applies configuration."
     (require 'cmacs-gowl-macro))
   (when (fboundp 'cmacs-gowl-macro--on-start)
     (cmacs-gowl-macro--on-start))
+  ;; Input broadcasting (cmacs-gowl-broadcast.el).  Opt-in the same way:
+  ;; the module is loaded only when `cmacs-gowl-broadcast-enable' is set
+  ;; or a team or rule is configured -- and even loaded, it repeats
+  ;; nothing until its toggle key switches it on.
+  (when (or (bound-and-true-p cmacs-gowl-broadcast-enable)
+            (bound-and-true-p cmacs-gowl-broadcast-teams)
+            (bound-and-true-p cmacs-gowl-broadcast-rules))
+    (require 'cmacs-gowl-broadcast))
+  (when (fboundp 'cmacs-gowl-broadcast--on-start)
+    (cmacs-gowl-broadcast--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.
@@ -3264,6 +3278,13 @@ nil) and REASON, a string: \"manual\", \"rule\", \"escape\",
 \"menu\".  Fires however it happened: `Super+g', a `confine-pointer'
 window rule, `gowl-pointer-confine', the IPC socket, D-Bus.")
 
+(defvar cmacs-gowl-module-event-functions nil
+  "Functions run when a gowl module announces a change of state.
+Each gets MODULE, the module's name (\"broadcast\"), and TEXT, what
+happened (\"on eq\", \"off panic\") -- the same text IPC subscribers
+see as `EVENT MODULE TEXT'.  The compositor's `module-event' signal,
+for modules that use gowl_compositor_emit_module_event().")
+
 (defvar cmacs-gowl-tag-changed-functions nil
   "Functions run with a monitor when the tags it views change.")
 
@@ -3323,7 +3344,9 @@ this runs from `cmacs-gowl-monitor-added-functions' as well."
                       ("lock-changed"
                        . cmacs-gowl-lock-changed-functions)
                       ("pointer-confine-changed"
-                       . cmacs-gowl-pointer-confine-changed-functions)))
+                       . cmacs-gowl-pointer-confine-changed-functions)
+                      ("module-event"
+                       . cmacs-gowl-module-event-functions)))
         (condition-case nil
             (push (cons comp (gobject-connect comp (car pair)
                                               (cmacs-gowl--bridge (cdr pair))))

@@ -53,6 +53,9 @@ static const CtlMethodSpec gowl_specs[] = {
   { "compositor macro", "Run a gowl macro by name or path with its "
     "arguments (loads the opt-in macro module on first use)",
     CTL_IFACE_COMPOSITOR, "RunMacro", "s:name A:args", CTL_REPLY_STRING },
+  { "compositor broadcast", "Input broadcasting: status, list, on, "
+    "off, toggle or panic (loads the opt-in broadcast module)",
+    CTL_IFACE_COMPOSITOR, "Broadcast", "s:verb", CTL_REPLY_STRING },
   { "compositor mfact", "Set the master area factor",
     CTL_IFACE_COMPOSITOR, "SetMfact", "d:mfact", CTL_REPLY_STRING },
   { "compositor nmaster", "Set the number of master windows",

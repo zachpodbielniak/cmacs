@@ -848,6 +848,18 @@ if test "$with_cmacs_gowl" != "no"; then
       $CMACS_GOWL_DEPS_CFLAGS"
     CMACS_GOWL_LIBS="-Wl,--whole-archive \$(srcdir)/../deps/gowl/build/$cmacs_dep_buildtype/libgowl.a \
       -Wl,--no-whole-archive $CMACS_GOWL_DEPS_LIBS"
+    # gowl's X11 delivery (src/core/gowl-xwayland-sync.c: keys into a
+    # background X11 window, for macros and the broadcast module) talks
+    # to Xwayland over an xcb connection of its own, and the archive
+    # carries those references -- a library reached only through
+    # wlroots' DT_NEEDED does not resolve a static archive's symbols.
+    # Optional, as in gowl's config.mk: without them gowl compiles the
+    # code out.  pkg-config only, no compile probe (see the note at the
+    # brigade block).
+    PKG_CHECK_MODULES([CMACS_GOWL_XCB], [xcb xcb-icccm],
+      [CMACS_GOWL_LIBS="$CMACS_GOWL_LIBS $CMACS_GOWL_XCB_LIBS"], [:])
+    PKG_CHECK_MODULES([CMACS_GOWL_XCB_XINPUT], [xcb-xinput],
+      [CMACS_GOWL_LIBS="$CMACS_GOWL_LIBS $CMACS_GOWL_XCB_XINPUT_LIBS"], [:])
     CMACS_GOWL_BUNDLED=yes
     # Check for libdecor (optional, for nested Wayland window decorations)
     PKG_CHECK_MODULES([LIBDECOR], [libdecor-0],

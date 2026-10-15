@@ -175,6 +175,7 @@ resolve at all.
 | =RunKeybind=               | =(s) -> (s)=    | Run what a key is bound to                     |
 | =ListKeybinds=             | =() -> (s)=     | Bound keys with action nick, arg and desc      |
 | =RunMacro=                 | =(sas) -> (s)=  | Run a gowl macro by name with arguments        |
+| =Broadcast=                | =(s) -> (s)=    | Input broadcasting: =status=, =list=, =on=, =off=, =toggle=, =panic=.  Signal =ModuleEvent= =(ss)= (module, text) on every module announcement, e.g. =broadcast= / =on eq= |
 | =Lock= / =Unlock=          | =() -> (s)=     | Toggle the session lock                        |
 | =PointerConfine=           | =(s) -> (s)=    | Keep the pointer in the focused window: =on=, =off=, =toggle=, or =state= / =""= to only ask; answers =on= or =off=.  Signal =PointerConfineChanged= =(bss)= (active, app-id, reason) on every change |
 | =Screenshot=               | =(ssss) -> (s)= | mode, client, by, file                         |
@@ -203,6 +204,16 @@ It goes through Elisp, so the opt-in macro module is loaded on first
 use exactly as by any other caller.  From the shell:
 =emacsctl compositor macro sort-windows reverse=.  See the Macros
 section of the gowl chapter.
+
+=Broadcast= drives input broadcasting (multiboxing): =status= and
+=list= answer JSON, =on=, =off= and =toggle= switch it (with a toast),
+=panic= switches it off and releases every key held in any window.  It
+goes through Elisp (=cmacs-gowl-broadcast-rpc=), so the opt-in broadcast
+module is loaded on first use.  From the shell: =emacsctl compositor
+broadcast toggle=.  The compositor's =module-event= signal is relayed as
+=ModuleEvent=, so a script can follow broadcasting being switched
+without polling.  See the Input broadcasting section of the gowl
+chapter.
 
 * Monitor methods (when =--with-cmacs-gowl=)
 :PROPERTIES:

@@ -58,6 +58,11 @@ static const gchar *iface_xml =
   "    <arg type='s' name='name' direction='in'/>"
   "    <arg type='as' name='args' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* Input broadcasting (multiboxing): status, list, on, off, toggle or
+     panic.  Loads the opt-in broadcast module on first use. */
+  "  <method name='Broadcast'>"
+  "    <arg type='s' name='verb' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='AddRule'>"
   "    <arg type='s' name='app_id' direction='in'/>"
   "    <arg type='s' name='title' direction='in'/>"
@@ -146,6 +151,10 @@ static const gchar *iface_xml =
   "  <signal name='PointerConfineChanged'>"
   "    <arg type='b' name='active'/><arg type='s' name='app_id'/>"
   "    <arg type='s' name='reason'/></signal>"
+  /* A gowl module announced a change of state: module "broadcast",
+     text "on eq" / "off panic" -- what IPC subscribers see as EVENT. */
+  "  <signal name='ModuleEvent'>"
+  "    <arg type='s' name='module'/><arg type='s' name='text'/></signal>"
   "  <method name='ReloadConfig'>"
   "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='ConfigGet'>"
@@ -267,6 +276,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       g_autofree const gchar **args = NULL;
       g_variant_get (p, "(&s^a&s)", &name, &args);
       RETURN_STR (cmacs_dispatch_gowl_run_macro (name, args, &err));
+    }
+  else if (g_strcmp0 (m, "Broadcast") == 0)
+    {
+      const gchar *verb;
+      g_variant_get (p, "(&s)", &verb);
+      RETURN_STR (cmacs_dispatch_gowl_broadcast (verb, &err));
     }
   else if (g_strcmp0 (m, "AddRule") == 0)
     {

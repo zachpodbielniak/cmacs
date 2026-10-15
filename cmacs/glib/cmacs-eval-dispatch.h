@@ -212,6 +212,11 @@ gchar *cmacs_dispatch_gowl_run_macro (const gchar *name,
                                       const gchar * const *args,
                                       GError **error);
 
+/* Input broadcasting: VERB is status, list, on, off, toggle or panic.
+   Through Elisp (`cmacs-gowl-broadcast-rpc'), which loads the opt-in
+   module when needed.  Returns the module's reply text or "ERROR ...". */
+gchar *cmacs_dispatch_gowl_broadcast (const gchar *verb, GError **error);
+
 /* Add a window rule. */
 gchar *cmacs_dispatch_gowl_add_rule (const gchar *app_id,
                                       const gchar *title,
