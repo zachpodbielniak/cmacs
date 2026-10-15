@@ -8,8 +8,9 @@
 ;; gowl's `floatdesk' module turns a workspace (a tag) into a floating
 ;; desktop: every window on it floats, new windows open centred at a
 ;; sensible size and cascade, floating windows get title bars
-;; (minimize, maximize, close; drag to an edge to snap; double-click to
-;; maximize), focus follows the click, and a dock of pinned and running
+;; (close, minimize and maximize on the left, the title centred; drag
+;; to an edge to snap; double-click to maximize), focus follows the
+;; click, and a dock of pinned and running
 ;; applications sits along one edge of the output.  Leaving the mode
 ;; tiles again exactly the windows the mode floated -- dialogs, windows
 ;; a rule floated and windows the user floated are left alone.

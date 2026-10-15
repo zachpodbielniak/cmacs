@@ -3062,8 +3062,9 @@ compositor broadcast toggle}) and MCP (@code{gowl_broadcast_*}).
 gowl's @code{floatdesk} module turns individual workspaces (tags) into
 a @emph{floating desktop}: every window on one floats, new windows
 open centred at a sensible size and cascade, floating windows get title
-bars (minimize, maximize, close; double-click to maximize; drag to the
-left or right edge to snap to that half, to the top to maximize;
+bars (close, minimize and maximize on the left, the title centred;
+double-click to maximize; drag to the left or right edge to snap to
+that half, to the top to maximize;
 borders resize), focus follows the click, minimize hides a window and
 leaves you where you were, and a dock of pinned and running
 applications sits along one edge of the output.  Leaving the mode tiles
