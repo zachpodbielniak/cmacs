@@ -3128,55 +3128,52 @@ with the window and hides/shows with buffer switching."
 ;;; Signal convenience wrappers
 
 (defvar cmacs-gowl--signal-handles nil
-  "Alist of (HANDLE . DESCRIPTION) for active signal connections.")
+  "Alist of (HANDLE OBJECT . DESCRIPTION) for active signal connections.
+HANDLE is the GLib handler id `gobject-connect' returned, and OBJECT
+the GObject it was connected on: `gobject-disconnect' needs both, and
+a bare id cannot name its object.")
+
+(defun cmacs-gowl--signal-connect (object signal callback)
+  "Connect CALLBACK to SIGNAL on OBJECT and record the connection.
+Return the handler id, the handle `cmacs-gowl-signal-disconnect' takes."
+  (let ((handle (gobject-connect object signal callback)))
+    (push (cons handle (cons object signal)) cmacs-gowl--signal-handles)
+    handle))
 
 (defun cmacs-gowl-on-focus-changed (callback)
   "Connect CALLBACK to the compositor's \"focus-changed\" signal.
 CALLBACK is called with one argument, the newly focused client
 GObject (or nil when focus is cleared).
 Returns a handle for `cmacs-gowl-signal-disconnect'."
-  (let ((handle (gobject-connect (gowl-compositor)
-                                 "focus-changed" callback)))
-    (push (cons handle "focus-changed") cmacs-gowl--signal-handles)
-    handle))
+  (cmacs-gowl--signal-connect (gowl-compositor) "focus-changed" callback))
 
 (defun cmacs-gowl-on-client-added (callback)
   "Connect CALLBACK to the compositor's \"client-added\" signal.
 CALLBACK is called with one argument, the new client GObject.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
-  (let ((handle (gobject-connect (gowl-compositor)
-                                 "client-added" callback)))
-    (push (cons handle "client-added") cmacs-gowl--signal-handles)
-    handle))
+  (cmacs-gowl--signal-connect (gowl-compositor) "client-added" callback))
 
 (defun cmacs-gowl-on-client-removed (callback)
   "Connect CALLBACK to the compositor's \"client-removed\" signal.
 CALLBACK is called with one argument, the departing client GObject.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
-  (let ((handle (gobject-connect (gowl-compositor)
-                                 "client-removed" callback)))
-    (push (cons handle "client-removed") cmacs-gowl--signal-handles)
-    handle))
+  (cmacs-gowl--signal-connect (gowl-compositor) "client-removed" callback))
 
 (defun cmacs-gowl-on-tag-changed (callback &optional monitor)
   "Connect CALLBACK to a monitor's \"tag-changed\" signal.
 CALLBACK is called with no arguments when the viewed tags change.
 MONITOR is a GowlMonitor object or nil for the focused monitor.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
-  (let* ((mon (or monitor (gowl-focused-monitor)))
-         (handle (gobject-connect mon "tag-changed" callback)))
-    (push (cons handle "tag-changed") cmacs-gowl--signal-handles)
-    handle))
+  (cmacs-gowl--signal-connect (or monitor (gowl-focused-monitor))
+                              "tag-changed" callback))
 
 (defun cmacs-gowl-on-layout-changed (callback &optional monitor)
   "Connect CALLBACK to a monitor's \"layout-changed\" signal.
 CALLBACK is called with no arguments when the layout changes.
 MONITOR is a GowlMonitor object or nil for the focused monitor.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
-  (let* ((mon (or monitor (gowl-focused-monitor)))
-         (handle (gobject-connect mon "layout-changed" callback)))
-    (push (cons handle "layout-changed") cmacs-gowl--signal-handles)
-    handle))
+  (cmacs-gowl--signal-connect (or monitor (gowl-focused-monitor))
+                              "layout-changed" callback))
 
 (defun cmacs-gowl-on-idle (callback)
   "Connect CALLBACK to the idle manager's \"idle\" signal.
@@ -3184,9 +3181,7 @@ CALLBACK is called with no arguments when the idle timeout elapses.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
   (let ((mgr (gowl-idle-manager)))
     (when mgr
-      (let ((handle (gobject-connect mgr "idle" callback)))
-        (push (cons handle "idle") cmacs-gowl--signal-handles)
-        handle))))
+      (cmacs-gowl--signal-connect mgr "idle" callback))))
 
 (defun cmacs-gowl-on-resume (callback)
   "Connect CALLBACK to the idle manager's \"resume\" signal.
@@ -3194,9 +3189,7 @@ CALLBACK is called with no arguments when input resumes after idle.
 Returns a handle for `cmacs-gowl-signal-disconnect'."
   (let ((mgr (gowl-idle-manager)))
     (when mgr
-      (let ((handle (gobject-connect mgr "resume" callback)))
-        (push (cons handle "resume") cmacs-gowl--signal-handles)
-        handle))))
+      (cmacs-gowl--signal-connect mgr "resume" callback))))
 
 ;;; Hooks
 ;;
@@ -3372,10 +3365,13 @@ this runs from `cmacs-gowl-monitor-added-functions' as well."
   "Disconnect a signal connection identified by HANDLE.
 HANDLE is a value previously returned by one of the
 `cmacs-gowl-on-*' functions."
-  (when handle
-    (gobject-disconnect handle)
-    (setq cmacs-gowl--signal-handles
-          (assq-delete-all handle cmacs-gowl--signal-handles))))
+  (let ((entry (and handle (assq handle cmacs-gowl--signal-handles))))
+    (when entry
+      (setq cmacs-gowl--signal-handles
+            (delq entry cmacs-gowl--signal-handles))
+      ;; The object may already be gone (a monitor unplugged, the
+      ;; compositor stopped); its handlers went with it.
+      (ignore-errors (gobject-disconnect (cadr entry) handle)))))
 
 
 ;;; Interactive commands

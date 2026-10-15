@@ -2438,6 +2438,28 @@ delayed key over raw IPC; removing and disabling leave nothing."
       (should (eql status 0))
       (should (string-match-p "cmacs-gowl-input-remap: ok" output)))))
 
+;;; Signal wrappers
+
+(ert-deftest cmacs-gowl-test-signal-disconnect-passes-object ()
+  "`cmacs-gowl-signal-disconnect' really disconnects the handler.
+It used to call `gobject-disconnect' with the handler id alone, an
+arity error for a two-argument DEFUN, so no `cmacs-gowl-on-*'
+connection could ever be undone.  A plain GObject stands in for the
+compositor: the wrapper only needs something to connect on."
+  (skip-unless (fboundp 'gobject-new))
+  (let* ((cmacs-gowl--signal-handles nil)
+         (obj (gobject-new "GObject"))
+         (handle (cmacs-gowl--signal-connect obj "notify" #'ignore)))
+    (should (integerp handle))
+    (should (eq (cadr (assq handle cmacs-gowl--signal-handles)) obj))
+    (cmacs-gowl-signal-disconnect handle)
+    (should-not (assq handle cmacs-gowl--signal-handles))
+    ;; Already gone: a second disconnect of the same id finds nothing.
+    (should-not (gobject-disconnect obj handle))
+    ;; An unknown or nil handle is a no-op, not an error.
+    (cmacs-gowl-signal-disconnect handle)
+    (cmacs-gowl-signal-disconnect nil)))
+
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here
 

@@ -37,7 +37,7 @@
 Handlers receive one argument: the message data string.")
 
 (defvar cmacs-org-ex-bridge--connections nil
-  "List of active bridge signal connections for cleanup.")
+  "List of (OBJECT . HANDLER-ID) bridge signal connections for cleanup.")
 
 (defun cmacs-org-ex-bridge-register (action handler)
   "Register HANDLER for messages with ACTION.
@@ -100,12 +100,12 @@ JavaScript in the web page can send messages via:
                                           (cmacs-org-ex-bridge--dispatch
                                            msg)))
                                     (error nil))))))
-          (push handle cmacs-org-ex-bridge--connections))))))
+          (push (cons ucm handle) cmacs-org-ex-bridge--connections))))))
 
 (defun cmacs-org-ex-bridge-teardown ()
   "Disconnect all bridge signal connections."
-  (dolist (handle cmacs-org-ex-bridge--connections)
-    (ignore-errors (gobject-disconnect handle)))
+  (dolist (conn cmacs-org-ex-bridge--connections)
+    (ignore-errors (gobject-disconnect (car conn) (cdr conn))))
   (setq cmacs-org-ex-bridge--connections nil))
 
 (defun cmacs-org-ex-bridge--widget-hook (webview props)
