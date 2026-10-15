@@ -1206,7 +1206,11 @@ if test "$with_cmacs_lrgvr" != "no"; then
   dnl are read from evdev and translated with the system XKB layout.
   PKG_CHECK_MODULES([CMACS_LRGVR], [openxr xkbcommon], [],
     [AC_MSG_ERROR([--with-cmacs-lrgvr requires the OpenXR loader and xkbcommon (Fedora: openxr-devel libxkbcommon-devel; Debian/Ubuntu: libopenxr-dev libxkbcommon-dev; Arch: openxr libxkbcommon)])])
-  AC_CHECK_HEADER([EGL/egl.h], [],
+  dnl pkg-config, NOT AC_CHECK_HEADER: a compile probe this early expands
+  dnl AC_CHECK_INCLUDES_DEFAULT before AC_PROG_CC, even inside an `if'
+  dnl that is not taken, and every later probe then runs with an empty
+  dnl $CC (memfd_create "no" -> --with-cmacs-screensaver aborts).
+  PKG_CHECK_EXISTS([egl], [],
     [AC_MSG_ERROR([--with-cmacs-lrgvr requires the EGL headers (Fedora: mesa-libEGL-devel; Debian/Ubuntu: libegl-dev)])])
   AC_DEFINE([HAVE_CMACS_LRGVR], 1, [CMacs OpenXR VR mode for emacs --lrg=3dvr])
   CMACS_LRGTERM_OBJ="$CMACS_LRGTERM_OBJ cmacs-lrgvr.o cmacs-lrgvr-kbd.o"
