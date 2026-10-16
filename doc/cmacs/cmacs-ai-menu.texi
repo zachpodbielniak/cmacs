@@ -115,6 +115,8 @@ bind it where you like:
 @item @kbd{m} @tab @code{cmacs-ai-menu} @tab pop the menu at point
 @item @kbd{s} @tab @code{cmacs-ai-summarize} @tab summarize
 @item @kbd{r} @tab @code{cmacs-ai-rephrase} @tab rephrase
+@item @kbd{f} @tab @code{cmacs-ai-proofread} @tab fix spelling and grammar
+@item @kbd{F} @tab @code{cmacs-ai-proofread-in-place} @tab the same, in place
 @item @kbd{p} @tab @code{cmacs-ai-reply} @tab draft a reply
 @item @kbd{e} @tab @code{cmacs-ai-explain} @tab explain
 @item @kbd{?} @tab @code{cmacs-ai-ask} @tab ask a question about it
@@ -177,6 +179,8 @@ answer as ``use your judgement'':
   @tab summarize it for someone new to it
 @item rephrase @tab @samp{Rephrase -- how?}
   @tab clearer, tighter, more direct
+@item proofread @tab @samp{Proofread -- anything to watch for?}
+  @tab fix only spelling, grammar and punctuation
 @item reply @tab @samp{Reply -- what do you want to say?}
   @tab draft the reply you judge most appropriate
 @item explain @tab @samp{Explain -- focus on}
@@ -193,6 +197,26 @@ None of them touches your buffer.  @code{rephrase} deliberately
 version is @code{cmacs-ai-rewrite-region}, which has always been a
 different command with different consequences, and appears on the menu
 as @samp{Rewrite in place...}.
+
+@cindex proofread
+@cindex spelling and grammar
+@samp{Fix spelling & grammar...} (@code{cmacs-ai-proofread}) is the
+copy editor: it corrects spelling, grammar, punctuation and obvious
+typos and changes nothing else---not the wording, the voice or the
+formatting.  The system prompt is
+@code{cmacs-ai-proofread-system-prompt}.
+
+@samp{Fix spelling & grammar in place}
+(@code{cmacs-ai-proofread-in-place}) replaces the text when the answer
+arrives, as one undo step.  Unlike @samp{Rewrite in place...} it is
+asynchronous, so a slow model never freezes Emacs---which, under
+@code{cmacs --gowl}, is the whole desktop.  If the text changed while
+the model was working, nothing is overwritten; the correction goes to
+the kill ring.  With no region it proofreads the paragraph at point.
+
+Both use @code{cmacs-ai-proofread-text}, which takes a string and a
+callback and never prompts or blocks; the gowl bar's @code{ai-rewrite}
+widget uses it as its default action.
 
 @node AI Menu Result Window
 @section The Result Window

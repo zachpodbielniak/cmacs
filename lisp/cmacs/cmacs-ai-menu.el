@@ -282,6 +282,8 @@ result in unconditionally:
     (define-key map (kbd "m") #'cmacs-ai-menu)
     (define-key map (kbd "s") #'cmacs-ai-summarize)
     (define-key map (kbd "r") #'cmacs-ai-rephrase)
+    (define-key map (kbd "f") #'cmacs-ai-proofread)
+    (define-key map (kbd "F") #'cmacs-ai-proofread-in-place)
     (define-key map (kbd "p") #'cmacs-ai-reply)
     (define-key map (kbd "e") #'cmacs-ai-explain)
     (define-key map (kbd "?") #'cmacs-ai-ask)

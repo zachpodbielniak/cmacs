@@ -30,6 +30,7 @@
 
 (require 'cmacs-ai-target)
 (require 'cmacs-ai-output)
+(require 'cmacs-ai-proofread)
 
 (declare-function cmacs-ai--ensure "cmacs-ai" ())
 (declare-function cmacs-ai-make-session "cmacs-ai"
@@ -146,6 +147,13 @@ with the answer, then only as much support as it needs."
      :history cmacs-ai-textops--rephrase-history
      :instruction "Rephrase the following."
      :default "Make it clearer, tighter and more direct.")
+    (proofread
+     :title "proofread"
+     :system cmacs-ai-proofread-system-prompt
+     :read "Proofread -- anything to watch for? (RET to fix spelling and grammar): "
+     :history cmacs-ai-textops--proofread-history
+     :instruction "Correct the spelling, grammar and punctuation of the following, changing nothing else."
+     :default "Fix only spelling, grammar and punctuation.")
     (reply
      :title "reply"
      :system cmacs-ai-reply-system-prompt
@@ -170,7 +178,7 @@ with the answer, then only as much support as it needs."
      :history cmacs-ai-textops--ask-history
      :instruction "Answer a question about the following."
      :default "What is the most useful thing to know about this?"))
-  "Specifications for the three text operations.
+  "Specifications for the text operations.
 
 Each entry is (NAME . PLIST).  :system names the defcustom holding the
 system prompt (indirected, so customising it takes effect immediately
@@ -181,6 +189,7 @@ variable.")
 (defvar cmacs-ai-textops--summarize-history nil)
 (defvar cmacs-ai-textops--rephrase-history nil)
 (defvar cmacs-ai-textops--reply-history nil)
+(defvar cmacs-ai-textops--proofread-history nil)
 (defvar cmacs-ai-textops--explain-history nil)
 (defvar cmacs-ai-textops--ask-history nil)
 
@@ -215,7 +224,8 @@ operation's default, which is the common case."
 (defun cmacs-ai-textops-run (op target &optional refinement)
   "Run text operation OP over TARGET and stream the result to a window.
 
-OP is `summarize\=', `rephrase\=', `reply\=', `explain\=' or `ask\='.  REFINEMENT
+OP is `summarize\=', `rephrase\=', `proofread\=', `reply\=', `explain\=' or
+`ask\='.  REFINEMENT
 is the free-text instruction; when omitted it is read from the
 minibuffer.  Returns the result buffer."
   (unless (cmacs-ai-target-p target)
@@ -317,6 +327,15 @@ The buffer is not modified -- use `cmacs-ai-rewrite-region' for that.
 REFINEMENT is read from the minibuffer; RET accepts the default."
   (interactive (list (cmacs-ai-textops-read-refinement 'rephrase)))
   (cmacs-ai-textops-run 'rephrase (cmacs-ai-textops--target) refinement))
+
+;;;###autoload
+(defun cmacs-ai-proofread (&optional refinement)
+  "Fix the spelling and grammar of the region, or what is at point.
+The corrected text appears in a result window; the buffer is not
+modified -- `cmacs-ai-proofread-in-place' replaces the text instead.
+REFINEMENT is read from the minibuffer; RET accepts the default."
+  (interactive (list (cmacs-ai-textops-read-refinement 'proofread)))
+  (cmacs-ai-textops-run 'proofread (cmacs-ai-textops--target) refinement))
 
 ;;;###autoload
 (defun cmacs-ai-reply (&optional refinement)

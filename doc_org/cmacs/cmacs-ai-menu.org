@@ -41,7 +41,7 @@ actions are registered -- the context menu is shared property, and org
 alone contributes a dozen items to it.
 
 #+begin_example
-AI > Ask AI  > Ask about this... / Summarize... / Rephrase... / Reply... / ...
+AI > Ask AI  > Ask about this... / Summarize... / Rephrase... / Fix spelling & grammar... / Reply... / ...
      Chat    > New chat with this / Send to an open chat... / ...
      Brigade > Spawn an agent on this... / Pin as agent context / ...
      Tools   > your own deftool forms
@@ -82,6 +82,8 @@ where you like:
 | =m= | =cmacs-ai-menu=        | pop the graphical menu at point          |
 | =s= | =cmacs-ai-summarize=   | summarize                                |
 | =r= | =cmacs-ai-rephrase=    | rephrase                                 |
+| =f= | =cmacs-ai-proofread=   | fix spelling and grammar, in a window    |
+| =F= | =cmacs-ai-proofread-in-place= | fix spelling and grammar, in place |
 | =p= | =cmacs-ai-reply=       | draft a reply                            |
 | =e= | =cmacs-ai-explain=     | explain                                  |
 | =?= | =cmacs-ai-ask=         | ask a question about it                  |
@@ -134,6 +136,7 @@ as "use your judgement":
 |-----------+-------------------------------------------------+---------------------------------------------|
 | summarize | =Summarize -- focus on=                         | summarize it for someone new to it          |
 | rephrase  | =Rephrase -- how?=                              | clearer, tighter, more direct               |
+| proofread | =Proofread -- anything to watch for?=           | fix only spelling, grammar and punctuation  |
 | reply     | =Reply -- what do you want to say?=             | draft the reply you judge most appropriate  |
 | explain   | =Explain -- focus on=                           | what it does and why, minus the obvious     |
 | ask       | =Ask about this=                                | the most useful thing to know about it      |
@@ -145,6 +148,14 @@ the rewrite rather than applying it; the in-place version is
 =cmacs-ai-rewrite-region=, which has always been a different command
 with different consequences, and appears on the menu as *Rewrite in
 place...*.
+
+** Fix spelling & grammar
+
+*Fix spelling & grammar...* (=cmacs-ai-proofread=, =f= in the command map) is the copy editor: it corrects spelling, grammar, punctuation and obvious typos and changes nothing else -- not the wording, not the voice, not the formatting.  That is the difference from Rephrase, which rewrites for clarity, and it is the one that matters for text that has to stay in someone's own voice.  The system prompt is =cmacs-ai-proofread-system-prompt=.
+
+*Fix spelling & grammar in place* (=cmacs-ai-proofread-in-place=, =F=) replaces the text when the answer arrives, as one undo step.  Unlike *Rewrite in place...* it is asynchronous: keep typing while the model works.  Under =cmacs --gowl= that is not a nicety -- Emacs's thread is the compositor's, and a synchronous model call there freezes the desktop.  If the text changed while the model was working, nothing is overwritten; the correction goes to the kill ring and the echo area says so.  With no region it proofreads the paragraph at point.
+
+The engine both use is =cmacs-ai-proofread-text=, which takes a string and a callback and never prompts or blocks, so other surfaces can call it -- the gowl bar's =ai-rewrite= widget uses this action as its default.
 
 ** The result window
 

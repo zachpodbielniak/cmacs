@@ -275,12 +275,13 @@ piece of text ask for this as well."
 
 ;;;; Ask group ---------------------------------------------------------
 ;;
-;; All five run through `cmacs-ai-textops-run', so they share one prompt
+;; All six run through `cmacs-ai-textops-run', so they share one prompt
 ;; style, one result window, and one cancel path.
 
 (dolist (spec '((ask       . 10)
                 (summarize . 20)
                 (rephrase  . 30)
+                (proofread . 35)
                 (reply     . 40)
                 (explain   . 50)))
   (let ((op (car spec)) (order (cdr spec)))
@@ -292,11 +293,14 @@ piece of text ask for this as well."
               ('ask "Ask about this...")
               ('summarize "Summarize...")
               ('rephrase "Rephrase...")
+              ('proofread "Fix spelling & grammar...")
               ('reply "Reply...")
               ('explain "Explain..."))
-     :help (format "%s this with cmacs-ai, in a result window"
-                   (capitalize (symbol-name op)))
-     :applies (if (memq op '(rephrase reply))
+     :help (if (eq op 'proofread)
+               "Correct spelling, grammar and punctuation, in a result window"
+             (format "%s this with cmacs-ai, in a result window"
+                     (capitalize (symbol-name op))))
+     :applies (if (memq op '(rephrase proofread reply))
                   (lambda (target)
                     (and (cmacs-ai-actions--textual-p target)
                          (cmacs-ai-actions--single-item-p target)))
@@ -323,6 +327,25 @@ piece of text ask for this as well."
          (set-mark (cdr bounds))
          (activate-mark)
          (call-interactively #'cmacs-ai-rewrite-region))))))
+
+(cmacs-ai-register-action
+ :name 'cmacs-ai-proofread-in-place
+ :group 'ask :order 65
+ :label "Fix spelling & grammar in place"
+ :help "Correct spelling, grammar and punctuation here (one undo step)"
+ :applies (lambda (target)
+            (and (cmacs-ai-actions--editable-p target)
+                 (cmacs-ai-actions--textual-p target)
+                 (cmacs-ai-actions--single-item-p target)))
+ :run
+ (lambda (target)
+   ;; Asynchronous, unlike "Rewrite in place": the answer is put in
+   ;; when it arrives, so a slow model never freezes Emacs -- which,
+   ;; under --gowl, is the whole desktop.
+   (require 'cmacs-ai-proofread)
+   (let ((bounds (cmacs-ai-target-bounds target)))
+     (with-current-buffer (cmacs-ai-target-buffer target)
+       (cmacs-ai-proofread-in-place (car bounds) (cdr bounds))))))
 
 (cmacs-ai-register-action
  :name 'cmacs-ai-document
