@@ -1,0 +1,225 @@
+#+TITLE: Bar Widgets: the Extended Set
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+gowl ships an extended set of bar widgets beside the classic ones in [[file:bar-widgets.org][Bar Widgets Reference]]: an AI assistant, an AI rewrite of the selected text, a meeting recorder that transcribes and files its notes, a translator, a keybinding wheel, a themed web-mail window, development service stacks, network shares, a TV remote and a World of Warcraft gold tracker, plus an activity style for the cpu widget.
+
+They are ports of Omarchy shell plugins, renamed for what they do, written as native gowl bar widgets in C (=deps/gowl/modules/bar/bar-plugins-*.c=), each with its own page in gowl's =docs/bar-widgets/= --- every setting, the standalone configuration, the dependencies and the troubleshooting live there. This page covers what is the same for all of them and what *cmacs* adds: which are on under =cmacs --gowl=, how they reach cmacs-ai, cmacs-transcribe and the second brain, and the Elisp that configures them.
+
+| Widget          | What it is                                                         | Under =cmacs --gowl=         | Standalone gowl                     | gowl page                       |
+|-----------------+--------------------------------------------------------------------+------------------------------+-------------------------------------+---------------------------------|
+| =cpu= (activity) | The cpu widget as a load "creature"; per-core map, processes, kill | on (=cpu.style: creature=)   | off (=style: label=)                | =docs/bar-widgets/cpu-activity.org= |
+| =ai-assistant=  | Chat with any provider; ollama models; the machine                 | on, top bar, via cmacs-ai    | off; uses ai-glib's =ai=             | =ai-assistant.org=              |
+| =meeting-notes= | Record outputs and mics, transcribe, summarise, file               | on, top bar, via cmacs       | off; needs configuring              | =meeting-notes.org=             |
+| =ai-rewrite=    | Rewrite the selected text (fix, improve, shorten, any AI action)   | off; actions pushed by cmacs | off; uses =ai=                      | =ai-rewrite.org=                |
+| =translate=     | Two-pane translator overlay                                        | off; AI engine via cmacs     | off; LibreTranslate / MyMemory / =ai= | =translate.org=                 |
+| =keywheel=      | Radial cheat sheet of every keybinding (+ an Emacs face)           | off; Emacs face pushed       | off                                 | =keywheel.org=                  |
+| =webmail=       | A themed web-mail window (gsurf) with an unread count              | off                          | off                                 | =webmail.org=                   |
+| =devservices=   | Start, stop and watch a project's dev services (podman)            | off                          | off                                 | =devservices.org=               |
+| =netshares=     | Mount CIFS, NFS and SSHFS shares                                   | off                          | off                                 | =netshares.org=                 |
+| =tvremote=      | Fire TV, Android TV, Roku, Samsung and LG remote                   | off                          | off                                 | =tvremote.org=                  |
+| =wow-gold=      | WoW gold, sales and trends from your addons, via =tsmctl=          | off                          | off                                 | =wow-gold.org=                  |
+
+"Off" means the widget is shipped in =bar.so= and does nothing until it is added to a widget list; nothing else needs installing to try one.
+
+* Turning a widget on or off
+
+** Under cmacs --gowl
+
+=cmacs-gowl-bar-widgets-apply= runs once when the compositor's bar comes up (=lisp/cmacs/cmacs-gowl-bar-widgets.el=). Everything it does is a defcustom in the =cmacs-gowl-bar= group (=M-x customize-group RET cmacs-gowl-bar=):
+
+| Option                                   | Default                                              | Does                                                                                         |
+|------------------------------------------+------------------------------------------------------+----------------------------------------------------------------------------------------------|
+| =cmacs-gowl-bar-cpu-style=               | =creature=                                           | The cpu widget's style: =creature=, =label=, or =nil= to leave it alone                      |
+| =cmacs-gowl-bar-default-widgets=         | =meeting-notes= and =ai-assistant= at =top-right=    | (WIDGET . PLACE) pairs to add; remove one to turn it off, add one to turn another on          |
+| =cmacs-gowl-bar-ai-widgets=              | the four AI widgets                                  | Widgets pointed at cmacs-ai (=ai-backend: cmacs=)                                            |
+| =cmacs-gowl-bar-widgets-setup-functions= | the widgets' push functions                          | Each widget's cmacs half: providers, actions, destinations, the Emacs face                   |
+| =cmacs-gowl-bar-devservices-follow-buffer= | =nil=                                              | Push the selected buffer's directory to =devservices= (its =auto= mode then follows cmacs)   |
+
+PLACE is =top-left=, =top-center=, =top-right=, =bottom-left=, =bottom-center= or =bottom-right=. Placement uses the bar's amendment keys only (=widgets-right-add= and friends), each add preceded by its remove, so the shipped layout and anything you configured stay where they are and a restart never adds a widget twice. Prefer a side region: adding to a centre region resets the bar's centre anchor (the clock).
+
+To add a widget by hand, or set any of its settings, from your init:
+
+#+begin_src emacs-lisp
+;; Turn two more on, in the bottom bar.
+(add-to-list 'cmacs-gowl-bar-default-widgets '("wow-gold" . bottom-right))
+(add-to-list 'cmacs-gowl-bar-default-widgets '("tvremote" . bottom-right))
+
+;; Or directly, at any time (a running bar takes it at once).
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-remove" . "wow-gold")
+   ("widgets-right-add"    . "wow-gold")
+   ("wow-gold.host"        . "mob-zach")))
+
+;; Turn the assistant off.
+(setq cmacs-gowl-bar-default-widgets
+      (assoc-delete-all "ai-assistant" cmacs-gowl-bar-default-widgets))
+#+end_src
+
+A =<widget>.<key>= setting does not need its widget to be on the bar yet: the bar remembers it and hands it over when the widget is added, so the order of your configuration never matters.
+
+=cmacs-gowl-bar-push= is the helper the integrations use: =(cmacs-gowl-bar-push "wow-gold" '(("host" . "local")))= sets the setting on whichever bar the widget is in, and never signals when no bar is running.
+
+** Standalone gowl
+
+Nothing is on. Add a widget in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "ai-assistant wow-gold"
+    ai-assistant.ai-provider: ollama
+    wow-gold.host: local
+keybinds:
+  "Super+e":       { action: ipc_command, arg: "bar-panel ai-rewrite", desc: "AI rewrite" }
+  "Super+Alt+t":   { action: ipc_command, arg: "bar-panel translate",  desc: "Translate" }
+  "Super+Alt+k":   { action: ipc_command, arg: "bar-panel keywheel",   desc: "Keybinding wheel" }
+#+end_src
+
+Standalone, the AI widgets use ai-glib's own =ai= command (providers and keys in =~/.config/ai-glib/config.yaml=), and =meeting-notes= needs its recorder, whisper model and output directory configured --- see its page.
+
+* Opening a panel from a key
+
+Every widget's panel opens with =gowl bar-panel NAME= (=gowl bar-panel= alone closes it), so a keybind is an =ipc_command=:
+
+#+begin_src emacs-lisp
+(gowl-add-keybind "Super+e"     'ipc-command "bar-panel ai-rewrite" "AI rewrite the selection")
+(gowl-add-keybind "Super+Alt+t" 'ipc-command "bar-panel translate"  "Translate")
+(gowl-add-keybind "Super+Alt+k" 'ipc-command "bar-panel keywheel"   "Keybinding wheel")
+(gowl-add-keybind "Super+Alt+o" 'ipc-command "bar-panel tvremote"   "TV remote")
+#+end_src
+
+These combinations are free in both gowl's shipped config and cmacs's default keybinds; none is bound by default.
+
+A widget can also be sent one of its panel actions without its panel: =gowl bar-widget-action WIDGET ID [INDEX [VALUE]]=. That is how a key turns the TV down:
+
+#+begin_src emacs-lisp
+(gowl-add-keybind "Super+Alt+equal" 'ipc-command
+                  "bar-widget-action tvremote key:vol_up" "TV volume up")
+#+end_src
+
+* Typing into a panel
+
+Several of these panels have text fields (the assistant's question, the translator's panes, the rewrite's custom instruction, the network-share form) and pictures (the CPU core map, the keybinding wheel, the TV remote). Both are new panel item kinds every widget can use:
+
+- A *text field* gets the keys while it has the keyboard: =j=, =k= and =Space= type.  =Return= submits (=Ctrl+Return= in a multi-line field), =Tab= / =Shift+Tab= leave it, =Ctrl+V= pastes, =Escape= closes the panel. =Alt= and =Super= chords are never taken by a field, so the window manager still answers.
+- A *canvas* that has the keyboard hears every key but =Escape= first --- the remote's arrows, the wheel's =j= --- and the mouse wheel over it is its own (the TV's volume, the wheel's faces).
+
+The full key list is in gowl's =docs/bar.org= under /Panels/.
+
+* AI: one set of providers
+
+The four AI widgets --- =ai-assistant=, =ai-rewrite=, =translate= (its =ai= engine) and =meeting-notes= (its summary) --- go through one backend in gowl (=modules/bar/bar-ai.c=). Under cmacs it is pointed at cmacs-ai:
+
+- The widget runs =emacsctl eval '(cmacs-gowl-bar-ai-run WIDGET ID SYSTEM PROMPT PROVIDER MODEL)'=, which starts an *asynchronous* cmacs-ai stream and returns at once --- under =--gowl= Emacs's thread is the compositor's, and a synchronous model call there would freeze the desktop. The answer is pushed back to the widget as settings, throttled to =cmacs-gowl-bar-ai-push-interval= (0.25 s).
+- Every provider configured in cmacs-ai is available, including named =cmacs-ai-openai-compatible-endpoints=. A widget that names no provider uses =cmacs-gowl-bar-ai-provider=, or --- when that is nil --- the AI menu's =cmacs-ai-textops-provider= and model, so the bar and the right-click menu agree.
+- A widget can name its own: =ai-rewrite.ai-provider= / =ai-model= for the widget, or per action (an ai-rewrite action that wants a small local model for spelling and a large one for rewriting).
+- =emacsctl= must be on the compositor's =PATH= (it is, for =just gowl= and the installed session); set =<widget>.emacsctl= to a full path otherwise.
+
+| Option                            | Default | Does                                                     |
+|-----------------------------------+---------+----------------------------------------------------------|
+| =cmacs-gowl-bar-ai-provider=      | nil     | The bar's provider when a widget names none              |
+| =cmacs-gowl-bar-ai-model=         | nil     | Its model                                                |
+| =cmacs-gowl-bar-ai-push-interval= | 0.25    | Least time between two pushes of a streaming answer      |
+| =cmacs-gowl-bar-ai-max-chars=     | 200000  | Longest answer pushed to a widget                        |
+
+* The widgets, from cmacs
+
+** cpu --- activity style
+
+On by default under cmacs (=cmacs-gowl-bar-cpu-style=). The creature's left eye is CPU, its right eye memory, its body fills with load above =cpu.load-threshold=, and it grows flames past =cpu.heat-threshold=. Its panel adds a map of every core, an expanded view with GPU, storage, a filter and a process list where Terminate and Force kill (two clicks) check the process's start time and owner before signalling. Theme it per part with =cpu.color-body=, =-eye=, =-load=, =-hot=, =-flame=. Turn the plain label back on with =(setq cmacs-gowl-bar-cpu-style 'label)=.
+
+** ai-assistant
+
+On by default under cmacs, in the top bar. =cmacs-gowl-bar-assistant-push= gives it cmacs-ai's provider list, the default provider and model, and (for the CLI providers, whose lists are static) their model lists; ollama's models it reads from ollama itself. The panel's *In cmacs* button opens the conversation in a cmacs-ai chat buffer (=cmacs-gowl-bar-assistant-open-in-chat=), seeded with the transcript; set =cmacs-gowl-bar-assistant-send-on-open= to send it too. Downloads, deletes and loads of ollama models each need an approval click.
+
+** meeting-notes
+
+On by default under cmacs, in the top bar. Left-click records every selected output and microphone (right-click picks sources, the destination, a title); left-click again stops. Under cmacs the recording goes to =cmacs-gowl-bar-meeting-finish=, which mixes it, runs it through *cmacs-transcribe* with the meeting summary (summary, decisions, action items, open questions) and files the result:
+
+| =cmacs-gowl-bar-meeting-destination= | Where the notes go                                                                        |
+|--------------------------------------+-------------------------------------------------------------------------------------------|
+| =org-inbox= (default)                | An org file in =cmacs-gowl-bar-meeting-inbox= (=~/Documents/notes/00_inbox=), notes-repo header conventions |
+| =secondbrain=                        | Ingested into the second brain (=cmacs-secondbrain-ingest-run=, type =meeting=), placed by PARA |
+| =directory=                          | cmacs-transcribe's transcript and summary in =cmacs-gowl-bar-meeting-directory=          |
+| =both=                               | The second brain, keeping the directory copy                                             |
+
+The panel's destination buttons override it per meeting. =cmacs-gowl-bar-meeting-para= forces a PARA category for second-brain ingests, =cmacs-gowl-bar-meeting-tags= sets their tags. Progress shows on the widget (mixing, transcribing, summarising, filing). Speaker separation is not done yet; it is the planned next step.
+
+** ai-rewrite
+
+Off by default; add it and bind a key (=Super+e= above). Select text anywhere, press the key, pick an action by its letter; the result is shown as a word diff and =Return= pastes it over the selection (=y= copies only). Under cmacs, =cmacs-gowl-bar-rewrite-push= gives it every text operation on the right-click AI menu --- Fix spelling & grammar (first, =f=), Rephrase, Improve, Shorten, Translate to English, Summarize, Explain, Reply, Ask and a custom instruction --- built from =cmacs-ai-textops--specs= at push time, so a customised prompt carries over. Change the list with =cmacs-gowl-bar-rewrite-actions=; =cmacs-gowl-bar-rewrite-actions-mode= says whether it replaces or extends the widget's built-in actions.
+
+The *Fix spelling & grammar* action is also on the right-click AI menu itself, and as =f= / =F= in =cmacs-ai-menu-command-map= (see the AI menu manual).
+
+** translate
+
+Off by default. Under cmacs it is pointed at cmacs-ai (=translate.engine: ai=), which also detects the source language. Standalone it prefers a self-hosted LibreTranslate (=translate.libretranslate-url=), then MyMemory; Google's keyless endpoint is opt-in only. =Ctrl+S= swaps, =Ctrl+1= / =Ctrl+2= pick a pane, =Ctrl+Shift+V= translates the clipboard.
+
+** keywheel
+
+Off by default. Shows every gowl keybinding --- cmacs's =gowl-add-keybind= ones included --- on a wheel of modifier rings. Under cmacs, =cmacs-gowl-bar-keywheel-setup= adds an *Emacs* face listing the bindings under =cmacs-gowl-bar-keywheel-sources= (default: =global-map= under =C-c=; add =(doom-leader-map . "SPC")= for the Doom leader), runnable from the wheel. Every ring colour is themable: =keywheel.color-ring-super=, =-shift=, =-ctrl=, =-hub=, =-alt=, =keywheel.color-selected=, =-text=, =-muted=, =-bg=, =-unbound=, each a palette role or =#rrggbb=; unset, the wheel follows the session palette cmacs pushes to gowl.
+
+** webmail
+
+Off by default. A kiosk gsurf window for any web-mail (Outlook on the web by default; Fastmail, Gmail, Proton or a self-hosted Roundcube work too), shown and hidden from the bar, with the unread count on the widget. Its stylesheet is generated from the session palette --- the same one cmacs pushes to gowl --- so it follows your theme; =webmail.color-background=, =-surface=, =-text=, =-subtext=, =-accent=, =-border= override parts of it, =webmail.follow-theme: false= keeps only your overrides, and =webmail.extra-css= appends a file.
+
+** devservices
+
+Off by default. Per-project stacks in =~/.config/gowl/devservices/*.yaml= (podman compose services and processes, health checks, tasks). Its =auto= mode follows the focused window's directory; with cmacs focused, turn on =cmacs-gowl-bar-devservices-follow-buffer= so it follows the selected buffer instead.
+
+** netshares
+
+Off by default. CIFS, NFS and SSHFS connections in =~/.config/gowl/netshares.yaml=; passwords live in the keyring (=secret-tool=), never on a command line. Set =netshares.open-command= to ="emacsclient -n"= to open a mounted share in dired.
+
+** tvremote
+
+Off by default. Fire TV is the first-class device (over =adb=: turn on ADB debugging, add the TV's address, accept the prompt on the TV); Android TV, Roku, Samsung and LG work too. Bind =gowl bar-widget-action tvremote key:vol_up= and friends for volume keys that work without the panel.
+
+** wow-gold
+
+Off by default. Reads your TradeSkillMaster, Altoholic/DataStore and Syndicator data through =tsmctl= --- locally, or from the machine that runs the game over ssh (=wow-gold.host=). Shows total gold and the day-over-day change, a 30-day trend, today's profit, the last sales, gold per character and what needs attention. Set =wow-gold.tsmctl-command= to a full path if the compositor's =PATH= lacks =~/bin/scripts=.
+
+* Packages
+
+Fedora packages the extended set can use, by widget (gowl itself needs nothing new to build):
+
+| Widget          | Packages                                                                                          |
+|-----------------+---------------------------------------------------------------------------------------------------|
+| ai-assistant    | =curl=, =wl-clipboard=; ollama runs as a podman container (not in Fedora)                          |
+| ai-rewrite      | =wl-clipboard=                                                                                    |
+| translate       | =curl=, =wl-clipboard=                                                                            |
+| meeting-notes   | =pipewire-utils= (=pw-record=), =pulseaudio-utils= (=pactl=), =ffmpeg-free= (or RPM Fusion =ffmpeg=); standalone also =whisper-cli= (not packaged; linuxbrew =whisper-cpp=) |
+| webmail         | gsurf (built by cmacs), =webkit2gtk4.1=                                                           |
+| devservices     | =podman=, =podman-compose=, =curl=, =xdg-utils=                                                   |
+| netshares       | =cifs-utils=, =nfs-utils=, =fuse-sshfs=, =fuse3=, =polkit= (+ an agent such as =mate-polkit=), =libsecret=, =xdg-utils= |
+| tvremote        | =android-tools= (Fire TV, Android TV), =curl= (Roku), =glib-networking= (Samsung/LG TLS); optional pip =catt=, =pyatv= |
+| wow-gold        | =python3=, =openssh-clients=, =wl-clipboard= (and =tsmctl= from the dotfiles)                      |
+| cpu (activity)  | none; optional =nvidia-smi= (RPM Fusion) for NVIDIA GPU figures                                    |
+
+* Troubleshooting
+
+| Symptom                                                | Cause and fix                                                                                                         |
+|--------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------|
+| An AI widget says "could not reach cmacs"              | =emacsctl= is not on the compositor's =PATH=; set =<widget>.emacsctl= to its full path.                                |
+| An AI widget says "no AI backend"                      | Standalone with no =ai= command. Install ai-glib's CLI, or set =<widget>.ai-backend: cmacs= under cmacs.               |
+| A default widget did not appear                        | =cmacs-gowl-bar-show-tags= is nil (the bar is not enabled), or the widget was removed from =cmacs-gowl-bar-default-widgets=. =M-x cmacs-gowl-bar-widgets-apply= re-applies. |
+| A new =M-x= command from these files is "not defined"  | The tree's autoloads predate the file: =make -C lisp autoloads= and rebuild, or =(require 'cmacs-gowl-bar-widgets)=.  |
+| A key in a panel closed it                             | Only keys the panel or the widget use are claimed; anything else closes the panel and reaches the window manager.      |
+
+* Files
+
+| File                                          | What                                                         |
+|-----------------------------------------------+--------------------------------------------------------------|
+| =lisp/cmacs/cmacs-gowl-bar-widgets.el=        | The defaults under =--gowl=                                  |
+| =lisp/cmacs/cmacs-gowl-bar-ai.el=             | The AI contract and =cmacs-gowl-bar-push=                    |
+| =lisp/cmacs/cmacs-gowl-bar-assistant.el=      | ai-assistant's cmacs half                                    |
+| =lisp/cmacs/cmacs-gowl-bar-meeting.el=        | meeting-notes' cmacs half                                    |
+| =lisp/cmacs/cmacs-gowl-bar-rewrite.el=        | ai-rewrite's actions                                         |
+| =lisp/cmacs/cmacs-gowl-bar-keywheel.el=       | keywheel's Emacs face                                        |
+| =lisp/cmacs/cmacs-ai-proofread.el=            | Fix spelling & grammar                                       |
+| =test/cmacs/cmacs-gowl-bar-*-tests.el=        | ERT for each                                                 |
+| =deps/gowl/modules/bar/bar-plugins-*.c=       | The widgets                                                  |
+| =deps/gowl/docs/bar-widgets/*.org=            | One page per widget                                          |

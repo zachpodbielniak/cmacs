@@ -5594,6 +5594,102 @@ the space between its columns.  They are pushed into the module when
 @code{cmacs-gowl-mode} starts.  @kbd{Super+s} used to select the
 scrolling layout, which is now reached by cycling layouts.
 
+@section Bar Widgets: the Extended Set
+
+@cindex bar widgets, extended set
+@cindex ai-assistant widget
+@cindex meeting-notes widget
+@cindex ai-rewrite widget
+
+gowl ships an extended set of bar widgets beside the classic ones: an
+AI assistant (@code{ai-assistant}), an AI rewrite of the selected text
+(@code{ai-rewrite}), a meeting recorder that transcribes and files its
+notes (@code{meeting-notes}), a translator (@code{translate}), a
+keybinding wheel (@code{keywheel}), a themed web-mail window
+(@code{webmail}), development service stacks (@code{devservices}),
+network shares (@code{netshares}), a TV remote with first-class Fire TV
+support (@code{tvremote}), a World of Warcraft gold tracker over
+@command{tsmctl} (@code{wow-gold}), and an activity style for the
+@code{cpu} widget.  Each has its own page in gowl's
+@file{docs/bar-widgets/} with every setting; the cmacs side is in the
+Org manual's @file{gowl/bar-widgets-extended.org}.
+
+Standalone gowl turns none of them on.  Under @code{cmacs --gowl},
+@code{cmacs-gowl-bar-widgets-apply} runs when the bar comes up and is
+driven by the @code{cmacs-gowl-bar} customization group:
+
+@table @code
+@item cmacs-gowl-bar-cpu-style
+@code{creature} (default), @code{label}, or @code{nil} to leave the cpu
+widget alone.
+@item cmacs-gowl-bar-default-widgets
+@code{(WIDGET . PLACE)} pairs to add; @code{meeting-notes} and
+@code{ai-assistant} at @code{top-right} by default.  PLACE is
+@code{top-left}, @code{top-center}, @code{top-right},
+@code{bottom-left}, @code{bottom-center} or @code{bottom-right}.
+Placement uses the bar's @code{widgets-*-add}/@code{-remove} keys, so
+nothing else on the bar moves and a restart adds nothing twice.
+@item cmacs-gowl-bar-ai-widgets
+Widgets pointed at cmacs-ai (@code{ai-backend: cmacs}).
+@item cmacs-gowl-bar-widgets-setup-functions
+Each widget's cmacs half (providers, actions, destinations, the
+keywheel's Emacs face).
+@item cmacs-gowl-bar-devservices-follow-buffer
+Push the selected buffer's directory to @code{devservices}.
+@end table
+
+@noindent
+To add one by hand: @code{(cmacs-gowl-bar-configure-top
+'(("widgets-right-add" . "wow-gold") ("wow-gold.host" . "local")))}.
+A @code{WIDGET.KEY} setting may be sent before its widget is on the
+bar; the bar remembers it.  @code{(cmacs-gowl-bar-push WIDGET ALIST)}
+sets settings on whichever bar holds the widget and never signals.
+
+@subsection AI widgets and cmacs-ai
+
+The AI widgets run @code{emacsctl eval '(cmacs-gowl-bar-ai-run WIDGET
+ID SYSTEM PROMPT PROVIDER MODEL)'}, which starts an asynchronous
+cmacs-ai stream and returns at once (a synchronous model call on Emacs's
+thread would freeze the desktop under @code{--gowl}); the answer is
+pushed back to the widget, throttled by
+@code{cmacs-gowl-bar-ai-push-interval}.  Every cmacs-ai provider,
+including named OpenAI-compatible endpoints, is available.  A widget
+that names no provider uses @code{cmacs-gowl-bar-ai-provider}, else the
+AI menu's @code{cmacs-ai-textops-provider} and model.  Standalone, the
+widgets use ai-glib's own @command{ai} command instead.
+
+@subsection Meeting notes
+
+Left-click the microphone to record every selected output and
+microphone; left-click again to stop.  Under cmacs the recording is
+mixed, run through cmacs-transcribe with the meeting summary, and filed
+according to @code{cmacs-gowl-bar-meeting-destination}:
+@code{org-inbox} (default; an Org file in
+@code{cmacs-gowl-bar-meeting-inbox}), @code{secondbrain} (ingested with
+@code{cmacs-secondbrain-ingest-run}), @code{directory}, or @code{both}.
+The panel overrides it per meeting.  Speaker separation is planned, not
+done.
+
+@subsection AI rewrite and the other widgets
+
+@code{ai-rewrite} rewrites the selected text: bind @kbd{Super+e} to
+@code{ipc-command "bar-panel ai-rewrite"}, select, press it, pick an
+action by its letter, and @key{RET} pastes the result.  Under cmacs its
+actions are every text operation on the right-click AI menu, Fix
+spelling & grammar first (@code{cmacs-gowl-bar-rewrite-actions}).
+
+Suggested keys, all free by default: @kbd{Super+Alt+t} translate,
+@kbd{Super+Alt+k} keywheel, @kbd{Super+Alt+o} tvremote.  @code{gowl
+bar-widget-action tvremote key:vol_up} presses one TV key without the
+panel.  The keywheel's ring colours (@code{keywheel.color-ring-*}) and
+the web-mail window's stylesheet (@code{webmail.color-*}) follow the
+session palette and can be overridden part by part.
+
+Text fields in these panels take the keyboard while focused (@kbd{j},
+@kbd{k} and @key{SPC} type; @key{TAB} leaves; @kbd{C-v} pastes); a
+picture (the TV remote, the wheel, the core map) that has the keyboard
+hears every key but @key{ESC} first, and the mouse wheel over it.
+
 @section Elisp Convenience Layer
 
 @cindex cmacs-gowl.el helpers

@@ -4723,6 +4723,8 @@ See [[file:gowl/bar-widgets.org][Bar Widgets Reference]] for the
 complete list of 25 bar widgets including system monitoring, network,
 media, git, custom commands with ANSI color, and configuration.
 
+See [[file:gowl/bar-widgets-extended.org][Bar Widgets: the Extended Set]] for the AI assistant, AI rewrite, meeting notes (into cmacs-transcribe and the second brain), translator, keybinding wheel, web mail, dev services, network shares, TV remote and WoW gold widgets, and what =cmacs --gowl= turns on.
+
 * Elisp Convenience Functions
 
 The Elisp layer provides convenience wrappers around compositor
