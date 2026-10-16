@@ -5674,6 +5674,15 @@ according to @code{cmacs-gowl-bar-meeting-destination}:
 The panel overrides it per meeting.  Speaker separation is planned, not
 done.
 
+Recordings are Opus in Ogg, piped from pw-record through ffmpeg (about
+14 MB an hour at the default 32 kb/s); no WAV is kept.  Several are
+mixed into @file{meeting.ogg} (@code{cmacs-gowl-bar-meeting-bitrate}),
+and cmacs-transcribe makes and deletes the WAV whisper reads.  Clicking
+the notes (the toast, or the panel's recent list) runs
+@code{cmacs-gowl-bar-meeting-open} over @command{emacsctl}: the file
+opens in the selected window and its frame is raised
+(@code{cmacs-gowl-bar-meeting-raise-frame}).
+
 @subsection AI rewrite and the other widgets
 
 @code{ai-rewrite} rewrites the selected text and is on by default:
@@ -5682,8 +5691,8 @@ select, press @kbd{Super+e}, pick an action by its letter, and
 the right-click AI menu, Fix spelling & grammar first
 (@code{cmacs-gowl-bar-rewrite-actions}).  @emph{Right-click its bar
 icon} to choose the provider and model: every cmacs-ai provider, the
-models cmacs could list for it, or any typed model id.  The choice is
-saved and survives restarts.
+models cmacs could list for it, or any typed model id (kept by
+@samp{Save} or @key{RET}).  The choice is saved and survives restarts.
 
 Suggested keys, all free by default: @kbd{Super+Alt+t} translate,
 @kbd{Super+Alt+k} keywheel, @kbd{Super+Alt+o} tvremote.  @code{gowl

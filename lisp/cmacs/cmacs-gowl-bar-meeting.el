@@ -6,14 +6,14 @@
 ;;; Commentary:
 
 ;; gowl's `meeting-notes' bar widget (deps/gowl/modules/bar/
-;; bar-plugins-meeting.c) records a meeting: one 16 kHz mono WAV per
-;; selected source (what the speakers play, the microphone, ...) in a
-;; session directory.  Under `cmacs --gowl' it then hands the session
-;; to cmacs:
+;; bar-plugins-meeting.c) records a meeting: one 16 kHz mono recording
+;; per selected source (what the speakers play, the microphone, ...)
+;; in a session directory, Opus in Ogg unless it was told otherwise.
+;; Under `cmacs --gowl' it then hands the session to cmacs:
 ;;
 ;;   emacsctl eval '(cmacs-gowl-bar-meeting-finish
 ;;                   "meeting-notes" "JOB-ID" "/session/dir"
-;;                   (list "01-a.wav" "02-b.wav") "TITLE" "DESTINATION")'
+;;                   (list "01-a.ogg" "02-b.ogg") "TITLE" "DESTINATION")'
 ;;
 ;; That call runs on Emacs's main thread, which under --gowl is the
 ;; compositor's, so it returns t AT ONCE and does everything else
@@ -29,9 +29,11 @@
 ;; The pipeline:
 ;;
 ;;   mixing        ffmpeg (a `make-process' with a sentinel) mixes the
-;;                 recordings into one `meeting.wav' --- amix with
-;;                 normalize=0, so a quiet remote voice is not divided
-;;                 by the number of inputs.
+;;                 recordings into one `meeting.ogg' (Opus) --- amix
+;;                 with normalize=0, so a quiet remote voice is not
+;;                 divided by the number of inputs.  One recording is
+;;                 used as it is.  No WAV is ever kept: cmacs-transcribe
+;;                 makes the one whisper reads and deletes it.
 ;;   transcribing  `cmacs-transcribe' (whisper.cpp) in a PRIVATE queue
 ;;                 buffer, so the options this meeting needs (output
 ;;                 directory, summary type) never leak into the user's
@@ -58,6 +60,10 @@
 ;; the reason instead.  A watchdog notices the two outcomes
 ;; cmacs-transcribe has no hook for --- a failed transcription and a
 ;; summary that did not happen --- so the widget never waits forever.
+;;
+;; `cmacs-gowl-bar-meeting-open' is what a click on the notes in the
+;; widget runs (its toast, its recent list): it visits the file in the
+;; frame in use and raises that frame.
 ;;
 ;; `cmacs-gowl-bar-meeting-push' tells the widget it is running under
 ;; cmacs (backend, AI backend, default destination); the --gowl startup
@@ -148,6 +154,20 @@ template, for the meeting's private transcription session only."
   :type 'string
   :group 'cmacs-gowl-bar)
 
+(defcustom cmacs-gowl-bar-meeting-bitrate "32k"
+  "The Opus bitrate of a mixed meeting, as ffmpeg reads it.
+32k is plenty for speech: about 14 MB an hour, against 115 MB for the
+16 kHz WAV it replaces."
+  :type 'string
+  :group 'cmacs-gowl-bar)
+
+(defcustom cmacs-gowl-bar-meeting-raise-frame t
+  "Non-nil: opening meeting notes from the bar raises their frame.
+Otherwise the file is visited in the selected frame, which keeps the
+keyboard where it was."
+  :type 'boolean
+  :group 'cmacs-gowl-bar)
+
 (defcustom cmacs-gowl-bar-meeting-timeout (* 4 60 60)
   "Seconds a meeting may take to transcribe and file before giving up."
   :type 'integer
@@ -164,7 +184,7 @@ template, for the meeting's private transcription session only."
                (:constructor cmacs-gowl-bar-meeting-job-create)
                (:copier nil))
   widget id dir files title destination
-  mixed            ; the WAV handed to cmacs-transcribe
+  mixed            ; the audio handed to cmacs-transcribe
   buffer           ; the private transcription queue buffer
   timer            ; the watchdog
   started          ; `float-time' at finish
@@ -231,9 +251,10 @@ would be logged and then forgotten, and the widget would wait forever."
 ;;;; Mixing ------------------------------------------------------------
 
 (defun cmacs-gowl-bar-meeting--mix-command (files output)
-  "The ffmpeg command mixing FILES into OUTPUT, a 16 kHz mono WAV.
-One file is only resampled; several are mixed with amix, normalize=0
-so each keeps its own level."
+  "The ffmpeg command mixing FILES into OUTPUT, 16 kHz mono Opus.
+Several are mixed with amix, normalize=0 so each keeps its own level;
+one is only re-encoded.  The bitrate is
+`cmacs-gowl-bar-meeting-bitrate'."
   (append (list cmacs-gowl-bar-meeting-ffmpeg
                 "-hide_banner" "-loglevel" "error" "-y")
           (apply #'append (mapcar (lambda (f) (list "-i" f)) files))
@@ -241,12 +262,31 @@ so each keeps its own level."
             (list "-filter_complex"
                   (format "amix=inputs=%d:duration=longest:normalize=0"
                           (length files))))
-          (list "-ar" "16000" "-ac" "1" output)))
+          (list "-ar" "16000" "-ac" "1"
+                "-c:a" "libopus" "-b:a" cmacs-gowl-bar-meeting-bitrate
+                "-application" "voip" output)))
 
 (defun cmacs-gowl-bar-meeting--mix (job)
-  "Start mixing JOB's recordings; the sentinel continues the pipeline."
+  "Start mixing JOB's recordings; the sentinel continues the pipeline.
+A single recording needs no mixing and goes straight to transcription:
+re-encoding it would only cost quality and a second copy on disk."
+  (if (null (cdr (cmacs-gowl-bar-meeting-job-files job)))
+      (progn
+        (setf (cmacs-gowl-bar-meeting-job-mixed job)
+              (car (cmacs-gowl-bar-meeting-job-files job)))
+        ;; From a timer, as the sentinel would: the finish call is on
+        ;; the compositor's thread, and starting a transcription loads
+        ;; cmacs-transcribe and sets up its queue.
+        (run-at-time 0 nil
+                     (lambda ()
+                       (cmacs-gowl-bar-meeting--guard job
+                         (cmacs-gowl-bar-meeting--transcribe job)))))
+    (cmacs-gowl-bar-meeting--mix-several job)))
+
+(defun cmacs-gowl-bar-meeting--mix-several (job)
+  "Mix JOB's recordings into one Opus file, asynchronously."
   (let* ((dir (cmacs-gowl-bar-meeting-job-dir job))
-         (out (expand-file-name "meeting.wav" dir))
+         (out (expand-file-name "meeting.ogg" dir))
          (log (generate-new-buffer " *cmacs-gowl-bar-meeting-ffmpeg*")))
     (setf (cmacs-gowl-bar-meeting-job-mixed job) out)
     (cmacs-gowl-bar-meeting--push job "mixing")
@@ -308,7 +348,7 @@ recordings."
                            keep))))))
 
 (defun cmacs-gowl-bar-meeting--transcribe (job)
-  "Hand JOB's mixed WAV to cmacs-transcribe in a private queue buffer.
+  "Hand JOB's mixed audio to cmacs-transcribe in a private queue buffer.
 Its hooks are added buffer-locally, so only this job fires them."
   (unless (fboundp 'cmacs-transcribe-start)
     (require 'cmacs-transcribe))
@@ -673,6 +713,31 @@ must be strings"))
             (push job cmacs-gowl-bar-meeting--jobs)
             (cmacs-gowl-bar-meeting--mix job))))))
     t))
+
+;;;###autoload
+(defun cmacs-gowl-bar-meeting-open (file)
+  "Visit FILE, a meeting's notes, in the frame in use; return t at once.
+The gowl meeting-notes widget runs this over emacsctl when its notes are
+clicked, and an eval runs on the compositor's thread under --gowl: so
+the visit itself is left to a timer, and a slow `find-file' (Org, its
+hooks) never holds the desktop.  Never signals; a missing file is said
+in the echo area."
+  (when (and (stringp file) (not (string-empty-p file)))
+    (run-at-time 0 nil #'cmacs-gowl-bar-meeting--visit
+                 (expand-file-name file)))
+  t)
+
+(defun cmacs-gowl-bar-meeting--visit (path)
+  "Show PATH in the selected window, raising its frame when asked to.
+See `cmacs-gowl-bar-meeting-raise-frame'."
+  (condition-case err
+      (if (not (file-readable-p path))
+          (message "cmacs-gowl-bar-meeting: %s is not there any more" path)
+        (pop-to-buffer-same-window (find-file-noselect path))
+        (when cmacs-gowl-bar-meeting-raise-frame
+          (select-frame-set-input-focus (selected-frame))))
+    (error (message "cmacs-gowl-bar-meeting: cannot open %s: %s"
+                    path (error-message-string err)))))
 
 ;;;###autoload
 (defun cmacs-gowl-bar-meeting-push (&optional widget)

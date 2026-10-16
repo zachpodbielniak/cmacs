@@ -28,7 +28,10 @@
 ;;     given the wrong type, title or tags;
 ;;   - an inbox note that breaks the notes repository's header
 ;;     convention, its file-name shape, or lets speech become a heading;
-;;   - amix's default normalisation, and mixing one file.
+;;   - amix's default normalisation, and re-encoding one recording;
+;;   - a WAV made and kept where Opus was asked for;
+;;   - opening notes from the bar doing the work on the compositor's
+;;     thread, or signalling on a file that is gone.
 
 ;;; Code:
 
@@ -145,19 +148,37 @@ argument lists of `cmacs-secondbrain-ingest-run')."
         (should (equal (cdr (assoc "meeting-notes.result" alist)) ""))))))
 
 (ert-deftest cmacs-gowl-bar-meeting-test-mix-command ()
-  "One file is resampled; several are mixed without normalisation."
-  (let ((cmacs-gowl-bar-meeting-ffmpeg "ffmpeg"))
-    (should (equal (cmacs-gowl-bar-meeting--mix-command '("/s/a.wav")
-                                                        "/s/m.wav")
-                   '("ffmpeg" "-hide_banner" "-loglevel" "error" "-y"
-                     "-i" "/s/a.wav" "-ar" "16000" "-ac" "1" "/s/m.wav")))
+  "Several are mixed without normalisation, into 16 kHz mono Opus."
+  (let ((cmacs-gowl-bar-meeting-ffmpeg "ffmpeg")
+        (cmacs-gowl-bar-meeting-bitrate "24k"))
     (should (equal (cmacs-gowl-bar-meeting--mix-command
-                    '("/s/a.wav" "/s/b c.wav" "/s/d.wav") "/s/m.wav")
+                    '("/s/a.ogg" "/s/b c.ogg" "/s/d.ogg") "/s/m.ogg")
                    '("ffmpeg" "-hide_banner" "-loglevel" "error" "-y"
-                     "-i" "/s/a.wav" "-i" "/s/b c.wav" "-i" "/s/d.wav"
+                     "-i" "/s/a.ogg" "-i" "/s/b c.ogg" "-i" "/s/d.ogg"
                      "-filter_complex"
                      "amix=inputs=3:duration=longest:normalize=0"
-                     "-ar" "16000" "-ac" "1" "/s/m.wav")))))
+                     "-ar" "16000" "-ac" "1" "-c:a" "libopus" "-b:a" "24k"
+                     "-application" "voip" "/s/m.ogg")))))
+
+(ert-deftest cmacs-gowl-bar-meeting-test-one-recording-is-not-mixed ()
+  "One recording goes to transcription as it is, from a timer.
+No ffmpeg, no second copy, and nothing done inside the finish call."
+  (cmacs-gowl-bar-meeting-tests--with
+    (let ((timers nil))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat fn &rest args)
+                   (push (cons fn args) timers) 'fake-timer)))
+        (should (eq t (cmacs-gowl-bar-meeting-finish
+                       "meeting-notes" "id" session (list "01-a.wav") nil)))
+        (should-not procs)
+        (should-not transcribed)
+        (should (= (length timers) 1))
+        (apply (caar timers) (cdar timers)))
+      (should (= (length transcribed) 1))
+      (should (equal (cmacs-gowl-bar-meeting-job-mixed (car transcribed))
+                     (expand-file-name "01-a.wav" session)))
+      (should-not (file-exists-p (expand-file-name "meeting.ogg" session)))
+      (should-not procs))))
 
 (ert-deftest cmacs-gowl-bar-meeting-test-mix-is-the-real-argv ()
   "The process is given the mix command, with the session's files."
@@ -167,7 +188,9 @@ argument lists of `cmacs-secondbrain-ingest-run')."
       (should (member (expand-file-name "01-a.wav" session) cmd))
       (should (member (expand-file-name "02-b.wav" session) cmd))
       (should (equal (car (last cmd))
-                     (expand-file-name "meeting.wav" session)))
+                     (expand-file-name "meeting.ogg" session)))
+      (should-not (cl-find-if (lambda (a) (string-suffix-p ".wav" a))
+                              (last cmd 1)))
       (should (member "amix=inputs=2:duration=longest:normalize=0" cmd)))))
 
 ;;;; The state sequence and the destinations ---------------------------
@@ -350,7 +373,8 @@ argument lists of `cmacs-secondbrain-ingest-run')."
     (cl-letf (((symbol-function 'make-process)
                (lambda (&rest _) (signal 'file-missing '("Searching" "ffmpeg")))))
       (should (eq t (cmacs-gowl-bar-meeting-finish
-                     "meeting-notes" "id" session (list "01-a.wav") nil))))
+                     "meeting-notes" "id" session
+                     (list "01-a.wav" "02-b.wav") nil))))
     (should (equal (cmacs-gowl-bar-meeting-tests--last "state") "error"))
     (should (string-match-p "ffmpeg-free"
                             (cmacs-gowl-bar-meeting-tests--last "error")))))
@@ -436,6 +460,52 @@ argument lists of `cmacs-secondbrain-ingest-run')."
       (cmacs-gowl-bar-meeting--on-summarised
        job (list :input-file "/elsewhere/talk.wav" :summary "x"))
       (should-not (member "done" (cmacs-gowl-bar-meeting-tests--states))))))
+
+;;;; Opening notes ---------------------------------------------------------
+
+(ert-deftest cmacs-gowl-bar-meeting-test-open-returns-at-once ()
+  "The open call only schedules the visit, and never signals."
+  (let ((timers nil))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_time _repeat fn &rest args)
+                 (push (cons fn args) timers) 'fake-timer))
+              ((symbol-function 'find-file-noselect)
+               (lambda (&rest _) (error "Must not visit synchronously"))))
+      (should (eq t (cmacs-gowl-bar-meeting-open "/notes/x.org")))
+      (should (eq t (cmacs-gowl-bar-meeting-open "")))
+      (should (eq t (cmacs-gowl-bar-meeting-open nil)))
+      (should (eq t (cmacs-gowl-bar-meeting-open 42))))
+    (should (= (length timers) 1))
+    (should (equal (cdar timers) '("/notes/x.org")))))
+
+(ert-deftest cmacs-gowl-bar-meeting-test-visit ()
+  "The visit shows the notes in the selected window; a gone file is said."
+  (let* ((dir (make-temp-file "cmacs-meeting-open-" t))
+         (file (expand-file-name "2026-10-16_14-05_meeting.org" dir))
+         (raised nil)
+         (cmacs-gowl-bar-meeting-raise-frame t))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "#+title: Q4\n"))
+          (cl-letf (((symbol-function 'select-frame-set-input-focus)
+                     (lambda (&rest _) (setq raised t))))
+            (save-window-excursion
+              (cmacs-gowl-bar-meeting--visit file)
+              (should (equal (buffer-file-name
+                              (window-buffer (selected-window)))
+                             file))
+              (should raised)
+              (kill-buffer (get-file-buffer file)))
+            (setq raised nil)
+            (let ((messages nil))
+              (cl-letf (((symbol-function 'message)
+                         (lambda (fmt &rest args)
+                           (push (apply #'format fmt args) messages))))
+                (cmacs-gowl-bar-meeting--visit
+                 (expand-file-name "gone.org" dir)))
+              (should (string-match-p "not there any more" (car messages)))
+              (should-not raised))))
+      (delete-directory dir t))))
 
 ;;;; Startup push ---------------------------------------------------------
 
