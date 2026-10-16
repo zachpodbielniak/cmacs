@@ -36,7 +36,9 @@
            (cmacs-gowl-bar-widgets-configure-function
             (lambda (bar alist)
               (setq ,configures (append ,configures
-                                        (list (cons bar alist)))))))
+                                        (list (cons bar alist))))))
+           ;; Never the real gowl-add-keybind: no compositor here.
+           (cmacs-gowl-bar-widgets-keybind-function #'ignore))
        ,@body)))
 
 (defun cmacs-gowl-bar-widgets-tests--pushed (pushes key)
@@ -68,8 +70,29 @@
                       pushes "translate.engine")
                      "ai"))
       (should (equal configures
-                     '((top ("widgets-right-remove" . "meeting-notes ai-assistant")
-                            ("widgets-right-add" . "meeting-notes ai-assistant"))))))))
+                     '((top ("widgets-right-remove"
+                             . "meeting-notes ai-assistant ai-rewrite")
+                            ("widgets-right-add"
+                             . "meeting-notes ai-assistant ai-rewrite"))))))))
+
+(ert-deftest cmacs-gowl-bar-widgets-test-rewrite-key ()
+  "Super+e opens ai-rewrite, only while ai-rewrite is on, nil binds none."
+  (let ((bound nil))
+    (cmacs-gowl-bar-widgets-tests--with pushes configures
+      (cl-letf (((symbol-function 'gowl-add-keybind) (lambda (&rest _) t)))
+        (let ((cmacs-gowl-bar-widgets-keybind-function
+               (lambda (&rest args) (push args bound)))
+              (cmacs-gowl-bar-default-widgets '(("ai-rewrite" . top-right)))
+              (cmacs-gowl-bar-rewrite-keybind "Super+e"))
+          (cmacs-gowl-bar-widgets-apply)
+          (should (equal bound '(("Super+e" "bar-panel ai-rewrite"
+                                  "AI rewrite the selection"))))
+          (setq bound nil)
+          (let ((cmacs-gowl-bar-rewrite-keybind nil))
+            (cmacs-gowl-bar-widgets-apply))
+          (let ((cmacs-gowl-bar-default-widgets nil))
+            (cmacs-gowl-bar-widgets-apply))
+          (should-not bound))))))
 
 (ert-deftest cmacs-gowl-bar-widgets-test-only-amendment-keys ()
   "Never a wholesale region list: that would replace the shipped layout."

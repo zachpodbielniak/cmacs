@@ -15,7 +15,8 @@
 ;;   - `cmacs-gowl-bar-cpu-style' puts the cpu widget in its activity
 ;;     ("creature") style;
 ;;   - `cmacs-gowl-bar-default-widgets' adds widgets to the bar --
-;;     meeting-notes and ai-assistant by default;
+;;     meeting-notes, ai-assistant and ai-rewrite by default, and
+;;     `cmacs-gowl-bar-rewrite-keybind' binds Super+e to ai-rewrite;
 ;;   - every AI-capable widget is pointed at cmacs-ai
 ;;     (`ai-backend: cmacs'), so it uses the providers configured here
 ;;     and nothing is configured twice;
@@ -55,7 +56,8 @@ leaves whatever the bar configuration says."
 
 (defcustom cmacs-gowl-bar-default-widgets
   '(("meeting-notes" . top-right)
-    ("ai-assistant" . top-right))
+    ("ai-assistant" . top-right)
+    ("ai-rewrite" . top-right))
   "Extended bar widgets cmacs --gowl turns on, and where.
 
 Each element is (WIDGET . PLACE): WIDGET a gowl bar widget name, PLACE
@@ -69,6 +71,17 @@ prefer a side region."
                        (choice (const top-left) (const top-center)
                                (const top-right) (const bottom-left)
                                (const bottom-center) (const bottom-right))))
+  :group 'cmacs-gowl-bar)
+
+(defcustom cmacs-gowl-bar-rewrite-keybind "Super+e"
+  "Key that opens the ai-rewrite panel on the selected text, or nil.
+
+Bound with `gowl-add-keybind' when the bar comes up (any older bind of
+the same key is removed first, so it is the one that answers).  Select
+text in any window, press it, pick an action; Return pastes the
+result over the selection.  Right-click the widget's icon to choose
+the provider and model."
+  :type '(choice (const :tag "No key" nil) string)
   :group 'cmacs-gowl-bar)
 
 (defcustom cmacs-gowl-bar-ai-widgets
@@ -135,6 +148,21 @@ not been regenerated still wires them up.")
   #'cmacs-gowl-bar-widgets--configure
   "How an alist for one bar is applied.  Tests rebind it.
 Called with (BAR ALIST), BAR being `top' or `bottom'.")
+
+(defvar cmacs-gowl-bar-widgets-keybind-function
+  #'cmacs-gowl-bar-widgets--bind
+  "How a widget's key is bound.  Tests rebind it.
+Called with (KEY IPC-COMMAND DESCRIPTION).")
+
+(declare-function gowl-add-keybind "cmacs-gowl.c" (key action &optional arg desc))
+(declare-function gowl-remove-keybind "cmacs-gowl.c" (key))
+
+(defun cmacs-gowl-bar-widgets--bind (key command desc)
+  "Bind KEY to the gowl IPC COMMAND, described as DESC, replacing any
+older bind of KEY."
+  (when (fboundp 'gowl-remove-keybind)
+    (ignore-errors (gowl-remove-keybind key)))
+  (gowl-add-keybind key 'ipc-command command desc))
 
 (defun cmacs-gowl-bar-widgets--configure (bar alist)
   "Send ALIST to BAR, `top' or `bottom', when the bar is running."
@@ -210,7 +238,18 @@ of the compositor's startup, which calls this."
                  (car entry) (cdr entry))
       (error (message "cmacs-gowl-bar: placing widgets: %s"
                       (error-message-string err)))))
-  ;; 4. Each widget's cmacs half.
+  ;; 4. The ai-rewrite key.  Remove before add: gowl answers the first
+  ;;    matching bind, and an older one would shadow this.
+  (when (and cmacs-gowl-bar-rewrite-keybind
+             (fboundp 'gowl-add-keybind)
+             (assoc "ai-rewrite" cmacs-gowl-bar-default-widgets))
+    (condition-case err
+        (funcall cmacs-gowl-bar-widgets-keybind-function
+                 cmacs-gowl-bar-rewrite-keybind "bar-panel ai-rewrite"
+                 "AI rewrite the selection")
+      (error (message "cmacs-gowl-bar: ai-rewrite key: %s"
+                      (error-message-string err)))))
+  ;; 5. Each widget's cmacs half.
   (dolist (feature cmacs-gowl-bar-widgets--features)
     (require feature nil t))
   (dolist (fn cmacs-gowl-bar-widgets-setup-functions)

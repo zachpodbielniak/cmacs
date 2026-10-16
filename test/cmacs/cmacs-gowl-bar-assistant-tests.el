@@ -120,7 +120,11 @@ cmacs-ai offers claude, ollama, claude-code and opencode."
                       pushes "bottom-ai-assistant.models.claude-code")
                      "sonnet,opus,haiku"))
       (should-not (assoc "ai-assistant.models.opencode"
-                         (cmacs-gowl-bar-assistant-tests--all pushes))))))
+                         (cmacs-gowl-bar-assistant-tests--all pushes)))
+      ;; ai-rewrite's provider choice gets the same lists.
+      (should (equal (cmacs-gowl-bar-assistant-tests--get
+                      pushes "ai-rewrite.models.claude-code")
+                     "sonnet,opus,haiku")))))
 
 (ert-deftest cmacs-gowl-bar-assistant-test-default-lists-only-cli ()
   "No HTTP provider is listed by default: that would be network I/O on

@@ -68,6 +68,15 @@ not offered by this cmacs-ai build are skipped."
   :type '(repeat symbol)
   :group 'cmacs-gowl-bar)
 
+(defcustom cmacs-gowl-bar-model-list-widgets '("ai-rewrite")
+  "Other bar widgets that receive the same model lists.
+
+The lists are made once and pushed to the assistant and to each of
+these, so ai-rewrite's provider choice offers the same models without
+listing them twice."
+  :type '(repeat string)
+  :group 'cmacs-gowl-bar)
+
 (defcustom cmacs-gowl-bar-assistant-model-list-delay 3
   "Idle seconds before the model lists are pushed.
 Startup is busy enough without them; the chooser works with free text
@@ -129,7 +138,11 @@ A provider that fails to list is skipped; nothing here signals."
                           (mapconcat #'identity models ","))
                     out))))))
     (when out
-      (cmacs-gowl-bar-push cmacs-gowl-bar-assistant-widget (nreverse out)))
+      (setq out (nreverse out))
+      (dolist (widget (delete-dups (cons cmacs-gowl-bar-assistant-widget
+                                         (copy-sequence
+                                          cmacs-gowl-bar-model-list-widgets))))
+        (cmacs-gowl-bar-push widget out)))
     nil))
 
 ;;;###autoload

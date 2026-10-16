@@ -13,7 +13,7 @@ They are ports of Omarchy shell plugins, renamed for what they do, written as na
 | =cpu= (activity) | The cpu widget as a load "creature"; per-core map, processes, kill | on (=cpu.style: creature=)   | off (=style: label=)                | =docs/bar-widgets/cpu-activity.org= |
 | =ai-assistant=  | Chat with any provider; ollama models; the machine                 | on, top bar, via cmacs-ai    | off; uses ai-glib's =ai=             | =ai-assistant.org=              |
 | =meeting-notes= | Record outputs and mics, transcribe, summarise, file               | on, top bar, via cmacs       | off; needs configuring              | =meeting-notes.org=             |
-| =ai-rewrite=    | Rewrite the selected text (fix, improve, shorten, any AI action)   | off; actions pushed by cmacs | off; uses =ai=                      | =ai-rewrite.org=                |
+| =ai-rewrite=    | Rewrite the selected text (fix, improve, shorten, any AI action)   | on, top bar, =Super+e=       | off; uses =ai=                      | =ai-rewrite.org=                |
 | =translate=     | Two-pane translator overlay                                        | off; AI engine via cmacs     | off; LibreTranslate / MyMemory / =ai= | =translate.org=                 |
 | =keywheel=      | Radial cheat sheet of every keybinding (+ an Emacs face)           | off; Emacs face pushed       | off                                 | =keywheel.org=                  |
 | =webmail=       | A themed web-mail window (gsurf) with an unread count              | off                          | off                                 | =webmail.org=                   |
@@ -33,7 +33,8 @@ They are ports of Omarchy shell plugins, renamed for what they do, written as na
 | Option                                   | Default                                              | Does                                                                                         |
 |------------------------------------------+------------------------------------------------------+----------------------------------------------------------------------------------------------|
 | =cmacs-gowl-bar-cpu-style=               | =creature=                                           | The cpu widget's style: =creature=, =label=, or =nil= to leave it alone                      |
-| =cmacs-gowl-bar-default-widgets=         | =meeting-notes= and =ai-assistant= at =top-right=    | (WIDGET . PLACE) pairs to add; remove one to turn it off, add one to turn another on          |
+| =cmacs-gowl-bar-default-widgets=         | =meeting-notes=, =ai-assistant=, =ai-rewrite= at =top-right= | (WIDGET . PLACE) pairs to add; remove one to turn it off, add one to turn another on |
+| =cmacs-gowl-bar-rewrite-keybind=         | ="Super+e"=                                          | Opens ai-rewrite on the selection (only while it is on); nil binds nothing                  |
 | =cmacs-gowl-bar-ai-widgets=              | the four AI widgets                                  | Widgets pointed at cmacs-ai (=ai-backend: cmacs=)                                            |
 | =cmacs-gowl-bar-widgets-setup-functions= | the widgets' push functions                          | Each widget's cmacs half: providers, actions, destinations, the Emacs face                   |
 | =cmacs-gowl-bar-devservices-follow-buffer= | =nil=                                              | Push the selected buffer's directory to =devservices= (its =auto= mode then follows cmacs)   |
@@ -85,13 +86,12 @@ Standalone, the AI widgets use ai-glib's own =ai= command (providers and keys in
 Every widget's panel opens with =gowl bar-panel NAME= (=gowl bar-panel= alone closes it), so a keybind is an =ipc_command=:
 
 #+begin_src emacs-lisp
-(gowl-add-keybind "Super+e"     'ipc-command "bar-panel ai-rewrite" "AI rewrite the selection")
 (gowl-add-keybind "Super+Alt+t" 'ipc-command "bar-panel translate"  "Translate")
 (gowl-add-keybind "Super+Alt+k" 'ipc-command "bar-panel keywheel"   "Keybinding wheel")
 (gowl-add-keybind "Super+Alt+o" 'ipc-command "bar-panel tvremote"   "TV remote")
 #+end_src
 
-These combinations are free in both gowl's shipped config and cmacs's default keybinds; none is bound by default.
+These combinations are free in both gowl's shipped config and cmacs's default keybinds; none is bound by default. =Super+e= for ai-rewrite is the exception: cmacs binds it (=cmacs-gowl-bar-rewrite-keybind=).
 
 A widget can also be sent one of its panel actions without its panel: =gowl bar-widget-action WIDGET ID [INDEX [VALUE]]=. That is how a key turns the TV down:
 
@@ -150,7 +150,9 @@ The panel's destination buttons override it per meeting. =cmacs-gowl-bar-meeting
 
 ** ai-rewrite
 
-Off by default; add it and bind a key (=Super+e= above). Select text anywhere, press the key, pick an action by its letter; the result is shown as a word diff and =Return= pastes it over the selection (=y= copies only). Under cmacs, =cmacs-gowl-bar-rewrite-push= gives it every text operation on the right-click AI menu --- Fix spelling & grammar (first, =f=), Rephrase, Improve, Shorten, Translate to English, Summarize, Explain, Reply, Ask and a custom instruction --- built from =cmacs-ai-textops--specs= at push time, so a customised prompt carries over. Change the list with =cmacs-gowl-bar-rewrite-actions=; =cmacs-gowl-bar-rewrite-actions-mode= says whether it replaces or extends the widget's built-in actions.
+On by default under cmacs, in the top bar, with =Super+e= bound to it. Select text anywhere, press =Super+e=, pick an action by its letter; the result is shown as a word diff and =Return= pastes it over the selection (=y= copies only).
+
+*Which provider and model rewrite your text:* right-click the widget's icon (or click the =⚙= row at the foot of the panel). The list is every cmacs-ai provider, with /Default/ --- the AI menu's provider --- first; under it, the models cmacs could list for the chosen provider (the CLI providers'; =cmacs-gowl-bar-model-list-widgets= says which widgets get them) and a field for any model id. The choice is saved (=$XDG_STATE_HOME/gowl/ai-rewrite.choice=) and survives restarts; an action that names its own provider keeps it. Under cmacs, =cmacs-gowl-bar-rewrite-push= gives it every text operation on the right-click AI menu --- Fix spelling & grammar (first, =f=), Rephrase, Improve, Shorten, Translate to English, Summarize, Explain, Reply, Ask and a custom instruction --- built from =cmacs-ai-textops--specs= at push time, so a customised prompt carries over. Change the list with =cmacs-gowl-bar-rewrite-actions=; =cmacs-gowl-bar-rewrite-actions-mode= says whether it replaces or extends the widget's built-in actions.
 
 The *Fix spelling & grammar* action is also on the right-click AI menu itself, and as =f= / =F= in =cmacs-ai-menu-command-map= (see the AI menu manual).
 
