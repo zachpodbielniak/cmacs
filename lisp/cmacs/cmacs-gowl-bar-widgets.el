@@ -85,7 +85,7 @@ ai-glib's `ai' command instead."
   '(cmacs-gowl-bar-assistant-push
     cmacs-gowl-bar-meeting-push
     cmacs-gowl-bar-rewrite-push
-    cmacs-gowl-bar-keywheel-push)
+    cmacs-gowl-bar-keywheel-setup)
   "Functions that push cmacs state into the extended bar widgets.
 
 Called with no arguments by `cmacs-gowl-bar-widgets-apply', each one if
@@ -93,6 +93,13 @@ it is defined.  A function that signals is reported and skipped; the
 rest still run."
   :type '(repeat function)
   :group 'cmacs-gowl-bar)
+
+(defconst cmacs-gowl-bar-widgets--features
+  '(cmacs-gowl-bar-assistant cmacs-gowl-bar-meeting
+    cmacs-gowl-bar-rewrite cmacs-gowl-bar-keywheel)
+  "The widgets' cmacs halves, loaded before their setup functions run.
+Required rather than left to autoloads, so a tree whose loaddefs have
+not been regenerated still wires them up.")
 
 (defvar cmacs-gowl-bar-widgets-configure-function
   #'cmacs-gowl-bar-widgets--configure
@@ -174,6 +181,8 @@ of the compositor's startup, which calls this."
       (error (message "cmacs-gowl-bar: placing widgets: %s"
                       (error-message-string err)))))
   ;; 4. Each widget's cmacs half.
+  (dolist (feature cmacs-gowl-bar-widgets--features)
+    (require feature nil t))
   (dolist (fn cmacs-gowl-bar-widgets-setup-functions)
     (when (fboundp fn)
       (condition-case err
