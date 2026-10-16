@@ -680,6 +680,244 @@ the model to continue with the new context.  */)
   return build_string (content);
 }
 
+/* ── Tool calls off the command loop ───────────────────────────── */
+
+/* A chat's tool loop runs on the command loop: the stream callback
+ * that sees stop=tool-use calls straight into the executor.  For a
+ * `glob' or `grep' with no path that walked $HOME -- and into an sshfs
+ * mount, where getdents() sleeps in the kernel -- the whole editor
+ * froze, and neither C-g nor SIGKILL could reach the thread until the
+ * mount was lazily unmounted.
+ *
+ * So the built-ins that touch the disk, a subprocess or the network run
+ * on a worker thread here.  Only those: a registered callback is Lisp
+ * (or the MCP bridge, whose handlers evaluate Lisp) and must stay on
+ * the main thread, and `ai_tool_executor_is_builtin' is what tells the
+ * two apart -- a callback that shadows a built-in's name is a callback.
+ * The agent-driving built-ins (`task', `agent_*', `skill', `todo_write')
+ * are left where they were; they reach brigade state that has never run
+ * off the main thread.  */
+static const char *const cmacs_ai_tools__offloadable[] = {
+  "bash", "read", "write", "edit", "multi_edit",
+  "glob", "grep", "ls", "web_fetch", "web_search", NULL
+};
+
+typedef struct
+{
+  guint           job_id;
+  AiToolExecutor *exec;        /* owned ref */
+  AiToolUse      *tool_use;    /* owned ref */
+  GCancellable   *cancellable; /* owned ref */
+  guint           session_id;  /* looked up again on the main thread */
+  uint64_t        cb_cookie;
+  gchar          *tool_id;     /* owned */
+  gchar          *tool_name;   /* owned */
+  gchar          *result;      /* set in worker */
+  GError         *error;       /* set in worker */
+} CmacsAiToolJob;
+
+/* Live jobs by id, so `cmacs-ai-tools-cancel-job' can reach one.  Main
+ * thread only: jobs are added by the DEFUN and removed in the done
+ * callback, both of which run there.  */
+static GHashTable *cmacs_ai__tool_jobs = NULL;
+static guint       cmacs_ai__next_tool_job = 1;
+
+static void
+cmacs_ai_tool_job__free (CmacsAiToolJob *j)
+{
+  g_clear_object (&j->exec);
+  g_clear_object (&j->tool_use);
+  g_clear_object (&j->cancellable);
+  g_free (j->tool_id);
+  g_free (j->tool_name);
+  g_free (j->result);
+  if (j->error) g_error_free (j->error);
+  g_free (j);
+}
+
+/* Append a tool_result for TOOL_ID to the session with handle
+ * SESSION_ID, if it still exists.  Every tool_use the model emitted
+ * needs one, or the provider rejects the next request on the session --
+ * so a cancelled or skipped call still gets an answer.  */
+static void
+cmacs_ai_tools__append_result (guint session_id, const gchar *tool_id,
+                               const gchar *tool_name, const gchar *content,
+                               gboolean is_error)
+{
+  CmacsAiSession *sess = cmacs_ai_session_lookup (session_id);
+  if (sess == NULL)
+    return;
+  AiMessage *rm = ai_message_new_tool_result_with_name (tool_id, tool_name,
+                                                        content, is_error);
+  cmacs_ai_session_append_message_obj (sess, rm);
+  g_object_unref (rm);
+}
+
+static gboolean
+cmacs_ai_tool_job__main_done (gpointer user)
+{
+  CmacsAiToolJob *j = user;
+  gboolean cancelled = (j->result == NULL && j->error != NULL
+                        && g_error_matches (j->error, G_IO_ERROR,
+                                            G_IO_ERROR_CANCELLED));
+  const gchar *content = j->result
+    ? j->result
+    : (cancelled ? "cancelled by the user"
+       : (j->error ? j->error->message : "tool execution failed"));
+
+  g_hash_table_remove (cmacs_ai__tool_jobs, GUINT_TO_POINTER (j->job_id));
+  cmacs_ai_tools__append_result (j->session_id, j->tool_id, j->tool_name,
+                                 content, j->result == NULL);
+
+  /* (:text RESULT), (:error MESSAGE) or (:cancelled MESSAGE).  */
+  Lisp_Object kind = intern (j->result ? ":text"
+                             : cancelled ? ":cancelled" : ":error");
+  cmacs_dispatch_callback_invoke1 (j->cb_cookie,
+                                   list2 (kind, build_string (content)));
+  cmacs_ai_tool_job__free (j);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+cmacs_ai_tool_job__worker (gpointer user)
+{
+  CmacsAiToolJob *j = user;
+  GMainContext *ctx;
+
+  /* A private context, for the reason `cmacs_ai_tools__worker' gives:
+   * `bash' and the web tools wait on async I/O, and with no context
+   * pushed that I/O lands on the process-global one Emacs iterates.  */
+  ctx = g_main_context_new ();
+  g_main_context_push_thread_default (ctx);
+  j->result = ai_tool_executor_execute (j->exec, j->tool_use,
+                                        j->cancellable, &j->error);
+  g_main_context_pop_thread_default (ctx);
+  g_main_context_unref (ctx);
+
+  g_main_context_invoke (cmacs_glib_get_context (),
+                         cmacs_ai_tool_job__main_done, j);
+  return NULL;
+}
+
+DEFUN ("cmacs-ai-tools-execute-into-session-async",
+       Fcmacs_ai_tools_execute_into_session_async,
+       Scmacs_ai_tools_execute_into_session_async, 6, 6, 0,
+       doc: /* Run one tool call on a worker thread, then answer it in SESSION.
+
+Like `cmacs-ai-tools-execute-into-session', but the tool runs off the
+command loop, so a slow `glob', `grep' or `bash' cannot freeze Emacs.
+When it finishes, a tool_result keyed by TOOL-ID is appended to SESSION
+and CALLBACK is called on the main thread with one of
+  (:text RESULT)       the tool's output
+  (:error MESSAGE)     the tool failed
+  (:cancelled MESSAGE) `cmacs-ai-tools-cancel-job' stopped it
+In every case SESSION gets a tool_result, so the model's request stays
+answerable.
+
+Only EXECUTOR's own built-in filesystem, shell and web tools are run
+this way.  For any other tool -- one registered from Lisp, or bridged
+from MCP, which must run on the main thread -- this returns nil and
+does nothing; use `cmacs-ai-tools-execute-into-session' for it.
+Otherwise returns a job id for `cmacs-ai-tools-cancel-job'.  */)
+  (Lisp_Object session, Lisp_Object executor, Lisp_Object tool_name,
+   Lisp_Object tool_input_json, Lisp_Object tool_id, Lisp_Object callback)
+{
+  CHECK_FIXNAT (session);
+  CHECK_FIXNAT (executor);
+  CHECK_STRING (tool_name);
+  CHECK_STRING (tool_input_json);
+  CHECK_STRING (tool_id);
+  if (cmacs_ai_session_lookup (XFIXNUM (session)) == NULL)
+    error ("cmacs-ai: bad session handle");
+  cmacs_ai__executor_registry_init ();
+  g_mutex_lock (&cmacs_ai__executor_mutex);
+  AiToolExecutor *exec =
+    g_hash_table_lookup (cmacs_ai__executors,
+                         GUINT_TO_POINTER (XFIXNUM (executor)));
+  if (exec) g_object_ref (exec);
+  g_mutex_unlock (&cmacs_ai__executor_mutex);
+  if (exec == NULL) error ("cmacs-ai: bad executor handle");
+
+  /* Built-in, and one of the ones that is safe off the main thread.  */
+  gboolean offload = FALSE;
+  if (ai_tool_executor_is_builtin (exec, SSDATA (tool_name)))
+    for (const char *const *n = cmacs_ai_tools__offloadable; *n; n++)
+      if (strcmp (*n, SSDATA (tool_name)) == 0)
+        {
+          offload = TRUE;
+          break;
+        }
+  if (!offload)
+    {
+      g_object_unref (exec);
+      return Qnil;
+    }
+
+  if (cmacs_ai__tool_jobs == NULL)
+    cmacs_ai__tool_jobs = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+  CmacsAiToolJob *j = g_new0 (CmacsAiToolJob, 1);
+  /* Zero is never an id, even after the counter wraps.  */
+  if (cmacs_ai__next_tool_job == 0)
+    cmacs_ai__next_tool_job = 1;
+  j->job_id      = cmacs_ai__next_tool_job++;
+  j->exec        = exec;
+  j->tool_use    = ai_tool_use_new_from_json_string (SSDATA (tool_id),
+                                                     SSDATA (tool_name),
+                                                     SSDATA (tool_input_json));
+  j->cancellable = g_cancellable_new ();
+  j->session_id  = XFIXNUM (session);
+  j->cb_cookie   = cmacs_dispatch_callback_register (callback);
+  j->tool_id     = g_strdup (SSDATA (tool_id));
+  j->tool_name   = g_strdup (SSDATA (tool_name));
+  g_hash_table_insert (cmacs_ai__tool_jobs, GUINT_TO_POINTER (j->job_id), j);
+
+  GThread *t = g_thread_new ("cmacs-ai-tool", cmacs_ai_tool_job__worker, j);
+  g_thread_unref (t);
+  return make_fixnum (j->job_id);
+}
+
+DEFUN ("cmacs-ai-tools-cancel-job", Fcmacs_ai_tools_cancel_job,
+       Scmacs_ai_tools_cancel_job, 1, 1, 0,
+       doc: /* Ask the tool call JOB to stop.
+
+JOB is an id from `cmacs-ai-tools-execute-into-session-async'.  `glob'
+and `grep' stop at the next directory entry and `bash' kills its
+command; the job's callback then runs with (:cancelled ...).  Returns t
+if JOB was still running, nil if it had already finished.  */)
+  (Lisp_Object job)
+{
+  CHECK_FIXNAT (job);
+  CmacsAiToolJob *j = cmacs_ai__tool_jobs
+    ? g_hash_table_lookup (cmacs_ai__tool_jobs, GUINT_TO_POINTER (XFIXNUM (job)))
+    : NULL;
+  if (j == NULL)
+    return Qnil;
+  g_cancellable_cancel (j->cancellable);
+  return Qt;
+}
+
+DEFUN ("cmacs-ai-tools-skip-into-session",
+       Fcmacs_ai_tools_skip_into_session,
+       Scmacs_ai_tools_skip_into_session, 4, 4, 0,
+       doc: /* Answer a tool call in SESSION without running it.
+
+Appends an error tool_result for TOOL-ID / TOOL-NAME whose text is
+REASON.  For the calls still queued when the user cancels a turn: the
+model asked for them, and a provider rejects the next request on a
+session that leaves a tool call unanswered.  Returns nil.  */)
+  (Lisp_Object session, Lisp_Object tool_name, Lisp_Object tool_id,
+   Lisp_Object reason)
+{
+  CHECK_FIXNAT (session);
+  CHECK_STRING (tool_name);
+  CHECK_STRING (tool_id);
+  CHECK_STRING (reason);
+  cmacs_ai_tools__append_result (XFIXNUM (session), SSDATA (tool_id),
+                                 SSDATA (tool_name), SSDATA (reason), TRUE);
+  return Qnil;
+}
+
 #ifdef HAVE_CMACS_MCP
 /* Lisp list of regexp strings -> GPtrArray<const gchar *>.
  * The returned array does NOT own its strings; the caller must keep
@@ -915,6 +1153,9 @@ are watching the cost yourself.  */);
   defsubr (&Scmacs_ai_tools_register);
   defsubr (&Scmacs_ai_tools_run_async);
   defsubr (&Scmacs_ai_tools_execute_into_session);
+  defsubr (&Scmacs_ai_tools_execute_into_session_async);
+  defsubr (&Scmacs_ai_tools_cancel_job);
+  defsubr (&Scmacs_ai_tools_skip_into_session);
   defsubr (&Scmacs_ai_tools_set_search_provider);
   defsubr (&Scmacs_ai_tools_set_working_directory);
   defsubr (&Scmacs_ai_tools_list);

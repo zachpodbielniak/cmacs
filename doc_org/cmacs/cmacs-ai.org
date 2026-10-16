@@ -1403,7 +1403,25 @@ For the directories you return to, list them and they appear at the top:
 
 From Lisp, =cmacs-ai-chat-open= takes it as a third argument.
 
-An HTTP provider has no subprocess to place anywhere, so the directory only affects the buffer; =cmacs-ai-client-set-working-directory= returns nil there to say so.
+An HTTP provider has no subprocess to place anywhere; =cmacs-ai-client-set-working-directory= returns nil there to say so. Its tools still follow the directory: the chat hands it to its tool executor with =cmacs-ai-tools-set-working-directory=, so =glob=, =grep=, =ls=, =read= and =bash= resolve a relative or omitted =path= against the chat's directory for every provider. The directory is kept in =cmacs-ai-chat-directory= and in the archive's =#+PROPERTY: directory=, and =cmacs-ai-resume-chat= restores both the buffer's =default-directory= and the tools' directory from it (a directory that no longer exists is dropped).
+
+Before this, "in directory" moved the buffer and nothing the model could call. A chat opened in =~/Documents/notes= with the HTTP =grok= provider sent =glob= for =**/*AGENTS*= with no path, the executor had no working directory, and the walk started in Emacs's own =$HOME= -- into an sshfs mount, on the command loop, where a =getdents()= waiting on the network cannot be interrupted by =C-g= or even =SIGKILL=. That is Forgejo cmacs#1.
+
+** Tool calls run off the command loop
+
+A chat's built-in file, shell and web tools -- =bash=, =read=, =write=, =edit=, =multi_edit=, =glob=, =grep=, =ls=, =web_fetch=, =web_search= -- run on a worker thread through =cmacs-ai-tools-execute-into-session-async=, so a slow search or command leaves the editor responsive. The calls in one turn still run one after another and are rendered in order; the model is re-asked only once they have all answered.
+
+Everything else stays on the main thread: a tool registered from Lisp (=cmacs-ai-define-tool=, the brigade's tools, =generate_image=) or bridged from cmacs's MCP surface evaluates Lisp, which only the main thread may do. A Lisp tool that takes a built-in's name (say =glob=) is a Lisp tool -- ai-glib's =ai_tool_executor_is_builtin= is what tells them apart, not the name.
+
+=C-c C-k= (=cmacs-ai-chat-cancel-stream=) reaches a running tool too: =glob= and =grep= stop at the next directory entry, =bash= kills its command, and any calls still queued in that turn are answered "cancelled by the user" without running. Every call the model made gets a tool_result either way, because a provider rejects the next request on a session that leaves one unanswered. Killing the buffer cancels the running call.
+
+ai-glib bounds the walk itself as well: =glob= and =grep= do not enter a mount point below their root (named in the result, so the model can pass one as =path= to search it on purpose), and stop at 64 levels and 200 000 directory entries. See ai-glib's =docs/tools.org=.
+
+| Function                                     | What it does                                                  |
+|----------------------------------------------+---------------------------------------------------------------|
+| =cmacs-ai-tools-execute-into-session-async=  | run a built-in on a worker; callback gets =(:text R)=, =(:error M)= or =(:cancelled M)=; nil for a tool that must stay on the main thread |
+| =cmacs-ai-tools-cancel-job=                  | stop a job started by the above                               |
+| =cmacs-ai-tools-skip-into-session=           | answer a call as an error without running it                  |
 
 =cmacs-ai-client-set-cli-option HANDLE NAME VALUE= sets any GObject property the CLI client declares, by its string name — the escape hatch for a flag cmacs has no dedicated setter for. The ingester uses it for =bare=, =exclude-dynamic-system-prompt-sections= and =disallowed-tools=. It returns nil on an HTTP client, which has no CLI to configure.
 

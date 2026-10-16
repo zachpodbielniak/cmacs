@@ -48,6 +48,15 @@
 (declare-function cmacs-ai-tools-execute-into-session
                   "cmacs-ai-tools.c"
                   (session executor tool-name tool-input-json tool-id))
+(declare-function cmacs-ai-tools-execute-into-session-async
+                  "cmacs-ai-tools.c"
+                  (session executor tool-name tool-input-json tool-id
+                           callback))
+(declare-function cmacs-ai-tools-cancel-job "cmacs-ai-tools.c" (job))
+(declare-function cmacs-ai-tools-skip-into-session "cmacs-ai-tools.c"
+                  (session tool-name tool-id reason))
+(declare-function cmacs-ai-tools-set-working-directory "cmacs-ai-tools.c"
+                  (executor directory))
 
 ;;;; State ----------------------------------------------------------
 
@@ -103,6 +112,21 @@ default.  Bind to nil before opening a chat to disable tool use.")
 (defvar-local cmacs-ai-chat--pending-tool-uses nil
   "List of (NAME INPUT-JSON ID) triples accumulated during the current stream.
 Drained on `:end stop=tool-use' to drive the tool execution loop.")
+
+(defvar-local cmacs-ai-chat-directory nil
+  "Directory this chat works in, or nil when it was opened without one.
+Set by `cmacs-ai-chat-with-provider-in-directory' and restored from the
+archive's `#+PROPERTY: directory'.  The built-in file tools resolve a
+relative or omitted path against it, and a CLI agent starts there.")
+
+(defvar-local cmacs-ai-chat--tool-job nil
+  "Id of the tool call running off the command loop, or nil.
+See `cmacs-ai-tools-execute-into-session-async'.  Cancelled by
+`cmacs-ai-chat-cancel-stream' and when the buffer is killed.")
+
+(defvar-local cmacs-ai-chat--tools-cancelled nil
+  "Non-nil once the user cancelled the turn whose tools are running.
+The calls still queued are then answered as cancelled, not run.")
 
 (defvar-local cmacs-ai-chat--tool-loop-depth 0
   "Number of consecutive tool-use re-streams in flight.
@@ -299,6 +323,18 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
   (setq-local cmacs-ai-chat-tool-executor
               (when cmacs-ai-chat-enable-tools
                 (cmacs-ai-tools-new)))
+  ;; The built-in file tools resolve a relative or omitted `path'
+  ;; against the executor's own working directory, never the buffer's.
+  ;; Unset, that is Emacs's process directory -- $HOME, usually -- so
+  ;; a chat opened "in" a project globbed the whole home directory,
+  ;; NAS mounts included.  `cmacs-ai-client-set-working-directory' does
+  ;; not cover this: it only reaches CLI providers, which have a
+  ;; process to start somewhere; an HTTP provider's tools run here.
+  (when (and cmacs-ai-chat-tool-executor
+             cmacs-ai-chat-directory
+             (fboundp 'cmacs-ai-tools-set-working-directory))
+    (cmacs-ai-tools-set-working-directory cmacs-ai-chat-tool-executor
+                                          cmacs-ai-chat-directory))
   ;; Augment the executor with cmacs's own MCP tool surface so the
   ;; model gets buffer / file / project / eval / apropos / describe
   ;; on top of ai-glib's filesystem-level built-ins.  Silently
@@ -419,7 +455,8 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
     ;; against the right tree rather than wherever the buffer was opened.
     (when directory
       (setq-local default-directory (file-name-as-directory
-                                     (expand-file-name directory))))
+                                     (expand-file-name directory)))
+      (setq-local cmacs-ai-chat-directory default-directory))
     (setq-local cmacs-ai-chat-session-pair
                 (cmacs-ai-make-session provider model))
     ;; A CLI agent finds its project by where its process starts:
@@ -720,13 +757,12 @@ org outline groups call-and-result with the response that drove them."
 
 (defun cmacs-ai-chat--drive-tool-loop (buf)
   "Drain pending tool-use requests for BUF and re-stream.
-Called after a stream ends with stop=tool-use.  Each pending tool
-is executed via `cmacs-ai-tools-execute-into-session' (which
-appends a tool_result message to the session), the result is
-rendered in the chat buffer, then `cmacs-ai-chat-continue-stream'
-re-invokes the model with the augmented context.  Loops via the
-stream-end callback until the model produces a non-tool stop
-reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
+Called after a stream ends with stop=tool-use.  The pending tools run
+one after another (see `cmacs-ai-chat--run-tools'), each result is
+rendered in the chat buffer and appended to the session, then
+`cmacs-ai-chat-continue-stream' re-invokes the model with the augmented
+context.  Loops via the stream-end callback until the model produces a
+non-tool stop reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
   (with-current-buffer buf
     (let ((executor cmacs-ai-chat-tool-executor)
           (session  (cdr cmacs-ai-chat-session-pair))
@@ -747,22 +783,75 @@ reason or `cmacs-ai-chat-tool-loop-max-turns' is reached."
         (setq cmacs-ai-chat--tool-loop-depth 0))
        (t
         (cl-incf cmacs-ai-chat--tool-loop-depth)
-        ;; Execute each pending tool and render its result.
-        (dolist (tu pending)
-          (let* ((name (nth 0 tu))
-                 (input (nth 1 tu))
-                 (id (nth 2 tu))
-                 (result (condition-case err
-                             (cmacs-ai-tools-execute-into-session
-                              session executor name input id)
-                           (error (format "tool error: %S" err)))))
-            (cmacs-ai-chat--render-tool-result buf name id result)))
-        ;; Re-stream so the model sees the new tool_result messages.
-        (cmacs-ai-chat-continue-stream
-         session
-         (lambda (payload)
-           (cmacs-ai-chat--stream-callback buf payload))
-         executor))))))
+        (setq cmacs-ai-chat--tools-cancelled nil)
+        (cmacs-ai-chat--run-tools buf session executor pending))))))
+
+(defun cmacs-ai-chat--run-tools (buf session executor pending)
+  "Run the tool calls in PENDING for BUF one at a time, then re-stream.
+PENDING is a list of (NAME INPUT-JSON ID).  A built-in file, shell or
+web tool runs on a worker thread through
+`cmacs-ai-tools-execute-into-session-async', so a `glob' of a large or
+remote tree cannot freeze the command loop; a tool registered from Lisp
+or bridged from MCP has to run on the main thread and still does.
+Once the user cancels (`cmacs-ai-chat-cancel-stream'), the calls left
+are answered as cancelled without running and the turn is closed."
+  (cond
+   ((not (buffer-live-p buf)) nil)
+   ((buffer-local-value 'cmacs-ai-chat--tools-cancelled buf)
+    (dolist (tu pending)
+      (cmacs-ai-tools-skip-into-session session (nth 0 tu) (nth 2 tu)
+                                        "cancelled by the user"))
+    (with-current-buffer buf
+      (setq cmacs-ai-chat--tool-loop-depth 0
+            cmacs-ai-chat--tools-cancelled nil)
+      (cmacs-ai-chat--close-turn buf)))
+   ((null pending)
+    ;; Re-stream so the model sees the new tool_result messages.
+    (cmacs-ai-chat-continue-stream
+     session
+     (lambda (payload)
+       (cmacs-ai-chat--stream-callback buf payload))
+     executor))
+   (t
+    (let* ((tu (car pending))
+           (name (nth 0 tu))
+           (input (nth 1 tu))
+           (id (nth 2 tu))
+           (job (and (fboundp 'cmacs-ai-tools-execute-into-session-async)
+                     (condition-case nil
+                         (cmacs-ai-tools-execute-into-session-async
+                          session executor name input id
+                          (lambda (payload)
+                            (cmacs-ai-chat--tool-finished
+                             buf session executor (cdr pending)
+                             name id payload)))
+                       (error nil)))))
+      (if job
+          (with-current-buffer buf
+            (setq cmacs-ai-chat--tool-job job))
+        ;; Not one of the built-ins that may leave the main thread.
+        (let ((result (condition-case err
+                          (cmacs-ai-tools-execute-into-session
+                           session executor name input id)
+                        (error (format "tool error: %S" err)))))
+          (cmacs-ai-chat--render-tool-result buf name id result)
+          (cmacs-ai-chat--run-tools buf session executor (cdr pending))))))))
+
+(defun cmacs-ai-chat--tool-finished (buf session executor rest name id payload)
+  "Render the off-thread tool call NAME / ID in BUF, then run REST.
+PAYLOAD is (:text RESULT), (:error MESSAGE) or (:cancelled MESSAGE);
+the session already has the matching tool_result."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (setq cmacs-ai-chat--tool-job nil))
+    (cmacs-ai-chat--render-tool-result
+     buf name id (if (eq (car payload) :text)
+                     (cadr payload)
+                   (format "tool %s: %s"
+                           (if (eq (car payload) :cancelled)
+                               "cancelled" "error")
+                           (cadr payload))))
+    (cmacs-ai-chat--run-tools buf session executor rest)))
 
 (defun cmacs-ai-chat--stream-callback (buf payload)
   "Dispatch a streaming PAYLOAD plist into BUF."
@@ -1250,6 +1339,11 @@ result, and continue the stream until the model stops."
   (interactive)
   (when-let* ((session (cdr cmacs-ai-chat-session-pair)))
     (cmacs-ai-chat-cancel session)
+    ;; A tool running off the command loop is part of the turn too:
+    ;; stop it, and answer whatever is still queued without running it.
+    (when cmacs-ai-chat--tool-job
+      (setq cmacs-ai-chat--tools-cancelled t)
+      (cmacs-ai-tools-cancel-job cmacs-ai-chat--tool-job))
     (setq cmacs-ai-chat--assistant-marker nil)
     (message "cmacs-ai: cancelled")))
 
@@ -1430,13 +1524,23 @@ turn carries full context.  Subsequent autosaves append to FILE."
       (insert "* Compose                                              :compose:\n"))
     (let* ((provider-str (cmacs-ai-chat--transcript-property "provider"))
            (model-str    (cmacs-ai-chat--transcript-property "model"))
+           (dir-str      (cmacs-ai-chat--transcript-property "directory"))
            (provider     (intern (or provider-str
                                       (symbol-name cmacs-ai-default-provider))))
            (turns        (cmacs-ai-chat--parse-transcript provider-str)))
       (cmacs-ai-chat-mode)
       (setq-local cmacs-ai-chat-provider provider)
+      ;; A resumed chat works where it did before.  A directory that has
+      ;; since gone away is dropped rather than handed to the tools.
+      (when (and dir-str (file-directory-p dir-str))
+        (setq-local default-directory
+                    (file-name-as-directory (expand-file-name dir-str)))
+        (setq-local cmacs-ai-chat-directory default-directory))
       (setq-local cmacs-ai-chat-session-pair
                   (cmacs-ai-make-session provider model-str))
+      (when cmacs-ai-chat-directory
+        (cmacs-ai-client-set-working-directory
+         (car cmacs-ai-chat-session-pair) cmacs-ai-chat-directory))
       (cmacs-ai-chat--setup-executor)
       (setq-local cmacs-ai-chat--created-at (current-time))
       ;; Continue appending to the SAME archive file.
@@ -1490,6 +1594,10 @@ Archives the conversation first (when `cmacs-ai-chat-autosave') so a
 closed chat can be resumed with `cmacs-ai-resume-chat'."
   (when (and cmacs-ai-chat-autosave cmacs-ai-chat--compose-marker)
     (ignore-errors (cmacs-ai-chat-save-quietly)))
+  ;; Nothing is left to read a running tool's answer.
+  (when cmacs-ai-chat--tool-job
+    (ignore-errors (cmacs-ai-tools-cancel-job cmacs-ai-chat--tool-job))
+    (setq cmacs-ai-chat--tool-job nil))
   (when cmacs-ai-chat-session-pair
     (cmacs-ai-free-session cmacs-ai-chat-session-pair)
     (setq cmacs-ai-chat-session-pair nil))

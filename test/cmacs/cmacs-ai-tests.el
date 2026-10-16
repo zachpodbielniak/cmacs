@@ -1135,6 +1135,163 @@ literally named \"~\" if handed one."
       (delete-directory dir t))))
 
 
+;;;; The chat's directory reaches the tool executor
+;;
+;; Forgejo cmacs#1: a chat opened in ~/Documents/notes with the HTTP
+;; grok provider sent `glob' with no path.  The executor had no working
+;; directory, so the walk started in Emacs's own cwd -- $HOME -- went
+;; into an sshfs mount and froze the editor on the command loop.
+
+(defun cmacs-ai-tests--wait-for (pred &optional seconds)
+  "Spin the event loop until PRED is non-nil or SECONDS (5) pass."
+  (let ((deadline (+ (float-time) (or seconds 5))))
+    (while (and (not (funcall pred)) (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    (funcall pred)))
+
+(ert-deftest cmacs-ai-chat-tools-run-in-the-chat-directory ()
+  "A relative or omitted path resolves against the chat's directory.
+The provider is HTTP on purpose: it has no subprocess, so
+`cmacs-ai-client-set-working-directory' cannot be what places the tools."
+  (skip-unless (and (fboundp 'cmacs-ai-chat-open)
+                    (fboundp 'cmacs-ai-tools-set-working-directory)))
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-ai-tooldir" t)))
+         (marker (expand-file-name "only-here.txt" dir))
+         (cmacs-ai-chat-enable-tools t)
+         (buf nil))
+    (unwind-protect
+        (progn
+          (write-region "x" nil marker)
+          (setq buf (cmacs-ai-chat-open 'claude nil dir))
+          (with-current-buffer buf
+            (should (equal cmacs-ai-chat-directory dir))
+            (let ((out (cmacs-ai-tools-execute-into-session
+                        (cdr cmacs-ai-chat-session-pair)
+                        cmacs-ai-chat-tool-executor
+                        "glob" "{\"pattern\":\"only-here.txt\"}" "t1")))
+              (should (string-match-p (regexp-quote "only-here.txt") out)))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-chat-restore-keeps-the-directory ()
+  "A resumed chat works in the directory its archive names."
+  (skip-unless (and (fboundp 'cmacs-ai-chat-resume)
+                    (fboundp 'cmacs-ai-tools-set-working-directory)))
+  (let* ((arch (make-temp-file "cmacs-ai-arch" t))
+         (work (file-name-as-directory (make-temp-file "cmacs-ai-work" t)))
+         (file (expand-file-name "260101-000000-claude.org" arch))
+         (cmacs-ai-chat-dir arch)
+         (cmacs-ai-chat-enable-tools t)
+         (buf nil))
+    (unwind-protect
+        (progn
+          (write-region "x" nil (expand-file-name "resumed.txt" work))
+          (with-temp-file file
+            (insert "#+TITLE: cmacs-ai -- 2026-01-01 00:00:00\n"
+                    "#+PROPERTY: provider claude\n"
+                    (format "#+PROPERTY: directory %s\n" work)
+                    "\n* Conversation\n\n"
+                    "** 2026-01-01 00:00:01  user\nhello\n\n"))
+          (setq buf (cmacs-ai-chat-resume file))
+          (with-current-buffer buf
+            (should (equal cmacs-ai-chat-directory work))
+            (should (equal (expand-file-name default-directory) work))
+            (should (string-match-p
+                     "resumed\\.txt"
+                     (cmacs-ai-tools-execute-into-session
+                      (cdr cmacs-ai-chat-session-pair)
+                      cmacs-ai-chat-tool-executor
+                      "glob" "{\"pattern\":\"*.txt\"}" "t1")))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory arch t)
+      (delete-directory work t))))
+
+(ert-deftest cmacs-ai-tools-builtins-run-off-the-command-loop ()
+  "A built-in runs on a worker and answers both the callback and the session."
+  (skip-unless (fboundp 'cmacs-ai-tools-execute-into-session-async))
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-ai-async" t)))
+         (pair (cmacs-ai-make-session 'claude "x"))
+         (ex (cmacs-ai-tools-new))
+         (got nil))
+    (unwind-protect
+        (progn
+          (write-region "x" nil (expand-file-name "found.txt" dir))
+          (cmacs-ai-tools-set-working-directory ex dir)
+          (let ((job (cmacs-ai-tools-execute-into-session-async
+                      (cdr pair) ex "glob" "{\"pattern\":\"*.txt\"}" "a1"
+                      (lambda (payload) (setq got payload)))))
+            (should (natnump job))
+            (should (cmacs-ai-tests--wait-for (lambda () got)))
+            (should (eq (car got) :text))
+            (should (string-match-p "found\\.txt" (cadr got)))
+            ;; The tool_result is in the session, so the model can be
+            ;; asked to continue.
+            (should (= 1 (cmacs-ai-session-message-count (cdr pair))))
+            ;; Finished, so there is nothing left to cancel.
+            (should-not (cmacs-ai-tools-cancel-job job))))
+      (cmacs-ai-tools-free ex)
+      (cmacs-ai-free-session pair)
+      (delete-directory dir t))))
+
+(ert-deftest cmacs-ai-tools-lisp-tools-stay-on-the-main-thread ()
+  "A tool registered from Lisp is never handed to a worker thread."
+  (skip-unless (fboundp 'cmacs-ai-tools-execute-into-session-async))
+  (let* ((pair (cmacs-ai-make-session 'claude "x"))
+         (ex (cmacs-ai-tools-new)))
+    (unwind-protect
+        (progn
+          (cmacs-ai-tools-register ex "lisp_probe" "probe"
+                                   (cons nil (lambda (&rest _) "ran")))
+          (should-not (cmacs-ai-tools-execute-into-session-async
+                       (cdr pair) ex "lisp_probe" "{}" "l1" #'ignore))
+          ;; A Lisp tool that shadows a built-in's name is still Lisp.
+          (cmacs-ai-tools-register ex "glob" "shadow"
+                                   (cons nil (lambda (&rest _) "shadowed")))
+          (should-not (cmacs-ai-tools-execute-into-session-async
+                       (cdr pair) ex "glob" "{}" "l2" #'ignore))
+          (should (= 0 (cmacs-ai-session-message-count (cdr pair)))))
+      (cmacs-ai-tools-free ex)
+      (cmacs-ai-free-session pair))))
+
+(ert-deftest cmacs-ai-tools-skip-answers-the-call ()
+  "A skipped call still gets a tool_result, so the session stays valid."
+  (skip-unless (fboundp 'cmacs-ai-tools-skip-into-session))
+  (let ((pair (cmacs-ai-make-session 'claude "x")))
+    (unwind-protect
+        (progn
+          (cmacs-ai-tools-skip-into-session (cdr pair) "glob" "s1"
+                                            "cancelled by the user")
+          (should (= 1 (cmacs-ai-session-message-count (cdr pair)))))
+      (cmacs-ai-free-session pair))))
+
+(ert-deftest cmacs-ai-chat-tool-loop-waits-for-an-off-thread-tool ()
+  "The chat renders an off-thread result, then re-streams, in that order."
+  (skip-unless (and (fboundp 'cmacs-ai-chat-open)
+                    (fboundp 'cmacs-ai-tools-execute-into-session-async)))
+  (let* ((dir (file-name-as-directory (make-temp-file "cmacs-ai-loop" t)))
+         (cmacs-ai-chat-enable-tools t)
+         (cmacs-ai-chat-show-tool-calls t)
+         (continued nil)
+         (buf nil))
+    (unwind-protect
+        (progn
+          (write-region "x" nil (expand-file-name "loop.txt" dir))
+          (setq buf (cmacs-ai-chat-open 'claude nil dir))
+          (cl-letf (((symbol-function 'cmacs-ai-chat-continue-stream)
+                     (lambda (&rest _) (setq continued t))))
+            (with-current-buffer buf
+              (setq cmacs-ai-chat--pending-tool-uses
+                    (list (list "glob" "{\"pattern\":\"*.txt\"}" "g1")))
+              (cmacs-ai-chat--drive-tool-loop buf)
+              ;; Started, not finished: the command loop is free.
+              (should cmacs-ai-chat--tool-job)
+              (should (cmacs-ai-tests--wait-for (lambda () continued)))
+              (should-not cmacs-ai-chat--tool-job)
+              (should (string-match-p "loop\\.txt" (buffer-string))))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t))))
+
+
 ;;;; Provider label
 
 (ert-deftest cmacs-ai-label-uses-the-provider-symbol ()
