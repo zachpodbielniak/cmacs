@@ -125,6 +125,26 @@
     (let ((cmacs-gowl-bar-default-widgets '(("x" . middle-earth))))
       (should-error (cmacs-gowl-bar-widgets--placement-alists)))))
 
+(ert-deftest cmacs-gowl-bar-widgets-test-devservices-follows-buffer ()
+  "Only a changed directory is pushed, and the option toggles the hook."
+  (cmacs-gowl-bar-widgets-tests--with pushes configures
+    (let ((cmacs-gowl-bar-devservices--last-cwd nil)
+          (window-selection-change-functions nil))
+      (let ((default-directory "/tmp/a/"))
+        (cmacs-gowl-bar-devservices--follow)
+        (cmacs-gowl-bar-devservices--follow))
+      (let ((default-directory "/tmp/b/"))
+        (cmacs-gowl-bar-devservices--follow))
+      (should (= 2 (length pushes)))
+      (should (equal (cdr (assoc "devservices.focus-cwd" (car (last pushes))))
+                     "/tmp/b/"))
+      (customize-set-variable 'cmacs-gowl-bar-devservices-follow-buffer t)
+      (should (memq #'cmacs-gowl-bar-devservices--follow
+                    window-selection-change-functions))
+      (customize-set-variable 'cmacs-gowl-bar-devservices-follow-buffer nil)
+      (should-not (memq #'cmacs-gowl-bar-devservices--follow
+                        window-selection-change-functions)))))
+
 (provide 'cmacs-gowl-bar-widgets-tests)
 
 ;;; cmacs-gowl-bar-widgets-tests.el ends here

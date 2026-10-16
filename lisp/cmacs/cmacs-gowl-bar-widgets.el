@@ -94,6 +94,36 @@ rest still run."
   :type '(repeat function)
   :group 'cmacs-gowl-bar)
 
+(defcustom cmacs-gowl-bar-devservices-follow-buffer nil
+  "When non-nil, the devservices widget follows the selected buffer.
+
+In its `auto' mode the widget shows the project of the focused window's
+working directory.  When that window is cmacs itself, the process's
+directory says nothing about which project you are in, so this pushes
+the selected buffer's `default-directory' to the widget (as
+`devservices.focus-cwd') whenever the selected window changes to a
+different directory.  Off by default: devservices is off by default."
+  :type 'boolean
+  :set (lambda (sym val)
+         (set-default sym val)
+         (if val
+             (add-hook 'window-selection-change-functions
+                       #'cmacs-gowl-bar-devservices--follow)
+           (remove-hook 'window-selection-change-functions
+                        #'cmacs-gowl-bar-devservices--follow)))
+  :group 'cmacs-gowl-bar)
+
+(defvar cmacs-gowl-bar-devservices--last-cwd nil
+  "The directory last pushed to devservices, so a push is a change.")
+
+(defun cmacs-gowl-bar-devservices--follow (&optional _frame)
+  "Push the selected buffer's directory to devservices if it changed.
+Each push re-lays the bar out, so an unchanged directory pushes nothing."
+  (let ((dir (ignore-errors (expand-file-name default-directory))))
+    (when (and dir (not (equal dir cmacs-gowl-bar-devservices--last-cwd)))
+      (setq cmacs-gowl-bar-devservices--last-cwd dir)
+      (cmacs-gowl-bar-push "devservices" (list (cons "focus-cwd" dir))))))
+
 (defconst cmacs-gowl-bar-widgets--features
   '(cmacs-gowl-bar-assistant cmacs-gowl-bar-meeting
     cmacs-gowl-bar-rewrite cmacs-gowl-bar-keywheel)
