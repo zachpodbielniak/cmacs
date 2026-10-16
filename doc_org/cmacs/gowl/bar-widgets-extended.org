@@ -150,7 +150,7 @@ The panel's destination buttons override it per meeting. =cmacs-gowl-bar-meeting
 
 ** ai-rewrite
 
-On by default under cmacs, in the top bar, with =Super+e= bound to it. Select text anywhere, press =Super+e=, pick an action by its letter; the result is shown as a word diff and =Return= pastes it over the selection (=y= copies only).
+On by default under cmacs, in the top bar, with =Super+e= bound to it. Select text anywhere, press =Super+e=, pick an action by its letter; the result is shown as a git-style diff --- the old line on a red =−= row, the new one on a green =+= row, the changed words highlighted --- and =Return= pastes it over the selection (=y= copies only).
 
 *Which provider and model rewrite your text:* right-click the widget's icon (or click the =⚙= row at the foot of the panel). The list is every cmacs-ai provider, with /Default/ --- the AI menu's provider --- first; under it, the models cmacs could list for the chosen provider (the CLI providers'; =cmacs-gowl-bar-model-list-widgets= says which widgets get them) and a field for any model id. The choice is saved (=$XDG_STATE_HOME/gowl/ai-rewrite.choice=) and survives restarts; an action that names its own provider keeps it. Under cmacs, =cmacs-gowl-bar-rewrite-push= gives it every text operation on the right-click AI menu --- Fix spelling & grammar (first, =f=), Rephrase, Improve, Shorten, Translate to English, Summarize, Explain, Reply, Ask and a custom instruction --- built from =cmacs-ai-textops--specs= at push time, so a customised prompt carries over. Change the list with =cmacs-gowl-bar-rewrite-actions=; =cmacs-gowl-bar-rewrite-actions-mode= says whether it replaces or extends the widget's built-in actions.
 
