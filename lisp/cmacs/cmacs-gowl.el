@@ -1945,6 +1945,14 @@ thread is running and applies configuration."
       (when (fboundp 'cmacs-gowl-bar-sync-enable)
         (cmacs-gowl-bar-sync-enable))))
   (cmacs-gowl--apply-tray-widget)
+  ;; gowl's extended bar widgets: the cpu widget's activity style, the
+  ;; AI widgets pointed at cmacs-ai, meeting notes and the assistant on
+  ;; the bar.  All of it lives in cmacs-gowl-bar-widgets.el and goes
+  ;; through the bar's amendment keys, so nothing else on the bar moves.
+  (when (and cmacs-gowl-bar-show-tags (fboundp 'gowl-bar-configure))
+    (ignore-errors
+      (require 'cmacs-gowl-bar-widgets)
+      (cmacs-gowl-bar-widgets-apply)))
   ;; Give each monitor its own initial tag (main → 1, second → 2, …).
   ;; Outputs may settle slightly after the compositor starts, so try
   ;; immediately and once more shortly after.
