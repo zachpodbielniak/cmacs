@@ -102,6 +102,13 @@ compositor the same way it drives a standalone gowl:
   gowl-msg dispatch Super+Return
   gowl-msg -s                    # the event stream
 
+The same socket speaks the gowl wire protocol -- JSON-RPC 2.0, one
+object per line -- for programs that lay out or manage their own
+windows (`gowl-msg -d' lists the methods; see docs/ipc.org in gowl).
+Windows embedded in Emacs buffers are refused by its geometry, tag and
+state methods: Emacs owns where they are.  Processes Emacs starts find
+the socket through GOWL_SOCKET.
+
 A string is used as the socket path instead of the default.  Commands
 run on the compositor's dispatch thread and do only what the compositor
 can already be asked to do -- there is no eval behind this socket --
@@ -1879,7 +1886,14 @@ thread is running and applies configuration."
   ;; session the way it reaches a standalone gowl.
   (when cmacs-gowl-ipc
     (condition-case err
-        (gowl-start-ipc (and (stringp cmacs-gowl-ipc) cmacs-gowl-ipc))
+        ;; GOWL_SOCKET names it for every process Emacs starts, which
+        ;; is what `gowl-msg' and a wire-protocol client look at first
+        ;; -- needed when `cmacs-gowl-ipc' moves the socket off the
+        ;; default path.  `setenv' changes `process-environment' only,
+        ;; so it is safe beside the compositor's dispatch thread.
+        (setenv "GOWL_SOCKET"
+                (gowl-start-ipc (and (stringp cmacs-gowl-ipc)
+                                     cmacs-gowl-ipc)))
       (error (message "cmacs-gowl: no IPC socket: %s"
                       (error-message-string err)))))
   ;; Apply default layout.

@@ -2239,6 +2239,92 @@ added the lock."
                               (cmacs-gowl-tests--ask socket "layout"))
          (error "The socket does not report the layout it set")))
 
+     ;; The wire protocol: JSON-RPC on the same socket.  Sent directly
+     ;; rather than through `gowl-msg', whose build here may predate it.
+     (defun cmacs-gowl-tests--rpc (socket lines want-id)
+       ;; LINES: one JSON-RPC request or a list of them, sent on one
+       ;; connection.  Returns (RESPONSE . EVENTS): the response whose
+       ;; id is WANT-ID, and every event notification read before it.
+       ;; A request's own events arrive BEFORE its reply -- they are
+       ;; pushed while it runs -- so they are in EVENTS.
+       (let* ((proc (make-network-process
+                     :name "gowl-rpc-test" :family 'local
+                     :service socket :coding 'utf-8-unix))
+              (buf "")
+              (response nil)
+              (events nil))
+         (unwind-protect
+             (progn
+               (set-process-filter
+                proc (lambda (_p out) (setq buf (concat buf out))))
+               (dolist (l (if (listp lines) lines (list lines)))
+                 (process-send-string proc (concat l "\n")))
+               (with-timeout (5 (error "No JSON-RPC reply %s to %S"
+                                       want-id lines))
+                 (while (not response)
+                   (accept-process-output proc 0.1)
+                   (while (string-search "\n" buf)
+                     (let* ((nl (string-search "\n" buf))
+                            (obj (json-parse-string (substring buf 0 nl)
+                                                    :object-type 'alist)))
+                       (setq buf (substring buf (1+ nl)))
+                       (cond ((equal (alist-get 'id obj) want-id)
+                              (setq response obj))
+                             ((equal (alist-get 'method obj) "event")
+                              (push obj events)))))))
+               (cons response (nreverse events)))
+           (delete-process proc))))
+     (let ((r (car (cmacs-gowl-tests--rpc
+                    socket "{\"id\":1,\"method\":\"rpc.ping\"}" 1))))
+       (unless (equal (alist-get 'result r) "pong")
+         (error "rpc.ping: %S" r)))
+     ;; A method that changes the session, seen from Lisp.
+     (let ((r (car (cmacs-gowl-tests--rpc
+                    socket (concat "{\"id\":2,\"method\":\"layout.set\","
+                                   "\"params\":{\"name\":\"tile\"}}")
+                    2))))
+       (unless (equal (alist-get 'name (alist-get 'result r)) "tile")
+         (error "layout.set: %S" r))
+       (unless (equal (gowl-get-layout) "[]=")
+         (error "layout.set did not reach the compositor: %S"
+                (gowl-get-layout))))
+     ;; Typed errors: a misspelt parameter is refused by name.
+     (let* ((r (car (cmacs-gowl-tests--rpc
+                     socket (concat "{\"id\":3,\"method\":"
+                                    "\"window.set_geometry\","
+                                    "\"params\":{\"widht\":1}}")
+                     3)))
+            (err (alist-get 'error r)))
+       (unless (and err (eql (alist-get 'code err) -32602))
+         (error "A bad parameter was not refused: %S" r)))
+     (let ((r (car (cmacs-gowl-tests--rpc
+                    socket "{\"id\":4,\"method\":\"gowl.state\"}" 4))))
+       (unless (string-search "HEADLESS-1"
+                              (format "%S" (alist-get 'monitors
+                                                      (alist-get 'result r))))
+         (error "gowl.state has no output: %S" r)))
+     ;; Structured events from an embedded compositor: subscribe, view
+     ;; another tag, and the change is announced on the same connection
+     ;; -- from the diff after the arrange, which sees it whichever path
+     ;; made it.
+     (let* ((rr (cmacs-gowl-tests--rpc
+                 socket
+                 (list (concat "{\"id\":5,\"method\":\"events.subscribe\","
+                               "\"params\":{\"events\":[\"tags.*\"]}}")
+                       (concat "{\"id\":6,\"method\":\"tags.view\","
+                               "\"params\":{\"tag\":3}}"))
+                 6))
+            (ev (seq-find (lambda (e)
+                            (equal (alist-get 'event (alist-get 'params e))
+                                   "tags.changed"))
+                          (cdr rr))))
+       (unless (eql (alist-get 'active (gowl-tag-info)) 4)
+         (error "tags.view did not reach the compositor: %S" (gowl-tag-info)))
+       (unless (and ev (eql (alist-get 'active
+                                       (alist-get 'data (alist-get 'params ev)))
+                            4))
+         (error "No tags.changed event: %S" rr)))
+
      ;; Removing the profile in force falls back to what is left.
      (unless (gowl-remove-output-profile "solo")
        (error "`gowl-remove-output-profile' found nothing"))

@@ -2709,6 +2709,34 @@ asked to do --- nothing arriving here evaluates Lisp.  Anyone who can
 open the socket can drive the desktop, which is why it lives in the
 user's runtime directory.
 
+@subsubheading The wire protocol
+
+The same socket speaks the gowl wire protocol: JSON-RPC 2.0, one
+object per line, told apart from a text command by its leading
+@samp{@{} (or @samp{[} for a batch).  It is the interface for
+programs: every target is named, parameters are named and checked,
+errors carry a code, a batch lands in one frame, @code{mine=true}
+finds the caller's own windows, and @command{gowl-msg -d} lists every
+method and event of the running compositor.
+
+@example
+gowl-msg -c gowl.state | jq '.windows[] | @{id, app_id, embedded@}'
+gowl-msg -c window.set_geometry id=12 x=0.5 y=0 width=0.5 height=1 \
+         relative_to=area units=fraction
+gowl-msg -c spawn argv='["foot"]' tag=3 floating=true width=900
+gowl-msg -s -j 'window.*' tags.changed
+@end example
+
+@code{cmacs --gowl} speaks it exactly as standalone gowl does and
+exports the socket's path as @env{GOWL_SOCKET} to every process Emacs
+starts.  Windows embedded in Emacs buffers (@code{embedded: true}) are
+the one difference: Emacs owns their place, so the methods that would
+move, retag, float, fullscreen, pin or minimize one answer
+@emph{refused} (@code{-32002}); queries, focus, close, typing, keys,
+screenshots and opacity work on them.  The reference is
+@file{deps/gowl/docs/ipc.org}; @command{make -C deps/gowl
+install-skills} installs the @code{/gowl-msg} agent skill.
+
 @subsection Enable / Disable
 
 @example

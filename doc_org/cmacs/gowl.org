@@ -3137,6 +3137,23 @@ It is on by default; =cmacs-gowl-ipc= turns it off (nil) or moves it (a path str
 
 Commands run on the compositor's dispatch thread, inside the lock a keybind runs under, and do only what the compositor can already be asked to do — this is not =emacsctl='s eval, and nothing arriving here evaluates Lisp. That said, anyone who can open the socket can drive your desktop, which is why it lives in your runtime directory. See =deps/gowl/docs/ipc.org= for the full command and event list.
 
+*** The wire protocol: driving the session from a program
+
+The same socket speaks the gowl wire protocol: JSON-RPC 2.0, one object per line, told apart from a text command by its leading ={= (or =[= for a batch). It is the interface for a /program/ -- a tool laying out its own windows, a launcher placing what it starts, an agent arranging a workspace. Every target is named (a window id, an output name), parameters are named and checked (a misspelt one is an error naming the ones the method takes), errors carry a code, a batch lands in one frame, =mine=true= finds the calling process's own windows and its children's, and the compositor describes itself: =gowl-msg -d= lists every method and event.
+
+#+begin_src sh
+gowl-msg -d                                   # methods and events
+gowl-msg -c gowl.state | jq '.windows[] | {id, app_id, embedded}'
+gowl-msg -c window.set_geometry id=12 x=0.5 y=0 width=0.5 height=1 \
+         relative_to=area units=fraction      # the right half of the usable screen
+gowl-msg -c spawn argv='["foot"]' tag=3 floating=true width=900 height=500
+gowl-msg -s -j 'window.*' tags.changed        # structured events
+#+end_src
+
+=cmacs --gowl= speaks it exactly as standalone gowl does -- =gowl_compositor_set_ipc()= installs it on both launch paths -- and exports the socket's path to every process Emacs starts as =GOWL_SOCKET=. The one difference is *embedded* windows (=embedded: true= in a window object): Emacs owns where they are and re-asserts it on every redisplay, so the methods that would move, retag, float, fullscreen, pin, push below or minimize one answer /refused/ (=-32002=) with that reason rather than appearing to work for a moment. Query, focus, close, typing, keys, screenshots and opacity work on them as on any window; floating windows, X11 popups and anything else Emacs does not hold behave exactly as under standalone gowl. Methods run on the dispatch thread under the gowl lock and never run Lisp; a =key.dispatch= or =action.run= that reaches a Lisp keybind is deferred to the main loop, as a real key's is.
+
+The reference is =deps/gowl/docs/ipc.org= (/The wire protocol/). For an agent, =make -C deps/gowl install-skills= installs the =/gowl-msg= skill, which teaches the same thing. =cmacs-gowl-test-ipc-and-profiles-headless= drives the protocol against a headless embedded compositor in a child cmacs.
+
 ** HDR
 
 =M-x cmacs-gowl-toggle-hdr= switches the focused output between HDR and SDR, and the bar's *display* panel carries the same toggle --- shown only where the output can do it, and replaced by a line saying so where it cannot.  =Super+Shift+h= is bound to it in standalone gowl's shipped config.
