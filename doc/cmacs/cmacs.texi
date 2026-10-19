@@ -2687,12 +2687,11 @@ The profile in force is chosen again on every hotplug and reload;
 
 A tag switch can move instead of cutting.  Each transition is its own
 gowl module, all loaded by @code{cmacs-gowl-mode}, and
-@code{cmacs-gowl-tag-transition} picks which runs: @code{cube} (the
-default), @code{slide}, @code{fade}, @code{zoom}, @code{iris},
+@code{cmacs-gowl-tag-transition} picks which runs: @code{random} (the
+default, a different one each switch), @code{cube}, @code{slide}, @code{fade}, @code{zoom}, @code{iris},
 @code{flip}, @code{pagecurl}, @code{carousel}, @code{sphere},
 @code{burn}, @code{ripple}, @code{pixelate}, @code{glitch}, @code{melt},
-@code{shatter}, @code{explode}, @code{implode}, @code{random} (a
-different one each switch) or @code{none}.
+@code{shatter}, @code{explode}, @code{implode} or @code{none}.
 
 @kbd{Super+:} steps round the loaded ones, @code{random} last, with a
 toast naming each; @kbd{M-x cmacs-gowl-cycle-tag-transition} does the

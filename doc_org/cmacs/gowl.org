@@ -3156,7 +3156,7 @@ The reference is =deps/gowl/docs/ipc.org= (/The wire protocol/). For an agent, =
 
 ** Tag transitions
 
-A tag switch can move instead of cutting: the cube turns, a page curls, the desktop melts, burns, shatters or wraps onto a globe. Each of the seventeen is its own gowl module and =cmacs-gowl-mode= loads them all; =cmacs-gowl-tag-transition= picks which one runs -- the cube by default, =random= for a different one each switch, =none= for an instant cut.
+A tag switch can move instead of cutting: the cube turns, a page curls, the desktop melts, burns, shatters or wraps onto a globe. Each of the seventeen is its own gowl module and =cmacs-gowl-mode= loads them all; =cmacs-gowl-tag-transition= picks which one runs -- =random= by default, a different one each switch (never the same twice running); a name to keep one, =none= for an instant cut. Standalone gowl defaults to the cube.
 
 | Key / command | Does |
 |---------------+------|

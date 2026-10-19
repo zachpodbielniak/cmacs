@@ -147,13 +147,13 @@ re-pushes it."
                                           (string :tag "Mode"))))
   :group 'cmacs-gowl)
 
-(defcustom cmacs-gowl-tag-transition 'cube
+(defcustom cmacs-gowl-tag-transition 'random
   "What a tag switch looks like.
 
 Every transition is its own gowl module and `cmacs-gowl-mode' loads
 them all; this picks which one runs:
 
-  `cube'      the desktop turns as one side of a solid (the default)
+  `cube'      the desktop turns as one side of a solid
   `slide'     pushed sideways, the next one following
   `fade'      a crossfade; nothing moves
   `zoom'      sinking away, the next arriving from in front
@@ -170,7 +170,7 @@ them all; this picks which one runs:
   `shatter'   struck like glass at the pointer, falling away
   `explode'   blown apart from the pointer
   `implode'   pulled into the pointer
-  `random'    a different one at every switch
+  `random'    a different one at every switch (the default)
   `none'      an instant switch
 
 Super+: (\\[cmacs-gowl-cycle-tag-transition]) steps through the loaded
