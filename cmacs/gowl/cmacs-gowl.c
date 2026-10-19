@@ -1783,7 +1783,19 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                               key bound to a module nobody loaded does
                               nothing.  Loading it floats nothing: every
                               workspace tiles until one is switched. */
-                           "floatdesk" };
+                           "floatdesk",
+                           /* Text expansion: `;today' becomes the date,
+                              in any window.  Standalone gowl opts in
+                              through modules.gabbrev.enabled; here it is
+                              always loaded, because its configuration
+                              is Elisp (cmacs-gowl-gabbrev.el) and its
+                              Lisp-backed variable types -- `elisp', and
+                              the minibuffer pickers -- only mean
+                              something with the module there to call
+                              them.  Costs a hash lookup per keystroke;
+                              typing into Emacs's own frames is left to
+                              Emacs (the deny filter names this pid). */
+                           "gabbrev" };
   GowlModuleManager *mgr = gowl_compositor_get_module_manager (comp);
   guint i;
   for (i = 0; i < G_N_ELEMENTS (names); i++)
@@ -8797,6 +8809,148 @@ gowl_module_manager_configure_all. */)
 
 
 /* ══════════════════════════════════════════════════════════════════════
+ * GABBREV: VARIABLE TYPES DEFINED IN LISP
+ *
+ * gowl's text expander (deps/gowl/docs/gabbrev.org) resolves a match's
+ * variables through types; libgowl keeps a registry of extra ones,
+ * which win over the module's built-in types.  `gowl-gabbrev-register-
+ * type' puts a Lisp-backed type in it: its C function -- called on the
+ * COMPOSITOR thread, which must neither block nor touch the Lisp VM --
+ * writes one form naming the request by its id and hands it to Emacs's
+ * main loop, exactly as a `custom' keybind does.  Lisp answers when it
+ * likes, through `gowl-run-command' "gabbrev-resolve ID JSON", which
+ * reaches gowl_gabbrev_request_return_by_id() and is posted back to the
+ * compositor's event loop by the module.
+ *
+ * The request itself stays with the expansion that made it (it is
+ * reference counted there); Lisp only ever holds the number.  If the
+ * expansion gave up meanwhile -- its timeout, the user typing on -- the
+ * late answer finds no request and is dropped.  An error escaping the
+ * form fails the request here, so a broken Lisp function costs that one
+ * expansion and says why, rather than leaving it to time out.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+typedef struct
+{
+  guint64 id;
+  gchar *form;
+} CmacsGowlGabbrevCall;
+
+static void
+cmacs_gowl_gabbrev_call_free (gpointer data)
+{
+  CmacsGowlGabbrevCall *call = data;
+
+  g_free (call->form);
+  g_free (call);
+}
+
+/* Emacs's main thread: evaluate the form; an error fails the request. */
+static gboolean
+cmacs_gowl_gabbrev_idle (gpointer data)
+{
+  CmacsGowlGabbrevCall *call = data;
+  GError *err = NULL;
+  gchar *result;
+
+  result = cmacs_dispatch_eval (call->form, &err);
+  if (result == NULL)
+    {
+      gowl_gabbrev_request_return_by_id (call->id, NULL,
+                                         err != NULL ? err->message
+                                         : "the Lisp function failed");
+      g_clear_error (&err);
+    }
+  g_free (result);
+  return G_SOURCE_REMOVE;
+}
+
+/* A JSON object of the values resolved so far, for the Lisp side. */
+static gchar *
+cmacs_gowl_gabbrev_vars_json (GHashTable *vars)
+{
+  GString *out = g_string_new ("{");
+  GHashTableIter iter;
+  gpointer key, value;
+  gboolean first = TRUE;
+
+  g_hash_table_iter_init (&iter, vars);
+  while (g_hash_table_iter_next (&iter, &key, &value))
+    {
+      g_autofree gchar *k = cmacs_dispatch_json_escape (key);
+      g_autofree gchar *v = cmacs_dispatch_json_escape (value);
+
+      g_string_append_printf (out, "%s\"%s\":\"%s\"", first ? "" : ",", k, v);
+      first = FALSE;
+    }
+  g_string_append_c (out, '}');
+  return g_string_free (out, FALSE);
+}
+
+/* The type's resolver, on the compositor thread.  DATA is the type's
+   name.  Only strings cross to the main thread. */
+static void
+cmacs_gowl_gabbrev_resolve (GowlGabbrevRequest *request, gpointer data)
+{
+  const gchar *type = data;
+  CmacsGowlGabbrevCall *call;
+  g_autofree gchar *vars = NULL;
+  g_autofree gchar *e_type = NULL, *e_name = NULL, *e_params = NULL;
+  g_autofree gchar *e_vars = NULL, *e_trigger = NULL;
+  g_autofree gchar *e_app = NULL, *e_title = NULL;
+
+  vars = cmacs_gowl_gabbrev_vars_json (gowl_gabbrev_request_get_vars (request));
+  e_type = cmacs_dispatch_lisp_escape (type);
+  e_name = cmacs_dispatch_lisp_escape (gowl_gabbrev_request_get_var_name (request));
+  e_params = cmacs_dispatch_lisp_escape (gowl_gabbrev_request_get_params_json (request));
+  e_vars = cmacs_dispatch_lisp_escape (vars);
+  e_trigger = cmacs_dispatch_lisp_escape (gowl_gabbrev_request_get_trigger (request));
+  e_app = cmacs_dispatch_lisp_escape (gowl_gabbrev_request_get_app_id (request));
+  e_title = cmacs_dispatch_lisp_escape (gowl_gabbrev_request_get_title (request));
+
+  call = g_new0 (CmacsGowlGabbrevCall, 1);
+  call->id = gowl_gabbrev_request_get_id (request);
+  call->form = g_strdup_printf
+    ("(cmacs-gowl-gabbrev--resolve %" G_GUINT64_FORMAT
+     " \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\")",
+     call->id, e_type, e_name, e_params, e_vars, e_trigger, e_app, e_title);
+  cmacs_glib_invoke_on_main (cmacs_gowl_gabbrev_idle, call,
+                             cmacs_gowl_gabbrev_call_free);
+}
+
+DEFUN ("gowl-gabbrev-register-type", Fgowl_gabbrev_register_type,
+       Sgowl_gabbrev_register_type, 1, 1, 0,
+       doc: /* Make TYPE a gabbrev variable type answered by Lisp.
+TYPE is a string, the `type:' a match's variable names.  A registered
+type wins over the gabbrev module's built-in type of the same name, so
+registering "choice" or "form" puts their pickers in Emacs.  Each
+variable of the type calls `cmacs-gowl-gabbrev--resolve' on Emacs's
+main thread with the request's id, which answers it through
+`gowl-run-command' "gabbrev-resolve".  Works before the compositor or
+the module is running: the registry is libgowl's, process-wide.  See
+`cmacs-gowl-gabbrev-define-type' for the Lisp side.  */)
+  (Lisp_Object type)
+{
+  CHECK_STRING (type);
+  if (SCHARS (type) == 0)
+    error ("An empty gabbrev type name");
+  gowl_gabbrev_register_var_type (SSDATA (type), cmacs_gowl_gabbrev_resolve,
+                                  g_strdup (SSDATA (type)), g_free);
+  return Qt;
+}
+
+DEFUN ("gowl-gabbrev-unregister-type", Fgowl_gabbrev_unregister_type,
+       Sgowl_gabbrev_unregister_type, 1, 1, 0,
+       doc: /* Stop answering gabbrev variable type TYPE from Lisp.
+A built-in type of the same name is used again.  Returns t when TYPE
+was registered.  */)
+  (Lisp_Object type)
+{
+  CHECK_STRING (type);
+  return gowl_gabbrev_unregister_var_type (SSDATA (type)) ? Qt : Qnil;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * WALLPAPER
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -13245,6 +13399,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
 
   /* Modules */
   defsubr (&Sgowl_run_command);
+  defsubr (&Sgowl_gabbrev_register_type);
+  defsubr (&Sgowl_gabbrev_unregister_type);
   defsubr (&Sgowl_load_module);
   defsubr (&Sgowl_list_modules);
   defsubr (&Sgowl_load_modules_from_dir);

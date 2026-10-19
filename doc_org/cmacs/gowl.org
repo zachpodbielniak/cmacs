@@ -1405,6 +1405,99 @@ gdbus call --session --dest org.cmacs.Editor1 --object-path /org/cmacs/Editor1 \
 
 and from bacon: =cmacsgi floatdesk toggle=, =cmacsgi floatdesk dock-pin firefox 0=.  Behaviour, the state file and the module's own settings are documented in =deps/gowl/docs/floatdesk.org=.
 
+** Text expansion (gabbrev)
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev
+:END:
+
+gowl's =gabbrev= module is a text expander --- espanso, done in the compositor, named for =abbrev-mode=.  Type =;today= in any window and it becomes =2026-10-19=; =;htoday= gives =October 19th, 2026=, =;mtoday= =20261019=, =;now=, =;hnow= and =;mnow= the time as well, =;shrug= the shrug.  =;reword= and =;fix= select the line behind the cursor, have cmacs-ai rewrite or correct it, and paste the answer over it.  The module's own reference --- matching, every variable type, filters, profiles, the IPC --- is [[file:../../deps/gowl/docs/gabbrev.org][deps/gowl/docs/gabbrev.org]]; =lisp/cmacs/cmacs-gowl-gabbrev.el= is its Elisp surface.
+
+*Always loaded here.*  Standalone gowl opts in (=modules: gabbrev: {enabled: true}=); under =cmacs --gowl= the module is in the default set, because its configuration is Elisp and its Lisp-backed variable types need it there.  =M-x cmacs-gowl-gabbrev-toggle= switches expansion off and on; =M-x cmacs-gowl-gabbrev-list= shows every match and where it came from.
+
+*** Configuring it from Elisp
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-config
+:END:
+
+#+begin_src elisp
+;; Your espanso configuration, as it is (`auto', the default, loads
+;; ~/.config/espanso when it exists), and snippet files of your own.
+(setq cmacs-gowl-gabbrev-espanso 'auto
+      cmacs-gowl-gabbrev-files '("~/Documents/notes/03_resources/snippets.yml"))
+
+;; espanso's options, by espanso's names.
+(setq cmacs-gowl-gabbrev-options '((toggle_key . "ALT")
+                                   (backend . "auto")))
+
+;; Matches.  A replacement is text ({{var}} placeholders, $|$ for the
+;; cursor) or a function run when the trigger is typed.
+(cmacs-gowl-gabbrev-define ";sig" "Best,\nZach")
+(cmacs-gowl-gabbrev-define "teh" "the" :word t :propagate-case t)
+(cmacs-gowl-gabbrev-define ";agenda"
+  (lambda (_ctx) (format "%d TODOs" (length (org-map-entries t "TODO=\"TODO\"" 'agenda)))))
+(cmacs-gowl-gabbrev-define ";mail" "zach@example.org"
+  :filter "app-id ~ '(?i)firefox|thunderbird'")
+#+end_src
+
+Sources load in order and a later one wins a trigger: the shipped matches, the files and espanso's configuration, then =cmacs-gowl-gabbrev-matches= and every =cmacs-gowl-gabbrev-define=.  =M-x cmacs-gowl-gabbrev-reload= pushes everything again after editing a file.
+
+*** Lisp in a snippet --- defined here, named in YAML
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-lisp
+:END:
+
+Lisp is only ever *defined* in your Elisp configuration.  YAML (yours, espanso's) can *call* it by name, never contain it:
+
+#+begin_src elisp
+(cmacs-gowl-gabbrev-define-function "weather"
+  (lambda (ctx) (my-weather (cmacs-gowl-gabbrev-param ctx "city" "Boston"))))
+;; YAML: vars: [{name: w, type: elisp, params: {function: weather, city: Paris}}]
+
+(cmacs-gowl-gabbrev-define-type "ticket"
+  (lambda (ctx) (my-ticket-title (cmacs-gowl-gabbrev-param ctx "id"))))
+;; YAML: vars: [{name: t, type: ticket, params: {id: "{{n}}"}}]
+#+end_src
+
+A function gets a context --- =cmacs-gowl-gabbrev-param=, =cmacs-gowl-gabbrev-var= (the values resolved before it), =cmacs-gowl-gabbrev-context-trigger=, =-app-id=, =-title= --- and returns the text.  Something slow returns =:async= and answers later with =cmacs-gowl-gabbrev-answer= (or =cmacs-gowl-gabbrev-fail=); the window waits, the desktop does not.
+
+How it gets there: =cmacs-gowl-gabbrev-define-type= calls the C function =gowl-gabbrev-register-type=, which puts a type in libgowl's registry whose resolver --- on the compositor thread, which must not touch the Lisp VM --- writes one form naming the request by its number and queues it on Emacs's main loop, as a =custom= keybind does.  Lisp answers through =gowl-run-command= =gabbrev-resolve=, and the module posts the answer back to the compositor.  A function that signals fails that one expansion, with its message in a toast.  The calls run inside the RPC dispatcher, where prompting is forbidden; anything that asks the user goes through a timer and =:async=, as the pickers do.
+
+*** Pickers, and AI
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-pickers
+:END:
+
+A =choice= variable, an espanso form and the search (=Super+Alt+e=, =cmacs-gowl-gabbrev-search-key=) ask in the minibuffer here, not through a dmenu-style program (=cmacs-gowl-gabbrev-use-minibuffer=).  =;reword= and =;fix= use cmacs-ai (=cmacs-gowl-gabbrev-ai-provider=, =-ai-model=); =cmacs-gowl-gabbrev-ai-actions= adds more grab-rewrite-paste triggers --- a trigger, a label, a system prompt and how much to grab (=line=, =word=, =paragraph=, =all=).
+
+*** abbrev-mode
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-abbrev
+:END:
+
+Both ways.  *Your abbrevs everywhere*: the tables in =cmacs-gowl-gabbrev-abbrev-tables= (=global-abbrev-table= by default) expand in every window as abbrev-mode expands them in a buffer --- as whole words, following the case typed unless the abbrev or table is =:case-fixed=, running an abbrev's hook (in a scratch buffer holding the expansion, whose text afterwards is what is typed) --- and they follow =define-abbrev= by themselves.  =cmacs-gowl-gabbrev-abbrev-prefix= puts something before them outside Emacs (=","= for =,ty=); =:system= abbrevs stay home unless =cmacs-gowl-gabbrev-abbrev-include-system=.
+
+*gabbrev's triggers in Emacs*: =cmacs-gowl-gabbrev-emacs-mode= expands them inside buffers, through the same renderer --- =;today= is the date in a buffer too --- as buffer edits, one undo step, the text arriving when its variables have answered.  Emacs's own frames are otherwise left out of the compositor's expansion (=cmacs-gowl-gabbrev-in-emacs=, nil by default): there Backspaces would be typed at whatever the keys mean in the current mode.  =M-x cmacs-gowl-gabbrev-insert= inserts any match at point.
+
+| Option                                      | Default                 | Meaning                                                  |
+|---------------------------------------------+-------------------------+----------------------------------------------------------|
+| =cmacs-gowl-gabbrev-enable=                 | t                       | expand from the start                                    |
+| =cmacs-gowl-gabbrev-builtin=                | t                       | the shipped matches                                      |
+| =cmacs-gowl-gabbrev-files=                  | nil                     | match files, directories, espanso directories            |
+| =cmacs-gowl-gabbrev-espanso=                | =auto=                  | load an espanso configuration                            |
+| =cmacs-gowl-gabbrev-options=                | nil                     | espanso options, an alist                                |
+| =cmacs-gowl-gabbrev-matches=                | nil                     | matches as plists                                        |
+| =cmacs-gowl-gabbrev-in-emacs=               | nil                     | expand into Emacs's own frames too                       |
+| =cmacs-gowl-gabbrev-deny-filter=            | nil (module's default)  | windows never expanded into; =+EXPR= adds                |
+| =cmacs-gowl-gabbrev-search-key=             | =Super+Alt+e=           | pick any match and type it                               |
+| =cmacs-gowl-gabbrev-toggle-key=             | nil                     | espanso's toggle key                                     |
+| =cmacs-gowl-gabbrev-use-minibuffer=         | t                       | pickers in the minibuffer                                |
+| =cmacs-gowl-gabbrev-ai-rewrite=             | t                       | ;reword and ;fix through cmacs-ai                        |
+| =cmacs-gowl-gabbrev-abbrev-tables=          | =(global-abbrev-table)= | abbrevs expanded everywhere                              |
+| =cmacs-gowl-gabbrev-module-settings=        | nil                     | more =modules: gabbrev:= settings                        |
+| =cmacs-gowl-gabbrev-expanded-functions=     | nil                     | hook: a match was typed                                  |
+
+Commands: =cmacs-gowl-gabbrev-list=, =-toggle=, =-reload=, =-status=, =-insert=, =-search=, =-test= (which match a text would fire in the focused window, and why not), =-sync-abbrevs=, =-apply=.
+
 ** Hooks
 :PROPERTIES:
 :CUSTOM_ID: gowl-hooks

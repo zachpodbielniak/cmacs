@@ -49,6 +49,7 @@
 (declare-function cmacs-gowl-macro--on-start "cmacs-gowl-macro" ())
 (declare-function cmacs-gowl-broadcast--on-start "cmacs-gowl-broadcast" ())
 (declare-function cmacs-gowl-floatdesk--on-start "cmacs-gowl-floatdesk" ())
+(declare-function cmacs-gowl-gabbrev--on-start "cmacs-gowl-gabbrev" ())
 (defvar cmacs-gowl-broadcast-enable)
 (defvar cmacs-gowl-broadcast-teams)
 (defvar cmacs-gowl-broadcast-rules)
@@ -2064,6 +2065,12 @@ thread is running and applies configuration."
   ;; switched (Super+w) or the default says so.
   (when (require 'cmacs-gowl-floatdesk nil t)
     (cmacs-gowl-floatdesk--on-start))
+  ;; Text expansion (cmacs-gowl-gabbrev.el).  Its module is in the
+  ;; default set too: this gives it the `cmacs-gowl-gabbrev-*'
+  ;; configuration -- files, espanso, Elisp matches, the abbrev tables
+  ;; -- and registers the Lisp-backed variable types.
+  (when (require 'cmacs-gowl-gabbrev nil t)
+    (cmacs-gowl-gabbrev--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; What shows through a translucent window: glass, blur, or nothing.

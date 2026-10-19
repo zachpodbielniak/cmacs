@@ -3184,6 +3184,92 @@ toggle}) and bacon (@command{cmacsgi floatdesk toggle}), all through
 @code{cmacs-gowl-floatdesk-rpc}.  Behaviour, the state file and the
 module's settings are documented in @file{deps/gowl/docs/floatdesk.org}.
 
+@section Text Expansion (gabbrev)
+@anchor{gowl gabbrev}
+@cindex text expansion
+@cindex gabbrev
+@cindex espanso
+@cindex snippets, everywhere
+
+gowl's @code{gabbrev} module is a text expander---espanso, done in
+the compositor, named for @code{abbrev-mode}.  Type @samp{;today} in
+any window and it becomes @samp{2026-10-19}; @samp{;htoday} gives
+@samp{October 19th, 2026}, @samp{;mtoday} @samp{20261019};
+@samp{;now}, @samp{;hnow} and @samp{;mnow} add the time;
+@samp{;shrug} is the shrug.  @samp{;reword} and @samp{;fix} select the
+line behind the cursor, have cmacs-ai rewrite or correct it, and paste
+the answer over it.  The module is in cmacs's default set (standalone
+gowl opts in); its reference is @file{deps/gowl/docs/gabbrev.org}, and
+@file{lisp/cmacs/cmacs-gowl-gabbrev.el} is its Elisp surface.
+
+@subsection Configuring it
+
+@lisp
+(setq cmacs-gowl-gabbrev-espanso 'auto        ; ~/.config/espanso, as it is
+      cmacs-gowl-gabbrev-files '("~/notes/snippets.yml")
+      cmacs-gowl-gabbrev-options '((toggle_key . "ALT")))
+
+(cmacs-gowl-gabbrev-define ";sig" "Best,\nZach")
+(cmacs-gowl-gabbrev-define "teh" "the" :word t :propagate-case t)
+(cmacs-gowl-gabbrev-define ";buf" (lambda (_ctx) (buffer-name)))
+@end lisp
+
+A replacement is text (with @samp{@{@{var@}@}} placeholders and
+@samp{$|$} for the cursor) or a function run when the trigger is typed.
+Sources load in order and a later one wins a trigger: the shipped
+matches, files and espanso's configuration, then your Elisp.
+
+@subsection Lisp in a snippet
+
+Lisp is only defined from Elisp; YAML can call it by name.
+@code{cmacs-gowl-gabbrev-define-function} makes a function callable as
+@code{@{type: elisp, params: @{function: NAME@}@}};
+@code{cmacs-gowl-gabbrev-define-type} makes a whole variable type,
+replacing a built-in one of the same name.  A function gets a context
+(@code{cmacs-gowl-gabbrev-param}, @code{cmacs-gowl-gabbrev-var},
+@code{cmacs-gowl-gabbrev-context-trigger}, @dots{}) and returns the
+text---or @code{:async}, answering later with
+@code{cmacs-gowl-gabbrev-answer} or @code{cmacs-gowl-gabbrev-fail}.
+
+@findex gowl-gabbrev-register-type
+The C function @code{gowl-gabbrev-register-type} puts the type in
+libgowl's registry.  Its resolver runs on the compositor thread, which
+must not touch the Lisp VM, so it queues one form naming the request by
+number on Emacs's main loop; Lisp answers through @code{gowl-run-command}
+@samp{gabbrev-resolve}.  A function that signals fails that expansion
+alone.  Prompting is forbidden inside the RPC dispatcher, so anything
+that asks the user uses a timer and @code{:async}, as the minibuffer
+pickers (a @code{choice}, a form, the search on @kbd{Super+Alt+e}) do.
+
+@subsection abbrev-mode
+
+The abbrev tables in @code{cmacs-gowl-gabbrev-abbrev-tables}
+(@code{global-abbrev-table} by default) expand in every window as
+abbrev-mode expands them in a buffer: whole words, following case
+unless @code{:case-fixed}, running the abbrev's hook, and following
+@code{define-abbrev}.  The other way,
+@code{cmacs-gowl-gabbrev-emacs-mode} expands gabbrev's triggers inside
+Emacs buffers through the same renderer, as buffer edits.  Emacs's own
+frames are otherwise left out of the compositor's expansion
+(@code{cmacs-gowl-gabbrev-in-emacs}).
+
+@subsection Commands and options
+
+@findex cmacs-gowl-gabbrev-list
+@findex cmacs-gowl-gabbrev-toggle
+@findex cmacs-gowl-gabbrev-insert
+Commands: @code{cmacs-gowl-gabbrev-list}, @code{-toggle},
+@code{-reload}, @code{-status}, @code{-insert}, @code{-search},
+@code{-test}, @code{-sync-abbrevs} and @code{-apply}.  Options:
+@code{cmacs-gowl-gabbrev-enable}, @code{-builtin}, @code{-files},
+@code{-espanso}, @code{-options}, @code{-matches}, @code{-in-emacs},
+@code{-deny-filter}, @code{-search-key}, @code{-toggle-key},
+@code{-use-minibuffer}, @code{-ai-rewrite}, @code{-ai-provider},
+@code{-ai-model}, @code{-ai-actions}, @code{-abbrev-tables},
+@code{-abbrev-prefix}, @code{-abbrev-include-system},
+@code{-module-settings} and the hook
+@code{-expanded-functions}.
+
 @section Macros
 @anchor{gowl Macros}
 @cindex macros, gowl
