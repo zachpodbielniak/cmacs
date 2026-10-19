@@ -147,6 +147,45 @@ re-pushes it."
                                           (string :tag "Mode"))))
   :group 'cmacs-gowl)
 
+(defcustom cmacs-gowl-tag-transition 'cube
+  "What a tag switch looks like.
+
+Every transition is its own gowl module and `cmacs-gowl-mode' loads
+them all; this picks which one runs:
+
+  `cube'      the desktop turns as one side of a solid (the default)
+  `slide'     pushed sideways, the next one following
+  `fade'      a crossfade; nothing moves
+  `zoom'      sinking away, the next arriving from in front
+  `iris'      a circle opening from the pointer
+  `flip'      turned over like a card, the next tag on its back
+  `pagecurl'  turned like a page, by its bottom corner
+  `carousel'  desktops swinging round a ring, past every tag between
+  `sphere'    wrapped onto a globe that turns to the next one
+  `burn'      burnt away from the pointer
+  `ripple'    a ripple spreading from the pointer
+  `pixelate'  through a mosaic
+  `glitch'    a broken signal
+  `melt'      running down the screen in columns
+  `shatter'   struck like glass at the pointer, falling away
+  `explode'   blown apart from the pointer
+  `implode'   pulled into the pointer
+  `random'    a different one at every switch
+  `none'      an instant switch
+
+Super+: (\\[cmacs-gowl-cycle-tag-transition]) steps through the loaded
+ones at runtime, `random' last, with a toast naming each.  The length
+is `tag-transition-duration' in the gowl config (the cube keeps
+`cube-duration').  See deps/gowl/docs/transitions.org."
+  :type '(choice (const cube) (const slide) (const fade) (const zoom)
+                 (const iris) (const flip) (const pagecurl)
+                 (const carousel) (const sphere) (const burn)
+                 (const ripple) (const pixelate) (const glitch)
+                 (const melt) (const shatter) (const explode)
+                 (const implode) (const random) (const none)
+                 (symbol :tag "Another loaded transition"))
+  :group 'cmacs-gowl)
+
 (defcustom cmacs-gowl-backdrop 'rain
   "What shows through a translucent window.
 
@@ -1723,6 +1762,13 @@ authoritative and keeps re-runs idempotent."
         ;; press is Super and the double-quote.
         (bind "Super+Shift+apostrophe" 'cycle-backdrop nil
               "Cycle the window backdrop")
+        ;; What a tag switch looks like: cube, slide, fade, ... and
+        ;; `random' last, round every transition module loaded.  Super+:
+        ;; -- the level-0 name for that key is `semicolon', so the bind
+        ;; reads Super+Shift+semicolon.  A compositor action, so it works
+        ;; whatever has the keyboard.
+        (bind "Super+Shift+semicolon" 'cycle-tag-transition nil
+              "Cycle the tag transition")
         (bind "Super+Shift+l" 'lock nil "Lock the session")
         (bind "Super+Shift+q" 'quit nil "Quit cmacs")
         (bind "Super+Shift+r" 'reload-config nil "Reload gowl config")
@@ -4061,6 +4107,10 @@ it does have."
     (ignore-errors (gowl-set-no-fx-apps (or cmacs-gowl-no-fx-apps ""))))
   (when (fboundp 'gowl-set-backdrop)
     (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop)))
+  ;; What a tag switch looks like.  Quiet when it is already in force,
+  ;; so a session start does not toast it.
+  (when (fboundp 'gowl-set-tag-transition)
+    (ignore-errors (gowl-set-tag-transition cmacs-gowl-tag-transition)))
   ;; AFTER the backdrop, and reading both variables.
   ;;
   ;; `crt' is the last stop on the backdrop tour as well as a switch of
@@ -4461,6 +4511,45 @@ and `cmacs-gowl-backdrop' together, so the choice survives the next
   (when (fboundp 'gowl-crt-p)
     (setq cmacs-gowl-crt (and (gowl-crt-p) t)))
   (message "Window backdrop: %s" cmacs-gowl-backdrop))
+
+;;;###autoload
+(defun cmacs-gowl-cycle-tag-transition (&optional backwards)
+  "Step to the next tag transition.
+
+Round every transition module loaded -- cube, slide, fade, zoom, iris,
+flip, pagecurl, carousel, sphere, burn, ripple, pixelate, glitch, melt,
+shatter, explode, implode -- with `random' as the last stop before the
+tour starts again.  A toast names the one you land on.
+
+With a prefix argument BACKWARDS, step the other way.
+
+This is what Super+: does, and it changes `cmacs-gowl-tag-transition'
+as well, so the choice survives the next `cmacs-gowl-mode'.  (The key
+itself changes only the running compositor.)"
+  (interactive "P")
+  (unless (fboundp 'gowl-set-tag-transition)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-tag-transition
+        (gowl-set-tag-transition (if backwards 'prev 'next)))
+  (message "Tag transition: %s" cmacs-gowl-tag-transition))
+
+;;;###autoload
+(defun cmacs-gowl-set-tag-transition (name)
+  "Choose what a tag switch looks like: NAME, `random' or `none'.
+Completes over the transitions loaded in the running compositor.
+Changes `cmacs-gowl-tag-transition' too."
+  (interactive
+   (list (intern (completing-read
+                  "Tag transition: "
+                  (append (mapcar #'symbol-name
+                                  (and (fboundp 'gowl-tag-transitions)
+                                       (gowl-tag-transitions)))
+                          '("random" "none"))
+                  nil t))))
+  (unless (fboundp 'gowl-set-tag-transition)
+    (user-error "This cmacs has no compositor"))
+  (setq cmacs-gowl-tag-transition (gowl-set-tag-transition name))
+  (message "Tag transition: %s" cmacs-gowl-tag-transition))
 
 ;;;###autoload
 (defun cmacs-gowl-toggle-crt ()

@@ -2683,6 +2683,27 @@ The profile in force is chosen again on every hotplug and reload;
 @code{gowl-output-profile} returns its name and
 @code{cmacs-gowl-output-profile-changed-functions} runs on a change.
 
+@subsection Tag Transitions
+
+A tag switch can move instead of cutting.  Each transition is its own
+gowl module, all loaded by @code{cmacs-gowl-mode}, and
+@code{cmacs-gowl-tag-transition} picks which runs: @code{cube} (the
+default), @code{slide}, @code{fade}, @code{zoom}, @code{iris},
+@code{flip}, @code{pagecurl}, @code{carousel}, @code{sphere},
+@code{burn}, @code{ripple}, @code{pixelate}, @code{glitch}, @code{melt},
+@code{shatter}, @code{explode}, @code{implode}, @code{random} (a
+different one each switch) or @code{none}.
+
+@kbd{Super+:} steps round the loaded ones, @code{random} last, with a
+toast naming each; @kbd{M-x cmacs-gowl-cycle-tag-transition} does the
+same and keeps the variable in step, and @kbd{M-x
+cmacs-gowl-set-tag-transition} chooses one by name.  From Lisp,
+@code{gowl-set-tag-transition}, @code{gowl-tag-transition} and
+@code{gowl-tag-transitions}; from outside, @command{gowl-msg
+tag-transition next} or the wire protocol's @code{transition.set}.
+Only the transition picked for a switch draws.  All need the GLES2
+renderer.  The reference is @file{deps/gowl/docs/transitions.org}.
+
 @subsection The IPC Socket
 
 Standalone gowl listens on @file{$XDG_RUNTIME_DIR/gowl.sock} and

@@ -1657,6 +1657,18 @@ cmacs_gowl_load_default_modules (GowlCompositor *comp, GError **error)
                            "columns", "centeredmaster", "fibonacci",
                            "animation", "cube", "expo", "switcher",
                            "magnifier", "blur",
+                           /* The tag transitions besides the cube, each
+                              its own module.  All loaded so Super+:
+                              (and `random', its last stop) can tour
+                              every one without a module load; only the
+                              one `tag-transition' picks for a switch
+                              draws, the rest stand down
+                              (src/core/gowl-tag-transition.c in gowl),
+                              and each costs nothing until picked. */
+                           "slide", "fade", "zoom", "iris", "flip",
+                           "pagecurl", "carousel", "sphere", "burn",
+                           "ripple", "pixelate", "glitch", "melt",
+                           "shatter", "explode", "implode",
                            /* The blur's alternative: the wallpaper
                               refracted through the window rather than
                               merely blurred behind it.  All four are
@@ -5893,6 +5905,81 @@ or drop its node.  Returns the style now in force.  */)
   return unbind_to (count,
     intern (gowl_config_backdrop_style_name (
       gowl_compositor_get_backdrop_style (cmacs_gowl_compositor))));
+}
+
+DEFUN ("gowl-tag-transition", Fgowl_tag_transition, Sgowl_tag_transition,
+       0, 0, 0,
+       doc: /* Return the tag transition in force, as a symbol.
+A loaded transition's name (`cube', `slide', `sphere', ...), `random'
+or `none'.  See `gowl-set-tag-transition'.  */)
+  (void)
+{
+  specpdl_ref count;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  return unbind_to (count,
+    intern (gowl_compositor_get_tag_transition (cmacs_gowl_compositor)));
+}
+
+DEFUN ("gowl-set-tag-transition", Fgowl_set_tag_transition,
+       Sgowl_set_tag_transition, 1, 1, 0,
+       doc: /* Choose what a tag switch looks like.
+
+NAME is a symbol or string: a loaded transition module's name --
+`cube', `slide', `fade', `zoom', `iris', `flip', `pagecurl',
+`carousel', `sphere', `burn', `ripple', `pixelate', `glitch', `melt',
+`shatter', `explode', `implode' -- or `random' (a different one each
+switch) or `none' (instant).  `next' and `prev' step round the loaded
+ones with `random' last, which is what Super+: and
+\[cmacs-gowl-cycle-tag-transition] do.  A toast names the choice.
+
+Signals an error for a name no loaded module provides.  Returns the
+transition now in force.  `gowl-tag-transitions' lists the loaded
+ones.  */)
+  (Lisp_Object name)
+{
+  specpdl_ref count;
+  const char *want;
+
+  GOWL_CHECK_RUNNING ();
+  if (SYMBOLP (name))
+    name = SYMBOL_NAME (name);
+  CHECK_STRING (name);
+  want = SSDATA (name);
+
+  count = cmacs_gowl_lock_scoped ();
+  if (!gowl_compositor_set_tag_transition (cmacs_gowl_compositor, want))
+    {
+      unbind_to (count, Qnil);
+      error ("No tag transition `%s' is loaded "
+             "(see `gowl-tag-transitions'; also random, none, next, prev)",
+             want);
+    }
+  return unbind_to (count,
+    intern (gowl_compositor_get_tag_transition (cmacs_gowl_compositor)));
+}
+
+DEFUN ("gowl-tag-transitions", Fgowl_tag_transitions,
+       Sgowl_tag_transitions, 0, 0, 0,
+       doc: /* Return the loaded tag transitions, as a list of symbols.
+In the order Super+: steps through them; `random', the tour's last
+stop, is a selection rather than a transition and is not in it.  */)
+  (void)
+{
+  specpdl_ref count;
+  gchar **names;
+  Lisp_Object out = Qnil;
+  gint i, n;
+
+  GOWL_CHECK_RUNNING ();
+  count = cmacs_gowl_lock_scoped ();
+  names = gowl_compositor_list_tag_transitions (cmacs_gowl_compositor);
+  n = names != NULL ? (gint) g_strv_length (names) : 0;
+  for (i = n - 1; i >= 0; i--)
+    out = Fcons (intern (names[i]), out);
+  g_strfreev (names);
+  return unbind_to (count, out);
 }
 
 DEFUN ("gowl-no-fx-apps", Fgowl_no_fx_apps, Sgowl_no_fx_apps, 0, 0, 0,
@@ -13015,6 +13102,9 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_locked_p);
   defsubr (&Sgowl_backdrop);
   defsubr (&Sgowl_set_backdrop);
+  defsubr (&Sgowl_tag_transition);
+  defsubr (&Sgowl_set_tag_transition);
+  defsubr (&Sgowl_tag_transitions);
   defsubr (&Sgowl_no_fx_apps);
   defsubr (&Sgowl_set_no_fx_apps);
   defsubr (&Sgowl_water_preset);

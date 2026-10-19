@@ -994,6 +994,9 @@ module is opt-in, so the key itself is the first use."
     ;; buffer cheatsheet
     (should (member '("Super+Shift+slash" ipc-command "menu-open keybinds")
                     captured))
+    ;; Super+: tours the tag transitions
+    (should (member '("Super+Shift+semicolon" cycle-tag-transition nil)
+                    captured))
     (should (assoc "Super+slash" captured))
     (dolist (key '("Super+Alt+Shift+s" "Super+Alt+c" "Super+Alt+r"
                    "Super+Alt+Shift+r" "Super+Alt+m" "Super+Alt+v"
@@ -2545,6 +2548,36 @@ compositor: the wrapper only needs something to connect on."
     ;; An unknown or nil handle is a no-op, not an error.
     (cmacs-gowl-signal-disconnect handle)
     (cmacs-gowl-signal-disconnect nil)))
+
+;;; Every tag transition gowl ships is loaded by default
+
+(ert-deftest cmacs-gowl-test-loads-every-tag-transition ()
+  "Every transition module in deps/gowl is in cmacs's default module list.
+Super+: tours the LOADED transitions, so one gowl ships and cmacs does
+not load is one the key silently skips -- and `random' never picks.
+A transition module is any module directory whose source uses
+GOWL_FX_DEFINE_TRANSITION_MODULE; the cube, which predates the macro,
+is checked by name."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c"))
+        (modules (cmacs-gowl-tests--source-file "deps/gowl/modules")))
+    (skip-unless (and source modules (file-directory-p modules)))
+    (let ((names '("cube"))
+          (text (with-temp-buffer
+                  (insert-file-contents source)
+                  (buffer-string))))
+      (dolist (dir (directory-files modules t "\\`[^.]"))
+        (when (and (file-directory-p dir)
+                   (with-temp-buffer
+                     (dolist (c (directory-files dir t "\\.c\\'"))
+                       (insert-file-contents c))
+                     (goto-char (point-min))
+                     (search-forward "GOWL_FX_DEFINE_TRANSITION_MODULE" nil t)))
+          (push (file-name-nondirectory dir) names)))
+      (should (> (length names) 1))
+      (dolist (name names)
+        (ert-info ((format "transition module %s" name))
+          (should (string-match-p (regexp-quote (format "\"%s\"" name))
+                                  text)))))))
 
 (provide 'cmacs-gowl-tests)
 ;;; cmacs-gowl-tests.el ends here

@@ -3154,6 +3154,38 @@ gowl-msg -s -j 'window.*' tags.changed        # structured events
 
 The reference is =deps/gowl/docs/ipc.org= (/The wire protocol/). For an agent, =make -C deps/gowl install-skills= installs the =/gowl-msg= skill, which teaches the same thing. =cmacs-gowl-test-ipc-and-profiles-headless= drives the protocol against a headless embedded compositor in a child cmacs.
 
+** Tag transitions
+
+A tag switch can move instead of cutting: the cube turns, a page curls, the desktop melts, burns, shatters or wraps onto a globe. Each of the seventeen is its own gowl module and =cmacs-gowl-mode= loads them all; =cmacs-gowl-tag-transition= picks which one runs -- the cube by default, =random= for a different one each switch, =none= for an instant cut.
+
+| Key / command | Does |
+|---------------+------|
+| =Super+:= | Step to the next loaded transition, =random= last; a toast names it |
+| =M-x cmacs-gowl-cycle-tag-transition= | The same, and keeps =cmacs-gowl-tag-transition= in step (prefix: backwards) |
+| =M-x cmacs-gowl-set-tag-transition= | Choose one by name, completing over the loaded ones |
+
+| Name | What it looks like |
+|------+--------------------|
+| =cube= | The desktop turns as one side of a solid (three-finger swipe while selected) |
+| =slide= | Pushed sideways, the next one following |
+| =fade= | A crossfade |
+| =zoom= | Sinking away, the next arriving from in front |
+| =iris= | A circle opening from the pointer |
+| =flip= | Turned over like a card |
+| =pagecurl= | Turned like a page, by its corner |
+| =carousel= | Desktops round a ring, past every tag between |
+| =sphere= | Wrapped onto a globe that turns |
+| =burn= | Burnt away from the pointer |
+| =ripple= | A ripple from the pointer |
+| =pixelate= | Through a mosaic |
+| =glitch= | A broken signal |
+| =melt= | Running down the screen in columns |
+| =shatter= | Struck like glass at the pointer, falling away |
+| =explode= | Blown apart from the pointer |
+| =implode= | Pulled into the pointer |
+
+From Lisp: =(gowl-set-tag-transition 'pagecurl)=, =(gowl-tag-transition)=, =(gowl-tag-transitions)=. From outside: =gowl-msg tag-transition next=, or the wire protocol's =transition.get= / =transition.set=. Only the transition picked for a switch draws; the rest stand down and cost nothing. All of them need the GLES2 renderer and sit out on rotated outputs and while locked. The length is =tag-transition-duration= in gowl's config (the cube keeps =cube-duration=). The full reference is =deps/gowl/docs/transitions.org=.
+
 ** HDR
 
 =M-x cmacs-gowl-toggle-hdr= switches the focused output between HDR and SDR, and the bar's *display* panel carries the same toggle --- shown only where the output can do it, and replaced by a line saying so where it cannot.  =Super+Shift+h= is bound to it in standalone gowl's shipped config.
