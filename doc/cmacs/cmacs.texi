@@ -3239,7 +3239,11 @@ number on Emacs's main loop; Lisp answers through @code{gowl-run-command}
 @samp{gabbrev-resolve}.  A function that signals fails that expansion
 alone.  Prompting is forbidden inside the RPC dispatcher, so anything
 that asks the user uses a timer and @code{:async}, as the minibuffer
-pickers (a @code{choice}, a form, the search on @kbd{Super+Alt+e}) do.
+pickers (a @code{choice}, a form, the search) do.
+
+@kbd{Super+Alt+e} expands what was just typed: a trigger at the cursor
+expands at once, word rules or not; otherwise the search opens with the
+word being typed as its input, and the match picked replaces it.
 
 @subsection abbrev-mode
 

@@ -155,7 +155,10 @@ Emacs's own frames are added unless `cmacs-gowl-gabbrev-in-emacs'."
   :group 'cmacs-gowl-gabbrev)
 
 (defcustom cmacs-gowl-gabbrev-search-key "Super+Alt+e"
-  "The gowl key that lists every match and types the one picked, or nil."
+  "The gowl key that expands what was just typed, or nil for none.
+When the text before the cursor ends with a trigger it expands at once,
+word rules or not.  Otherwise it opens the search, starting from the
+word being typed, and the match picked replaces that word."
   :type '(choice (const :tag "No key" nil) string)
   :group 'cmacs-gowl-gabbrev)
 
@@ -609,7 +612,9 @@ Quitting the minibuffer fails the variable."
                                                          60)))
                                             (alist-get 'id m)))))
                                 matches)))
-            (pick (completing-read "Expand: " rows nil t))
+            ;; Start from the word that was being typed (`;dat')
+            (pick (completing-read "Expand: " rows nil t
+                                   (cmacs-gowl-gabbrev-param ctx "query")))
             (id (cdr (assoc pick rows)))
             (rid (format "search-%d" (cmacs-gowl-gabbrev-context-id ctx))))
        (puthash rid ctx cmacs-gowl-gabbrev--searches)
@@ -821,7 +826,7 @@ Idempotent.  `cmacs --gowl' calls it at every compositor start."
   (when (and cmacs-gowl-gabbrev-search-key (fboundp 'gowl-add-keybind))
     (condition-case err
         (gowl-add-keybind cmacs-gowl-gabbrev-search-key 'ipc-command
-                          "gabbrev-search" "Expand a snippet (gabbrev)")
+                          "gabbrev-search" "Expand what was typed (gabbrev)")
       (error (message "cmacs-gowl-gabbrev: cannot bind %s: %s"
                       cmacs-gowl-gabbrev-search-key
                       (error-message-string err))))))

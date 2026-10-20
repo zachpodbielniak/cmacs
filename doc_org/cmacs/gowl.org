@@ -1410,7 +1410,7 @@ and from bacon: =cmacsgi floatdesk toggle=, =cmacsgi floatdesk dock-pin firefox 
 :CUSTOM_ID: gowl-gabbrev
 :END:
 
-gowl's =gabbrev= module is a text expander --- espanso, done in the compositor, named for =abbrev-mode=.  Type =;today= in any window and it becomes =2026-10-19=; =;htoday= gives =October 19th, 2026=, =;mtoday= =20261019=, =;now=, =;hnow= and =;mnow= the time as well, =;shrug= the shrug.  =;reword= and =;fix= select the line behind the cursor, have cmacs-ai rewrite or correct it, and paste the answer over it.  The module's own reference --- matching, every variable type, filters, profiles, the IPC --- is [[file:../../deps/gowl/docs/gabbrev.org][deps/gowl/docs/gabbrev.org]]; =lisp/cmacs/cmacs-gowl-gabbrev.el= is its Elisp surface.
+gowl's =gabbrev= module is a text expander --- espanso, done in the compositor, named for =abbrev-mode=.  Type =;today= (or =;date=) in any window and it becomes =2026-10-19=; =;htoday= gives =October 19th, 2026=, =;mtoday= =20261019=, =;now=, =;hnow= and =;mnow= the time as well, =;shrug= the shrug.  =;reword= and =;fix= select the line behind the cursor, have cmacs-ai rewrite or correct it, and paste the answer over it.  The module's own reference --- matching, every variable type, filters, profiles, the IPC --- is [[file:../../deps/gowl/docs/gabbrev.org][deps/gowl/docs/gabbrev.org]]; =lisp/cmacs/cmacs-gowl-gabbrev.el= is its Elisp surface.
 
 *Always loaded here.*  Standalone gowl opts in (=modules: gabbrev: {enabled: true}=); under =cmacs --gowl= the module is in the default set, because its configuration is Elisp and its Lisp-backed variable types need it there.  =M-x cmacs-gowl-gabbrev-toggle= switches expansion off and on; =M-x cmacs-gowl-gabbrev-list= shows every match and where it came from.
 
@@ -1467,7 +1467,7 @@ How it gets there: =cmacs-gowl-gabbrev-define-type= calls the C function =gowl-g
 :CUSTOM_ID: gowl-gabbrev-pickers
 :END:
 
-A =choice= variable, an espanso form and the search (=Super+Alt+e=, =cmacs-gowl-gabbrev-search-key=) ask in the minibuffer here, not through a dmenu-style program (=cmacs-gowl-gabbrev-use-minibuffer=).  =;reword= and =;fix= use cmacs-ai (=cmacs-gowl-gabbrev-ai-provider=, =-ai-model=); =cmacs-gowl-gabbrev-ai-actions= adds more grab-rewrite-paste triggers --- a trigger, a label, a system prompt and how much to grab (=line=, =word=, =paragraph=, =all=).
+*Super+Alt+e* (=cmacs-gowl-gabbrev-search-key=) expands what you just typed: a trigger at the cursor expands at once, word rules or not (=brb= then the key); otherwise the search opens with the word being typed as its input, and the pick replaces that word.  A =choice= variable, an espanso form and that search ask in the minibuffer here, not through a dmenu-style program (=cmacs-gowl-gabbrev-use-minibuffer=).  =;reword= and =;fix= use cmacs-ai (=cmacs-gowl-gabbrev-ai-provider=, =-ai-model=); =cmacs-gowl-gabbrev-ai-actions= adds more grab-rewrite-paste triggers --- a trigger, a label, a system prompt and how much to grab (=line=, =word=, =paragraph=, =all=).
 
 *** abbrev-mode
 :PROPERTIES:
