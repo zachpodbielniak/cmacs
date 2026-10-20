@@ -3196,6 +3196,8 @@ the compositor, named for @code{abbrev-mode}.  Type @samp{;today} in
 any window and it becomes @samp{2026-10-19}; @samp{;htoday} gives
 @samp{October 19th, 2026}, @samp{;mtoday} @samp{20261019};
 @samp{;now}, @samp{;hnow} and @samp{;mnow} add the time;
+@samp{;yesterday} and @samp{;tomorrow}, with @samp{h} and @samp{m}
+variants, give the days either side;
 @samp{;shrug} is the shrug.  @samp{;reword} and @samp{;fix} select the
 line behind the cursor, have cmacs-ai rewrite or correct it, and paste
 the answer over it.  The module is in cmacs's default set (standalone
