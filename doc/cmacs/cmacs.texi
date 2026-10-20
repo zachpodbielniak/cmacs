@@ -3204,6 +3204,74 @@ the answer over it.  The module is in cmacs's default set (standalone
 gowl opts in); its reference is @file{deps/gowl/docs/gabbrev.org}, and
 @file{lisp/cmacs/cmacs-gowl-gabbrev.el} is its Elisp surface.
 
+@subsection The built-in matches
+
+Every trigger starts with @samp{;} and none is the start of another.
+Define a trigger again to replace one; setting
+@code{cmacs-gowl-gabbrev-builtin} to nil drops them all.  Examples are
+for 2026-10-19 at 14:05; text no key on a usual layout types is
+pasted.
+
+@multitable {;hyesterday} {October 19th, 2026 at 2:05 PM} {selection (line) + model}
+@headitem Trigger @tab Becomes @tab How
+@item @emph{Dates and times} @tab @tab
+@item @code{;today} @tab 2026-10-19 @tab date %Y-%m-%d
+@item @code{;date} @tab 2026-10-19 @tab another trigger for ;today
+@item @code{;htoday} @tab October 19th, 2026 @tab date %B %-d%o, %Y
+@item @code{;mtoday} @tab 20261019 @tab date %Y%m%d
+@item @code{;yesterday} @tab 2026-10-18 @tab date, one day back
+@item @code{;hyesterday} @tab October 18th, 2026 @tab date, one day back
+@item @code{;myesterday} @tab 20261018 @tab date, one day back
+@item @code{;tomorrow} @tab 2026-10-20 @tab date, one day on
+@item @code{;htomorrow} @tab October 20th, 2026 @tab date, one day on
+@item @code{;mtomorrow} @tab 20261020 @tab date, one day on
+@item @code{;now} @tab 2026-10-19 14:05:09 @tab date %Y-%m-%d %H:%M:%S
+@item @code{;hnow} @tab October 19th, 2026 at 2:05 PM @tab date %B %-d%o, %Y at %-I:%M %p
+@item @code{;mnow} @tab 20261019140509 @tab date %Y%m%d%H%M%S
+@item @code{;iso} @tab 2026-10-19T14:05:09-04:00 @tab date %Y-%m-%dT%H:%M:%S%:z
+@item @code{;time} @tab 14:05 @tab date %H:%M
+@item @code{;htime} @tab 2:05 PM @tab date %-I:%M %p
+@item @code{;week} @tab 2026-W43 @tab date %G-W%V (ISO week)
+@item @code{;dow} @tab Monday @tab date %A
+@item @code{;month} @tab October 2026 @tab date %B %Y
+@item @code{;epoch} @tab 1792433109 @tab date %s (Unix time)
+@item @emph{Faces} @tab @tab
+@item @code{;shrug} @tab ¯\_(ツ)_/¯ @tab text (pasted)
+@item @code{;tableflip} @tab (╯°□°)╯︵ ┻━┻ @tab text (pasted)
+@item @code{;unflip} @tab ┬─┬ノ( º _ ºノ) @tab text (pasted)
+@item @code{;lenny} @tab ( ͡° ͜ʖ ͡°) @tab text (pasted)
+@item @code{;disapprove} @tab ಠ_ಠ @tab text (pasted)
+@item @emph{Symbols} @tab @tab
+@item @code{;->} @tab → @tab text
+@item @code{;<-} @tab ← @tab text
+@item @code{;=>} @tab ⇒ @tab text
+@item @code{;<=} @tab ≤ @tab text
+@item @code{;>=} @tab ≥ @tab text
+@item @code{;!=} @tab ≠ @tab text
+@item @code{;+-} @tab ± @tab text
+@item @code{;inf} @tab ∞ @tab text
+@item @code{;deg} @tab ° @tab text
+@item @code{;em} @tab — @tab text (em dash)
+@item @code{;en} @tab – @tab text (en dash)
+@item @code{;...} @tab … @tab text
+@item @code{;bullet} @tab • @tab text
+@item @code{;check} @tab ✓ @tab text
+@item @code{;cross} @tab ✗ @tab text
+@item @code{;copy} @tab © @tab text
+@item @code{;reg} @tab ® @tab text
+@item @code{;tm} @tab ™ @tab text
+@item @code{;euro} @tab € @tab text
+@item @emph{Session} @tab @tab
+@item @code{;uuid} @tab a random UUID @tab uuid
+@item @code{;user} @tab your login name @tab env $USER
+@item @code{;host} @tab this machine's host name @tab shell hostname
+@item @code{;clip} @tab the clipboard, as plain text @tab clipboard
+@item @code{;lorem} @tab a paragraph of lorem ipsum @tab text
+@item @emph{Rewriting (AI)} @tab @tab
+@item @code{;reword} @tab the current line, reworded @tab selection (line) + model, pasted over it
+@item @code{;fix} @tab the current line, spelling and grammar fixed @tab selection (line) + model, pasted over it
+@end multitable
+
 @subsection Configuring it
 
 @lisp

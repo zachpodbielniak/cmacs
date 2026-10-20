@@ -1414,6 +1414,67 @@ gowl's =gabbrev= module is a text expander --- espanso, done in the compositor, 
 
 *Always loaded here.*  Standalone gowl opts in (=modules: gabbrev: {enabled: true}=); under =cmacs --gowl= the module is in the default set, because its configuration is Elisp and its Lisp-backed variable types need it there.  =M-x cmacs-gowl-gabbrev-toggle= switches expansion off and on; =M-x cmacs-gowl-gabbrev-list= shows every match and where it came from.
 
+*** The built-in matches
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-builtin
+:END:
+
+Every trigger starts with =;= and none is the start of another.  Give a trigger again (=cmacs-gowl-gabbrev-define=) to replace one; =cmacs-gowl-gabbrev-builtin= nil drops them all.  Examples are for 2026-10-19 at 14:05.  /pasted/ means the text goes in through the clipboard under the default =auto= backend, because no key on a usual layout types it; everything else is typed as keys.  Under =cmacs --gowl=, =;reword= and =;fix= use cmacs-ai.
+
+| Group           | Trigger       | Becomes                                      | How                                      |
+|-----------------+---------------+----------------------------------------------+------------------------------------------|
+| Dates and times | ~;today~      | 2026-10-19                                   | date ~%Y-%m-%d~                          |
+|                 | ~;date~       | 2026-10-19                                   | another trigger for ;today               |
+|                 | ~;htoday~     | October 19th, 2026                           | date ~%B %-d%o, %Y~                      |
+|                 | ~;mtoday~     | 20261019                                     | date ~%Y%m%d~                            |
+|                 | ~;yesterday~  | 2026-10-18                                   | date, one day back                       |
+|                 | ~;hyesterday~ | October 18th, 2026                           | date, one day back                       |
+|                 | ~;myesterday~ | 20261018                                     | date, one day back                       |
+|                 | ~;tomorrow~   | 2026-10-20                                   | date, one day on                         |
+|                 | ~;htomorrow~  | October 20th, 2026                           | date, one day on                         |
+|                 | ~;mtomorrow~  | 20261020                                     | date, one day on                         |
+|                 | ~;now~        | 2026-10-19 14:05:09                          | date ~%Y-%m-%d %H:%M:%S~                 |
+|                 | ~;hnow~       | October 19th, 2026 at 2:05 PM                | date ~%B %-d%o, %Y at %-I:%M %p~         |
+|                 | ~;mnow~       | 20261019140509                               | date ~%Y%m%d%H%M%S~                      |
+|                 | ~;iso~        | 2026-10-19T14:05:09-04:00                    | date ~%Y-%m-%dT%H:%M:%S%:z~              |
+|                 | ~;time~       | 14:05                                        | date ~%H:%M~                             |
+|                 | ~;htime~      | 2:05 PM                                      | date ~%-I:%M %p~                         |
+|                 | ~;week~       | 2026-W43                                     | date ~%G-W%V~ (ISO week)                 |
+|                 | ~;dow~        | Monday                                       | date ~%A~                                |
+|                 | ~;month~      | October 2026                                 | date ~%B %Y~                             |
+|                 | ~;epoch~      | 1792433109                                   | date ~%s~ (Unix time)                    |
+| Faces           | ~;shrug~      | ¯\_(ツ)_/¯                                   | text (pasted)                            |
+|                 | ~;tableflip~  | (╯°□°)╯︵ ┻━┻                                | text (pasted)                            |
+|                 | ~;unflip~     | ┬─┬ノ( º _ ºノ)                              | text (pasted)                            |
+|                 | ~;lenny~      | ( ͡° ͜ʖ ͡°)                                     | text (pasted)                            |
+|                 | ~;disapprove~ | ಠ_ಠ                                          | text (pasted)                            |
+| Symbols         | ~;->~         | →                                            | text                                     |
+|                 | ~;<-~         | ←                                            | text                                     |
+|                 | ~;=>~         | ⇒                                            | text                                     |
+|                 | ~;<=~         | ≤                                            | text                                     |
+|                 | ~;>=~         | ≥                                            | text                                     |
+|                 | ~;!=~         | ≠                                            | text                                     |
+|                 | ~;+-~         | ±                                            | text                                     |
+|                 | ~;inf~        | ∞                                            | text                                     |
+|                 | ~;deg~        | °                                            | text                                     |
+|                 | ~;em~         | —                                            | text (em dash)                           |
+|                 | ~;en~         | –                                            | text (en dash)                           |
+|                 | ~;...~        | …                                            | text                                     |
+|                 | ~;bullet~     | •                                            | text                                     |
+|                 | ~;check~      | ✓                                            | text                                     |
+|                 | ~;cross~      | ✗                                            | text                                     |
+|                 | ~;copy~       | ©                                            | text                                     |
+|                 | ~;reg~        | ®                                            | text                                     |
+|                 | ~;tm~         | ™                                            | text                                     |
+|                 | ~;euro~       | €                                            | text                                     |
+| Session         | ~;uuid~       | a random UUID                                | uuid                                     |
+|                 | ~;user~       | your login name                              | env ~$USER~                              |
+|                 | ~;host~       | this machine's host name                     | shell ~hostname~                         |
+|                 | ~;clip~       | the clipboard, as plain text                 | clipboard                                |
+|                 | ~;lorem~      | a paragraph of lorem ipsum                   | text                                     |
+| Rewriting (AI)  | ~;reword~     | the current line, reworded                   | selection (line) + model, pasted over it |
+|                 | ~;fix~        | the current line, spelling and grammar fixed | selection (line) + model, pasted over it |
+
 *** Configuring it from Elisp
 :PROPERTIES:
 :CUSTOM_ID: gowl-gabbrev-config
