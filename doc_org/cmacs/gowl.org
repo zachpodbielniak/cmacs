@@ -1530,6 +1530,13 @@ How it gets there: =cmacs-gowl-gabbrev-define-type= calls the C function =gowl-g
 
 *Super+Alt+e* (=cmacs-gowl-gabbrev-search-key=) expands what you just typed: a trigger at the cursor expands at once, word rules or not (=brb= then the key); otherwise the search opens with the word being typed as its input, and the pick replaces that word.  A =choice= variable, an espanso form and that search ask in the minibuffer here, not through a dmenu-style program (=cmacs-gowl-gabbrev-use-minibuffer=).  =;reword= and =;fix= use cmacs-ai (=cmacs-gowl-gabbrev-ai-provider=, =-ai-model=); =cmacs-gowl-gabbrev-ai-actions= adds more grab-rewrite-paste triggers --- a trigger, a label, a system prompt and how much to grab (=line=, =word=, =paragraph=, =all=).
 
+*** Calling gowl macros
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-macros
+:END:
+
+A =macro= variable runs a gowl macro by name and types what it gave =gowl_macro_set_result()= --- =vars: [{name: n, type: macro, params: {name: count-windows, args: [visible]}}]= --- waiting for a timeline or threaded macro to finish (=wait: false= does not).  gowl's macro module is opt-in here; =cmacs-gowl-gabbrev-apply= loads it (=cmacs-gowl-macro-ensure=) as soon as a loaded match has a =macro= variable.  A macro defined from Elisp (=cmacs-gowl-macro-define=) runs but gives no value: for text computed in Elisp use =cmacs-gowl-gabbrev-define-function= and =type: elisp=.  The other way, a macro types through =gabbrev-insert TEXT= and =gabbrev-expand ID= (=gowl_macro_command()=).  Details: [[file:../../deps/gowl/docs/gabbrev.org::#gabbrev-macros][gabbrev.org]].
+
 *** abbrev-mode
 :PROPERTIES:
 :CUSTOM_ID: gowl-gabbrev-abbrev

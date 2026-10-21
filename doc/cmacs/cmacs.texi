@@ -3315,6 +3315,18 @@ pickers (a @code{choice}, a form, the search) do.
 expands at once, word rules or not; otherwise the search opens with the
 word being typed as its input, and the match picked replaces it.
 
+@subsection Calling gowl macros
+
+A @code{macro} variable (@code{params: @{name: count-windows, args:
+[visible]@}}) runs a gowl macro by name and types what it gave
+@code{gowl_macro_set_result()}, waiting for a timeline or threaded
+macro to finish unless @code{wait: false}.  The macro module is opt-in
+here; @code{cmacs-gowl-gabbrev-apply} loads it
+(@code{cmacs-gowl-macro-ensure}) when a loaded match has a @code{macro}
+variable.  An Elisp-defined macro gives no value: use @code{type:
+elisp} for text computed in Elisp.  The other way, a macro types
+through @samp{gabbrev-insert} and @samp{gabbrev-expand}.
+
 @subsection abbrev-mode
 
 The abbrev tables in @code{cmacs-gowl-gabbrev-abbrev-tables}

@@ -76,6 +76,7 @@
 (declare-function gowl-gabbrev-register-type "cmacs-gowl.c" (type))
 (declare-function gowl-gabbrev-unregister-type "cmacs-gowl.c" (type))
 (declare-function cmacs-ai-make-session "cmacs-ai")
+(declare-function cmacs-gowl-macro-ensure "cmacs-gowl-macro" ())
 (declare-function cmacs-ai-chat-stream "cmacs-ai-stream.c" (session prompt callback))
 (defvar cmacs-gowl-module-event-functions)
 
@@ -790,6 +791,24 @@ ways that bypass that (`edit-abbrevs' does not)."
                  (expand-file-name file))
          t)))))
 
+(defun cmacs-gowl-gabbrev--uses-macros-p ()
+  "Non-nil when a loaded match has a `macro' variable."
+  (cl-some (lambda (m)
+             (cl-some (lambda (v) (equal (alist-get 'type v) "macro"))
+                      (alist-get 'vars m)))
+           (ignore-errors (cmacs-gowl-gabbrev-list-matches))))
+
+(defun cmacs-gowl-gabbrev--ensure-macros ()
+  "Load gowl's macro module when a match calls a macro.
+It is opt-in under cmacs (loaded on first use); a `macro' variable is a
+use, and without the module it could only fail."
+  (when (and (cmacs-gowl-gabbrev--uses-macros-p)
+             (require 'cmacs-gowl-macro nil t))
+    (condition-case err
+        (cmacs-gowl-macro-ensure)
+      (error (message "cmacs-gowl-gabbrev: cannot load the macro module: %s"
+                      (error-message-string err))))))
+
 ;;;###autoload
 (defun cmacs-gowl-gabbrev-apply ()
   "Push every `cmacs-gowl-gabbrev-*' setting into the running module."
@@ -805,6 +824,7 @@ ways that bypass that (`edit-abbrevs' does not)."
     (cmacs-gowl-gabbrev--push-files)
     (cmacs-gowl-gabbrev--push-lisp)
     (cmacs-gowl-gabbrev-sync-abbrevs)
+    (cmacs-gowl-gabbrev--ensure-macros)
     (when (called-interactively-p 'interactive)
       (message "gabbrev: %s" (cmacs-gowl-gabbrev--summary)))))
 
