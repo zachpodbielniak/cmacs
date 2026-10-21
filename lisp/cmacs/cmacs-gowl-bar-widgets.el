@@ -57,7 +57,8 @@ leaves whatever the bar configuration says."
 (defcustom cmacs-gowl-bar-default-widgets
   '(("meeting-notes" . top-right)
     ("ai-assistant" . top-right)
-    ("ai-rewrite" . top-right))
+    ("ai-rewrite" . top-right)
+    ("gabbrev" . top-right))
   "Extended bar widgets cmacs --gowl turns on, and where.
 
 Each element is (WIDGET . PLACE): WIDGET a gowl bar widget name, PLACE

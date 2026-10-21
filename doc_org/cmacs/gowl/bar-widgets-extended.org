@@ -21,6 +21,7 @@ They are ports of Omarchy shell plugins, renamed for what they do, written as na
 | =netshares=     | Mount CIFS, NFS and SSHFS shares                                   | off                          | off                                 | =netshares.org=                 |
 | =tvremote=      | Fire TV, Android TV, Roku, Samsung and LG remote                   | off                          | off                                 | =tvremote.org=                  |
 | =wow-gold=      | WoW gold, sales and trends from your addons, via =tsmctl=          | off                          | off                                 | =wow-gold.org=                  |
+| =gabbrev=       | Text expansion: on/off, expansions resolving (cancel), phrases to accept, usage | on, top bar           | off                                 | =gabbrev.org=                   |
 
 "Off" means the widget is shipped in =bar.so= and does nothing until it is added to a widget list; nothing else needs installing to try one.
 
@@ -33,7 +34,7 @@ They are ports of Omarchy shell plugins, renamed for what they do, written as na
 | Option                                   | Default                                              | Does                                                                                         |
 |------------------------------------------+------------------------------------------------------+----------------------------------------------------------------------------------------------|
 | =cmacs-gowl-bar-cpu-style=               | =creature=                                           | The cpu widget's style: =creature=, =label=, or =nil= to leave it alone                      |
-| =cmacs-gowl-bar-default-widgets=         | =meeting-notes=, =ai-assistant=, =ai-rewrite= at =top-right= | (WIDGET . PLACE) pairs to add; remove one to turn it off, add one to turn another on |
+| =cmacs-gowl-bar-default-widgets=         | =meeting-notes=, =ai-assistant=, =ai-rewrite=, =gabbrev= at =top-right= | (WIDGET . PLACE) pairs to add; remove one to turn it off, add one to turn another on |
 | =cmacs-gowl-bar-rewrite-keybind=         | ="Super+e"=                                          | Opens ai-rewrite on the selection (only while it is on); nil binds nothing                  |
 | =cmacs-gowl-bar-ai-widgets=              | the four AI widgets                                  | Widgets pointed at cmacs-ai (=ai-backend: cmacs=)                                            |
 | =cmacs-gowl-bar-widgets-setup-functions= | the widgets' push functions                          | Each widget's cmacs half: providers, actions, destinations, the Emacs face                   |

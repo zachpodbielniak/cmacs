@@ -10859,6 +10859,10 @@ on_clipboard_changed (GowlSeat *seat, gpointer user_data)
 
   if (cmacs_gowl_compositor == NULL)
     return;
+  /* Marked "do not keep" (a password manager's copy, a gabbrev
+     expansion on its way to a paste): not a kill. */
+  if (gowl_seat_clipboard_is_transient (seat))
+    return;
   wl_dpy = gowl_compositor_get_wl_display (cmacs_gowl_compositor);
   if (wl_dpy == NULL)
     return;

@@ -305,6 +305,162 @@ built-in ;today still renders a date."
       (should (eql status 0))
       (should (string-search "gabbrev-headless: ok" output)))))
 
+;;;; Stats, learning, watching: what reaches the module, what comes back
+
+(ert-deftest cmacs-gowl-gabbrev-test-settings-new-features ()
+  "The stats, learning, watch, clipboard and toast settings reach the module."
+  (let ((cmacs-gowl-gabbrev-stats nil)
+        (cmacs-gowl-gabbrev-learn t)
+        (cmacs-gowl-gabbrev-learn-min-count 1)
+        (cmacs-gowl-gabbrev-watch nil)
+        (cmacs-gowl-gabbrev-clipboard-history t)
+        (cmacs-gowl-gabbrev-pending-toast-ms 0)
+        (cmacs-gowl-gabbrev-module-settings nil))
+    (let ((s (cmacs-gowl-gabbrev--settings)))
+      (should (equal (cdr (assoc "stats" s)) "false"))
+      (should (equal (cdr (assoc "learn" s)) "true"))
+      ;; the module refuses a count below two; so does this
+      (should (equal (cdr (assoc "learn-min-count" s)) "2"))
+      (should (equal (cdr (assoc "watch" s)) "false"))
+      (should (equal (cdr (assoc "clipboard-history" s)) "true"))
+      (should (equal (cdr (assoc "pending-toast-ms" s)) "0")))))
+
+(ert-deftest cmacs-gowl-gabbrev-test-suggestion-event ()
+  "A `suggestion' event runs the hook with the trigger and the phrase;
+`-' (no free trigger) becomes nil."
+  (let* ((got nil)
+         (cmacs-gowl-gabbrev-suggestion-functions
+          (list (lambda (trigger phrase) (push (list trigger phrase) got)))))
+    (cmacs-gowl-gabbrev--on-module-event
+     "gabbrev" "suggestion ;tyvm \"thank you very much\"")
+    (cmacs-gowl-gabbrev--on-module-event
+     "gabbrev" "suggestion - \"see \\\"you\\\" soon\"")
+    (cmacs-gowl-gabbrev--on-module-event "macro" "suggestion ;x \"no\"")
+    (should (equal (nreverse got)
+                   '((";tyvm" "thank you very much")
+                     (nil "see \"you\" soon"))))))
+
+(ert-deftest cmacs-gowl-gabbrev-test-list-usage-columns ()
+  "The list shows uses and when last used; U narrows to never-used."
+  (cl-letf (((symbol-function 'cmacs-gowl-gabbrev-list-matches)
+             (lambda (&optional _)
+               (list '((id . ";a") (triggers ";a") (replace . "one")
+                       (source . "<runtime>") (uses . 5)
+                       (last-used . 1760000000))
+                     '((id . ";b") (triggers ";b") (replace . "two")
+                       (source . "<runtime>") (uses . 0) (last-used))
+                     '((id . "<search>") (triggers ";;") (replace . "x")
+                       (source . "<builtin>") (uses . 0))))))
+    (save-window-excursion
+      (cmacs-gowl-gabbrev-list)
+      (with-current-buffer "*gabbrev*"
+        (should (= (length tabulated-list-entries) 2))
+        (let ((a (cadr (assoc ";a" tabulated-list-entries)))
+              (b (cadr (assoc ";b" tabulated-list-entries))))
+          (should (equal (aref a 1) "5"))
+          (should (string-match-p "\\`2025-" (aref a 2)))
+          (should (equal (aref b 1) "0"))
+          (should (equal (substring-no-properties (aref b 2)) "never")))
+        (should (cmacs-gowl-gabbrev--sort-uses (assoc ";b" tabulated-list-entries)
+                                               (assoc ";a" tabulated-list-entries)))
+        (cmacs-gowl-gabbrev-list-toggle-unused)
+        (should (equal (mapcar #'car tabulated-list-entries) '(";b")))
+        (cmacs-gowl-gabbrev-list-toggle-unused)
+        (should (= (length tabulated-list-entries) 2)))
+      (kill-buffer "*gabbrev*"))))
+
+(defconst cmacs-gowl-gabbrev-tests--learn-form
+  '(progn
+     (setq cmacs-gowl-ipc nil)
+     ;; The files go to a scratch directory through the module's own
+     ;; settings: `setenv' changes `process-environment', not the C
+     ;; environment the module reads, so XDG_* here would not reach it
+     (let* ((scratch (make-temp-file "gabbrev-learn" t))
+            (learned (expand-file-name "learned.yml" scratch)))
+       (require 'cmacs-gowl)
+       (require 'cmacs-gowl-gabbrev)
+       (if (not (gowl-start))
+           (progn (princ "gabbrev-learn: no compositor\n") (kill-emacs 77))
+         (cmacs-gowl--install-hook-bridges)
+         (setq cmacs-gowl-gabbrev-espanso nil
+               cmacs-gowl-gabbrev-ai-rewrite nil
+               cmacs-gowl-gabbrev-search-key nil
+               cmacs-gowl-gabbrev-learn t
+               cmacs-gowl-gabbrev-module-settings
+               (list (cons "stats-file" (expand-file-name "stats.tsv" scratch))
+                     (cons "learned-file" learned)))
+         (cmacs-gowl-gabbrev-define ";hl" "hello")
+         (cmacs-gowl-gabbrev-start)
+         (cmacs-gowl-gabbrev--push-lisp)
+         (let ((done 0) problems)
+           (add-hook 'cmacs-gowl-module-event-functions
+                     (lambda (m text)
+                       (when (and (equal m "gabbrev")
+                                  (string-prefix-p "rendered" text))
+                         (setq done (1+ done)))))
+           ;; Three uses, through the renderer: counted like typing
+           (dotimes (i 3)
+             (gowl-run-command (format "gabbrev-render --id r%d ;hl" i)))
+           (dotimes (_ 50) (unless (>= done 3) (sit-for 0.1)))
+           (let* ((m (cl-find ";hl" (cmacs-gowl-gabbrev-list-matches)
+                              :key (lambda (x) (alist-get 'id x))
+                              :test #'equal))
+                  (status (cmacs-gowl-gabbrev-status)))
+             (unless (equal (alist-get 'uses m) 3)
+               (push (format "uses %S" (alist-get 'uses m)) problems))
+             (unless (numberp (alist-get 'last-used m))
+               (push "no last-used" problems))
+             ;; The settings arrived
+             (unless (alist-get 'on (alist-get 'learning status))
+               (push "learning is off" problems))
+             (unless (equal (alist-get 'clipboard-history status) nil)
+               (push "clipboard history kept" problems)))
+           ;; Accepting writes the learned file and makes a match
+           (let ((trigger (cmacs-gowl-gabbrev-accept "see you soon")))
+             (unless (equal trigger ";sys")
+               (push (format "trigger %S" trigger) problems))
+             (unless (file-exists-p learned)
+               (push "no learned file" problems))
+             (unless (cl-find ";sys" (cmacs-gowl-gabbrev-list-matches)
+                              :key (lambda (x) (car (alist-get 'triggers x)))
+                              :test #'equal)
+               (push "accepted match not loaded" problems)))
+           ;; A collision is refused, as a user-error
+           (unless (condition-case nil
+                       (progn (cmacs-gowl-gabbrev-accept "hi there" ";h") nil)
+                     (user-error t))
+             (push "collision accepted" problems))
+           ;; Counted uses reach the stats file at shutdown
+           (ignore-errors (gowl-stop))
+           (unless (file-exists-p (expand-file-name "stats.tsv" scratch))
+             (push "no stats file" problems))
+           (delete-directory scratch t)
+           (princ (format "problems: %S\n" problems))
+           (princ (if problems "gabbrev-learn: FAIL\n" "gabbrev-learn: ok\n"))
+           (kill-emacs (if problems 3 0))))))
+  "What `cmacs-gowl-gabbrev-test-stats-and-accept-headless' runs in a child.")
+
+(ert-deftest cmacs-gowl-gabbrev-test-stats-and-accept-headless ()
+  "Usage counts and accepting a phrase, through the real module: uses
+and last-used reach `cmacs-gowl-gabbrev-list-matches', the settings
+arrive, an accepted phrase is written to the learned file and loaded,
+and a trigger that collides is refused."
+  (skip-unless (fboundp 'gowl-start))
+  (unless (fboundp 'cmacs-gowl-tests--run-headless)
+    (load (expand-file-name "cmacs-gowl-tests" cmacs-gowl-gabbrev-tests--dir)
+          t t))
+  (skip-unless (fboundp 'cmacs-gowl-tests--run-headless))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-gabbrev-tests--learn-form))
+         (status (car result))
+         (output (cdr result)))
+    (when (eql status 77)
+      (ert-skip "no headless compositor here"))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-search "gabbrev-learn: ok" output)))))
+
 (provide 'cmacs-gowl-gabbrev-tests)
 
 ;;; cmacs-gowl-gabbrev-tests.el ends here

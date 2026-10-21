@@ -49,7 +49,8 @@
     val))
 
 (ert-deftest cmacs-gowl-bar-widgets-test-defaults ()
-  "Out of the box: creature cpu, meeting-notes and ai-assistant on top."
+  "Out of the box: creature cpu, meeting-notes, ai-assistant, ai-rewrite
+and gabbrev on top."
   (cmacs-gowl-bar-widgets-tests--with pushes configures
     (let ((cmacs-gowl-bar-cpu-style 'creature)
           (cmacs-gowl-bar-default-widgets
@@ -71,9 +72,9 @@
                      "ai"))
       (should (equal configures
                      '((top ("widgets-right-remove"
-                             . "meeting-notes ai-assistant ai-rewrite")
+                             . "meeting-notes ai-assistant ai-rewrite gabbrev")
                             ("widgets-right-add"
-                             . "meeting-notes ai-assistant ai-rewrite"))))))))
+                             . "meeting-notes ai-assistant ai-rewrite gabbrev"))))))))
 
 (ert-deftest cmacs-gowl-bar-widgets-test-rewrite-key ()
   "Super+e opens ai-rewrite, only while ai-rewrite is on, nil binds none."

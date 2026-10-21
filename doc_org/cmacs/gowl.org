@@ -1546,6 +1546,23 @@ Both ways.  *Your abbrevs everywhere*: the tables in =cmacs-gowl-gabbrev-abbrev-
 
 *gabbrev's triggers in Emacs*: =cmacs-gowl-gabbrev-emacs-mode= expands them inside buffers, through the same renderer --- =;today= is the date in a buffer too --- as buffer edits, one undo step, the text arriving when its variables have answered.  Emacs's own frames are otherwise left out of the compositor's expansion (=cmacs-gowl-gabbrev-in-emacs=, nil by default): there Backspaces would be typed at whatever the keys mean in the current mode.  =M-x cmacs-gowl-gabbrev-insert= inserts any match at point.
 
+*** Pruning, learning and the rest
+:PROPERTIES:
+:CUSTOM_ID: gowl-gabbrev-extras
+:END:
+
+*What earns its keep.*  The module counts every use of every match (=cmacs-gowl-gabbrev-stats=, on; kept in =$XDG_STATE_HOME/gowl/gabbrev-stats.tsv=).  =M-x cmacs-gowl-gabbrev-list= has *Uses* and *Last used* columns --- click the Uses header to sort --- and =U= narrows it to the matches that never fired, which is the list to prune.  =(cmacs-gowl-gabbrev-stats)= returns the counts; =M-x cmacs-gowl-gabbrev-stats-reset= forgets them (with a prefix argument, one match's).  A match expanded inside Emacs through =cmacs-gowl-gabbrev-emacs-mode= counts too.
+
+*Phrases you keep typing.*  With =cmacs-gowl-gabbrev-learn= (off by default) the module notices phrases typed again and again --- three times, =cmacs-gowl-gabbrev-learn-min-count= --- and proposes a trigger: "thank you very much" becomes =;tyvm=, never one that would shadow or be shadowed by a trigger you have.  It counts in memory only, never in a denied window, a terminal or synthetic input, and a run with a digit or a symbol in it is never part of a phrase, so a password or a number cannot become one.  When a phrase gets there a toast says so and =cmacs-gowl-gabbrev-suggestion-functions= runs.  =M-x cmacs-gowl-gabbrev-suggestions= lists them: =a= (or RET) accepts one, asking for the trigger with the proposal as default; =x= dismisses it; =L= switches learning.  An accepted phrase goes into =~/.config/gowl/gabbrev-learned.yml=, an ordinary match file --- edit or delete entries freely.  =M-x cmacs-gowl-gabbrev-accept= and =-dismiss= do the same from anywhere; =M-x cmacs-gowl-gabbrev-learn= switches learning for the session.
+
+*Live reload.*  A match file you edit, or a new one in a loaded directory (an espanso =match/= folder), is picked up by itself (=cmacs-gowl-gabbrev-watch=); no =cmacs-gowl-gabbrev-reload= needed.  Your Elisp definitions are pushed as you make them, as before.
+
+*The clipboard and the kill ring.*  A paste expansion's text is on the clipboard only to be pasted, so the module marks it the way password managers mark a password: the clipboard history skips it and so does the kill-ring sync (=gowl-clipboard-watch=).  =cmacs-gowl-gabbrev-clipboard-history= lets them in.  The same mark from a password manager (KeePassXC sets it) keeps its copies out of the kill ring too.
+
+*No keys, no clipboard.*  =(setq cmacs-gowl-gabbrev-options '((backend . "text-input")))= --- or =:force-mode "text-input"= on one match --- puts expansions in the way an input method does, through text-input-v3: one edit, any character, nothing on the clipboard.  Applications without a text-input-v3 text field get keys or a paste as before.
+
+*Slow expansions.*  An expansion still waiting after 1.5 s (=cmacs-gowl-gabbrev-pending-toast-ms=) --- a slow command, a model, a macro --- raises a toast that opens the bar's =gabbrev= widget (on the top bar by default), which lists it with a cancel.  =M-x cmacs-gowl-gabbrev-cancel= stops every running expansion.
+
 | Option                                      | Default                 | Meaning                                                  |
 |---------------------------------------------+-------------------------+----------------------------------------------------------|
 | =cmacs-gowl-gabbrev-enable=                 | t                       | expand from the start                                    |
@@ -1563,8 +1580,15 @@ Both ways.  *Your abbrevs everywhere*: the tables in =cmacs-gowl-gabbrev-abbrev-
 | =cmacs-gowl-gabbrev-abbrev-tables=          | =(global-abbrev-table)= | abbrevs expanded everywhere                              |
 | =cmacs-gowl-gabbrev-module-settings=        | nil                     | more =modules: gabbrev:= settings                        |
 | =cmacs-gowl-gabbrev-expanded-functions=     | nil                     | hook: a match was typed                                  |
+| =cmacs-gowl-gabbrev-stats=                  | t                       | count uses per match                                     |
+| =cmacs-gowl-gabbrev-learn=                  | nil                     | suggest triggers for phrases typed often                 |
+| =cmacs-gowl-gabbrev-learn-min-count=        | 3                       | how often before a phrase is suggested                   |
+| =cmacs-gowl-gabbrev-watch=                  | t                       | reload when a match file changes                         |
+| =cmacs-gowl-gabbrev-clipboard-history=      | nil                     | let paste expansions into histories and the kill ring    |
+| =cmacs-gowl-gabbrev-pending-toast-ms=       | 1500                    | toast for an expansion still resolving; 0 never          |
+| =cmacs-gowl-gabbrev-suggestion-functions=   | nil                     | hook: learning noticed a phrase (TRIGGER PHRASE)         |
 
-Commands: =cmacs-gowl-gabbrev-list=, =-toggle=, =-reload=, =-status=, =-insert=, =-search=, =-test= (which match a text would fire in the focused window, and why not), =-sync-abbrevs=, =-apply=.
+Commands: =cmacs-gowl-gabbrev-list=, =-toggle=, =-reload=, =-status=, =-insert=, =-search=, =-test= (which match a text would fire in the focused window, and why not), =-sync-abbrevs=, =-apply=, =-suggestions=, =-accept=, =-dismiss=, =-learn=, =-stats-reset=, =-cancel=.
 
 ** Hooks
 :PROPERTIES:

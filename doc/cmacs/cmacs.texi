@@ -3339,22 +3339,61 @@ Emacs buffers through the same renderer, as buffer edits.  Emacs's own
 frames are otherwise left out of the compositor's expansion
 (@code{cmacs-gowl-gabbrev-in-emacs}).
 
+@subsection Pruning, learning and the rest
+
+@vindex cmacs-gowl-gabbrev-stats
+The module counts every use of every match
+(@code{cmacs-gowl-gabbrev-stats}, kept in
+@file{$XDG_STATE_HOME/gowl/gabbrev-stats.tsv}).
+@code{cmacs-gowl-gabbrev-list} has @samp{Uses} and @samp{Last used}
+columns, and @kbd{U} narrows it to the matches that never fired;
+@code{cmacs-gowl-gabbrev-stats-reset} forgets the counts.
+
+@vindex cmacs-gowl-gabbrev-learn
+@findex cmacs-gowl-gabbrev-suggestions
+With @code{cmacs-gowl-gabbrev-learn} (off by default) it notices
+phrases typed again and again and proposes a trigger for each---``thank
+you very much'' becomes @samp{;tyvm}.  It counts in memory only, never
+in a denied window, a terminal or synthetic input, and never counts a
+run with a digit or a symbol in it.  @code{cmacs-gowl-gabbrev-suggestions}
+lists the phrases: @kbd{a} accepts one into
+@file{~/.config/gowl/gabbrev-learned.yml}, an ordinary match file, and
+@kbd{x} dismisses it.  @code{cmacs-gowl-gabbrev-suggestion-functions}
+runs when a phrase gets there.
+
+@vindex cmacs-gowl-gabbrev-watch
+@vindex cmacs-gowl-gabbrev-clipboard-history
+An edited match file, or a new one in a loaded directory, reloads by
+itself (@code{cmacs-gowl-gabbrev-watch}).  A paste expansion is marked
+as not worth keeping, so the clipboard history and the kill-ring sync
+skip it (@code{cmacs-gowl-gabbrev-clipboard-history} lets it in).  The
+@samp{text-input} backend puts text in through text-input-v3, as an
+input method does: one edit, any character, no clipboard.  An expansion
+still waiting after @code{cmacs-gowl-gabbrev-pending-toast-ms} raises a
+toast that opens the bar's @code{gabbrev} widget, which cancels it;
+@code{cmacs-gowl-gabbrev-cancel} stops them all.
+
 @subsection Commands and options
 
 @findex cmacs-gowl-gabbrev-list
 @findex cmacs-gowl-gabbrev-toggle
 @findex cmacs-gowl-gabbrev-insert
+@findex cmacs-gowl-gabbrev-accept
 Commands: @code{cmacs-gowl-gabbrev-list}, @code{-toggle},
 @code{-reload}, @code{-status}, @code{-insert}, @code{-search},
-@code{-test}, @code{-sync-abbrevs} and @code{-apply}.  Options:
+@code{-test}, @code{-sync-abbrevs}, @code{-apply},
+@code{-suggestions}, @code{-accept}, @code{-dismiss}, @code{-learn},
+@code{-stats-reset} and @code{-cancel}.  Options:
 @code{cmacs-gowl-gabbrev-enable}, @code{-builtin}, @code{-files},
 @code{-espanso}, @code{-options}, @code{-matches}, @code{-in-emacs},
 @code{-deny-filter}, @code{-search-key}, @code{-toggle-key},
 @code{-use-minibuffer}, @code{-ai-rewrite}, @code{-ai-provider},
 @code{-ai-model}, @code{-ai-actions}, @code{-abbrev-tables},
 @code{-abbrev-prefix}, @code{-abbrev-include-system},
-@code{-module-settings} and the hook
-@code{-expanded-functions}.
+@code{-module-settings}, @code{-stats}, @code{-learn},
+@code{-learn-min-count}, @code{-watch}, @code{-clipboard-history},
+@code{-pending-toast-ms} and the hooks @code{-expanded-functions} and
+@code{-suggestion-functions}.
 
 @section Macros
 @anchor{gowl Macros}
@@ -5844,8 +5883,9 @@ driven by the @code{cmacs-gowl-bar} customization group:
 widget alone.
 @item cmacs-gowl-bar-default-widgets
 @code{(WIDGET . PLACE)} pairs to add; @code{meeting-notes},
-@code{ai-assistant} and @code{ai-rewrite} at @code{top-right} by
-default.  PLACE is
+@code{ai-assistant}, @code{ai-rewrite} and @code{gabbrev} (text
+expansion: expansions still resolving, phrases to accept) at
+@code{top-right} by default.  PLACE is
 @code{top-left}, @code{top-center}, @code{top-right},
 @code{bottom-left}, @code{bottom-center} or @code{bottom-right}.
 Placement uses the bar's @code{widgets-*-add}/@code{-remove} keys, so

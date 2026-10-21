@@ -56,6 +56,16 @@
 ;; Pickers -- a `choice' variable, a form, the search -- are the
 ;; minibuffer here, instead of the module's dmenu-style program.
 ;;
+;; PRUNING AND LEARNING: the module counts every use of every match, so
+;; `cmacs-gowl-gabbrev-list' has Uses and Last used columns (U shows the
+;; ones that never fired).  With `cmacs-gowl-gabbrev-learn' it also
+;; notices phrases typed again and again and proposes a trigger for each
+;; -- `cmacs-gowl-gabbrev-suggestions' lists them, `a' accepts one into
+;; the learned-matches file.  Match files reload by themselves when they
+;; change (`cmacs-gowl-gabbrev-watch'), and a paste expansion never
+;; lands in the clipboard history or the kill ring
+;; (`cmacs-gowl-gabbrev-clipboard-history').
+;;
 ;; Everything reaches the module through `gowl-run-command' and its
 ;; `gabbrev-' commands (the IPC words), and hears it through
 ;; `cmacs-gowl-module-event-functions'.
@@ -231,6 +241,51 @@ For example ((\"picker-command\" . \"fuzzel --dmenu\") (\"log\" . \"true\"))."
 
 (defcustom cmacs-gowl-gabbrev-expanded-functions nil
   "Functions run with a match's id after the module typed it."
+  :type 'hook
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-stats t
+  "Non-nil: count every use of every match.
+The counts are kept in $XDG_STATE_HOME/gowl/gabbrev-stats.tsv and shown
+in `cmacs-gowl-gabbrev-list' -- the way to find the snippets nobody uses."
+  :type 'boolean
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-learn nil
+  "Non-nil: notice phrases typed again and again, and propose triggers.
+Opt-in.  Phrases are counted in memory only, never in a denied window,
+a terminal or synthetic input, and a run with a digit or a symbol in it
+is never a phrase.  See `cmacs-gowl-gabbrev-suggestions'."
+  :type 'boolean
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-learn-min-count 3
+  "How often a phrase is typed before it is suggested."
+  :type 'natnum
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-watch t
+  "Non-nil: reload when a loaded match file, or a file in a loaded
+directory, changes -- espanso's `auto_restart'."
+  :type 'boolean
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-clipboard-history nil
+  "Non-nil: let a paste expansion into clipboard histories and the kill ring.
+By default the module marks the text it puts on the clipboard only to
+paste it as not worth keeping, the way password managers mark theirs."
+  :type 'boolean
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-pending-toast-ms 1500
+  "Milliseconds an expansion may resolve before a toast says it waits.
+The toast names the gabbrev bar panel, which cancels it.  0: never."
+  :type 'natnum
+  :group 'cmacs-gowl-gabbrev)
+
+(defcustom cmacs-gowl-gabbrev-suggestion-functions nil
+  "Functions run with (TRIGGER PHRASE) when learning notices a phrase.
+TRIGGER is the proposed trigger, or nil when none was free."
   :type 'hook
   :group 'cmacs-gowl-gabbrev)
 
@@ -736,7 +791,16 @@ ways that bypass that (`edit-abbrevs' does not)."
   (let ((deny (cmacs-gowl-gabbrev--deny)))
     (append
      (list (cons "builtin" (if cmacs-gowl-gabbrev-builtin "true" "false"))
-           (cons "start-on" (if cmacs-gowl-gabbrev-enable "true" "false")))
+           (cons "start-on" (if cmacs-gowl-gabbrev-enable "true" "false"))
+           (cons "stats" (if cmacs-gowl-gabbrev-stats "true" "false"))
+           (cons "learn" (if cmacs-gowl-gabbrev-learn "true" "false"))
+           (cons "learn-min-count"
+                 (number-to-string (max 2 cmacs-gowl-gabbrev-learn-min-count)))
+           (cons "watch" (if cmacs-gowl-gabbrev-watch "true" "false"))
+           (cons "clipboard-history"
+                 (if cmacs-gowl-gabbrev-clipboard-history "true" "false"))
+           (cons "pending-toast-ms"
+                 (number-to-string cmacs-gowl-gabbrev-pending-toast-ms)))
      (when deny (list (cons "deny-filter" deny)))
      cmacs-gowl-gabbrev-module-settings)))
 
@@ -866,6 +930,11 @@ Idempotent.  `cmacs --gowl' calls it at every compositor start."
      ((string-match "\\`expanded \\(.*\\)\\'" text)
       (run-hook-with-args 'cmacs-gowl-gabbrev-expanded-functions
                           (match-string 1 text)))
+     ((string-match "\\`suggestion \\([^ ]+\\) \\(.*\\)\\'" text)
+      (let ((trigger (match-string 1 text))
+            (phrase (json-parse-string (match-string 2 text))))
+        (run-hook-with-args 'cmacs-gowl-gabbrev-suggestion-functions
+                            (unless (equal trigger "-") trigger) phrase)))
      ((string-prefix-p "reloaded" text)
       (setq cmacs-gowl-gabbrev--triggers nil)))))
 
@@ -1029,6 +1098,8 @@ This is what `cmacs-gowl-gabbrev-search-key' runs; from inside Emacs,
     (define-key map (kbd "g") #'cmacs-gowl-gabbrev-list)
     (define-key map (kbd "r") #'cmacs-gowl-gabbrev-reload)
     (define-key map (kbd "t") #'cmacs-gowl-gabbrev-toggle)
+    (define-key map (kbd "U") #'cmacs-gowl-gabbrev-list-toggle-unused)
+    (define-key map (kbd "s") #'cmacs-gowl-gabbrev-suggestions)
     map)
   "Keys of `cmacs-gowl-gabbrev-list-mode'.")
 
@@ -1036,26 +1107,61 @@ This is what `cmacs-gowl-gabbrev-search-key' runs; from inside Emacs,
   "Every gabbrev match: trigger, what it does, where it comes from.
 \\<cmacs-gowl-gabbrev-list-mode-map>
 \\[cmacs-gowl-gabbrev-list-insert] inserts one in the buffer you came from,
-\\[cmacs-gowl-gabbrev-reload] reloads, and
-\\[cmacs-gowl-gabbrev-toggle] switches expansion off and on."
-  (setq tabulated-list-format [("Trigger" 18 t) ("Does" 56 nil) ("From" 30 t)])
+\\[cmacs-gowl-gabbrev-reload] reloads,
+\\[cmacs-gowl-gabbrev-toggle] switches expansion off and on,
+\\[cmacs-gowl-gabbrev-list-toggle-unused] shows only the matches that never fired, and
+\\[cmacs-gowl-gabbrev-suggestions] lists the phrases learning noticed.
+Sort by Uses (click its header) to see what earns its keep."
+  (setq tabulated-list-format
+        [("Trigger" 18 t)
+         ("Uses" 6 cmacs-gowl-gabbrev--sort-uses :right-align t)
+         ("Last used" 16 t)
+         ("Does" 44 nil)
+         ("From" 26 t)])
   (setq tabulated-list-sort-key '("Trigger" . nil))
   (tabulated-list-init-header))
 
 (defvar-local cmacs-gowl-gabbrev--list-origin nil
   "The buffer the list was opened from.")
 
+(defvar-local cmacs-gowl-gabbrev--list-unused nil
+  "Non-nil: the list shows only matches that never fired.")
+
+(defun cmacs-gowl-gabbrev--sort-uses (a b)
+  "Tabulated-list predicate: entry A used fewer times than entry B."
+  (< (string-to-number (aref (cadr a) 1))
+     (string-to-number (aref (cadr b) 1))))
+
+(defun cmacs-gowl-gabbrev--last-used (match)
+  "When MATCH (a `gabbrev-list' entry) last fired, for the list."
+  (let ((when (alist-get 'last-used match)))
+    (if (numberp when)
+        (format-time-string "%F %R" (seconds-to-time when))
+      (propertize "never" 'face 'shadow))))
+
+(defun cmacs-gowl-gabbrev-list-toggle-unused ()
+  "Show only the matches that never fired, or every match again."
+  (interactive)
+  (setq cmacs-gowl-gabbrev--list-unused (not cmacs-gowl-gabbrev--list-unused))
+  (cmacs-gowl-gabbrev-list))
+
 ;;;###autoload
 (defun cmacs-gowl-gabbrev-list ()
   "List every gabbrev match."
   (interactive)
-  (let ((origin (if (derived-mode-p 'cmacs-gowl-gabbrev-list-mode)
-                    cmacs-gowl-gabbrev--list-origin
-                  (current-buffer)))
-        (matches (cmacs-gowl-gabbrev-list-matches)))
+  (let* ((in-list (derived-mode-p 'cmacs-gowl-gabbrev-list-mode))
+         (origin (if in-list cmacs-gowl-gabbrev--list-origin (current-buffer)))
+         (unused (and in-list cmacs-gowl-gabbrev--list-unused))
+         (matches (cl-remove-if
+                   (lambda (m)
+                     (or (string-prefix-p "<" (alist-get 'id m))
+                         (and unused (> (or (alist-get 'uses m) 0) 0))))
+                   (cmacs-gowl-gabbrev-list-matches))))
     (with-current-buffer (get-buffer-create "*gabbrev*")
       (cmacs-gowl-gabbrev-list-mode)
-      (setq cmacs-gowl-gabbrev--list-origin origin)
+      (setq cmacs-gowl-gabbrev--list-origin origin
+            cmacs-gowl-gabbrev--list-unused unused
+            mode-name (if unused "gabbrev: never used" "gabbrev"))
       (setq tabulated-list-entries
             (mapcar (lambda (m)
                       (let ((does (or (alist-get 'label m)
@@ -1067,6 +1173,9 @@ This is what `cmacs-gowl-gabbrev-search-key' runs; from inside Emacs,
                                            (alist-get 'regex m) "")
                                        'face (if (alist-get 'overridden m)
                                                  'shadow 'default))
+                                      (number-to-string
+                                       (or (alist-get 'uses m) 0))
+                                      (cmacs-gowl-gabbrev--last-used m)
                                       does
                                       (abbreviate-file-name
                                        (or (alist-get 'source m) ""))))))
@@ -1083,6 +1192,166 @@ This is what `cmacs-gowl-gabbrev-search-key' runs; from inside Emacs,
       (user-error "The buffer this list came from is gone"))
     (pop-to-buffer origin)
     (cmacs-gowl-gabbrev-insert id)))
+
+;;;; Pruning: usage counts
+
+(defun cmacs-gowl-gabbrev-stats (&optional unused)
+  "Uses per match, most used first (`gabbrev-stats'), as a list of alists.
+With UNUSED, only the loaded matches that never fired."
+  (cmacs-gowl-gabbrev--json
+   (cmacs-gowl-gabbrev--command
+    (if unused "gabbrev-stats --unused" "gabbrev-stats"))))
+
+;;;###autoload
+(defun cmacs-gowl-gabbrev-stats-reset (&optional id)
+  "Forget the usage counts -- of ID only, when given.
+Interactively, with a prefix argument, ask which match."
+  (interactive
+   (list (when current-prefix-arg
+           (cmacs-gowl-gabbrev--read-match "Forget the counts of: "))))
+  (unless (or id (called-interactively-p 'interactive)
+              (yes-or-no-p "Forget every usage count? "))
+    (user-error "Kept"))
+  (message "gabbrev: %s" (cmacs-gowl-gabbrev--command
+                          (if id (concat "gabbrev-stats-reset " id)
+                            "gabbrev-stats-reset"))))
+
+;;;###autoload
+(defun cmacs-gowl-gabbrev-cancel (&optional job)
+  "Stop the expansion JOB (an id from `gabbrev-status'), or every one."
+  (interactive)
+  (message "gabbrev: %s"
+           (cmacs-gowl-gabbrev--command
+            (if job (format "gabbrev-cancel %s" job) "gabbrev-cancel"))))
+
+;;;; Learning: phrases typed often
+
+;;;###autoload
+(defun cmacs-gowl-gabbrev-learn (&optional arg)
+  "Switch learning repeated phrases on or off.  With ARG, on if positive.
+This session only; `cmacs-gowl-gabbrev-learn' is the setting."
+  (interactive "P")
+  (let* ((status (cmacs-gowl-gabbrev-status))
+         (on (cond ((null arg) (not (alist-get 'on (alist-get 'learning status))))
+                   (t (> (prefix-numeric-value arg) 0)))))
+    (message "Learning %s" (cmacs-gowl-gabbrev--command
+                            (if on "gabbrev-learn on" "gabbrev-learn off")))))
+
+(defun cmacs-gowl-gabbrev-suggestion-list (&optional limit)
+  "The phrases learning noticed, best first (at most LIMIT), as alists
+with `phrase', `trigger' (or nil), `count', `words' and `last'."
+  (cmacs-gowl-gabbrev--json
+   (cmacs-gowl-gabbrev--command
+    (if limit (format "gabbrev-suggestions %d" limit) "gabbrev-suggestions"))))
+
+;;;###autoload
+(defun cmacs-gowl-gabbrev-accept (phrase &optional trigger)
+  "Make PHRASE a match, typed as TRIGGER (proposed by the module when nil).
+It goes into the learned-matches file, an ordinary YAML match file.
+Interactively, pick a suggestion and confirm or change its trigger.
+Returns the trigger."
+  (interactive
+   (let* ((sugs (cmacs-gowl-gabbrev-suggestion-list))
+          (phrase (if sugs
+                      (completing-read "Accept phrase: "
+                                       (mapcar (lambda (s) (alist-get 'phrase s))
+                                               sugs)
+                                       nil nil)
+                    (read-string "Phrase: ")))
+          (proposed (alist-get 'trigger
+                               (cl-find phrase sugs
+                                        :key (lambda (s) (alist-get 'phrase s))
+                                        :test #'equal))))
+     (list phrase (read-string (format "Trigger%s: "
+                                       (if proposed
+                                           (format " (default %s)" proposed)
+                                         ""))
+                               nil nil proposed))))
+  (when (string-match-p "\n" phrase)
+    (user-error "A suggestion is one line"))
+  (let ((trigger (string-trim
+                  (cmacs-gowl-gabbrev--command
+                   (if (and trigger (not (string-empty-p trigger)))
+                       (format "gabbrev-accept --trigger %s %s" trigger phrase)
+                     (concat "gabbrev-accept " phrase))))))
+    (setq cmacs-gowl-gabbrev--triggers nil)
+    (when (called-interactively-p 'interactive)
+      (message "gabbrev: %s now types %S" trigger phrase))
+    (when (derived-mode-p 'cmacs-gowl-gabbrev-suggestions-mode)
+      (cmacs-gowl-gabbrev-suggestions))
+    trigger))
+
+(defun cmacs-gowl-gabbrev-dismiss (phrase)
+  "Never suggest PHRASE again (this session)."
+  (interactive (list (completing-read
+                      "Dismiss phrase: "
+                      (mapcar (lambda (s) (alist-get 'phrase s))
+                              (cmacs-gowl-gabbrev-suggestion-list)))))
+  (cmacs-gowl-gabbrev--command (concat "gabbrev-dismiss " phrase))
+  (when (derived-mode-p 'cmacs-gowl-gabbrev-suggestions-mode)
+    (cmacs-gowl-gabbrev-suggestions)))
+
+(defvar cmacs-gowl-gabbrev-suggestions-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'cmacs-gowl-gabbrev-suggestions-accept)
+    (define-key map (kbd "a") #'cmacs-gowl-gabbrev-suggestions-accept)
+    (define-key map (kbd "x") #'cmacs-gowl-gabbrev-suggestions-dismiss)
+    (define-key map (kbd "g") #'cmacs-gowl-gabbrev-suggestions)
+    (define-key map (kbd "L") #'cmacs-gowl-gabbrev-learn)
+    map)
+  "Keys of `cmacs-gowl-gabbrev-suggestions-mode'.")
+
+(define-derived-mode cmacs-gowl-gabbrev-suggestions-mode tabulated-list-mode
+  "gabbrev suggestions"
+  "Phrases typed again and again, with a trigger proposed for each.
+\\<cmacs-gowl-gabbrev-suggestions-mode-map>
+\\[cmacs-gowl-gabbrev-suggestions-accept] accepts the one at point (asking for the trigger),
+\\[cmacs-gowl-gabbrev-suggestions-dismiss] dismisses it,
+\\[cmacs-gowl-gabbrev-suggestions] refreshes, and
+\\[cmacs-gowl-gabbrev-learn] switches learning off and on."
+  (setq tabulated-list-format [("Phrase" 48 t) ("Trigger" 14 t)
+                               ("Typed" 6 nil :right-align t)])
+  (setq tabulated-list-sort-key nil)
+  (tabulated-list-init-header))
+
+;;;###autoload
+(defun cmacs-gowl-gabbrev-suggestions ()
+  "List the phrases learning noticed, to accept as matches or dismiss."
+  (interactive)
+  (let ((sugs (cmacs-gowl-gabbrev-suggestion-list))
+        (learning (alist-get 'on (alist-get 'learning
+                                            (cmacs-gowl-gabbrev-status)))))
+    (with-current-buffer (get-buffer-create "*gabbrev suggestions*")
+      (cmacs-gowl-gabbrev-suggestions-mode)
+      (setq mode-name (if learning "gabbrev suggestions"
+                        "gabbrev suggestions (learning off)"))
+      (setq tabulated-list-entries
+            (mapcar (lambda (s)
+                      (list s
+                            (vector (alist-get 'phrase s)
+                                    (or (alist-get 'trigger s)
+                                        (propertize "none free" 'face 'shadow))
+                                    (number-to-string (alist-get 'count s)))))
+                    sugs))
+      (tabulated-list-print)
+      (pop-to-buffer (current-buffer)))))
+
+(defun cmacs-gowl-gabbrev-suggestions-accept ()
+  "Accept the suggestion at point, confirming its trigger."
+  (interactive)
+  (let* ((s (or (tabulated-list-get-id) (user-error "No suggestion here")))
+         (proposed (alist-get 'trigger s)))
+    (cmacs-gowl-gabbrev-accept
+     (alist-get 'phrase s)
+     (read-string (format "Trigger for %S%s: " (alist-get 'phrase s)
+                          (if proposed (format " (default %s)" proposed) ""))
+                  nil nil proposed))))
+
+(defun cmacs-gowl-gabbrev-suggestions-dismiss ()
+  "Dismiss the suggestion at point."
+  (interactive)
+  (let ((s (or (tabulated-list-get-id) (user-error "No suggestion here"))))
+    (cmacs-gowl-gabbrev-dismiss (alist-get 'phrase s))))
 
 ;;;; Inside Emacs: gabbrev's triggers in buffers
 
