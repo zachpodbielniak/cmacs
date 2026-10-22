@@ -13775,6 +13775,71 @@ and never look inside a box.
 make -C test check-cmacs    # every test/cmacs/*-tests.el
 @end example
 
+@subsection Before trusting a result: @code{just verify-fresh}
+
+A test that runs against a stale artifact does not fail.  It passes, or
+fails somewhere unrelated, against code that is no longer on disk:
+@file{test/cmacs/*.elc} older than the @file{src/emacs} that should have
+recompiled them, @file{lisp/cmacs/*.elc} older than their @file{.el},
+@file{libcmacs-api.so} and the bacon modules (built only when absent),
+gowl module @file{.so} files and @file{xdg-desktop-portal-gowl}, a
+bundled @file{libwhisper.a} linked against new headers, a
+@file{src/temacs} never relinked after a dep archive it links changed.
+
+@file{admin/cmacs-verify-fresh.sh} catches the whole class with one rule:
+an artifact is stale when anything it is built from is newer than it.
+
+@example
+just verify-fresh                     # report; exit 1 if anything is stale
+just verify-fresh --all               # every stale artifact
+just verify-fresh --only 'gowl-*'     # some classes (--list names them)
+just verify-fresh --fix               # run the rebuild commands, re-check
+admin/cmacs-verify-fresh.sh --quiet   # exit status only
+@end example
+
+For each stale artifact it prints the newest file that makes it stale,
+the intermediate it goes through, and the command that rebuilds the
+class.  Nothing is built unless @option{--fix} is given; a full check of
+a built tree takes a few seconds.
+
+The dependency lists are the real ones, never guessed from names: the
+make database (@code{make -p}) of the Makefile that builds the artifact,
+which includes the compiler's @option{-MMD} @file{.d} files, with pattern
+rules instantiated the way make does; the compiler's @file{.o.d} files
+and @file{CMakeFiles/<T>.dir} for a cmake tree (whisper.cpp); and the
+pattern rule's shape for @file{.elc} (plus @file{src/emacs} for tests).
+Staleness is transitive.  The in-tree archives on @code{temacs}'s
+@code{LIBES} link line are added as prerequisites, since they are link
+inputs make does not track.  A target whose recipe is a no-op or copies
+only when changed (@code{move-if-change}, @code{cmp -s || cp}) is never
+stale: make re-stats it and rebuilds nothing above it, which is why
+@file{src/globals.h} stays older than @file{gl-stamp}.
+
+@code{make -q} and @code{make -n} still remake an included makefile, so
+each probe passes @option{-o} for every makefile it may read and runs
+with @env{SHELL} set to a guard that runs @code{$(shell ...)} functions
+but refuses any recipe (make drops @code{q} from the exported
+@env{MAKEFLAGS} while it remakes a makefile).  A refused recipe is
+reported.
+
+@code{make -C test check-cmacs} (and so @code{just test}) runs the guard
+with @option{--gate} first, from a @code{## CMACS:} hunk in
+@file{test/Makefile.in}, so a stale tree fails fast with the report.
+Stale test @file{.elc} only produce a note there, because the
+@code{%.elc} rule recompiles them.  @code{just test-gowl} builds gowl,
+gates on the gowl classes, then runs.  @env{CMACS_SKIP_FRESH_CHECK}=1
+is the escape hatch; @option{--fix} runs each command under
+@code{flock "$CMACS_BUILD_LOCK"} when that variable names a lock file.
+
+A class is one @code{vf_class} call in @code{vf_register_classes}; add
+a case to @file{test/cmacs/cmacs-verify-fresh-tests.el} with it.  It
+cannot see what make cannot: restored mtimes (@code{tar -x}),
+undeclared dependencies, system headers (unless @option{--system}), or
+artifacts outside the table (the Doom eln cache, copies under
+@file{/usr}).  @file{.eln} files need no check of their own: Emacs looks
+one up only while loading the @file{.elc}, under a name carrying the md5
+of the current source.
+
 @subsection Expected failure: @code{emacs-tests/seccomp/allows-stdout}
 
 Upstream's own suite (@code{make -C test src/emacs-tests}) has one test
@@ -14195,7 +14260,7 @@ temacs (a separate optional frontend).  @code{deps/gsurf} pins
 
 @subsection test/Makefile.in --- cmacs test-suite support
 
-Three small hunks (each marked @code{## CMACS: ...}):
+Five small hunks (each marked @code{## CMACS: ...}):
 
 @itemize @bullet
 @item
@@ -14213,6 +14278,16 @@ Export a writable @env{XDG_CACHE_HOME} (@code{TEST_XDG_CACHE}, next to
 @code{TEST_HOME}) in the two test-running recipes: crispy tests compile
 C via gcc into the user cache dir, which cannot be created under the
 sandboxed @code{HOME=/nonexistent}.
+@item
+Make the byte compiler a prerequisite of @code{%.elc}
+(@code{cmacs_byte_compiler := $(wildcard $(EMACS))}): upstream lists only
+the source, so a test @file{.elc} outlived every rebuild of
+@file{src/emacs}.  Re-run @code{./config.status test/Makefile} after
+re-applying it.
+@item
+A @code{cmacs-verify-fresh} prerequisite of @code{check-cmacs} that runs
+@code{admin/cmacs-verify-fresh.sh --gate}, so the suite refuses a tree
+with stale build artifacts (@env{CMACS_SKIP_FRESH_CHECK}=1 bypasses it).
 @end itemize
 
 @node Upstream Lisp

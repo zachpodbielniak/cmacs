@@ -303,6 +303,22 @@ endef
 
 $(foreach subdir, $(SUBDIRS), $(eval $(call subdir_template,$(subdir))))
 
+## CMACS: refuse to run the cmacs suites against stale artifacts.
+##
+## A stale artifact does not make a test fail -- it makes it pass, or
+## fail somewhere unrelated, against code no longer on disk: test .elc
+## older than src/emacs, lisp/cmacs .elc older than their .el,
+## libcmacs-api.so and the bacon modules (built only when absent), gowl
+## modules, a temacs never relinked against a rebuilt dep archive.
+## admin/cmacs-verify-fresh.sh checks all of them against the real
+## dependency lists and prints the rebuild command for each.  Stale test
+## .elc are only reported: the %.elc rule above recompiles them.
+## CMACS_SKIP_FRESH_CHECK=1 is the escape hatch.
+.PHONY: cmacs-verify-fresh
+cmacs-verify-fresh:
+	@$(srcdir)/../admin/cmacs-verify-fresh.sh --gate
+check-cmacs: cmacs-verify-fresh
+
 ifeq (@HAVE_MODULES@, yes)
 # -fPIC is a no-op on Windows, but causes a compiler warning
 ifeq ($(SO),.dll)

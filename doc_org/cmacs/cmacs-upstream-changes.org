@@ -335,7 +335,7 @@ embedded Doom config.
 
 ** test/Makefile.in --- cmacs test-suite support
 
-Three small hunks (each marked =## CMACS: ...=):
+Five small hunks (each marked =## CMACS: ...=):
 
 - Add =cmacs= to the =SUBDIRS= find so the =check-cmacs= target exists
   (runs every =test/cmacs/*-tests.el=).
@@ -348,6 +348,14 @@ Three small hunks (each marked =## CMACS: ...=):
   =TEST_HOME=) in the two test-running recipes: crispy tests compile C
   via gcc into the user cache dir, which cannot be created under the
   sandboxed =HOME=/nonexistent=.
+- Make the byte compiler a prerequisite of =%.elc=
+  (=cmacs_byte_compiler := $(wildcard $(EMACS))=): upstream lists only
+  the source, so a test =.elc= outlived every rebuild of =src/emacs=.
+  Re-run =./config.status test/Makefile= after re-applying it.
+- A =cmacs-verify-fresh= prerequisite of =check-cmacs= that runs
+  =admin/cmacs-verify-fresh.sh --gate=, so the suite refuses a tree with
+  stale build artifacts (=CMACS_SKIP_FRESH_CHECK=1= bypasses it; see
+  /Before trusting a result/ in =build.org=).
 
 * Lisp
 

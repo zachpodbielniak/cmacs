@@ -1034,6 +1034,113 @@ Test files in =test/cmacs/=:
 | =cmacs-crispy-tests.el=      | Crispy scripting  |
 | =cmacs-config-tests.el=      | Config loading    |
 | =cmacs-office-tests.el=      | Office packages (round-trip gate) |
+| =cmacs-verify-fresh-tests.el= | The stale-artifact guard below |
+
+** Before trusting a result: =just verify-fresh=
+
+A test that runs against a stale artifact does not fail.  It passes, or
+fails somewhere unrelated, against code that is no longer on disk.  This
+tree has done that through every door it has: =test/cmacs/*.elc= older
+than the =src/emacs= that should have recompiled them (33 fake failures
+in 8 suites), =lisp/cmacs/*.elc= older than their =.el= (Emacs loads the
+=.elc= anyway), =libcmacs-api.so= and the bacon modules (which
+=src/Makefile.in= builds only when they are /absent/), gowl module =.so=
+files and =xdg-desktop-portal-gowl= (a portal test ran a binary weeks
+old), a bundled =libwhisper.a= linked against new headers, and a
+=src/temacs= that was never relinked after a dep archive it links
+changed.
+
+=admin/cmacs-verify-fresh.sh= catches the whole class with one rule: an
+artifact is stale when anything it is built from is newer than it.
+
+#+begin_example
+just verify-fresh                     # report; exit 1 if anything is stale
+just verify-fresh --all               # every stale artifact, not the first 8
+just verify-fresh --only 'gowl-*'     # some classes (--list names them)
+just verify-fresh --fix               # run the rebuild commands, re-check
+admin/cmacs-verify-fresh.sh --quiet   # exit status only
+#+end_example
+
+For each stale artifact it prints the newest file that makes it stale,
+the intermediate it goes through (=src/temacs= /via/ the object a source
+change left behind), and the command that rebuilds the class.  Nothing
+is built unless =--fix= is given, and a full check of a built tree takes
+a few seconds.
+
+*** Where the dependency lists come from
+
+Never from names when an exact list exists:
+
+| Kind      | Source of truth                                     | Classes                                     |
+|-----------+-----------------------------------------------------+---------------------------------------------|
+| =makedb=  | the make database (=make -p=) of the Makefile that builds it, which already includes the compiler's =-MMD= =.d= files; pattern rules are instantiated the way make does | =src-link=, =api-so=, =bacon-modules=, =gsurf-modules=, =org-ex=, =gowl-*=, =dep-*= |
+| =cmake=   | the compiler's =.o.d= files, and each =lib<T>.a= against the objects of its own =CMakeFiles/<T>.dir= | =dep-whisper= |
+| =pattern= | the pattern rule's shape (=%.elc: %.el=, plus =src/emacs= for tests) | =lisp-elc=, =test-elc= |
+
+Staleness is transitive, as it is for make: a header newer than an
+object makes the archive holding that object stale, and the report names
+both.  Two things make is told about that its rules do not show are
+added: the in-tree archives on =temacs='s =LIBES= link line (link inputs,
+not prerequisites), and both gowl build types (cmacs links and loads
+=debug=, gowl's own =make test= builds =release=).
+
+A target whose recipe is a no-op (=@true=, =@:=, =test -f $@=) or copies
+only when the content changed (=move-if-change=, =cmp -s ... || cp=) is
+never stale: make re-stats it after running the recipe, sees the same
+mtime and rebuilds nothing above it.  =src/globals.h= is permanently
+older than =gl-stamp= for exactly that reason.
+
+*** Reading a make database without building
+
+=make -q= and =make -n= do not stop make from /remaking an included
+makefile/ --- a =.d= with a rule, a generated =.mk= --- before it does
+anything else.  So each probe passes =-o= for every makefile it may read,
+and runs with =SHELL= set to a guard that executes =$(shell ...)=
+functions (config files call =pkg-config=) but refuses any recipe: while
+make remakes a makefile it drops =q= from the =MAKEFLAGS= it exports,
+which is how the guard tells the two apart.  A refused recipe is
+reported, so the class can be given the =-o= that stops make asking.
+
+*** As a test precondition
+
+=make -C test check-cmacs= (and so =just test=) runs the guard with
+=--gate= first (a =## CMACS:= hunk in =test/Makefile.in=), so a stale
+tree fails fast with the report instead of producing results.  Stale
+=test/cmacs/*.elc= are reported but do not fail it: the =%.elc= rule
+lists the byte compiler as a prerequisite, so the run recompiles them
+itself --- unless a merge dropped that hunk, in which case they fail it
+too.  =just test-gowl= builds gowl, then gates on the gowl classes, then
+runs its suite.
+
+#+begin_example
+CMACS_SKIP_FRESH_CHECK=1 make -C test check-cmacs   # knowingly stale
+#+end_example
+
+=--fix= runs each command bare, or under =flock "$CMACS_BUILD_LOCK"=
+when that variable names a lock file (for builds that share a checkout).
+
+*** Adding a class
+
+Each class is one =vf_class= call in =vf_register_classes=: a name, a
+kind, the directory, an ERE (or glob) selecting the artifacts, the fix
+command and a description, plus make arguments.  A new runtime =.so=
+built by a Makefile is usually three lines.  Add a case to
+=test/cmacs/cmacs-verify-fresh-tests.el= with it.
+
+*** What it cannot see
+
+- Content: it compares mtimes, as make does.  A =tar -x= or anything
+  else that restores old mtimes defeats it, exactly as it defeats make.
+- Dependencies nobody declared: a source a rule does not list, or a
+  header a dep's Makefile does not track (no =-MMD=), is invisible to it
+  for the same reason it is invisible to make.
+- System headers and libraries, unless =--system=: an OS update would
+  otherwise mark everything stale.
+- Artifacts outside the class table: the Doom eln cache, installed
+  copies under =/usr=, a running Emacs's already-loaded code.
+- =.eln= files directly.  They need no check of their own: Emacs looks
+  one up only while loading the =.elc=, under a name carrying the md5 of
+  the current source, so a stale =.elc= is the whole failure.
 
 ** Expected failure: =emacs-tests/seccomp/allows-stdout=
 

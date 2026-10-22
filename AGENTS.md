@@ -377,6 +377,20 @@ Maintained in two formats that must stay in sync — **update both**:
 
 `make -C test check-cmacs` — ERT tests, one file per subsystem in `test/cmacs/`.
 
+**Run `just verify-fresh` before trusting any test result** (yours or a
+pre-existing-failure check). It compares every build artifact — test and
+`lisp/cmacs` `.elc`, `libcmacs-api.so`, bacon/gsurf/gowl modules, the gowl
+portal, dep archives, the `src/emacs` link — against its real dependency list
+(make database, `.d` files, pattern rule) and prints the rebuild command for
+each stale one; `--fix` runs them (under `flock "$CMACS_BUILD_LOCK"` when set).
+`check-cmacs` and `just test-gowl` already run it as a `--gate`, so a stale
+tree fails fast; `CMACS_SKIP_FRESH_CHECK=1` bypasses that. A new runtime
+artifact that is built "only when absent" or by a sub-make nothing names
+belongs in its class table (`vf_register_classes` in
+`admin/cmacs-verify-fresh.sh`), with a case in
+`test/cmacs/cmacs-verify-fresh-tests.el`. Details: *Before trusting a result*
+in `doc_org/cmacs/build.org`.
+
 **Gate tests on the primitive, not on a feature name that does not exist.**
 `cmacs-feature-p` (cmacs.el) knows the configure-time names from
 `cmacs_feature_names[]`; `gobject` is not one (the bridge ships with `glib`), so

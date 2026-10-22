@@ -591,14 +591,30 @@ check-defuns:
 # Test
 # ──────────────────────────────────────────────────────────────────────
 
+# Checks test/lisp .elc, libcmacs-api.so, bacon/gsurf/gowl modules, the
+# gowl portal, dep archives and the src/emacs link against their real
+# dependency lists, and prints the rebuild command for each stale one.
+# ARGS: --fix, --all, --only 'gowl-*', --quiet (see --help).
+# Fail if any build artifact is older than its sources (run before trusting a test).
+[group('test')]
+verify-fresh *ARGS:
+    admin/cmacs-verify-fresh.sh {{ ARGS }}
+
+# `check-cmacs' runs `verify-fresh --gate' first (test/Makefile.in), so
+# a stale tree fails fast with the report; CMACS_SKIP_FRESH_CHECK=1
+# runs it anyway.
 # Run the cmacs ERT suite.
 [group('test')]
 test:
     make -C test check-cmacs
 
+# Builds what the tests load, checks the build really made it fresh (a
+# module .so named as a make target is never rebuilt), then runs.
 # Run gowl's GTest suite.
 [group('test')]
 test-gowl:
+    make -C {{ gowl_dir }} all {{ gowl_deps }}
+    admin/cmacs-verify-fresh.sh --gate --only 'gowl-release,gowl-modules-release'
     make -C {{ gowl_dir }} test {{ gowl_deps }}
 
 # Pure C over glib -- no Emacs, no GL, no display -- so it runs headless
