@@ -82,6 +82,17 @@ mode is an agent spending real money on a misheard instruction."
   :type 'boolean
   :group 'cmacs-brigade-voice)
 
+(defcustom cmacs-brigade-voice-confirm-style 'auto
+  "How `cmacs-brigade-voice-confirm' asks.
+`auto'      without blocking (spoken yes/no or y/n, see
+            `cmacs-voice-confirm') while the voice engine is in use --
+            the always-on loop is on or the mic is open -- and with
+            `y-or-n-p' otherwise
+`voice'     always without blocking
+`blocking'  always `y-or-n-p', as before the voice engine"
+  :type '(choice (const auto) (const voice) (const blocking))
+  :group 'cmacs-brigade-voice)
+
 (defcustom cmacs-brigade-voice-speak-answers t
   "Whether spoken questions get spoken answers."
   :type 'boolean
@@ -121,6 +132,8 @@ No longer used: the shared engine drains every
 (declare-function cmacs-piper-supported-p "cmacs-piper-defuns.c")
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c")
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
+(declare-function cmacs-voice-confirm "cmacs-voice-commands" (prompt action))
+(defvar cmacs-voice-confirm-destructive)
 (declare-function cmacs-brigade-plan-mode "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-append-task "cmacs-brigade-plan"
                   (file spec))
@@ -253,12 +266,37 @@ adopted -- so it is editable, refilable and in git like any other."
                  (intern (completing-read "Agent: " names nil t)))))))
   (cmacs-brigade-voice-listen
    "Task"
-   (lambda (text)
-     (if (and cmacs-brigade-voice-confirm
-              (not (y-or-n-p (format "Queue for %s: %S ? "
-                                     (or agent "default") text))))
-         (message "cmacs-brigade-voice: discarded")
-       (cmacs-brigade-voice--queue text agent)))))
+   (lambda (text) (cmacs-brigade-voice--confirm-and-queue text agent))))
+
+(defun cmacs-brigade-voice--voice-active-p ()
+  "Non-nil when the voice engine is in use: the loop is on or the mic open."
+  (or (bound-and-true-p cmacs-voice-loop-mode)
+      (and (fboundp 'cmacs-voice-mic-open-p) (cmacs-voice-mic-open-p))))
+
+(defun cmacs-brigade-voice--confirm-and-queue (text agent)
+  "Queue TEXT for AGENT, after `cmacs-brigade-voice-confirm' asks.
+How it asks is `cmacs-brigade-voice-confirm-style'.  The non-blocking
+way is the desktop voice commands' (`cmacs-voice-confirm'): the
+question is shown and spoken, and a spoken \"yes\"/\"no\" -- the next
+utterance; with the loop on no wake phrase is needed -- or y/n answers
+it, while nothing waits.  The blocking way is `y-or-n-p'."
+  (let ((prompt (format "Queue for %s: %S" (or agent "default") text))
+        (queue (lambda () (cmacs-brigade-voice--queue text agent))))
+    (cond
+     ((not cmacs-brigade-voice-confirm) (funcall queue))
+     ((pcase cmacs-brigade-voice-confirm-style
+        ('voice t)
+        ('blocking nil)
+        (_ (cmacs-brigade-voice--voice-active-p)))
+      (require 'cmacs-voice-commands)
+      ;; A dictated task is not destructive, but its confirmation is
+      ;; asked the same way whatever `cmacs-voice-confirm-destructive'
+      ;; says: the point of the question is the transcription.
+      (let ((cmacs-voice-confirm-destructive
+             (if (eq cmacs-voice-confirm-destructive 'keyboard) 'keyboard t)))
+        (cmacs-voice-confirm prompt queue)))
+     ((y-or-n-p (concat prompt " ? ")) (funcall queue))
+     (t (message "cmacs-brigade-voice: discarded")))))
 
 (defun cmacs-brigade-voice--queue (text agent)
   "Append TEXT as a task for AGENT to the voice plan, and adopt it.

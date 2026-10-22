@@ -249,7 +249,15 @@ Owners are the symbols clients acquire with; nil means nobody.")
     (unless (eq new old)
       (run-hook-with-args 'cmacs-voice-owner-change-functions new old))))
 
-(cl-defun cmacs-voice-acquire (id &key consumer suspend resume preempt exclusive)
+(defun cmacs-voice--needs-capture-p ()
+  "Non-nil when some owner wants the engine's own capture stream.
+An `:external' owner records through its own stream (cmacs-audio's
+file recorder, at whatever rate it likes) and only holds the mic so
+that the always-on loop does not listen in."
+  (cl-some (lambda (o) (not (plist-get o :external))) cmacs-voice--owners))
+
+(cl-defun cmacs-voice-acquire (id &key consumer suspend resume preempt
+                                   exclusive external)
   "Take the microphone for client ID; CONSUMER is called with each PCM chunk.
 PCM is unibyte S16LE mono at `cmacs-voice-rate'.
 
@@ -260,25 +268,38 @@ mic is preempted: its PREEMPT function runs -- it should release, by
 stopping or cancelling -- and if it does not, it is removed.
 
 A non-exclusive client acquiring while a push-to-talk client holds the
-mic waits below it, suspended.  Re-acquiring with the same ID replaces
+mic waits below it, suspended.  EXTERNAL marks an exclusive client that
+records through a stream of its own: it suspends the loop like any
+push-to-talk, is never preempted, and opens no engine capture.
+Re-acquiring with the same ID replaces
 the entry.  Signals when the microphone cannot be opened, leaving the
-owners as they were."
+owners as they were.
+
+PROPS are the keywords above.
+
+\(fn ID &rest PROPS)"
   (let* ((old (cmacs-voice-owner))
+         (exclusive (or exclusive external))
          (entry (list :id id :consumer consumer :suspend suspend
-                      :resume resume :preempt preempt :exclusive exclusive))
+                      :resume resume :preempt preempt :exclusive exclusive
+                      :external external))
          (saved cmacs-voice--owners))
     (setq cmacs-voice--owners (cl-remove id cmacs-voice--owners
                                          :key (lambda (o) (plist-get o :id))))
     (if exclusive
         (progn
-          ;; Another push-to-talk: preempt it.
-          (dolist (o (cl-remove-if-not (lambda (o) (plist-get o :exclusive))
+          ;; Another push-to-talk: preempt it (an external recorder
+          ;; keeps going: it is not ours to stop).
+          (dolist (o (cl-remove-if-not (lambda (o) (and (plist-get o :exclusive)
+                                                        (not (plist-get o :external))
+                                                        (not external)))
                                        cmacs-voice--owners))
             (cmacs-voice--call o :preempt)
             (setq cmacs-voice--owners (delq o cmacs-voice--owners)))
           ;; A streaming client on top: suspend it.
           (when-let* ((top (car cmacs-voice--owners)))
-            (cmacs-voice--call top :suspend))
+            (unless (plist-get top :exclusive)
+              (cmacs-voice--call top :suspend)))
           (push entry cmacs-voice--owners))
       (if (and (car cmacs-voice--owners)
                (plist-get (car cmacs-voice--owners) :exclusive))
@@ -294,13 +315,15 @@ owners as they were."
           (cmacs-voice--call top :suspend))
         (push entry cmacs-voice--owners)))
     (condition-case err
-        (cmacs-voice--open-capture)
+        (if (cmacs-voice--needs-capture-p)
+            (cmacs-voice--open-capture)
+          (cmacs-voice--close-capture))
       (error
        (setq cmacs-voice--owners
              (cl-remove id saved :key (lambda (o) (plist-get o :id))))
-       (unless cmacs-voice--owners (cmacs-voice--close-capture))
+       (unless (cmacs-voice--needs-capture-p) (cmacs-voice--close-capture))
        (signal (car err) (cdr err))))
-    (when (and exclusive cmacs-voice-ptt-stops-speech)
+    (when (and exclusive (not external) cmacs-voice-ptt-stops-speech)
       (cmacs-voice-stop-speaking))
     (cmacs-voice--changed old)
     id))
@@ -313,27 +336,48 @@ Returns non-nil when ID held it."
          (entry (cmacs-voice--entry id)))
     (when entry
       (setq cmacs-voice--owners (delq entry cmacs-voice--owners))
-      (when (and (eq old id) (car cmacs-voice--owners))
+      (when (and (eq old id) (car cmacs-voice--owners)
+                 (not (plist-get (car cmacs-voice--owners) :exclusive)))
         (cmacs-voice--call (car cmacs-voice--owners) :resume))
-      (unless cmacs-voice--owners (cmacs-voice--close-capture))
+      (unless (cmacs-voice--needs-capture-p) (cmacs-voice--close-capture))
       (cmacs-voice--changed old)
       t)))
 
+(defun cmacs-voice--fed-owner ()
+  "The owner the engine's capture feeds: the first push-to-talk client,
+else the streaming client on top -- unless an external recorder holds
+the mic above it."
+  (catch 'found
+    (dolist (o cmacs-voice--owners)
+      (cond ((plist-get o :external) nil)
+            ((plist-get o :exclusive) (throw 'found o))
+            (t (throw 'found
+                      (unless (cl-some (lambda (x) (plist-get x :external))
+                                       cmacs-voice--owners)
+                        o)))))
+    nil))
+
 (defun cmacs-voice--deliver (pcm)
-  "Hand PCM to the current owner, or wipe it when there is none."
-  (let ((top (car cmacs-voice--owners)))
-    (if (and top (plist-get top :consumer))
-        (condition-case err (funcall (plist-get top :consumer) pcm)
-          (error (message "Voice: %s: %s" (plist-get top :id)
+  "Hand PCM to the fed owner, or wipe it when there is none."
+  (let ((o (cmacs-voice--fed-owner)))
+    (if (and o (plist-get o :consumer))
+        (condition-case err (funcall (plist-get o :consumer) pcm)
+          (error (message "Voice: %s: %s" (plist-get o :id)
                           (error-message-string err))))
       (fillarray pcm 0))))
 
 (defun cmacs-voice--drain ()
-  "Read what the capture holds and deliver it."
+  "Read everything the capture holds and deliver it.
+`cmacs-audio-read-pcm' drains at most what it is asked for, so keep
+asking until it comes back empty (bounded, against a runaway stream)."
   (when cmacs-voice--capture
-    (let ((pcm (ignore-errors
-                 (cmacs-audio-read-pcm cmacs-voice--capture (* 2 cmacs-voice-rate)))))
-      (when (and pcm (> (length pcm) 0))
+    (let ((n 0) pcm)
+      (while (and (< n 20)
+                  (setq pcm (ignore-errors
+                              (cmacs-audio-read-pcm cmacs-voice--capture
+                                                    (* 2 cmacs-voice-rate))))
+                  (> (length pcm) 0))
+        (cl-incf n)
         (cmacs-voice--deliver pcm)))))
 
 (defun cmacs-voice--tick ()
@@ -397,7 +441,7 @@ The caller owns the string (pass it to `cmacs-voice-transcribe', which
 wipes it).  Returns nil when ID was not recording."
   (when (assq id cmacs-voice--ptt)
     ;; The tail since the last tick belongs to this phrase.
-    (when (eq (cmacs-voice-owner) id) (cmacs-voice--drain))
+    (when (eq (plist-get (cmacs-voice--fed-owner) :id) id) (cmacs-voice--drain))
     (let* ((cell (assq id cmacs-voice--ptt))
            (chunks (plist-get (cdr cell) :chunks))
            (pcm (apply #'concat (reverse chunks))))
@@ -412,6 +456,26 @@ wipes it).  Returns nil when ID was not recording."
     (cmacs-voice-wipe (plist-get (cdr cell) :chunks))
     (setq cmacs-voice--ptt (delq cell cmacs-voice--ptt)))
   (cmacs-voice-release id))
+
+
+;;;; Writing audio
+
+(defun cmacs-voice-write-wav (pcm file &optional rate)
+  "Write mono 16-bit PCM to FILE as a WAV at RATE (default `cmacs-voice-rate')."
+  (let ((n (length pcm))
+        (rate (or rate cmacs-voice-rate)))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (cl-flet ((u32 (v) (insert (logand v 255) (logand (ash v -8) 255)
+                                 (logand (ash v -16) 255) (logand (ash v -24) 255)))
+                (u16 (v) (insert (logand v 255) (logand (ash v -8) 255))))
+        (insert "RIFF") (u32 (+ 36 n)) (insert "WAVEfmt ")
+        (u32 16) (u16 1) (u16 1) (u32 rate) (u32 (* 2 rate)) (u16 2) (u16 16)
+        (insert "data") (u32 n))
+      (insert pcm)
+      (let ((coding-system-for-write 'binary))
+        (write-region nil nil file nil 'silent)))
+    file))
 
 
 ;;;; Transcription

@@ -641,19 +641,7 @@ PCM is wiped once whisper has its copy."
 
 (defun cmacs-voice-loop--write-wav (pcm file)
   "Write mono 16 kHz PCM to FILE as a WAV."
-  (let ((n (length pcm)))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (cl-flet ((u32 (v) (insert (logand v 255) (logand (ash v -8) 255)
-                                 (logand (ash v -16) 255) (logand (ash v -24) 255)))
-                (u16 (v) (insert (logand v 255) (logand (ash v -8) 255))))
-        (insert "RIFF") (u32 (+ 36 n)) (insert "WAVEfmt ")
-        (u32 16) (u16 1) (u16 1) (u32 cmacs-voice-rate)
-        (u32 (* 2 cmacs-voice-rate)) (u16 2) (u16 16)
-        (insert "data") (u32 n))
-      (insert pcm)
-      (let ((coding-system-for-write 'binary))
-        (write-region nil nil file nil 'silent)))))
+  (cmacs-voice-write-wav pcm file))
 
 (defun cmacs-voice-loop--maybe-save (pcm)
   "Keep a copy of PCM when `cmacs-voice-loop-save-directory' asks for it."

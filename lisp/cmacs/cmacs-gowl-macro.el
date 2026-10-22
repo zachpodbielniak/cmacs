@@ -68,15 +68,12 @@
 (declare-function gowl-configure-module "cmacs-gowl")
 (declare-function gowl-add-keybind "cmacs-gowl")
 (declare-function cmacs-notify "cmacs-notify")
-(declare-function cmacs-audio--capture-open-1 "cmacs-audio")
-(declare-function cmacs-audio-start "cmacs-audio")
-(declare-function cmacs-audio-close "cmacs-audio")
-(declare-function cmacs-audio-read-pcm "cmacs-audio")
 (declare-function cmacs-whisper-model-path "cmacs-whisper")
-(declare-function cmacs-whisper-transcribe-pcm-async "cmacs-whisper")
-(defvar cmacs-audio-capture-source)
+(declare-function cmacs-voice-ptt-start "cmacs-voice" (id &rest keys))
+(declare-function cmacs-voice-ptt-stop "cmacs-voice" (id))
+(declare-function cmacs-voice-ptt-cancel "cmacs-voice" (id))
+(declare-function cmacs-voice-transcribe "cmacs-voice" (pcm callback &rest keys))
 (defvar cmacs-audio-default-rate)
-(defvar cmacs-audio-default-device)
 (defvar cmacs-whisper-language)
 
 (defgroup cmacs-gowl-macro nil
@@ -760,8 +757,10 @@ argument)."
 ;;;; Voice
 
 (defvar cmacs-gowl-macro--voice nil
-  "The listener: nil, or a plist (:state listening|transcribing
-:handle AUDIO :chunks LIST :drain TIMER :limit TIMER).")
+  "The listener: nil, or a plist (:state listening|transcribing).
+The microphone itself belongs to the shared voice engine
+\(cmacs-voice.el): listening is a push-to-talk client of it, so the
+always-on loop pauses meanwhile.")
 
 (defun cmacs-gowl-macro--toast (summary body)
   "Say SUMMARY and BODY on the gowl bar (when loaded) and in the echo area."
@@ -777,16 +776,9 @@ argument)."
   (and (fboundp 'cmacs-audio--capture-open-1)
        (fboundp 'cmacs-whisper-transcribe-pcm-async)
        (require 'cmacs-audio nil t)
-       (require 'cmacs-whisper nil t)))
+       (require 'cmacs-whisper nil t)
+       (require 'cmacs-voice nil t)))
 
-(defun cmacs-gowl-macro--voice-drain ()
-  "Move what the microphone has captured into the chunk list."
-  (let ((handle (plist-get cmacs-gowl-macro--voice :handle)))
-    (when handle
-      (let ((pcm (cmacs-audio-read-pcm handle cmacs-audio-default-rate)))
-        (while (> (length pcm) 0)
-          (push pcm (plist-get cmacs-gowl-macro--voice :chunks))
-          (setq pcm (cmacs-audio-read-pcm handle cmacs-audio-default-rate)))))))
 
 ;;;###autoload
 (defun cmacs-gowl-macro-voice-text (text &optional dry-run)
@@ -826,21 +818,21 @@ max-seconds, last-heard, last-error, phrases."
 
 (defun cmacs-gowl-macro--voice-stop ()
   "Stop listening and hand the recording to whisper."
-  (let ((v cmacs-gowl-macro--voice))
-    (dolist (k '(:drain :limit))
-      (when (timerp (plist-get v k)) (cancel-timer (plist-get v k))))
-    (cmacs-gowl-macro--voice-drain)
-    (let ((pcm (apply #'concat (reverse (plist-get cmacs-gowl-macro--voice
-                                                   :chunks)))))
-      (ignore-errors (cmacs-audio-close (plist-get v :handle)))
-      (if (< (length pcm) (/ cmacs-audio-default-rate 2))
-          (progn (setq cmacs-gowl-macro--voice nil)
-                 (cmacs-gowl-macro--toast "Voice" "heard nothing"))
-        (setq cmacs-gowl-macro--voice (list :state 'transcribing))
-        (cmacs-gowl-macro--toast "Voice" "transcribing...")
-        (cmacs-whisper-transcribe-pcm-async
-         (cmacs-whisper-model-path) pcm
-         #'cmacs-gowl-macro--voice-heard cmacs-whisper-language)))))
+  (let ((pcm (or (cmacs-voice-ptt-stop 'gowl-macro) "")))
+    (if (< (length pcm) (/ cmacs-audio-default-rate 2))
+        (progn (fillarray pcm 0)
+               (setq cmacs-gowl-macro--voice nil)
+               (cmacs-gowl-macro--toast "Voice" "heard nothing"))
+      (setq cmacs-gowl-macro--voice (list :state 'transcribing))
+      (cmacs-gowl-macro--toast "Voice" "transcribing...")
+      (cmacs-voice-transcribe pcm #'cmacs-gowl-macro--voice-heard
+                              :model (cmacs-whisper-model-path)
+                              :language cmacs-whisper-language))))
+
+(defun cmacs-gowl-macro--voice-cancel ()
+  "Another push-to-talk took the microphone: drop this recording."
+  (cmacs-voice-ptt-cancel 'gowl-macro)
+  (setq cmacs-gowl-macro--voice nil))
 
 ;;;###autoload
 (defun cmacs-gowl-macro-voice ()
@@ -864,20 +856,14 @@ a macro with `cmacs-gowl-macro-voice-text'.  Bound to Super+Alt+m."
      "Voice" (format "no whisper model at %s -- M-x cmacs-whisper-download-model"
                      (cmacs-whisper-model-path))))
    (t
-    (let ((handle (cmacs-audio--capture-open-1
-                   :source cmacs-audio-capture-source
-                   :rate cmacs-audio-default-rate
-                   :channels 1
-                   :device cmacs-audio-default-device)))
-      (cmacs-audio-start handle)
-      (setq cmacs-gowl-macro--voice
-            (list :state 'listening :handle handle :chunks nil
-                  :drain (run-with-timer 0.5 0.5
-                                         #'cmacs-gowl-macro--voice-drain)
-                  :limit (run-with-timer cmacs-gowl-macro-voice-max-seconds
-                                         nil #'cmacs-gowl-macro--voice-stop)))
-      (cmacs-gowl-macro--toast "Listening"
-                               "say a macro's name; Super+Alt+m when done")))))
+    (require 'cmacs-voice)
+    (cmacs-voice-ptt-start 'gowl-macro
+                           :max-seconds cmacs-gowl-macro-voice-max-seconds
+                           :on-timeout #'cmacs-gowl-macro--voice-stop
+                           :preempt #'cmacs-gowl-macro--voice-cancel)
+    (setq cmacs-gowl-macro--voice (list :state 'listening))
+    (cmacs-gowl-macro--toast "Listening"
+                             "say a macro's name; Super+Alt+m when done"))))
 
 ;;;; Keys
 

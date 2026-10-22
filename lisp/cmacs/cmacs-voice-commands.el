@@ -16,7 +16,7 @@
 ;;   "run standup"              a gowl macro, or a brigade tool, by name
 ;;   "use tool web search for emacs news"
 ;;   "fire event backup now"    a podomation event
-;;   "run rule standup"         emits `voice_rule' for podomation rules
+;;   "run rule standup"         runs podomation pod standup's rules
 ;;   "save", "undo", "other window", "org agenda" ...
 ;;
 ;; The registry, `cmacs-voice-commands', is the VR voice-command
@@ -64,7 +64,10 @@
 (declare-function gowl-toggle-client-fullscreen "cmacs-gowl-defuns.c" (client))
 (declare-function cmacs-gowl-macro-run "cmacs-gowl-macro" (name &rest args))
 (declare-function cmacs-gowl-macro-list "cmacs-gowl-macro")
-(declare-function cmacs-podomation-emit-event "cmacs-podomation-defuns.c" (event data))
+(declare-function cmacs-podomation-emit-event "cmacs-podomation.c" (event data))
+(declare-function cmacs-podomation-run-pod "cmacs-podomation.c" (name &optional event data))
+(declare-function cmacs-podomation-list-pods "cmacs-podomation.c")
+(declare-function cmacs-podomation-running-p "cmacs-podomation.c")
 (declare-function cmacs-brigade-registry-list "cmacs-brigade-registry" (kind))
 (declare-function cmacs-brigade-registry-get "cmacs-brigade-registry" (kind name))
 (declare-function cmacs-brigade-call-tool "cmacs-brigade-tools"
@@ -74,6 +77,8 @@
 (declare-function cmacs-brigade-tool-destructive "cmacs-brigade-registry" (tool))
 (declare-function cmacs-brigade-tool-description "cmacs-brigade-registry" (tool))
 (declare-function cmacs-lrg-vr-active-now-p "cmacs-lrg-vr")
+(declare-function cmacs-voice-loop--arm "cmacs-voice-loop" (seconds))
+(defvar cmacs-voice-loop-mode)
 
 
 ;;;; Customization
@@ -248,7 +253,11 @@ while it waits, and it lapses after `cmacs-voice-confirm-seconds'."
     (message "%s (y/n%s)" prompt
              (if (eq cmacs-voice-confirm-destructive 'keyboard) "" ", or say yes/no"))
     (unless (eq cmacs-voice-confirm-destructive 'keyboard)
-      (ignore-errors (cmacs-voice-speak prompt)))
+      (ignore-errors (cmacs-voice-speak prompt))
+      ;; With the loop on, the answer needs no wake phrase.
+      (when (and (bound-and-true-p cmacs-voice-loop-mode)
+                 (fboundp 'cmacs-voice-loop--arm))
+        (cmacs-voice-loop--arm cmacs-voice-confirm-seconds)))
     'pending))
 
 
@@ -557,12 +566,27 @@ tool's own `:confirm' is still asked by the brigade."
     (cmacs-podomation-emit-event event (list (cons "source" "voice")))
     (cmacs-voice--say "Event %s" event)))
 
+(defun cmacs-voice--pod-names ()
+  "Names of the podomation pods, when the engine runs."
+  (when (and (fboundp 'cmacs-podomation-list-pods)
+             (ignore-errors (cmacs-podomation-running-p)))
+    (mapcar (lambda (p) (format "%s" (car p)))
+            (ignore-errors (cmacs-podomation-list-pods)))))
+
 (defun cmacs-voice-run-rule (name)
-  "Emit `voice_rule' with NAME, for podomation rules bound to it.
-A rule like  voice_rule where name == \"standup\" => ...  runs."
-  (cmacs-podomation-emit-event
-   "voice_rule" (list (cons "name" (string-trim name)) (cons "source" "voice")))
-  (cmacs-voice--say "Rule %s" name))
+  "Run the rules of the podomation pod spoken NAME best matches.
+Through `cmacs-podomation-run-pod': the pod's rules run now, as if its
+source had fired.  When no pod matches, `voice_rule' is emitted with
+NAME instead, for rules written against that event:
+  voice_rule where name == \"standup\" => ..."
+  (let ((pod (cmacs-voice-best-name name (cmacs-voice--pod-names))))
+    (if (and pod (fboundp 'cmacs-podomation-run-pod))
+        (condition-case err
+            (cmacs-voice--say "Rule %s (%s)" pod (cmacs-podomation-run-pod pod))
+          (error (cmacs-voice--say "Rule %s: %s" pod (error-message-string err))))
+      (cmacs-podomation-emit-event
+       "voice_rule" (list (cons "name" (string-trim name)) (cons "source" "voice")))
+      (cmacs-voice--say "Rule %s" name))))
 
 
 ;;;; The shipped commands
@@ -616,7 +640,7 @@ A rule like  voice_rule where name == \"standup\" => ...  runs."
                ("\\(?:fire\\|emit\\|trigger\\|send\\) event \\(.+\\)"
                 cmacs-voice-emit-event "fire event NAME (podomation)" (:when ,pod))
                ("run rule \\(.+\\)"
-                cmacs-voice-run-rule "run rule NAME (podomation voice_rule)" (:when ,pod))
+                cmacs-voice-run-rule "run rule NAME (a podomation pod)" (:when ,pod))
                ("\\(?:run\\|start\\) \\(.+\\)"
                 cmacs-voice-run-named "run NAME (macro, else tool)" (:context desktop))
                ;; Emacs, anywhere

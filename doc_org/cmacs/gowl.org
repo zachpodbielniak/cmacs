@@ -1179,7 +1179,7 @@ The screen wears a frame while it records.  It is gowl's input recorder, used as
 :CUSTOM_ID: gowl-macros-voice
 :END:
 
-*Super+Alt+m, say a macro's name, Super+Alt+m.*  cmacs records with its audio subsystem and transcribes with its embedded whisper (=cmacs-whisper-model-path=; =M-x cmacs-whisper-download-model= the first time), then hands the words to the module, which runs the macro they name.  Listening stops by itself after =cmacs-gowl-macro-voice-max-seconds= (10).
+*Super+Alt+m, say a macro's name, Super+Alt+m.*  cmacs records through its shared voice engine (=cmacs-voice.el=: the always-on loop pauses meanwhile, and another push-to-talk cancels this one) and transcribes with its embedded whisper (=cmacs-whisper-model-path=; =M-x cmacs-whisper-download-model= the first time), then hands the words to the module, which runs the macro they name.  Listening stops by itself after =cmacs-gowl-macro-voice-max-seconds= (10).
 
 What counts as naming a macro, first match wins: a phrase in =cmacs-gowl-macro-voice-phrases=; a macro's name said as words --- =pip-corner= is "pip corner", and what follows becomes its arguments, so "pip corner twenty five" runs =pip-corner 25=; or every word of a name, in any order.  Numbers said as words become digits, and "please" and "thank you" are ignored.  An Elisp macro is reached the same way, and sees =cmacs-gowl-macro-trigger= ="voice"=.
 

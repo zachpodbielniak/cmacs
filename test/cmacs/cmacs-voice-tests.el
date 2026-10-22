@@ -295,6 +295,208 @@ sent to whisper and `whisper-reply' is the text it answers with."
         (should-not (cmacs-lrg-vr-voice-recording-p))
         (cmacs-voice-ptt-cancel 'other)))))
 
+;;;; The engine is the only microphone owner
+
+(defconst cmacs-voice-tests--lisp-dir
+  (expand-file-name "../../lisp/cmacs/"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "lisp/cmacs/, found from this file.")
+
+(defun cmacs-voice-tests--calls (file fn)
+  "Positions in FILE where code (not a comment or string) calls FN."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (emacs-lisp-mode)
+    (let ((re (concat "(" (regexp-quote (symbol-name fn)) "[ \t\n)]"))
+          (found nil))
+      (goto-char (point-min))
+      (while (re-search-forward re nil t)
+        (let ((ppss (save-excursion (syntax-ppss (match-beginning 0)))))
+          (unless (or (nth 3 ppss) (nth 4 ppss))
+            (push (line-number-at-pos (match-beginning 0)) found))))
+      (nreverse found))))
+
+(ert-deftest cmacs-voice-test-engine-is-the-only-mic-owner ()
+  "No lisp/cmacs file opens or reads a capture stream but the engine.
+The one exception is cmacs-audio.el's file recorder, which records at
+any rate and channel count -- and it must hold the engine's mic while
+it does.  A voice feature that opens its own capture fights every
+other one for the device and lets the always-on loop hear it."
+  (let ((offenders nil))
+    (dolist (file (directory-files cmacs-voice-tests--lisp-dir t "\\.el\\'"))
+      (let ((base (file-name-nondirectory file)))
+        (dolist (fn '(cmacs-audio--capture-open-1 cmacs-audio-read-pcm))
+          (let ((lines (cmacs-voice-tests--calls file fn)))
+            (when (and lines
+                       (not (equal base "cmacs-voice.el"))
+                       (not (and (equal base "cmacs-audio.el")
+                                 (eq fn 'cmacs-audio--capture-open-1))))
+              (push (list base fn lines) offenders))))))
+    (should-not offenders))
+  ;; The recorder holds the engine's mic, and only the recorder opens one.
+  (let ((audio (expand-file-name "cmacs-audio.el" cmacs-voice-tests--lisp-dir)))
+    (should (= (length (cmacs-voice-tests--calls
+                        audio 'cmacs-audio--capture-open-1))
+               1))
+    (should (cmacs-voice-tests--calls audio 'cmacs-voice-acquire))
+    (should (cmacs-voice-tests--calls audio 'cmacs-voice-release))))
+
+(ert-deftest cmacs-voice-test-external-recorder-pauses-the-loop ()
+  "A file recording holds the mic: the loop pauses, no engine capture opens."
+  (cmacs-voice-tests--with-mic
+    (let ((events nil))
+      (cmacs-voice-acquire 'loop :consumer #'ignore
+                           :suspend (lambda () (push 'suspend events))
+                           :resume (lambda () (push 'resume events)))
+      (should (= opened 1))
+      (cmacs-voice-acquire 'recorder-1 :external t)
+      (should (equal events '(suspend)))
+      ;; the loop's capture keeps draining, to nobody
+      (setq mic (list (cmacs-voice-tests--pcm 100)))
+      (cmacs-voice--tick)
+      ;; a push-to-talk does not preempt the recorder and is fed
+      (cmacs-voice-ptt-start 'talk)
+      (should (memq 'recorder-1 (cmacs-voice-owners)))
+      (setq mic (list (cmacs-voice-tests--pcm 300)))
+      (cmacs-voice--tick)
+      (should (= (length (cmacs-voice-ptt-stop 'talk)) 300))
+      (should (equal events '(suspend)))
+      (cmacs-voice-release 'recorder-1)
+      (should (equal events '(resume suspend)))
+      (cmacs-voice-release 'loop)
+      ;; alone, a recorder opens no engine capture
+      (setq opened 0)
+      (cmacs-voice-acquire 'recorder-2 :external t)
+      (should (= opened 0))
+      (should-not (cmacs-voice-mic-open-p))
+      (cmacs-voice-release 'recorder-2))))
+
+(ert-deftest cmacs-voice-test-audio-recorder-holds-the-engine ()
+  "`cmacs-audio-open-recorder' holds the engine's mic until closed."
+  (skip-unless (require 'cmacs-audio nil t))
+  (cmacs-voice-tests--with-mic
+    (let ((h (cmacs-audio-open-recorder)))
+      (should (eq h 'fake-handle))
+      (should (memq 'recorder-fake-handle (cmacs-voice-owners)))
+      (cmacs-audio-close-recorder h)
+      (should-not (cmacs-voice-owners)))))
+
+;;;; Dictation on the engine
+
+(ert-deftest cmacs-voice-test-dictate-inserts-in-order ()
+  "C-c v d: windows are transcribed one at a time and inserted in order;
+the window in progress shows as a partial overlay meanwhile."
+  (skip-unless (require 'cmacs-whisper-dictate nil t))
+  (cmacs-voice-tests--with-mic
+    (let ((replies (list " Hello there." " General Kenobi." " the rest"
+                         " partial words"))
+          (pending nil)
+          (cmacs-whisper-dictate-window-seconds 1.0)
+          (cmacs-whisper-dictate-partial-interval 0.0)
+          (cmacs-whisper-dictate--queue nil)
+          (cmacs-whisper-dictate--busy nil)
+          (cmacs-whisper-dictate--buffer nil))
+      (cl-letf (((symbol-function 'file-exists-p) (lambda (&rest _) t))
+                ((symbol-function 'cmacs-whisper-dictate--silent-p) #'ignore)
+                ((symbol-function 'cmacs-whisper-transcribe-pcm-async)
+                 (lambda (_m _pcm cb &rest _) (setq pending (append pending (list cb))))))
+        (with-temp-buffer
+          (insert "Start.")
+          (should (eq (lookup-key cmacs-voice-map "d") #'cmacs-whisper-dictate))
+          (cmacs-whisper-dictate)
+          (should (memq 'dictate (cmacs-voice-owners)))
+          (should (eq cmacs-whisper-dictate--state 'recording))
+          ;; two full windows arrive: only one goes to whisper at a time
+          (setq mic (list (cmacs-voice-tests--pcm 32000) (cmacs-voice-tests--pcm 32000)))
+          (cmacs-voice--tick)
+          (should (= (length pending) 1))
+          (funcall (pop pending) (list (cons :text (pop replies))))
+          (should (= (length pending) 1))
+          (funcall (pop pending) (list (cons :text (pop replies))))
+          (should (equal (buffer-string) "Start. Hello there. General Kenobi."))
+          ;; half a window: a partial shows, not text
+          (setq mic (list (cmacs-voice-tests--pcm 20000)))
+          (cmacs-voice--tick)
+          (should (= (length pending) 1))
+          (funcall (pop pending) '((:text . " partial words")))
+          (should (string-match-p "partial words"
+                                  (overlay-get cmacs-whisper-dictate--overlay
+                                               'after-string)))
+          (should (equal (buffer-string) "Start. Hello there. General Kenobi."))
+          ;; stopping transcribes what is left, then the mic is free
+          (cmacs-whisper-dictate)
+          (should-not (cmacs-voice-owners))
+          (should-not cmacs-whisper-dictate--overlay)
+          (funcall (pop pending) (list (cons :text (pop replies))))
+          (should (equal (buffer-string)
+                         "Start. Hello there. General Kenobi. The rest"))
+          (should (eq cmacs-whisper-dictate--state 'idle)))))))
+
+(ert-deftest cmacs-voice-test-dictate-command-words-and-preempt ()
+  "Command words still run; a push-to-talk elsewhere ends dictation."
+  (skip-unless (require 'cmacs-whisper-dictate nil t))
+  (cmacs-voice-tests--with-mic
+    (let ((cmacs-whisper-dictate-window-seconds 1.0)
+          (cmacs-whisper-dictate-partial-interval nil)
+          (cmacs-whisper-dictate--queue nil)
+          (cmacs-whisper-dictate--busy nil))
+      (cl-letf (((symbol-function 'file-exists-p) (lambda (&rest _) t))
+                ((symbol-function 'cmacs-whisper-dictate--silent-p) #'ignore)
+                ((symbol-function 'cmacs-whisper-transcribe-pcm-async)
+                 (lambda (_m _pcm cb &rest _) (funcall cb '((:text . " New line."))))))
+        (with-temp-buffer
+          (insert "a")
+          (cmacs-whisper-dictate)
+          (setq mic (list (cmacs-voice-tests--pcm 32000)))
+          (cmacs-voice--tick)
+          (should (equal (buffer-string) "a\n"))
+          (cmacs-voice-ptt-start 'other)
+          (should-not (memq 'dictate (cmacs-voice-owners)))
+          (cmacs-voice-ptt-cancel 'other))))))
+
+;;;; Brigade confirmation without blocking
+
+(ert-deftest cmacs-voice-test-brigade-confirm-non-blocking ()
+  "With voice in use, a dictated task is confirmed by a spoken yes, not y-or-n-p."
+  (skip-unless (and (require 'cmacs-brigade-voice nil t)
+                    (require 'cmacs-voice-commands nil t)))
+  (let ((queued nil) (asked nil)
+        (cmacs-brigade-voice-confirm t)
+        (cmacs-voice--confirm nil)
+        (cmacs-voice-confirm-destructive t))
+    (cl-letf (((symbol-function 'cmacs-brigade-voice--queue)
+               (lambda (text agent) (push (list text agent) queued)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) (setq asked t) t))
+              ((symbol-function 'cmacs-voice-speak) #'ignore))
+      ;; voice on: never blocks
+      (let ((cmacs-brigade-voice-confirm-style 'voice))
+        (cmacs-brigade-voice--confirm-and-queue "survey the notes" 'researcher)
+        (should-not asked)
+        (should-not queued)
+        (should (cmacs-voice-confirm-pending-p))
+        (should (eq (cmacs-voice-command-run "yes") 'confirm))
+        (should (equal queued '(("survey the notes" researcher))))
+        ;; "no" discards
+        (cmacs-brigade-voice--confirm-and-queue "something else" nil)
+        (cmacs-voice-command-run "no")
+        (should (= (length queued) 1)))
+      ;; voice off, auto: the old blocking prompt
+      (let ((cmacs-brigade-voice-confirm-style 'auto)
+            (cmacs-voice-loop-mode nil))
+        (cl-letf (((symbol-function 'cmacs-voice-mic-open-p) #'ignore))
+          (cmacs-brigade-voice--confirm-and-queue "typed task" nil)
+          (should asked)
+          (should (= (length queued) 2))))
+      ;; auto with the loop on: non-blocking
+      (setq asked nil)
+      (let ((cmacs-brigade-voice-confirm-style 'auto)
+            (cmacs-voice-loop-mode t))
+        (cl-letf (((symbol-function 'cmacs-voice-loop--arm) #'ignore))
+          (cmacs-brigade-voice--confirm-and-queue "loop task" nil)
+          (should-not asked)
+          (should (cmacs-voice-confirm-pending-p))
+          (setq cmacs-voice--confirm nil))))))
+
 (provide 'cmacs-voice-tests)
 
 ;;; cmacs-voice-tests.el ends here

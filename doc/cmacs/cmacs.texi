@@ -8532,11 +8532,17 @@ default).  @code{cmacs-transcribe} passes @code{4} by default
 
 @section Live Dictation (cmacs-whisper-dictate)
 
-@kbd{M-x cmacs-whisper-dictate} (bound to @kbd{C-c v d}) toggles a
-buffer-local dictation mode.  Speak into the microphone; whisper's
-own end-of-utterance VAD detects pauses and emits each finalised
-segment, which is inserted at point with @code{undo-boundary} between
-segments so each utterance is one undo unit.
+@kbd{M-x cmacs-whisper-dictate} (bound to @kbd{C-c v d}) toggles
+dictation into the current buffer.  Speech is transcribed in
+@code{cmacs-whisper-dictate-window-seconds} (3 s) windows, one at a time
+so text lands in the order it was said, and each is inserted at point
+with @code{undo-boundary} between windows so each is one undo unit.
+While you talk, the window in progress is re-transcribed every
+@code{cmacs-whisper-dictate-partial-interval} (1 s) and shown dimmed at
+point as an overlay until it is final.  Silent windows are not sent to
+whisper.  Dictation is a client of the shared voice engine: the
+always-on loop pauses meanwhile, and a push-to-talk command elsewhere
+ends it.
 
 Voice commands intercepted before insertion (configured via
 @code{cmacs-whisper-dictate-command-words}):
@@ -8708,6 +8714,19 @@ order; stopping drops queued and in-flight sentences.
 Silero VAD or the energy detector, frame by frame.
 @end table
 
+Every Lisp capture goes through the engine: also dictation
+(@kbd{C-c v d}), the gowl macro voice key (Super+Alt+m) and libreclaw
+voice messages.  The one exception is cmacs-audio's file recorder
+(@code{cmacs-audio-record-to-file}, @code{#+BEGIN_AUDIO} blocks), which
+records at any rate and channel count through
+@code{cmacs-audio-open-recorder} and holds the engine's microphone as an
+@code{:external} owner meanwhile, so the loop does not listen in.
+@file{test/cmacs/cmacs-voice-tests.el} fails if any other
+@file{lisp/cmacs} file opens or reads a capture stream.  A dictated
+brigade task (@code{cmacs-brigade-voice-confirm}) is confirmed without
+blocking -- spoken yes/no or @kbd{y}/@kbd{n} -- while the engine is in
+use (@code{cmacs-brigade-voice-confirm-style}).
+
 While a push-to-talk client records, the loop shows
 @code{Voice:paused}.  @code{cmacs-voice-loop-device},
 @code{-poll-interval}, @code{-threads}, @code{-vad-model},
@@ -8740,8 +8759,9 @@ lists them.
 A gowl macro (@code{cmacs-gowl-macro-run}), else a brigade tool
 (@code{cmacs-brigade-call-tool}), else an Emacs command.
 @item ``fire event NAME'', ``run rule NAME''
-@code{cmacs-podomation-emit-event}; rules are reached through the
-@code{voice_rule} event.
+``run rule NAME'' runs pod NAME's rules
+(@code{cmacs-podomation-run-pod}); with no such pod it emits
+@code{voice_rule} for rules bound to that event.
 @end table
 
 Names are matched exactly, then by containing every spoken word, then

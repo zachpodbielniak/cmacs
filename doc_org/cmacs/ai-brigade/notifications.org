@@ -186,8 +186,11 @@ It goes through org rather than poking the runtime directly. Org is authoritativ
 #+begin_src elisp
 (setq cmacs-brigade-voice-plan-file nil   ; nil = inbox.org in the plan dir
       cmacs-brigade-voice-agent 'researcher
-      cmacs-brigade-voice-confirm t)
+      cmacs-brigade-voice-confirm t
+      cmacs-brigade-voice-confirm-style 'auto)
 #+end_src
+
+How the confirmation is asked is =cmacs-brigade-voice-confirm-style=.  Under =auto= (the default) it does not block while the voice engine is in use — the always-on loop is on, or the mic is open: the question is shown and spoken, and a spoken "yes"/"no" (the next utterance; with the loop on no wake phrase is needed) or =y=/=n= answers it, through the same non-blocking confirmation the desktop voice commands use.  With voice off it is the old =y-or-n-p=.  =voice= never blocks; =blocking= always does.  The recording itself goes through the shared voice engine, so the loop pauses for the length of the phrase.
 
 ** Asking about state
 

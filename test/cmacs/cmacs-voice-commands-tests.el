@@ -227,6 +227,18 @@ podomation call; two windows exist, a terminal (focused) and firefox."
         (should-not (cmacs-voice-mic-open-p))
         (should (equal calls '((view-tags 16))))))))
 
+(ert-deftest cmacs-voice-commands-test-run-rule-runs-the-pod ()
+  "\"run rule standup\" runs pod standup's rules through the DEFUN."
+  (cmacs-voice-commands-tests--with-desktop
+    (cl-letf (((symbol-function 'cmacs-podomation-running-p) (lambda (&rest _) t))
+              ((symbol-function 'cmacs-podomation-list-pods)
+               (lambda (&rest _) '(("standup" . healthy) ("backup" . healthy))))
+              ((symbol-function 'cmacs-podomation-run-pod)
+               (lambda (&rest a) (push (cons 'run-pod a) calls) "on_tick")))
+      (cmacs-voice-command-run "Run rule stand up." :context 'desktop)
+      (should (equal calls '((run-pod "standup")))))))
+
+
 (provide 'cmacs-voice-commands-tests)
 
 ;;; cmacs-voice-commands-tests.el ends here

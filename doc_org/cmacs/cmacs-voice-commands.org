@@ -32,7 +32,7 @@ Three ways in:
 | "run macro NAME" | ~cmacs-gowl-macro-run~ | gowl |
 | "use tool NAME [for ARG]" | ~cmacs-brigade-call-tool~ with ARG as the tool's one string parameter | brigade |
 | "fire event backup now" | ~cmacs-podomation-emit-event~ ~backup_now~ | podomation |
-| "run rule standup" | emits ~voice_rule~ with ~name = "standup"~ | podomation |
+| "run rule standup" | ~cmacs-podomation-run-pod~ on the pod named like that — its rules run now; with no such pod, emits ~voice_rule~ with ~name = "standup"~ | podomation |
 | "save", "save all", "undo", "other window" | the Emacs commands | — |
 | "org agenda", any command name | ~org-agenda~ … | — |
 

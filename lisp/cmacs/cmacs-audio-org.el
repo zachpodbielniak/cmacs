@@ -129,17 +129,13 @@ The block must contain `:record t' or have no :src yet."
   (let ((bounds (cmacs-audio-org--block-bounds)))
     (unless bounds
       (user-error "Point is not inside a #+BEGIN_AUDIO block"))
-    (pcase-let* ((`(,beg ,end ,args) bounds)
+    (pcase-let* ((`(,beg ,end ,_args) bounds)
                  (sidecar (expand-file-name
                            (format-time-string "audio-%Y%m%d-%H%M%S.wav")
                            cmacs-audio-output-dir))
-                 (h (cmacs-audio--capture-open-1
-                     :source cmacs-audio-capture-source
-                     :rate   cmacs-audio-default-rate
-                     :channels cmacs-audio-default-channels)))
+                 (h (cmacs-audio-open-recorder)))
       (unless (file-directory-p cmacs-audio-output-dir)
         (make-directory cmacs-audio-output-dir t))
-      (cmacs-audio-start h)
       (setq cmacs-audio-org--recording (list h sidecar beg end))
       (message "cmacs-audio: recording; M-x cmacs-audio-org-finish to stop"))))
 
@@ -149,7 +145,7 @@ The block must contain `:record t' or have no :src yet."
   (pcase cmacs-audio-org--recording
     (`(,h ,path ,beg ,_end)
      (cmacs-audio-write-file h path)
-     (cmacs-audio-close h)
+     (cmacs-audio-close-recorder h)
      (setq cmacs-audio-org--recording nil)
      ;; Rewrite the BEGIN_AUDIO line to include :src.
      (save-excursion

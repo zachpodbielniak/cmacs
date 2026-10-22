@@ -94,6 +94,44 @@ for music capture if you do not need transcription."
 
 ;;;; ────────────────────── High-level wrappers ─────────────────────
 
+;; Recording to a file is the one capture that does not go through the
+;; voice engine (cmacs-voice.el): it records at whatever rate and
+;; channel count you ask for, and keeps the whole history for the WAV.
+;; It still tells the engine it holds the microphone (an `:external'
+;; owner), so the always-on voice loop pauses rather than transcribing
+;; -- and answering -- a voice memo.  Every other Lisp capture is the
+;; engine's; test/cmacs/cmacs-voice-tests.el fails if one is not.
+
+(declare-function cmacs-voice-acquire "cmacs-voice" (id &rest keys))
+(declare-function cmacs-voice-release "cmacs-voice" (id))
+
+(defun cmacs-audio-open-recorder (&optional rate channels)
+  "Open and start a capture stream for recording to a file.
+RATE and CHANNELS default to `cmacs-audio-default-rate' and
+`cmacs-audio-default-channels'.  Holds the voice engine's microphone
+for as long as the stream is open; close it with
+`cmacs-audio-close-recorder'.  Returns the handle."
+  (let ((h (cmacs-audio--capture-open-1
+            :source   cmacs-audio-capture-source
+            :rate     (or rate cmacs-audio-default-rate)
+            :channels (or channels cmacs-audio-default-channels)
+            :device   cmacs-audio-default-device
+            :level-meter nil)))
+    (condition-case err
+        (cmacs-audio-start h)
+      (error (ignore-errors (cmacs-audio-close h))
+             (signal (car err) (cdr err))))
+    (when (or (fboundp 'cmacs-voice-acquire) (require 'cmacs-voice nil t))
+      (ignore-errors
+        (cmacs-voice-acquire (intern (format "recorder-%s" h)) :external t)))
+    h))
+
+(defun cmacs-audio-close-recorder (handle)
+  "Close recorder HANDLE and give the voice engine its microphone back."
+  (ignore-errors (cmacs-audio-close handle))
+  (when (fboundp 'cmacs-voice-release)
+    (cmacs-voice-release (intern (format "recorder-%s" handle)))))
+
 (defvar cmacs-audio--pending-recording nil
   "Internal: (HANDLE . PATH) for the most recent open-ended recording.")
 
@@ -102,20 +140,14 @@ for music capture if you do not need transcription."
   (interactive "FOutput WAV: \nP")
   (unless (file-directory-p (file-name-directory path))
     (make-directory (file-name-directory path) t))
-  (let ((h (cmacs-audio--capture-open-1
-            :source   cmacs-audio-capture-source
-            :rate     cmacs-audio-default-rate
-            :channels cmacs-audio-default-channels
-            :device   cmacs-audio-default-device
-            :level-meter nil)))
-    (cmacs-audio-start h)
+  (let ((h (cmacs-audio-open-recorder)))
     (cmacs-audio--mode-line-update)
     (cond
      ((numberp seconds)
       (run-at-time seconds nil
                    (lambda ()
                      (cmacs-audio-write-file h path)
-                     (cmacs-audio-close h)
+                     (cmacs-audio-close-recorder h)
                      (cmacs-audio--mode-line-update)
                      (message "cmacs-audio: wrote %s" path))))
      (t
@@ -129,7 +161,7 @@ for music capture if you do not need transcription."
   (pcase cmacs-audio--pending-recording
     (`(,h . ,path)
      (cmacs-audio-write-file h path)
-     (cmacs-audio-close h)
+     (cmacs-audio-close-recorder h)
      (setq cmacs-audio--pending-recording nil)
      (cmacs-audio--mode-line-update)
      (message "cmacs-audio: wrote %s" path))

@@ -14,7 +14,15 @@
 | Brigade dictation and questions (~cmacs-brigade-voice-listen~) | ~cmacs-brigade-voice.el~ | push-to-talk |
 | Voice commands (~C-c v v~) | ~cmacs-voice-commands.el~ | push-to-talk |
 
-~cmacs-whisper-dictate~ (~C-c v d~) deliberately keeps its own capture: it streams text into a buffer as you talk, which is a different shape, and it predates the engine.
+| Dictation (~C-c v d~) | ~cmacs-whisper-dictate.el~ | exclusive (long-running) |
+| Gowl macro voice (Super+Alt+m) | ~cmacs-gowl-macro.el~ | push-to-talk |
+| Libreclaw voice messages | ~cmacs-libreclaw.el~ | push-to-talk |
+
+** The only microphone owner
+
+Every capture in ~lisp/cmacs~ goes through the engine, with one exception by design: cmacs-audio's file recorder (~cmacs-audio-record-to-file~, ~#+BEGIN_AUDIO~ blocks via ~cmacs-audio-open-recorder~), which records at whatever rate and channel count it is asked for and keeps the whole history for its WAV.  It still holds the engine's microphone while it records, as an ~:external~ owner: the loop pauses (so it does not transcribe — and answer — a voice memo), no engine capture is opened for it, and a push-to-talk started meanwhile is fed as usual and does not preempt it.
+
+~cmacs-voice-test-engine-is-the-only-mic-owner~ in ~test/cmacs/cmacs-voice-tests.el~ enforces this: it fails if any ~lisp/cmacs/*.el~ other than ~cmacs-voice.el~ calls ~cmacs-audio--capture-open-1~ or ~cmacs-audio-read-pcm~ in code (comments, strings, ~declare-function~ and ~fboundp~ checks do not count), except the single open in ~cmacs-audio.el~, which must be paired with ~cmacs-voice-acquire~ / ~-release~.
 
 Before the engine, each client opened its own capture stream and its own piper jobs.  Two of them active at once meant two captures of one device, and speech from one talking over speech from another; the voice chat even spoke one reply's sentences out of order, because each sentence was its own piper job and a short one could finish first.
 
@@ -36,7 +44,7 @@ So holding A in VR while the loop is on pauses the loop for exactly the length o
 | Function | |
 |----------+-|
 | ~(cmacs-voice-ptt-start ID &key max-seconds on-timeout preempt)~ | take the mic exclusively and record |
-| ~(cmacs-voice-ptt-stop ID)~ | drain the tail, release, return the audio as one unibyte PCM string |
+| ~(cmacs-voice-ptt-stop ID)~ | drain the tail (everything buffered, not just one read), release, return the audio as one unibyte PCM string |
 | ~(cmacs-voice-ptt-cancel ID)~ | release and wipe the audio |
 | ~(cmacs-voice-ptt-active-p &optional ID)~ | recording? |
 

@@ -182,10 +182,11 @@ The full arities are:
 
 * Live dictation (cmacs-whisper-dictate)
 
-~M-x cmacs-whisper-dictate~ (bound to ~C-c v d~) toggles a buffer-
-local dictation mode.  Speak into the mic; whisper's own
-end-of-utterance VAD detects pauses and emits each finalised segment,
-which is inserted at point with ~undo-boundary~ between segments.
+~M-x cmacs-whisper-dictate~ (bound to ~C-c v d~) toggles dictation into the current buffer.  Speech is cut into ~cmacs-whisper-dictate-window-seconds~ (3 s) windows; each is transcribed and inserted at point with ~undo-boundary~ between windows.  Windows go to whisper one at a time, so text lands in the order it was said, and a window with nothing above the energy floor is not sent at all (no ~[BLANK_AUDIO]~ in your prose).
+
+*Insert as you talk.*  Every ~cmacs-whisper-dictate-partial-interval~ (1 s; nil to turn off) the window in progress is re-transcribed and shown, dimmed, at the insertion point as an overlay ~after-string~ — nothing reaches the buffer or its undo list until the window is final, when the real text replaces it.
+
+*One microphone.*  Dictation is an exclusive client of the shared voice engine ([[file:cmacs-voice.org][cmacs-voice.org]]): the always-on loop pauses while you dictate, and a push-to-talk command elsewhere (VR, the brigade, ~C-c v v~) ends the dictation instead of opening the device a second time.  There is one dictation at a time; toggling in another buffer moves it there.  Stopping still transcribes what is left of the last window.
 
 ** Mode-line indicator
 
