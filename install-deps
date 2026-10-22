@@ -352,6 +352,11 @@ set_packages_fedora () {
 	# handlers silently lose extended attributes on copy.
 	PKGS_PRINT=(poppler-utils libacl-devel libattr-devel)
 	PKGS_DBEXPLORER=(mariadb-connector-c-devel)
+	# cmacs-spacemouse: libspnav to read spacenavd (optional at build --
+	# a built-in client covers its absence), and spacenavd itself, the
+	# daemon that owns the device.  Enable it with
+	# `systemctl enable --now spacenavd'.
+	PKGS_SPACEMOUSE=(libspnav-devel spacenavd)
 	PKG_CMD="${SUDO} dnf install -y"
 }
 
@@ -458,6 +463,8 @@ set_packages_debian () {
 	# build lost them and then died, thousands of lines later, on
 	# IGESControl_Reader.hxx.  Either connector satisfies orm-glib.
 	PKGS_DBEXPLORER=(default-libmysqlclient-dev)
+	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
+	PKGS_SPACEMOUSE=(libspnav-dev spacenavd)
 	# --no-remove: this is somebody's workstation.  Installing build deps
 	# must never uninstall what is already on it; a conflict should stop
 	# and say so rather than being resolved silently in apt's favour.
@@ -524,6 +531,8 @@ set_packages_arch () {
 	# cmacs-print + ACL/xattr.  See the Fedora block.
 	PKGS_PRINT=(poppler acl attr)
 	PKGS_DBEXPLORER=(mariadb-libs)
+	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
+	PKGS_SPACEMOUSE=(libspnav spacenavd)
 	PKG_CMD="${SUDO} pacman -S --needed --noconfirm"
 }
 
@@ -561,6 +570,9 @@ set_packages_macos () {
 	# ACL/xattr in libSystem, so there is nothing to install for those.
 	PKGS_PRINT=(poppler)
 	PKGS_DBEXPLORER=(mariadb-connector-c)
+	# cmacs-spacemouse: Homebrew packages neither libspnav nor spacenavd;
+	# the built-in client still talks to a spacenavd built by hand.
+	PKGS_SPACEMOUSE=()
 	PKG_CMD="brew install"
 }
 
@@ -591,6 +603,8 @@ set_packages_freebsd () {
 	# extattr interfaces are in libc.
 	PKGS_PRINT=(poppler-utils)
 	PKGS_DBEXPLORER=(mariadb-connector-c)
+	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
+	PKGS_SPACEMOUSE=(libspnav spacenavd)
 	PKG_CMD="${SUDO} pkg install -y"
 }
 
@@ -614,7 +628,8 @@ all_packages () {
 	     "${PKGS_CAD[@]}" \
 	     "${PKGS_OFFICE[@]}" \
 	     "${PKGS_PRINT[@]}" \
-	     "${PKGS_DBEXPLORER[@]}"
+	     "${PKGS_DBEXPLORER[@]}" \
+	     "${PKGS_SPACEMOUSE[@]}"
 }
 
 # ── Install system packages ──────────────────────────────────────────
@@ -1049,6 +1064,7 @@ list_packages () {
 	echo "CAD:             ${PKGS_CAD[*]:-N/A}"
 	echo "Office:          ${PKGS_OFFICE[*]:-N/A}"
 	echo "dbexplorer:      ${PKGS_DBEXPLORER[*]:-N/A}"
+	echo "SpaceMouse:      ${PKGS_SPACEMOUSE[*]:-N/A}"
 	echo ""
 	echo "From source (deps/): mcp-glib, crispy, bacon, gowl, podomation, libreclaw"
 }

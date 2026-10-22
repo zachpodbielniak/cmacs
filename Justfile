@@ -128,6 +128,7 @@ configure_flags := """
     --with-cmacs-lsp
     --with-cmacs-dbexplorer
     --with-cmacs-clawtilla
+    --with-cmacs-spacemouse
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

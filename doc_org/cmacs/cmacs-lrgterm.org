@@ -524,8 +524,9 @@ room, left stick pans, triggers dolly — reading each axis as a *signed* analog
 value (~lrg_input_map_get_axis~) and calling the same orbit/pan/dolly intents.
 It is polled ~60 Hz and is a no-op when no gamepad is present.  The map is data:
 ~cmacs-lrg-3d-load-gamepad-bindings~ FILE loads a YAML remap, so a SpaceMouse or
-other 6DOF device exposed as a joystick is rebound without code (a native
-SpaceMouse via ~libspnav~ remains a roadmap item).
+other 6DOF device exposed as a joystick is rebound without code.  A real
+SpaceMouse is read natively through spacenavd by =--with-cmacs-spacemouse=
+([[file:cmacs-spacemouse.org][cmacs-spacemouse]]), which drives the same orbit / pan / dolly intents.
 
 ** Spatial workspaces (the workspace carousel)
 

@@ -80,6 +80,7 @@ interaction.
 * Evil and Doom::               Single-key cmacs modes under Evil / Doom Emacs.
 * CMacs Dbexplorer::            Query, browse, edit and export databases in buffers.
 * CMacs Clawtilla::             Drive a fleet of agents from the editor.
+* CMacs Spacemouse::            A SpaceMouse / 6DOF device as the 3D camera.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -12720,6 +12721,74 @@ Connecting and subscribing are asynchronous for the same reason.  Both
 needed adding to clawtilla for this: @code{clawt_client_connect_async()}
 and @code{clawt_client_subscribe_async()}.
 
+@node CMacs Spacemouse
+@chapter CMacs Spacemouse: A 6DOF Camera
+
+@cindex spacemouse
+@cindex 6DOF
+@cindex spacenavd
+
+@code{--with-cmacs-spacemouse} makes a 3Dconnexion SpaceMouse --- or any
+device @command{spacenavd} drives --- the camera of cmacs's 3D views.
+@kbd{M-x cmacs-spacemouse-mode} turns it on.  Tilt and twist the cap to
+orbit, push and pull it to pan and zoom: the libregnum scene in the
+selected window (roamgraph, the second brain, gnuseye's globe, the CAD
+viewer), the 3D @option{--lrg} frame's camera, or in a headset the VR
+viewer.  The buttons are events, @code{<spacemouse-1>},
+@code{<spacemouse-2>}, @dots{}, bound in @code{cmacs-spacemouse-mode-map}.
+
+@example
+(cmacs-spacemouse-mode 1)
+(setq cmacs-spacemouse-sensitivity 1.5
+      cmacs-spacemouse-invert '(rx))
+(keymap-set cmacs-spacemouse-mode-map "<spacemouse-2>" #'other-window)
+@end example
+
+The daemon must run (Fedora: @samp{spacenavd}, then @kbd{systemctl enable
+--now spacenavd}).  Without it the mode does nothing visible and
+reconnects every three seconds, so a daemon started later just works.
+@kbd{M-x cmacs-spacemouse-describe} says what is connected and what the
+cap last moved.
+
+@table @code
+@item cmacs-spacemouse-target
+@code{auto} (the VR viewer, else the selected window's scene, else the 3D
+frame), @code{none}, or a buffer (@kbd{M-x
+cmacs-spacemouse-target-this-buffer}).
+@item cmacs-spacemouse-sensitivity
+@itemx cmacs-spacemouse-translation-scale
+@itemx cmacs-spacemouse-rotation-scale
+Speed multipliers.
+@item cmacs-spacemouse-deadzone
+Fraction of full deflection ignored at rest (0.06); cut out, so the
+response starts at zero past it.
+@item cmacs-spacemouse-full-scale
+Raw reading that is full deflection (350).
+@item cmacs-spacemouse-invert
+Axes to invert, from @code{tx ty tz rx ry rz}.
+@item cmacs-spacemouse-dominant-axis
+Only the strongest axis acts at a time.
+@item cmacs-spacemouse-send-releases
+Also send @code{<spacemouse-N-release>}.
+@end table
+
+@emph{Motion never reaches Lisp.}  The daemon's socket is a GSource on the
+cmacs GMainContext, which Emacs pumps from its own pselect, so a report
+is read in the main thread between commands, shaped, and applied at once
+through the target's own camera helpers --- for a libregnum view the same
+orbit, pan and zoom the mouse uses, so a globe's occluder clamp still
+holds.  libspnav is used when configure finds it (@samp{pkg-config
+spnav}); otherwise, and whenever a socket is named, a built-in client of
+spacenavd's original protocol, which every daemon still serves.  A button
+is a keystroke whose code (@code{cmacs-spacemouse-key-code}) lies above
+every keysym range; Emacs names it @code{key-@var{code}}, and the mode
+translates that to @code{<spacemouse-@var{n}>}.
+
+The tests (@file{test/cmacs/cmacs-spacemouse-tests.el}) play the daemon on
+a socket of their own.  What they cannot check is a physical cap's axis
+directions: the defaults assume spacenavd's (+X right, +Y up, +Z toward
+you); invert an axis that moves a view the wrong way.
+
 @node Build Configuration
 @chapter Build Configuration
 
@@ -12865,6 +12934,7 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
   --with-cmacs-clawtilla \
+  --with-cmacs-spacemouse \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

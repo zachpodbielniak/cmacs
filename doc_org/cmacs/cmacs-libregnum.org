@@ -453,6 +453,10 @@ The cost is not subtle. A two-node scene measured *16.66 ms per frame* with the 
 
 Generic, so a scene gets keyboard zoom without rolling its own: roamgraph predates this and still has a private =cmacs-roamgraph-zoom= (whose docstring claimed negative moved closer, while its own zoom-in passed a positive amount — the code was right).
 
+** SpaceMouse
+
+With =cmacs-spacemouse-mode= on ([[file:cmacs-spacemouse.org][cmacs-spacemouse]]) a 6DOF cap orbits, pans and zooms the view in the selected window -- or the buffer named by =cmacs-spacemouse-set-target=. =cmacs_libregnum_spacemouse_motion= (=cmacs-libregnum-input.c=) converts the cap's rates into the units the mouse helpers take (0.005 rad and 0.0015 camera distances per pixel, wheel ticks) and calls those very helpers, so occluder clamps, orbit locks and the cancelled fly-to behave exactly as they do for a drag. Hosted games and image views are left alone. It runs from a GLib dispatch on the main thread and never signals.
+
 ** Picking from Lisp
 
 =cmacs-libregnum-pick-at= — BUFFER VX VY &optional VW VH.  The same ray-pick the mouse uses, at a view pixel; VW/VH default to the view's own framebuffer.

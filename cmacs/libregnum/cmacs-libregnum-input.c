@@ -1301,4 +1301,48 @@ cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
   return true;
 }
 
+/* SpaceMouse: a 6DOF report as orbit + pan + zoom of BUFFER's camera.
+ * The helpers take mouse units -- orbit 0.005 rad and pan 0.0015 camera
+ * distances per pixel, zoom per wheel tick -- so convert rates into
+ * them.  Yaw twists the scene the way the cap turns, like grabbing the
+ * scene itself (the convention 3D tools use for these devices). */
+#define SM_ORBIT_RAD_S  1.6     /* full twist, radians per second */
+#define SM_PAN_DIST_S   0.9     /* full push, camera distances per second */
+#define SM_ZOOM_TICKS_S 8.0     /* full push, wheel ticks per second */
+
+bool
+cmacs_libregnum_spacemouse_motion (Lisp_Object buffer, const float *t,
+                                   const float *r, float dt)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+  double orbit_px, pan_px;
+
+  if (!BUFFERP (buffer) || cmacs_libregnum_view_registry_empty_p ())
+    return false;
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v == NULL)
+    return false;
+  ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (ctx == NULL || cmacs_libregnum_render_ctx_is_game (ctx)
+      || cmacs_libregnum_render_ctx_is_image (ctx))
+    return false;
+
+  orbit_px = SM_ORBIT_RAD_S * (double) dt / 0.005;
+  pan_px = SM_PAN_DIST_S * (double) dt / 0.0015;
+  if (r[1] != 0.0f || r[0] != 0.0f)
+    cmacs_libregnum_render_ctx_orbit_camera (ctx, -(double) r[1] * orbit_px,
+                                             (double) r[0] * orbit_px);
+  if (t[0] != 0.0f || t[1] != 0.0f)
+    /* Push right: the camera goes right, the scene slides left. */
+    cmacs_libregnum_render_ctx_pan_camera (ctx, -(double) t[0] * pan_px,
+                                           (double) t[1] * pan_px);
+  if (t[2] != 0.0f)
+    cmacs_libregnum_render_ctx_zoom_camera (ctx, (double) t[2]
+                                                 * SM_ZOOM_TICKS_S
+                                                 * (double) dt);
+  cmacs_libregnum_view_request_redraw (v);
+  return true;
+}
+
 #endif /* HAVE_CMACS_LIBREGNUM */

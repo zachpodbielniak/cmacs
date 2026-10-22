@@ -96,6 +96,17 @@ extern gboolean cmacs_libregnum_handle_scroll (struct frame *f,
                                                double dx, double dy,
                                                double x, double y);
 
+/* 6DOF camera motion (cmacs-spacemouse): move BUFFER's scene camera by
+ * the intent T (right, up, forward) and R (pitch, yaw, roll), each about
+ * -1..1, over DT seconds -- orbit, pan and zoom through the same helpers
+ * the mouse uses, so occluder clamps and orbit locks hold.  False when
+ * BUFFER shows no 3D scene (or a hosted game, which owns its camera).
+ * Never signals: runs from a GLib dispatch. */
+extern bool cmacs_libregnum_spacemouse_motion (Lisp_Object buffer,
+                                               const float *t,
+                                               const float *r,
+                                               float dt);
+
 /* ── Registry init (called from init_cmacs_libregnum) ───────────── */
 extern void     cmacs_libregnum_view_registry_init    (void);
 extern gboolean cmacs_libregnum_view_registry_empty_p (void);

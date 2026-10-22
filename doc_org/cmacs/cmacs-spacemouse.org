@@ -1,0 +1,203 @@
+#+TITLE: cmacs-spacemouse — SpaceMouse / 6DOF Input
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+A 3Dconnexion SpaceMouse -- or any six-degree-of-freedom device that
+=spacenavd= drives -- as the camera of cmacs's 3D views.  Tilt and twist
+the cap to orbit, push and pull it to pan and zoom:
+
+- the *libregnum scene* in the selected window: roamgraph, the second
+  brain, gnuseye's globe, the CAD viewer, any =cmacs-libregnum-mode=
+  buffer;
+- the *3D lrg frame* (=emacs --lrg=3d=): orbit the room, pan, dolly;
+- the *VR viewer* (=emacs --lrg=3dvr=): walk and turn.
+
+The buttons are ordinary events, =<spacemouse-1>=, =<spacemouse-2>=, ...,
+bound in ~cmacs-spacemouse-mode-map~.
+
+#+begin_src emacs-lisp
+(cmacs-spacemouse-mode 1)
+(setq cmacs-spacemouse-sensitivity 1.5
+      cmacs-spacemouse-invert '(rx))     ; tilt the other way
+(keymap-set cmacs-spacemouse-mode-map "<spacemouse-2>" #'other-window)
+#+end_src
+
+Built with ~--with-cmacs-spacemouse~ (part of the default flag set;
+requires ~--with-cmacs-glib~).  ~IS-CMACS-SPACEMOUSE~ is non-nil in a build
+that has it.
+
+* Setting up the device
+
+spacenavd owns the device and serves its reports on a Unix socket.
+
+| Distribution | Packages                          | Then                                     |
+|--------------+-----------------------------------+------------------------------------------|
+| Fedora       | =spacenavd libspnav-devel=        | =systemctl enable --now spacenavd=       |
+| Debian/Ubuntu | =spacenavd libspnav-dev=         | =systemctl enable --now spacenavd=       |
+| Arch         | =spacenavd libspnav=              | =systemctl enable --now spacenavd=       |
+
+On an immutable host (Immutablue, Silverblue) layer them into the image;
+=libspnav-devel= is only needed at build time and is optional (see
+[[*The connection][The connection]]).  =./install-deps --packages= lists them with the rest.
+
+Without spacenavd the mode does nothing visible: it keeps trying to
+connect every three seconds, so starting the daemon (or plugging the
+device in, with spacenavd's hotplug) later just starts working.
+=M-x cmacs-spacemouse-describe= says whether it is connected and what the
+cap last moved.
+
+* What moves
+
+~cmacs-spacemouse-target~ (or ~cmacs-spacemouse-set-target~) picks it:
+
+| Target   | Moves                                                                 |
+|----------+-----------------------------------------------------------------------|
+| =auto=   | the VR viewer while a headset runs; else the libregnum scene in the selected window; else the 3D lrg frame's camera |
+| a buffer | that buffer's scene, whichever window is selected (=M-x cmacs-spacemouse-target-this-buffer=) |
+| =none=   | nothing -- the buttons still work                                     |
+
+=M-x cmacs-spacemouse-target-auto= goes back to following the selected
+window.
+
+| Cap motion                     | libregnum scene    | 3D lrg frame        | VR viewer             |
+|--------------------------------+--------------------+---------------------+-----------------------|
+| twist (yaw)                    | orbit left/right   | orbit the room      | smooth turn, 90°/s    |
+| tilt forward/back (pitch)      | orbit up/down      | orbit up/down       | --                    |
+| push right/left, lift/press    | pan                | pan                 | step sideways, rise/sink |
+| push away / pull toward you    | zoom in / out      | dolly in / out      | walk forward / back   |
+
+Roll is read but not used by any target yet.  The libregnum target goes
+through the very helpers the mouse uses (=cmacs_libregnum_render_ctx_orbit_camera=,
+=_pan_camera=, =_zoom_camera=), so a globe's occluder clamp, an orbit
+lock on a flat scene and every other camera rule hold for the cap too.
+A hosted game or an image view keeps its own controls and is not moved.
+
+* Tuning
+
+| Variable                              | Default | Meaning                                         |
+|---------------------------------------+---------+-------------------------------------------------|
+| ~cmacs-spacemouse-sensitivity~         | 1.0     | overall speed                                   |
+| ~cmacs-spacemouse-translation-scale~   | 1.0     | pan and zoom speed                              |
+| ~cmacs-spacemouse-rotation-scale~      | 1.0     | orbit and turn speed                            |
+| ~cmacs-spacemouse-deadzone~            | 0.06    | fraction of full deflection ignored at rest     |
+| ~cmacs-spacemouse-full-scale~          | 350     | raw reading that is full deflection (512 for some older models) |
+| ~cmacs-spacemouse-invert~              | nil     | axes to invert: =tx ty tz rx ry rz=             |
+| ~cmacs-spacemouse-dominant-axis~       | nil     | only the strongest axis acts at a time          |
+| ~cmacs-spacemouse-send-releases~       | nil     | also send =<spacemouse-N-release>=              |
+| ~cmacs-spacemouse-buttons~             | 32      | how many buttons get names                      |
+| ~cmacs-spacemouse-socket~              | nil     | spacenavd's socket, nil for the default         |
+
+The deadzone is cut out rather than masked: just past it the response
+starts at zero, so there is no jump at its edge.  Speeds are rates:
+a report covers the period spacenavd says it does (bounded to 100 ms, so
+the first push after a long rest does not leap).
+
+*Axis directions are the one thing the tests cannot check.*  The defaults
+assume spacenavd's convention (+X right, +Y up, +Z toward you); if a cap
+moves a view the wrong way, invert that axis.
+
+* How it works
+
+** The split
+
+| File                         | Sees      | Job                                                        |
+|------------------------------+-----------+------------------------------------------------------------|
+| =cmacs-spacemouse-proto.c=   | nothing   | decode spacenavd's packets; shape six raw axes into an intent |
+| =cmacs-spacemouse-conn.c=    | GLib      | the connection: socket or libspnav, GSource, reconnect     |
+| =cmacs-spacemouse-defuns.c=  | =lisp.h=  | apply motion to the target; buttons to events; Lisp API     |
+| =cmacs-spacemouse.el=        | Lisp      | defcustoms, event names, the mode, commands                |
+
+Nothing crossing between them is a ~Lisp_Object~, so none lives in GLib
+memory; the one Lisp value the C half keeps, the target, is ~staticpro~'d.
+
+** The connection
+
+The daemon's socket is watched by a GSource attached to the cmacs
+GMainContext, which Emacs pumps from its own pselect
+(=cmacs-glib-loop.c=).  A report is therefore read in the main thread,
+between commands, with ~waiting_for_input~ already cleared -- no thread of
+ours, and no polling timer.  The handler still must not signal, so it
+reads C structs and never calls a Lisp ~F*~ that can.
+
+Two clients, one descriptor:
+
+- *libspnav*, when ~pkg-config spnav~ finds it at configure time
+  (=HAVE_LIBSPNAV=): ~spnav_open~, ~spnav_fd~, ~spnav_poll_event~.  It also
+  speaks spacenavd's newer protocol versions.
+- *a built-in client of the original protocol*, which every spacenavd
+  still serves to a client that asks for nothing newer: one packet per
+  report, eight native-endian ints -- type (0 motion, 1 press, 2 release),
+  then x y z rx ry rz and the period in ms, or the button number.  It is
+  used without libspnav, and whenever a socket is named -- which is how
+  the tests play the daemon.  Socket: $SPNAV_SOCKET, else
+  =/run/spnav.sock=, else =/var/run/spnav.sock=.
+
+A stream socket may split a packet; the reader reassembles. End of file
+(the daemon stopped) closes the connection and starts the reconnect
+timer.
+
+** Motion
+
+Each motion report is normalised against ~full-scale~, clamped, deadzoned,
+inverted per ~invert~, reduced to its strongest axis with ~dominant~, and
+mapped to an intent -- translation (right, up, forward: pushing the cap
+away is forward) and rotation (pitch, yaw, roll: a counter-clockwise twist
+seen from above is a positive yaw, a left turn) -- then multiplied by the
+sensitivity and the group's scale.  The target turns the intent into its
+own units: radians per second of orbit, camera distances per second of
+pan, wheel ticks per second of zoom for a libregnum view; the gamepad's
+rates for the 3D frame; ~cmacs-lrg-vr-move-speed~ for VR.
+
+** Buttons
+
+Each button becomes a ~NON_ASCII_KEYSTROKE_EVENT~ whose code is
+=0x10ff0000= plus the button number (plus =0x100= for a release): above
+the Unicode keysym range and the XF86 range, so it is no real key.
+Emacs names such a code =key-CODE= (~make_lispy_event~), and
+~cmacs-spacemouse--install-translations~ maps those in
+~function-key-map~ to =<spacemouse-N>= (N counts from 1) and
+=<spacemouse-N-release>=.  ~cmacs-spacemouse-key-code~ gives the code, so
+the base lives in one place.
+
+* Lisp API
+
+| Function                                   | Does                                                  |
+|--------------------------------------------+-------------------------------------------------------|
+| ~cmacs-spacemouse-mode~                    | global minor mode: translations, options, connect     |
+| ~cmacs-spacemouse-start~ =&optional SOCKET NO-RETRY= | connect (retrying unless NO-RETRY); t if connected now |
+| ~cmacs-spacemouse-stop~                    | disconnect and stop retrying                          |
+| ~cmacs-spacemouse-status~                  | plist: =:enabled :connected :backend :socket :attempts :motion-events :button-events :target :last-target= |
+| ~cmacs-spacemouse-set-target~ =TARGET=     | =auto=, =none= or a buffer                            |
+| ~cmacs-spacemouse-set-option~ =KEY VALUE=  | the C side of the defcustoms                          |
+| ~cmacs-spacemouse-key-code~ =BUTTON &optional RELEASE= | the keystroke code a button arrives as    |
+| ~cmacs-spacemouse-describe~                | say what is connected and moving                      |
+| ~cmacs-spacemouse-target-this-buffer~, ~-target-auto~ | pick the target interactively              |
+| ~cmacs-spacemouse-reset-view~              | reset the 3D frame's (or VR's) view -- =<spacemouse-1>= |
+
+For tests: ~cmacs-spacemouse--shape~ (shape raw axes), ~--inject~ (handle
+an event as if the daemon sent it), ~--recent-events~ (the last 32
+reports), ~--packet~ (an event as the daemon's wire bytes).
+
+* Tests
+
+=test/cmacs/cmacs-spacemouse-tests.el= -- the shaping and its options,
+target validation, motion with no scene (a counted no-op), button codes
+and their names, a missing daemon (no error, retrying), and the whole
+read path against a fake daemon on a local socket: packets split across
+writes, button press and release, and the daemon going away.
+
+#+begin_src sh
+flock .../build.lock make -C test cmacs/cmacs-spacemouse-tests
+#+end_src
+
+Needing real hardware: the axis directions of a physical cap, and the
+libspnav code path (the built-in client is what the suite drives).
+
+* Future work
+
+- Roll as a camera axis (bank the VR view, roll a CAD part).
+- A per-mode target hook, so a buffer can claim the cap while visible.
+- Camera-based (no-device) hand input belongs to hand tracking, not here;
+  see the VR chapter.

@@ -3820,6 +3820,36 @@ lrg_3d_surface_of_frame (struct frame *f)
   return (s != NULL && LRG_IS_3D_SURFACE (s)) ? LRG_3D_SURFACE (s) : NULL;
 }
 
+/* SpaceMouse (cmacs-spacemouse.c): a 6DOF report as the 3D frame's
+   camera -- yaw and pitch orbit the room, translation pans and dollies --
+   with the gamepad's rates, which are per ~60 Hz tick, as per-second
+   ones.  T is (right, up, forward), R (pitch, yaw, roll), each about
+   -1..1; DT seconds.  False on a 2D frame or mid-redisplay.  */
+bool
+cmacs_lrgterm_spacemouse_motion (struct frame *f, const float *t,
+                                 const float *r, float dt)
+{
+  Lrg3DSurface *s3 = lrg_3d_surface_of_frame (f);
+  LrgSpatialCamera *cam;
+  float k = dt * 60.0f;
+
+  if (s3 == NULL || lrg_drawing)
+    return false;
+  cam = lrg_3d_surface_get_camera (s3);
+  if (cam == NULL)
+    return false;
+  if (r[0] != 0.0f || r[1] != 0.0f)
+    lrg_3d_surface_orbit_room (s3, -r[1] * LRG_PAD_ORBIT_DPS * k,
+                               r[0] * LRG_PAD_ORBIT_DPS * k);
+  if (t[0] != 0.0f || t[1] != 0.0f)
+    lrg_spatial_camera_pan_drag (cam, -t[0] * LRG_PAD_PAN * k,
+                                 t[1] * LRG_PAD_PAN * k);
+  if (t[2] != 0.0f)
+    lrg_spatial_camera_dolly_drag (cam, 1.0f - t[2] * LRG_PAD_DOLLY * k);
+  lrg_recompose_now (f);
+  return true;
+}
+
 DEFUN ("cmacs-lrg-3d-supported-p", Fcmacs_lrg_3d_supported_p,
        Scmacs_lrg_3d_supported_p, 0, 1, 0,
        doc: /* Return t if FRAME is an lrg frame rendered by the 3D surface.

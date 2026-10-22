@@ -694,6 +694,8 @@ OPTION_DEFAULT_OFF([cmacs-gsurf-lrg],
   [gsurf libregnum backend for emacs --lrg (offscreen WebKit -> GrlTexture; requires --with-cmacs-libregnum)])
 OPTION_DEFAULT_OFF([cmacs-lrgvr],
   [OpenXR VR presentation for emacs --lrg=3dvr (SteamVR/Monado headsets + motion controllers; requires --with-cmacs-lrgterm and openxr)])
+OPTION_DEFAULT_OFF([cmacs-spacemouse],
+  [CMacs SpaceMouse / 6DOF input via spacenavd (libspnav when found; drives libregnum, 3D lrg and VR cameras; requires --with-cmacs-glib)])
 
 # Accept --with-gsurf as a convenience alias for --with-cmacs-gsurf.
 AC_ARG_WITH([gsurf],
@@ -1398,6 +1400,34 @@ if test "$with_cmacs_dbexplorer" != "no"; then
   dnl file's HAVE_CMACS_GLIB && HAVE_CMACS_DBEXPLORER pair.
   CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-dbexplorer.o"
 fi
+if test "$with_cmacs_spacemouse" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-spacemouse requires --with-cmacs-glib (the spacenavd socket is watched by a GSource on the cmacs GMainContext)])
+  fi
+  # SpaceMouse / 6DOF input.  spacenavd owns the device; cmacs reads its
+  # reports from a Unix socket.  libspnav (Fedora libspnav-devel, Debian
+  # libspnav-dev, Arch libspnav) is used when present -- it also speaks
+  # the newer protocol versions -- and a built-in client of the original
+  # protocol, which every spacenavd still serves, covers its absence, so
+  # a missing library narrows nothing a SpaceMouse user would notice.
+  # Neither needs the daemon at build time: one that is not running is a
+  # clean no-op at run time.
+  PKG_CHECK_MODULES([CMACS_SPACEMOUSE_DEPS], [glib-2.0])
+  CMACS_SPACEMOUSE_CFLAGS="$CMACS_SPACEMOUSE_DEPS_CFLAGS"
+  CMACS_SPACEMOUSE_LIBS="$CMACS_SPACEMOUSE_DEPS_LIBS"
+  # Probed with pkg-config (libspnav >= 1.0 ships spnav.pc), never
+  # AC_CHECK_HEADER/AC_CHECK_LIB: this block runs before AC_PROG_CC, and
+  # a compile probe here expands AC_CHECK_INCLUDES_DEFAULT with an empty
+  # $CC, breaking every later probe (the EGL fix above, 14d9dcb8bd0).
+  PKG_CHECK_EXISTS([spnav],
+    [AC_DEFINE([HAVE_LIBSPNAV], 1, [libspnav is available for cmacs-spacemouse])
+     CMACS_SPACEMOUSE_CFLAGS="$CMACS_SPACEMOUSE_CFLAGS `$PKG_CONFIG --cflags spnav`"
+     CMACS_SPACEMOUSE_LIBS="$CMACS_SPACEMOUSE_LIBS `$PKG_CONFIG --libs spnav`"],
+    [AC_MSG_NOTICE([libspnav not found -- cmacs-spacemouse uses its built-in spacenavd client])])
+  AC_DEFINE([HAVE_CMACS_SPACEMOUSE], 1, [CMacs SpaceMouse / 6DOF input])
+  CMACS_SPACEMOUSE_OBJ="cmacs-spacemouse-init.o cmacs-spacemouse-defuns.o \
+    cmacs-spacemouse-conn.o cmacs-spacemouse-proto.o"
+fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-libregnum (the globe is rendered through libregnum)])
@@ -2085,6 +2115,9 @@ AC_SUBST(CMACS_ROAMGRAPH_LIBS)
 AC_SUBST(CMACS_OFFICE_OBJ)
 AC_SUBST(CMACS_OFFICE_CFLAGS)
 AC_SUBST(CMACS_OFFICE_LIBS)
+AC_SUBST(CMACS_SPACEMOUSE_OBJ)
+AC_SUBST(CMACS_SPACEMOUSE_CFLAGS)
+AC_SUBST(CMACS_SPACEMOUSE_LIBS)
 AC_SUBST(CMACS_DBEXPLORER_OBJ)
 AC_SUBST(CMACS_DBEXPLORER_CFLAGS)
 AC_SUBST(CMACS_DBEXPLORER_LIBS)
@@ -9422,7 +9455,7 @@ for cmacs_isystem_var in \
   CMACS_LRGTERM_CFLAGS CMACS_LSP_CFLAGS CMACS_MCP_CFLAGS \
   CMACS_OFFICE_CFLAGS CMACS_ORG_EX_CFLAGS CMACS_PIPER_CFLAGS \
   CMACS_PODOMATION_CFLAGS CMACS_ROAMGRAPH_CFLAGS \
-  CMACS_SECONDBRAIN_CFLAGS \
+  CMACS_SECONDBRAIN_CFLAGS CMACS_SPACEMOUSE_CFLAGS \
   CMACS_SCREENSAVER_CFLAGS CMACS_VIDEO_CFLAGS CMACS_VIDSTUDIO_CFLAGS \
   CMACS_WHISPER_CFLAGS; do
   eval "cmacs_isystem_val=\$$cmacs_isystem_var"
