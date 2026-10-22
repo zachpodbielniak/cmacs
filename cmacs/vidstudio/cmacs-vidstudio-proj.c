@@ -1900,13 +1900,23 @@ cmacs_vidstudio_proj_move_clip (CmacsVidProject *p, gint clip_id,
   if (dst == NULL)
     return FALSE;
 
-  /* Move the segment to DST.  Take an extra ref on the owned objects BEFORE
-     the remove (whose clear-func unrefs once), so `copy' keeps exactly one
-     ref to hand to the destination slot. */
+  /* Move the segment to DST.  The array's clear-func (vidseg_clear) frees
+     EVERY owned member on remove -- the clip and transition, but also the
+     keyframe array, the curve cache and the asset string.  Taking extra refs
+     on the two GObjects alone (the old approach) left `copy' holding freed
+     keys/curves/asset, so serializing or rendering a moved clip that had
+     keyframes, or any image/video/text clip, read freed memory and crashed.
+     Steal all of them instead: NULL the source slot's pointers so the
+     clear-func frees nothing, and `copy' owns exactly what the slot did. */
   copy = g_array_index (t->segs, VidSeg, si);
-  g_object_ref (copy.clip);
-  if (copy.trans)
-    g_object_ref (copy.trans);
+  {
+    VidSeg *src = &g_array_index (t->segs, VidSeg, si);
+    src->clip = NULL;
+    src->trans = NULL;
+    src->keys = NULL;
+    src->curves = NULL;
+    src->asset = NULL;
+  }
   g_array_remove_index (t->segs, si);
 
   if (new_index > dst->segs->len)
@@ -1928,7 +1938,10 @@ cmacs_vidstudio_proj_remove_clip (CmacsVidProject *p, gint clip_id,
     return FALSE;
   if (!ripple)
     {
-      /* Replace with a transparent gap of equal duration. */
+      /* Replace with a transparent gap of equal duration.  The creation
+         descriptor and the keyframes must go too: serialization writes the
+         segment from them, so leaving the old kind/colour/asset in place
+         made a saved project resurrect the "removed" clip on reload. */
       GrlColor clear = { 0, 0, 0, 0 };
       s = &g_array_index (t->segs, VidSeg, si);
       g_clear_object (&s->trans);
@@ -1936,6 +1949,16 @@ cmacs_vidstudio_proj_remove_clip (CmacsVidProject *p, gint clip_id,
       s->clip = LRG_REEL_CLIP (lrg_reel_solid_clip_new (&clear));
       lrg_reel_clip_set_duration_in_frames (s->clip, s->duration);
       s->trans_overlap = 0;
+      s->trans_type = -1;
+      s->trans_easing = 0;
+      g_clear_pointer (&s->keys, g_array_unref);
+      g_clear_pointer (&s->curves, g_ptr_array_unref);
+      s->keys_dirty = TRUE;
+      g_clear_pointer (&s->asset, g_free);
+      s->kind = CMACS_VID_KIND_SOLID;
+      memset (s->col, 0, sizeof s->col);
+      s->in_sec = 0.0;
+      s->out_sec = 0.0;
     }
   else
     {
