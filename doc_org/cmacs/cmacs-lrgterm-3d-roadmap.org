@@ -54,6 +54,16 @@ the Emacs glue.
   device.  ~cmacs-lrg-3d-load-gamepad-bindings~ loads a YAML remap, so a 6DOF
   device exposed as a joystick rebinds without code.  GTests:
   input/{action,map}/get-axis.
+- *Native SpaceMouse / 6DOF* (=--with-cmacs-spacemouse=,
+  [[file:cmacs-spacemouse.org][cmacs-spacemouse]]): spacenavd read through the GLib loop (libspnav, or a
+  built-in client of its protocol), motion applied in C to the 3D frame's
+  orbit/pan/dolly, to the libregnum view in the selected window, or to the
+  VR viewer; buttons as =<spacemouse-N>=.
+- *VR hand tracking* (=XR_EXT_hand_tracking= + =XR_FB_hand_tracking_aim=):
+  a hand takes over a put-down controller's laser; pinch tap / hold /
+  move / pull and a two-hand stretch are classified in C at frame rate,
+  palm-up and the rest arrive as =<vr-hand-...>= events.  See /Hand
+  tracking/ in ~cmacs-lrgterm.org~.
 - *Spatial workspaces (the workspace carousel)*: Doom / persp-mode workspaces as
   *live* 3D panels on a curved arc around the current (live-centre) workspace —
   always rendering their real contents, not snapshots.  Built on a new *off-screen
@@ -129,5 +139,6 @@ the Emacs glue.
 - Real depth-of-field *blur* (a separable-gaussian ~LrgPostEffect~) instead of the
   tint dim; SDF glyphs for crisper angled text; live ~2d~ ↔ ~3d~ surface swap without
   restart.
-- *Gesture* (Wayland pinch/swipe, hand-pose) and *voice* intent
-  wiring through the ai → MCP chain; drag-to-detach a window into its own free panel.
+- *Gesture* (Wayland pinch/swipe, camera-based hand pose on onnxruntime -- the
+  VR path has hands already) and *voice* intent wiring through the ai → MCP
+  chain; drag-to-detach a window into its own free panel.

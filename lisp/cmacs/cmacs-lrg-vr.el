@@ -40,6 +40,19 @@
 ;; the hold asked for (`cmacs-lrg-vr-on-release') -- so push-to-talk is one
 ;; hold command.
 ;;
+;; Put a controller down and the hand holding it takes over its laser
+;; (OpenXR hand tracking, `cmacs-lrg-vr-hand-tracking'): pinch thumb and
+;; index to click, pinch and hold still to drag (select text), pinch and
+;; move to scroll, pinch on empty space and move to pull yourself along,
+;; and pinch with both hands and stretch to resize the world.  That much
+;; runs in C at the headset's frame rate; the discrete gestures arrive as
+;; events like the buttons:
+;;
+;;   <vr-hand-left-palm-up>   <vr-hand-right-palm-up>    palm turned up
+;;   <vr-hand-left-palm-down> <vr-hand-right-palm-down>  ... and back
+;;   <vr-hand-left-pinch>     <vr-hand-right-pinch>      pinch on nothing
+;;   <vr-hand-zoom-in>        <vr-hand-zoom-out>         a stretch ended
+;;
 ;; Rebind any of them in `cmacs-lrg-vr-mode-map':
 ;;
 ;;   (keymap-set cmacs-lrg-vr-mode-map "<vr-y>" #'consult-buffer)
@@ -178,6 +191,19 @@ friends instead, with tap and hold, to bind as you like."
   :type 'boolean
   :set (cmacs-lrg-vr--set 'dpad-arrows))
 
+(defcustom cmacs-lrg-vr-hand-tracking t
+  "Non-nil: a tracked hand drives the laser of a controller put down.
+Needs a runtime with OpenXR hand tracking (SteamVR, Monado).  The hand's
+aim ray is the laser; a pinch is the trigger -- tap to click, hold to
+drag, move to scroll -- and both hands pinching resize the world."
+  :type 'boolean
+  :set (cmacs-lrg-vr--set 'hands))
+
+(defcustom cmacs-lrg-vr-show-hand-joints t
+  "Non-nil: draw a tracked hand as its joints and bones."
+  :type 'boolean
+  :set (cmacs-lrg-vr--set 'hand-joints))
+
 (defcustom cmacs-lrg-vr-escape-key nil
   "What <vr-b> sends.
 nil means <escape> when `evil-mode' is on and \\[keyboard-quit] otherwise;
@@ -209,6 +235,20 @@ super (released after a hold).")
     (f34 . vr-flick-up)
     (f35 . vr-flick-down))
   "The function keys the pointer stick's flicks arrive as.")
+
+(defconst cmacs-lrg-vr--hand-keys
+  '((f32 alt vr-hand-left-palm-up)
+    (f33 alt vr-hand-right-palm-up)
+    (f32 super vr-hand-left-palm-down)
+    (f33 super vr-hand-right-palm-down)
+    (f32 hyper vr-hand-left-pinch)
+    (f33 hyper vr-hand-right-pinch)
+    (f34 alt vr-hand-zoom-in)
+    (f35 alt vr-hand-zoom-out))
+  "The keys hand gestures arrive as, (KEY BANK NAME).
+The flick keys in banks the flicks never use: alt for a palm turned up
+and a finished stretch, super for a palm turned back, hyper for a pinch
+tapped on empty space.")
 
 (defun cmacs-lrg-vr--layer-modifiers ()
   "The modifier sets a controller layer can add: none, then each layer's."
@@ -286,6 +326,13 @@ See `cmacs-lrg-vr-escape-key'."
     (message "VR scale %.2f m/unit" s)))
 
 ;;;###autoload
+(defun cmacs-lrg-vr-report-scale ()
+  "Say what the VR world scale is now (after a two-hand stretch, say)."
+  (interactive)
+  (cmacs-lrg-vr--require-active)
+  (message "VR scale %.2f m/unit" (cmacs-lrg-vr-scale)))
+
+;;;###autoload
 (defun cmacs-lrg-vr-smaller (&optional n)
   "Make the VR workspace smaller (and nearer) by 15%, N times."
   (interactive "p")
@@ -316,7 +363,7 @@ See `cmacs-lrg-vr-escape-key'."
                           (cmacs-lrg-vr-supported-p))
                      " (start Emacs with --lrg=3dvr)"
                    " (this build has no OpenXR support)"))
-      (message "VR: %s on %s, %s, %.0f Hz, scale %.2f; left %s%s, right %s%s"
+      (message "VR: %s on %s, %s, %.0f Hz, scale %.2f; left %s%s, right %s%s%s"
                (or (plist-get st :runtime) "?")
                (or (plist-get st :system) "?")
                (plist-get st :state)
@@ -325,7 +372,10 @@ See `cmacs-lrg-vr-escape-key'."
                (or (plist-get st :left-profile) "no controller")
                (if (plist-get st :left-tracked) "" " (untracked)")
                (or (plist-get st :right-profile) "no controller")
-               (if (plist-get st :right-tracked) "" " (untracked)")))))
+               (if (plist-get st :right-tracked) "" " (untracked)")
+               (cond ((not (plist-get st :hand-tracking)) "; no hand tracking")
+                     ((plist-get st :hand-aim) "; hands (runtime aim)")
+                     (t "; hands"))))))
 
 (defvar-keymap cmacs-lrg-vr-mode-map
   :doc "Keymap for `cmacs-lrg-vr-mode': controller buttons and VR commands.
@@ -403,6 +453,17 @@ Layers (the modifier hand): S- trigger, M- grip, C- both, by default."
   "C-c v +"                #'cmacs-lrg-vr-bigger
   "C-c v -"                #'cmacs-lrg-vr-smaller
   "C-c v ?"                #'cmacs-lrg-vr-describe
+  ;; Hand tracking: a palm turned up is a menu; the rest are quiet unless
+  ;; bound (the continuous part -- click, drag, scroll, pull, stretch --
+  ;; never reaches Lisp).
+  "<vr-hand-left-palm-up>"    #'cmacs-lrg-vr-quick-menu
+  "<vr-hand-right-palm-up>"   #'cmacs-lrg-vr-toggle-keyboard
+  "<vr-hand-left-palm-down>"  #'ignore
+  "<vr-hand-right-palm-down>" #'ignore
+  "<vr-hand-left-pinch>"      #'ignore
+  "<vr-hand-right-pinch>"     #'ignore
+  "<vr-hand-zoom-in>"         #'cmacs-lrg-vr-report-scale
+  "<vr-hand-zoom-out>"        #'cmacs-lrg-vr-report-scale
   ;; Voice results run as commands (`cmacs-lrg-vr-run-later').
   "<cmacs-lrg-vr-deferred>" #'cmacs-lrg-vr--run-deferred)
 
@@ -437,6 +498,10 @@ dispatchers, so a slow press still does the tap and no release is ever
     (pcase-dolist (`(,fkey . ,name) cmacs-lrg-vr--flick-keys)
       (define-key function-key-map
                   (vector (event-convert-list (append mods (list fkey))))
+                  (vector (cmacs-lrg-vr--event name mods))))
+    (pcase-dolist (`(,fkey ,bank ,name) cmacs-lrg-vr--hand-keys)
+      (define-key function-key-map
+                  (vector (event-convert-list (append mods (list bank fkey))))
                   (vector (cmacs-lrg-vr--event name mods))))))
 
 ;;;; Holds and releases
@@ -518,7 +583,9 @@ FUNCTION and an input event bound to `cmacs-lrg-vr--run-deferred'."
     (cmacs-lrg-vr-set-option 'mod-second-source cmacs-lrg-vr-modifier-source)
     (cmacs-lrg-vr-set-option 'mod-both cmacs-lrg-vr-both-modifier)
     (cmacs-lrg-vr-set-option 'hold-seconds cmacs-lrg-vr-hold-seconds)
-    (cmacs-lrg-vr-set-option 'dpad-arrows cmacs-lrg-vr-dpad-arrows))
+    (cmacs-lrg-vr-set-option 'dpad-arrows cmacs-lrg-vr-dpad-arrows)
+    (cmacs-lrg-vr-set-option 'hands cmacs-lrg-vr-hand-tracking)
+    (cmacs-lrg-vr-set-option 'hand-joints cmacs-lrg-vr-show-hand-joints))
   (when (and cmacs-lrg-vr-scale (cmacs-lrg-vr-active-now-p))
     (cmacs-lrg-vr-set-scale cmacs-lrg-vr-scale)))
 

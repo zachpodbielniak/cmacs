@@ -227,6 +227,10 @@ extern guint64 lrg_font_atlas_id (cairo_scaled_font_t *scaled);
 
 /* lrg_requested_render_mode is declared in lisp.h (reachable from core).  */
 
+/* 6DOF camera motion on a 3D lrg frame (cmacs-spacemouse).  */
+extern bool cmacs_lrgterm_spacemouse_motion (struct frame *, const float *,
+                                             const float *, float);
+
 /* Event plumbing shared with cmacs-lrgvr.c (cmacs-lrgterm.c).  */
 extern int cmacs_lrgterm_store_event (struct frame *, struct input_event *,
                                       struct input_event *);
@@ -252,6 +256,7 @@ extern int cmacs_lrgvr_tick (struct frame *, struct input_event *);
 extern bool cmacs_lrgvr_mouse_position (struct frame *, int *, int *);
 extern bool cmacs_lrgvr_focused_p (void);
 extern void cmacs_lrgvr_set_modal (bool);
+extern bool cmacs_lrgvr_spacemouse_motion (const float *, const float *, float);
 extern void syms_of_cmacs_lrgvr (void);
 
 /* Physical keyboards read from evdev while the window is hidden

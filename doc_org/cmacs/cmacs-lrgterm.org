@@ -796,6 +796,68 @@ display, and each loses detail when it shrinks:
   ~set_window_size_hook~ confirms a resize from ~read_socket~ the way a
   window system would.
 
+** Hand tracking
+
+Put a controller down and the hand that held it takes over its laser.
+Any runtime with OpenXR =XR_EXT_hand_tracking= drives it -- SteamVR
+(Index skeletal input, the Steam Frame's cameras), Monado/WiVRn, Quest via
+a link runtime -- and =XR_FB_hand_tracking_aim=, where the runtime has it,
+supplies the runtime's own aim ray and pinch strength.  Controllers win:
+a hand is only the pointer while its controller is not tracked, and a
+swap mid-press releases whatever the old source held.
+
+| Gesture                                 | Does                                                  |
+|-----------------------------------------+-------------------------------------------------------|
+| pinch thumb + index, let go quickly     | =mouse-1= click at the laser (a key on the keyboard; a workspace panel switches) |
+| pinch and hold still (0.45 s) on a panel | =mouse-1= held: drag to select, drag a scroll bar, orbit a globe |
+| pinch and move on a panel               | scroll -- the content follows the hand, a wheel step per 36 laser pixels |
+| pinch on nothing and move               | pull the world (move yourself), as the grip does     |
+| pinch on nothing, let go quickly        | =<vr-hand-left-pinch>= / =<vr-hand-right-pinch>=      |
+| both hands pinch on nothing and stretch | resize the world (the VR scale follows the hands' distance); =<vr-hand-zoom-in>= / =-out>= at the end |
+| palm turned up for 0.3 s                | =<vr-hand-left-palm-up>= (quick menu), =<vr-hand-right-palm-up>= (keyboard) |
+| ... and turned back                     | =<vr-hand-left-palm-down>= / =<vr-hand-right-palm-down>= |
+
+Tracked hands are drawn as their joints and bones
+(~cmacs-lrg-vr-show-hand-joints~); ~cmacs-lrg-vr-hand-tracking~ nil turns
+hand input off.  ~cmacs-lrg-vr-status~ reports =:hand-tracking=,
+=:hand-aim=, =:left-hand= and =:right-hand=.
+
+*Where it runs.*  libregnum's ~LrgOpenXRService~ makes two hand trackers
+with the session and locates their 26 joints at each frame's predicted
+display time *on the frame-wait thread*, straight after ~xrWaitFrame~
+returns -- the thread that blocks anyway -- and hands them over with the
+frame.  ~begin_frame~ then derives the aim (the runtime's, or a ray from
+an estimated shoulder through the knuckles, which does not move as the
+fingers close) and the pinch latch (strength from the fingertip distance
+unless the runtime gives one; closes at 0.85, opens at 0.60 -- the
+hysteresis that keeps a pinch at the threshold from chattering).  All of
+that is pure arithmetic in =deps/libregnum/src/vr/lrg-vr-hand.c=, tested
+against the stub's deterministic fake hands.
+
+*Continuous manipulation stays in C.*  ~vr_gesture_step~ in
+=cmacs-lrgvr.c= classifies both hands' pinches together at the headset's
+frame rate -- tap, drag, scroll, pull, stretch -- and applies the result
+through the controller's own paths (the same mouse events, wheel offers,
+world pull and VR scale).  It is a pure function of samples in, actions
+out, so ~cmacs-lrg-vr--simulate-hand-gestures~ runs it from ERT with no
+headset.  Only the discrete outcomes become events, on the flick keys'
+unused banks: alt F32/F33 palm up, super F32/F33 palm down, hyper F32/F33
+empty-space pinch, alt F34/F35 the end of a stretch; the layer of a
+controller in the other hand still applies.
+
+*Not yet:* camera-based hand tracking for the desktop (an ONNX hand-pose
+model on onnxruntime over a camera capture), and hand grabs of panels --
+the controller grip carries them.
+
+** SpaceMouse in VR
+
+With ~cmacs-spacemouse-mode~ on (=--with-cmacs-spacemouse=,
+[[file:cmacs-spacemouse.org][cmacs-spacemouse]]) a SpaceMouse flies the
+viewer while VR runs: push to walk (forward, sideways, up) at
+~cmacs-lrg-vr-move-speed~, twist to turn smoothly (90° a second at full
+twist).  It goes through ~cmacs_lrgvr_spacemouse_motion~, ahead of every
+other SpaceMouse target.
+
 ** Comfort and scale
 
 You sit in a *seat* that follows the 3D camera: at the camera's eye, at the

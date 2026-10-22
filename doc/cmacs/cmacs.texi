@@ -11892,6 +11892,63 @@ glyph atlas above), which lrgterm works around.
 @env{CMACS_LRG_VR_GL_LOG}=1 keeps raylib's log of every texture and
 framebuffer it creates and frees, with GL names.
 
+@subsection Hand tracking
+
+@cindex hand tracking
+@cindex pinch gestures
+Put a controller down and the hand that held it takes over its laser,
+on any runtime with OpenXR @code{XR_EXT_hand_tracking} (SteamVR,
+Monado/WiVRn); @code{XR_FB_hand_tracking_aim}, where offered, supplies
+the runtime's own aim ray and pinch strength.  A tracked controller
+always wins, and a swap mid-press releases whatever was held.
+
+@table @asis
+@item Pinch and let go quickly
+@kbd{mouse-1} at the laser; on the in-world keyboard, a key; on another
+workspace's panel, a switch.
+@item Pinch and hold still (0.45 s) on a panel
+@kbd{mouse-1} held: drag to select, drag a scroll bar, orbit a globe.
+@item Pinch and move on a panel
+Scroll; the content follows the hand, one wheel step per 36 laser pixels.
+@item Pinch on nothing and move
+Pull the world, as the grip does.
+@item Pinch on nothing, let go quickly
+@code{<vr-hand-left-pinch>} / @code{<vr-hand-right-pinch>}.
+@item Both hands pinch on nothing and stretch
+The world scale follows the hands' distance; @code{<vr-hand-zoom-in>}
+or @code{<vr-hand-zoom-out>} when it ends.
+@item Palm turned up for 0.3 s
+@code{<vr-hand-left-palm-up>} (quick menu), @code{<vr-hand-right-palm-up>}
+(keyboard); turning it back sends @code{<vr-hand-left-palm-down>} /
+@code{<vr-hand-right-palm-down>}.
+@end table
+
+Tracked hands are drawn as joints and bones
+(@code{cmacs-lrg-vr-show-hand-joints}); @code{cmacs-lrg-vr-hand-tracking}
+nil turns hand input off; @code{cmacs-lrg-vr-status} reports
+@code{:hand-tracking}, @code{:hand-aim}, @code{:left-hand} and
+@code{:right-hand}.
+
+libregnum's @code{LrgOpenXRService} locates the 26 joints of each hand at
+the frame's predicted display time on its frame-wait thread, straight
+after @code{xrWaitFrame}, and hands them over with the frame; the aim
+(the runtime's, or a ray from an estimated shoulder through the
+knuckles) and the pinch latch (closes at 0.85, opens at 0.60 --- the
+hysteresis that stops a pinch held at the threshold from chattering) are
+pure arithmetic in @file{lrg-vr-hand.c}.  The gestures are classified in
+C at the headset's frame rate by @code{vr_gesture_step}, a pure function
+that @code{cmacs-lrg-vr--simulate-hand-gestures} runs from tests; only
+the discrete outcomes reach Lisp, on the flick keys' unused banks (alt,
+super and hyper of F32--F35).  Camera-based hand tracking for the desktop
+(an ONNX hand-pose model on onnxruntime) is future work.
+
+@subsection SpaceMouse in VR
+
+With @code{cmacs-spacemouse-mode} on (@pxref{CMacs Spacemouse}), the cap
+flies the viewer while VR runs: push to walk, sideways and up at
+@code{cmacs-lrg-vr-move-speed}, twist to turn (90 degrees a second at
+full twist).
+
 @section Commands
 
 @table @code
