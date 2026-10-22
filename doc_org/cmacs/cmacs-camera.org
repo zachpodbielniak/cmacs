@@ -252,6 +252,53 @@ hand projected onto the camera), ~--map~, ~--simulate~ (landmark frames
 through latch and classifier), ~--anchors~, ~--decode~, ~--letterbox~,
 ~--roi-from-palm~.
 
+** The hand cursor
+
+~cmacs-handtrack-pointer-mode~ (off by default) makes one hand
+(~cmacs-handtrack-pointer-hand~, the right) the gowl desktop's pointer.
+
+| Hand                                   | Pointer                                    |
+|----------------------------------------+--------------------------------------------|
+| moves                                  | follows, smoothed                          |
+| thumb + index, quick pinch             | left click                                 |
+| thumb + index pinch, moved             | drag: left held until the fingers open     |
+| thumb + index + middle, moved          | scroll -- the content follows the hand, the pointer held where it began |
+| thumb + index + middle, quick          | right click                                |
+
+*All in C, per frame, on the main thread.*  The inference result
+reaches the main thread through the cmacs GLib loop; there the point
+between the thumb and index knuckles -- it barely moves when the fingers
+close, so pinching does not jog the pointer -- is mapped from
+~cmacs-handtrack-pointer-region~ of the mirrored image (fractions, a
+smaller region needing less reach) onto ~cmacs-handtrack-pointer-output~
+(or the output under the pointer), smoothed with a One-Euro filter
+(~cmacs-handtrack-pointer-min-cutoff~: lower is steadier;
+~cmacs-handtrack-pointer-beta~: higher follows fast motion), and sent
+through =cmacs_gowl_pointer_warp= -- the function ~gowl-pointer-warp~
+wraps, under the gowl lock -- once it moves past
+~cmacs-handtrack-pointer-deadzone~ pixels.  No Lisp runs per frame.
+
+*Clicks come from the shared classifier*, the target chosen per pinch:
+a thumb-index pinch is "nothing" (its tap is a click, its pull a drag);
+one with the middle finger too (middle tip within 3.5 cm of the thumb
+tip as the pinch closes) is a "panel" (moved, it scrolls one notch per
+36 pixels of hand travel; tapped, it right-clicks).  The other hand's
+gestures and two-hand zoom stay what they were.  Limit: a thumb-index
+pinch held still past the tap window and released is neither a click
+nor a drag -- move it to drag.
+
+*Nothing is left held.*  The classifier ends the pinch of a hand that
+leaves view (the button goes up); a watchdog on the cmacs context
+releases anything held once no result has come for 0.4 s (a camera that
+stopped, a stalled inference thread); turning the mode off, or
+~cmacs-handtrack-mode~ off, releases too.  A locked session refuses the
+injection (a release still goes through).
+
+~cmacs-handtrack--simulate-pointer~ runs synthetic hands through all of
+it with the pointer calls recorded instead of sent, which is how the
+tests check movement, clicks, drags, scroll, the release and the other
+hand.
+
 * Tests
 
 - =test/cmacs/cmacs-camera-tests.el= -- closed by default, videotestsrc
@@ -268,10 +315,8 @@ through latch and classifier), ~--anchors~, ~--decode~, ~--letterbox~,
 
 * Not yet
 
-- *gowl desktop pointer from a hand* -- moving and clicking the
-  compositor's pointer: it needs gowl pointer primitives that take the
-  gowl lock from the main thread; none exists today and =deps/gowl= is
-  not changed here.  Follow-up.
+- VR hands driving the desktop pointer when the headset view is not
+  in use.
 - Camera hands in a headset that has no hand tracking of its own.
 - The 3D lrg frame's camera as a gesture target (the SpaceMouse has it).
 - A persistent gowl bar widget for the camera (today: a toast on open

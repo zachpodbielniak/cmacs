@@ -278,6 +278,186 @@
     (cmacs-handtrack-close)
     (cmacs-camera-close)))
 
+;;;; The hand cursor (synthetic hands; pointer calls recorded, not sent)
+
+(defconst cmacs-handtrack-tests--geom '(0 0 1920 1080))
+
+(defun cmacs-handtrack-tests--two-finger (lm)
+  "LM with the middle fingertip brought onto the thumb tip."
+  (let ((v (copy-sequence lm)))
+    (dotimes (k 3)
+      (aset v (+ 36 k) (aref v (+ 12 k))))
+    v))
+
+(defmacro cmacs-handtrack-tests--with-pointer-defaults (&rest body)
+  (declare (indent 0))
+  `(unwind-protect
+       (progn
+         (cmacs-handtrack-set-option 'pointer-hand 'right)
+         (cmacs-handtrack-set-option 'pointer-region '(0.2 0.2 0.8 0.8))
+         (cmacs-handtrack-set-option 'pointer-deadzone 1.5)
+         ,@body)
+     (cmacs-handtrack-set-option 'pointer-hand 'right)
+     (cmacs-handtrack-set-option 'pointer-region '(0.2 0.2 0.8 0.8))
+     (cmacs-handtrack-set-option 'pointer-deadzone 1.5)))
+
+(defun cmacs-handtrack-tests--calls (kind calls)
+  (cl-remove-if-not (lambda (c) (eq (car c) kind)) calls))
+
+(ert-deftest cmacs-handtrack-pointer-follows-the-hand ()
+  "The knuckles' point maps through the region onto the output."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let* ((calls (cmacs-handtrack--simulate-pointer
+                   (list (list 0 nil (cmacs-handtrack-tests--hand 'right 0.05 nil 0.0 0.0))
+                         (list 33 nil (cmacs-handtrack-tests--hand 'right 0.05 nil 0.05 0.0))
+                         (list 66 nil (cmacs-handtrack-tests--hand 'right 0.05 nil 0.10 0.0)))
+                   cmacs-handtrack-tests--geom))
+           (warps (cmacs-handtrack-tests--calls 'warp calls)))
+      (should (>= (length warps) 3))
+      ;; Moving right moves the pointer right; nothing is clicked.
+      (should (< (nth 1 (nth 0 warps)) (nth 1 (nth 1 warps)) (nth 1 (nth 2 warps))))
+      (should-not (cmacs-handtrack-tests--calls 'button calls))
+      ;; Inside the output.
+      (dolist (w warps)
+        (should (<= 0 (nth 1 w) 1919))
+        (should (<= 0 (nth 2 w) 1079))))
+    ;; A hand at the region's edge (and past it) pins the pointer there.
+    (let ((w (car (cmacs-handtrack--simulate-pointer
+                   (list (list 0 nil (cmacs-handtrack-tests--hand 'right 0.05 nil 0.4 0.3)))
+                   cmacs-handtrack-tests--geom))))
+      (should (equal w '(warp 1919 0))))))
+
+(ert-deftest cmacs-handtrack-pointer-still-hand-is-quiet ()
+  "A still hand sends one warp, then nothing: smoothing plus the deadzone."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let ((still (cmacs-handtrack-tests--hand 'right 0.05)))
+      (should (= 1 (length (cmacs-handtrack-tests--calls
+                            'warp
+                            (cmacs-handtrack--simulate-pointer
+                             (cl-loop for ms from 0 to 300 by 33
+                                      collect (list ms nil still))
+                             cmacs-handtrack-tests--geom))))))))
+
+(ert-deftest cmacs-handtrack-pointer-tap-clicks ()
+  "A quick thumb-index pinch is a left click."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let ((calls (cmacs-handtrack--simulate-pointer
+                  (list (list 0 nil (cmacs-handtrack-tests--hand 'right 0.05))
+                        (list 50 nil (cmacs-handtrack-tests--hand 'right 0.01))
+                        (list 150 nil (cmacs-handtrack-tests--hand 'right 0.05)))
+                  cmacs-handtrack-tests--geom)))
+      (should (equal (cmacs-handtrack-tests--calls 'button calls)
+                     '((button 272 press) (button 272 release)))))))
+
+(ert-deftest cmacs-handtrack-pointer-drag-holds-and-lets-go ()
+  "A pinch moved is a drag: pressed, followed, released on opening."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let* ((h (lambda (pinch y) (cmacs-handtrack-tests--hand 'right pinch nil 0.1 y)))
+           (calls (cmacs-handtrack--simulate-pointer
+                   (list (list 0 nil (funcall h 0.01 -0.1))
+                         (list 33 nil (funcall h 0.01 -0.06))
+                         (list 66 nil (funcall h 0.01 -0.02))
+                         (list 99 nil (funcall h 0.05 -0.02)))
+                   cmacs-handtrack-tests--geom))
+           (buttons (cmacs-handtrack-tests--calls 'button calls)))
+      (should (equal buttons '((button 272 press) (button 272 release))))
+      ;; The pointer moved while it was held.
+      (let ((press (cl-position '(button 272 press) calls :test #'equal))
+            (release (cl-position '(button 272 release) calls :test #'equal)))
+        (should (cl-some (lambda (c) (eq (car c) 'warp))
+                         (cl-subseq calls press release)))))))
+
+(ert-deftest cmacs-handtrack-pointer-lost-hand-releases-once ()
+  "A hand that leaves view mid-drag lets the button go -- once."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let* ((h (lambda (y) (cmacs-handtrack-tests--hand 'right 0.01 nil 0.1 y)))
+           (calls (cmacs-handtrack--simulate-pointer
+                   (list (list 0 nil (funcall h -0.1))
+                         (list 33 nil (funcall h -0.05))
+                         (list 66 nil nil)
+                         (list 600 nil nil)
+                         (list 1200 nil nil))
+                   cmacs-handtrack-tests--geom)))
+      (should (equal (cmacs-handtrack-tests--calls 'button calls)
+                     '((button 272 press) (button 272 release)))))))
+
+(ert-deftest cmacs-handtrack-pointer-two-finger-scrolls ()
+  "Thumb, index and middle together, moved: scroll, with the pointer held."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let* ((open (cmacs-handtrack-tests--hand 'right 0.05 nil 0.1 0.05))
+           (two (lambda (y) (cmacs-handtrack-tests--two-finger
+                             (cmacs-handtrack-tests--hand 'right 0.01 nil 0.1 y))))
+           (calls (cmacs-handtrack--simulate-pointer
+                   (append (list (list 0 nil open))
+                           (cl-loop for i from 1 to 10
+                                    collect (list (* i 33) nil
+                                                  (funcall two (- 0.05 (* i 0.012)))))
+                           (list (list 400 nil open)))
+                   cmacs-handtrack-tests--geom))
+           (scrolls (cmacs-handtrack-tests--calls 'scroll calls))
+           (first-two (cl-position-if (lambda (c) (eq (car c) 'scroll)) calls)))
+      ;; Moving the hand down shows what is above: scrolls up (negative).
+      (should scrolls)
+      (should (cl-every (lambda (c) (and (null (nth 1 c)) (< (nth 2 c) 0))) scrolls))
+      (should (<= (apply #'+ (mapcar (lambda (c) (nth 2 c)) scrolls)) -3))
+      ;; No click, and no warp while the two-finger pinch is held.
+      (should-not (cmacs-handtrack-tests--calls 'button calls))
+      (should-not (cl-some (lambda (c) (eq (car c) 'warp))
+                           (cl-subseq calls first-two
+                                      (1+ (cl-position-if
+                                           (lambda (c) (eq (car c) 'scroll))
+                                           calls :from-end t))))))))
+
+(ert-deftest cmacs-handtrack-pointer-two-finger-tap-right-clicks ()
+  "A quick three-finger pinch is a right click."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let ((calls (cmacs-handtrack--simulate-pointer
+                  (list (list 0 nil (cmacs-handtrack-tests--hand 'right 0.05))
+                        (list 50 nil (cmacs-handtrack-tests--two-finger
+                                      (cmacs-handtrack-tests--hand 'right 0.01)))
+                        (list 150 nil (cmacs-handtrack-tests--hand 'right 0.05)))
+                  cmacs-handtrack-tests--geom)))
+      (should (equal (cmacs-handtrack-tests--calls 'button calls)
+                     '((button 273 press) (button 273 release)))))))
+
+(ert-deftest cmacs-handtrack-pointer-other-hand-does-not-point ()
+  "Only the cursor hand moves or clicks the pointer."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (let ((calls (cmacs-handtrack--simulate-pointer
+                  (list (list 0 (cmacs-handtrack-tests--hand 'left 0.05) nil)
+                        (list 50 (cmacs-handtrack-tests--hand 'left 0.01) nil)
+                        (list 150 (cmacs-handtrack-tests--hand 'left 0.05) nil))
+                  cmacs-handtrack-tests--geom)))
+      (should-not calls))
+    (cmacs-handtrack-set-option 'pointer-hand 'left)
+    (should (cmacs-handtrack-tests--calls
+             'warp (cmacs-handtrack--simulate-pointer
+                    (list (list 0 (cmacs-handtrack-tests--hand 'left 0.05) nil))
+                    cmacs-handtrack-tests--geom)))))
+
+(ert-deftest cmacs-handtrack-pointer-options-validate ()
+  "Pointer options refuse what they cannot use; turning off is safe."
+  (skip-unless (cmacs-handtrack-tests--built-p))
+  (cmacs-handtrack-tests--with-pointer-defaults
+    (should-error (cmacs-handtrack-set-option 'pointer-region '(0.5 0.5 0.5 0.5))
+                  :type 'args-out-of-range)
+    (should-error (cmacs-handtrack-set-option 'pointer-region '(-1 0 1 1))
+                  :type 'args-out-of-range)
+    (should-error (cmacs-handtrack-set-option 'pointer-min-cutoff 0)
+                  :type 'args-out-of-range)
+    (should-error (cmacs-handtrack--simulate-pointer nil '(0 0 0 0))
+                  :type 'args-out-of-range)
+    (should (null (cmacs-handtrack-set-option 'pointer nil)))
+    (should-not (plist-get (cmacs-handtrack-status) :pointer-held))))
+
 (provide 'cmacs-handtrack-tests)
 
 ;;; cmacs-handtrack-tests.el ends here

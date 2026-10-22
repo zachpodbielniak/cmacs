@@ -49,6 +49,10 @@ stores keyboard events, nothing more.  */
 #include "cmacs-hand-gesture.h"
 #include "cmacs-handtrack.h"
 #include "cmacs-libregnum.h"
+#ifdef HAVE_CMACS_GOWL
+#include "cmacs-gowl-pointer.h"
+#endif
+#include "cmacs-glib-loop.h"
 
 /* Gesture events are keystrokes whose codes match no keysym (Emacs names
    them key-NNN; cmacs-handtrack.el translates them), as the SpaceMouse's
@@ -68,6 +72,66 @@ static const char *const ht_event_names[HT_EV_COUNT] = {
 
 #define HT_ACTIONS 24
 
+/* ---------------------------------------------------------------------
+   The hand cursor: one hand drives the gowl desktop's pointer.
+
+   Per frame, in C on the main thread, never through Lisp: the point
+   between the thumb and index knuckles (it barely moves as the fingers
+   close, so a pinch does not jog the pointer) is mapped from an active
+   region of the camera image onto one output, smoothed with a One-Euro
+   filter (steady when still, quick when moving), and sent through
+   cmacs-gowl-pointer.c -- gowl's injected-input path, under the gowl
+   lock -- when it has moved past a deadzone.
+
+   Clicks come from the shared gesture classifier, with the target
+   chosen per pinch: a thumb-index pinch is "nothing" (tap = left click,
+   moved = drag with the left button held); a pinch with the middle
+   finger as well is a "panel" (moved = scroll, the content following
+   the hand, with the pointer held where the pinch began; tapped = right
+   click).
+
+   A lost hand never leaves a button down: the classifier ends a pinch
+   whose hand left view, and a watchdog on the CMacs context releases
+   anything held once no result has arrived for CMACS_HT_RELEASE_US
+   (a camera that stopped, an inference thread that stalled).
+   --------------------------------------------------------------------- */
+
+#define CMACS_HT_RELEASE_US 400000     /* no hand this long: let go */
+#define CMACS_HT_TWO_FINGER_M 0.035f   /* middle tip near the thumb tip */
+
+/* Where pointer output goes: the desktop, or a recorder for tests.  */
+struct ht_pointer_out
+{
+  void (*warp) (struct ht_pointer_out *, double, double);
+  void (*button) (struct ht_pointer_out *, unsigned int, bool);
+  void (*scroll) (struct ht_pointer_out *, bool, double);
+  Lisp_Object *log;              /* recorder: the calls, newest first */
+};
+
+struct ht_euro
+{
+  bool init;
+  double x, dx;
+};
+
+struct ht_cursor
+{
+  bool enabled;
+  int hand;                      /* 0 left, 1 right */
+  float region[4];               /* x0 y0 x1 y1 of the (mirrored) image */
+  char output[64];               /* "" : the output under the pointer */
+  float deadzone_px;
+  float min_cutoff, beta;        /* One-Euro parameters */
+  struct ht_euro ex, ey;
+  bool have_last;
+  double last_x, last_y;         /* last position sent */
+  gint64 last_us;                /* last filter step */
+  bool held;                     /* left button down (a drag) */
+  bool two_finger;               /* the current pinch includes the middle */
+  bool was_pinched;
+  gint64 seen_us;                /* last result with the cursor hand */
+};
+
 /* Hands as the classifier sees them, frame after frame.  */
 struct ht_tracker
 {
@@ -78,6 +142,8 @@ struct ht_tracker
 static struct
 {
   struct ht_tracker tr;
+  struct ht_cursor cursor;
+  guint watchdog;                /* GSource id on the CMacs context */
   Lisp_Object target;            /* auto, none or a buffer; staticpro'd */
   bool swap_hands;               /* handedness the other way round */
   float palm_threshold, presence_threshold;
@@ -90,7 +156,137 @@ static struct
 } hd = {
   .palm_threshold = 0.5f, .presence_threshold = 0.5f,
   .orbit_gain = 2500.0f, .zoom_gain = 9.5f,
+  .cursor = { .hand = 1, .region = { 0.2f, 0.2f, 0.8f, 0.8f },
+              .deadzone_px = 1.5f, .min_cutoff = 1.2f, .beta = 0.02f },
 };
+
+/* ----------------------------------------------------------- the cursor -- */
+
+static double
+euro_alpha (double cutoff, double dt)
+{
+  double tau = 1.0 / (2.0 * G_PI * cutoff);
+  return 1.0 / (1.0 + tau / dt);
+}
+
+/* One-Euro filter step: the cutoff rises with speed, so a still hand is
+   smoothed hard and a moving one follows without lag.  */
+static double
+euro_step (struct ht_euro *e, double x, double dt, double min_cutoff,
+           double beta)
+{
+  double dx, a;
+
+  if (!e->init || dt <= 0.0)
+    {
+      e->init = true;
+      e->x = x;
+      e->dx = 0.0;
+      return x;
+    }
+  dx = (x - e->x) / dt;
+  a = euro_alpha (1.0, dt);
+  e->dx = e->dx + a * (dx - e->dx);
+  a = euro_alpha (min_cutoff + beta * fabs (e->dx), dt);
+  e->x = e->x + a * (x - e->x);
+  return e->x;
+}
+
+/* The cursor hand's pointer position on output GEOM, smoothed, from
+   landmarks LM (image-normalised, mirrored).  */
+static void
+cursor_target (struct ht_cursor *c, const CmacsHtLandmarks *lm,
+               const int *geom, gint64 now, double *x, double *y)
+{
+  float u = 0.5f * (lm->lm[2][0] + lm->lm[5][0]);
+  float v = 0.5f * (lm->lm[2][1] + lm->lm[5][1]);
+  float rw = c->region[2] - c->region[0], rh = c->region[3] - c->region[1];
+  double dt = c->last_us > 0 ? (double) (now - c->last_us) / 1e6 : 0.0;
+
+  u = rw > 1e-3f ? CLAMP ((u - c->region[0]) / rw, 0.0f, 1.0f) : 0.5f;
+  v = rh > 1e-3f ? CLAMP ((v - c->region[1]) / rh, 0.0f, 1.0f) : 0.5f;
+  if (dt > 0.5)
+    dt = 0.0;                    /* back after a gap: start afresh */
+  *x = euro_step (&c->ex, geom[0] + (double) u * (geom[2] - 1), dt,
+                  c->min_cutoff, c->beta);
+  *y = euro_step (&c->ey, geom[1] + (double) v * (geom[3] - 1), dt,
+                  c->min_cutoff, c->beta);
+  c->last_us = now;
+}
+
+static void
+cursor_release (struct ht_cursor *c, struct ht_pointer_out *out)
+{
+  if (c->held)
+    out->button (out, 0x110, false);
+  c->held = false;
+}
+
+/* The real output: gowl, under its lock (cmacs-gowl-pointer.c).  */
+static void
+desk_warp (struct ht_pointer_out *o, double x, double y)
+{
+  (void) o;
+#ifdef HAVE_CMACS_GOWL
+  cmacs_gowl_pointer_warp (x, y);
+#else
+  (void) x;
+  (void) y;
+#endif
+}
+
+static void
+desk_button (struct ht_pointer_out *o, unsigned int b, bool pressed)
+{
+  (void) o;
+#ifdef HAVE_CMACS_GOWL
+  cmacs_gowl_pointer_button (b, pressed);
+#else
+  (void) b;
+  (void) pressed;
+#endif
+}
+
+static void
+desk_scroll (struct ht_pointer_out *o, bool horizontal, double notches)
+{
+  (void) o;
+#ifdef HAVE_CMACS_GOWL
+  cmacs_gowl_pointer_scroll (horizontal, notches);
+#else
+  (void) horizontal;
+  (void) notches;
+#endif
+}
+
+static struct ht_pointer_out ht_desktop = {
+  desk_warp, desk_button, desk_scroll, NULL
+};
+
+/* The test recorder: (warp X Y) (button CODE press|release)
+   (scroll HORIZONTAL NOTCHES), newest first.  */
+static void
+rec_warp (struct ht_pointer_out *o, double x, double y)
+{
+  *o->log = Fcons (list3 (intern_c_string ("warp"), make_fixnum (lround (x)),
+                          make_fixnum (lround (y))), *o->log);
+}
+
+static void
+rec_button (struct ht_pointer_out *o, unsigned int b, bool pressed)
+{
+  *o->log = Fcons (list3 (intern_c_string ("button"), make_fixnum (b),
+                          intern_c_string (pressed ? "press" : "release")),
+                   *o->log);
+}
+
+static void
+rec_scroll (struct ht_pointer_out *o, bool horizontal, double notches)
+{
+  *o->log = Fcons (list3 (intern_c_string ("scroll"), horizontal ? Qt : Qnil,
+                          make_float (notches)), *o->log);
+}
+
 
 /* ---------------------------------------------------------- tracking -- */
 
@@ -98,9 +294,11 @@ static struct
    to OUT.  ASPECT is the frame's height / width.  */
 static int
 ht_track (struct ht_tracker *tr, const CmacsHtLandmarks *lm, int n,
-          float aspect, gint64 now, struct cmacs_hg_action *out, int max)
+          float aspect, gint64 now, struct ht_cursor *cur, const int *geom,
+          struct ht_pointer_out *pout, struct cmacs_hg_action *out, int max)
 {
   struct cmacs_hg_sample smp[2];
+  const CmacsHtLandmarks *side_lm[2] = { NULL, NULL };
   bool seen[2] = { false, false };
   bool was[2];
   int i, side;
@@ -119,6 +317,7 @@ ht_track (struct ht_tracker *tr, const CmacsHtLandmarks *lm, int n,
         continue;
       cmacs_ht_to_hand_state (&lm[i], aspect, side == 1, &tr->hands[side]);
       seen[side] = true;
+      side_lm[side] = &lm[i];
     }
   memset (smp, 0, sizeof smp);
   for (side = 0; side < 2; side++)
@@ -141,7 +340,104 @@ ht_track (struct ht_tracker *tr, const CmacsHtLandmarks *lm, int n,
                                               &smp[side].pos[1],
                                               &smp[side].pos[2]);
     }
+
+  /* The cursor hand: its pointer, and the kind of pinch it makes.  */
+  if (cur != NULL && cur->enabled && geom != NULL)
+    {
+      side = cur->hand;
+      if (seen[side])
+        {
+          double x, y;
+          bool pinched = smp[side].pinched;
+
+          cur->seen_us = now;
+          if (pinched && !cur->was_pinched)
+            {
+              float mt[3], tt[3], d[3];
+              const LrgVRHandState *st = &tr->hands[side];
+              lrg_vr_hand_state_get_joint_position (st, LRG_VR_HAND_JOINT_MIDDLE_TIP,
+                                                    &mt[0], &mt[1], &mt[2]);
+              lrg_vr_hand_state_get_joint_position (st, LRG_VR_HAND_JOINT_THUMB_TIP,
+                                                    &tt[0], &tt[1], &tt[2]);
+              d[0] = mt[0] - tt[0];
+              d[1] = mt[1] - tt[1];
+              d[2] = mt[2] - tt[2];
+              cur->two_finger = sqrtf (d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+                                < CMACS_HT_TWO_FINGER_M;
+            }
+          cur->was_pinched = pinched;
+          cursor_target (cur, side_lm[side], geom, now, &x, &y);
+          smp[side].target = cur->two_finger && pinched ? CMACS_HG_PANEL
+                             : CMACS_HG_NONE;
+          /* The hand's own position feeds the scroll; the pointer stays
+             where a two-finger pinch began.  */
+          smp[side].fx = (int) lround (x);
+          smp[side].fy = (int) lround (y);
+          if (!(cur->two_finger && pinched)
+              && (!cur->have_last
+                  || hypot (x - cur->last_x, y - cur->last_y)
+                     >= (double) cur->deadzone_px))
+            {
+              pout->warp (pout, x, y);
+              cur->last_x = x;
+              cur->last_y = y;
+              cur->have_last = true;
+            }
+        }
+      else
+        cur->was_pinched = false;
+    }
   return cmacs_hg_step (&tr->g, smp, now, out, max);
+}
+
+/* A cursor-hand action, if A is one: true when handled here.  */
+static bool
+cursor_apply (struct ht_cursor *c, struct ht_pointer_out *out,
+              const struct cmacs_hg_action *a)
+{
+  if (c == NULL || !c->enabled || a->hand != c->hand)
+    return false;
+  switch (a->kind)
+    {
+    case CMACS_HG_TAP:             /* thumb-index tap: left click */
+      out->button (out, 0x110, true);
+      out->button (out, 0x110, false);
+      return true;
+    case CMACS_HG_PULL_BEGIN:      /* ... moved: a drag */
+      if (!c->held)
+        out->button (out, 0x110, true);
+      c->held = true;
+      return true;
+    case CMACS_HG_PULL_END:
+      cursor_release (c, out);
+      return true;
+    case CMACS_HG_PULL_MOVE:       /* the pointer already follows */
+      return true;
+    case CMACS_HG_CLICK:           /* two-finger tap: right click */
+      out->button (out, 0x111, true);
+      out->button (out, 0x111, false);
+      return true;
+    case CMACS_HG_SCROLL:          /* two-finger move: scroll */
+      /* The content follows the hand: moving it down shows what is
+         above, a scroll up.  */
+      if (a->y != 0)
+        out->scroll (out, false, -(double) a->y);
+      if (a->x != 0)
+        out->scroll (out, true, -(double) a->x);
+      return true;
+    case CMACS_HG_DRAG_BEGIN: case CMACS_HG_DRAG_END:
+      return true;                 /* a two-finger hold does nothing */
+    default:
+      return false;
+    }
+}
+
+/* Let go if the cursor hand has not been seen for CMACS_HT_RELEASE_US.  */
+static void
+cursor_watch (struct ht_cursor *c, struct ht_pointer_out *out, gint64 now)
+{
+  if (c->held && now - c->seen_us > CMACS_HT_RELEASE_US)
+    cursor_release (c, out);
 }
 
 /* ------------------------------------------------------------ applying -- */
@@ -236,11 +532,57 @@ ht_on_result (const CmacsHtResult *r)
   hd.results++;
   hd.latency_us = r->latency_us;
   hd.last_n = r->n;
-  n = ht_track (&hd.tr, r->hands, r->n,
-                r->img_w > 0 ? (float) r->img_h / (float) r->img_w : 0.75f,
-                g_get_monotonic_time (), act, HT_ACTIONS);
+  {
+    int geom[4];
+    bool have_geom = false;
+    gint64 now = g_get_monotonic_time ();
+
+#ifdef HAVE_CMACS_GOWL
+    if (hd.cursor.enabled)
+      have_geom = cmacs_gowl_output_geometry (hd.cursor.output[0] != '\0'
+                                              ? hd.cursor.output : NULL,
+                                              &geom[0], &geom[1], &geom[2],
+                                              &geom[3]);
+#endif
+    cursor_watch (&hd.cursor, &ht_desktop, now);
+    n = ht_track (&hd.tr, r->hands, r->n,
+                  r->img_w > 0 ? (float) r->img_h / (float) r->img_w : 0.75f,
+                  now, &hd.cursor, have_geom ? geom : NULL, &ht_desktop,
+                  act, HT_ACTIONS);
+  }
   for (i = 0; i < n; i++)
-    ht_apply (&act[i]);
+    if (!cursor_apply (&hd.cursor, &ht_desktop, &act[i]))
+      ht_apply (&act[i]);
+}
+
+/* The watchdog (CMacs context, main thread): a lost camera or a stalled
+   inference thread delivers no results, so nothing else would let go.  */
+static gboolean
+ht_watchdog (gpointer data)
+{
+  (void) data;
+  cursor_watch (&hd.cursor, &ht_desktop, g_get_monotonic_time ());
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+ht_watchdog_set (bool on)
+{
+  if (on && hd.watchdog == 0)
+    {
+      GSource *src = g_timeout_source_new (100);
+      g_source_set_callback (src, ht_watchdog, NULL, NULL);
+      hd.watchdog = g_source_attach (src, cmacs_glib_get_context ());
+      g_source_unref (src);
+    }
+  else if (!on && hd.watchdog != 0)
+    {
+      GSource *src = g_main_context_find_source_by_id
+        (cmacs_glib_get_context (), hd.watchdog);
+      if (src != NULL)
+        g_source_destroy (src);
+      hd.watchdog = 0;
+    }
 }
 
 /* ------------------------------------------------------------- helpers -- */
@@ -349,12 +691,15 @@ thread.  Prefer `cmacs-handtrack-mode'.  Return t, or signal.  */)
   memset (&hd.tr, 0, sizeof hd.tr);
   lrg_vr_hand_state_reset (&hd.tr.hands[0]);
   lrg_vr_hand_state_reset (&hd.tr.hands[1]);
+  hd.cursor.have_last = false;
+  hd.cursor.ex.init = hd.cursor.ey.init = false;
   if (!cmacs_ht_worker_start (&cfg, ht_on_result, &err))
     {
       Lisp_Object msg = build_string (err != NULL ? err : "hand tracking failed");
       g_free (err);
       xsignal1 (Qerror, msg);
     }
+  ht_watchdog_set (hd.cursor.enabled);
   return Qt;
 }
 
@@ -364,6 +709,8 @@ DEFUN ("cmacs-handtrack-close", Fcmacs_handtrack_close,
   (void)
 {
   cmacs_ht_worker_stop ();
+  cursor_release (&hd.cursor, &ht_desktop);
+  ht_watchdog_set (false);
   lrg_vr_hand_state_reset (&hd.tr.hands[0]);
   lrg_vr_hand_state_reset (&hd.tr.hands[1]);
   return Qnil;
@@ -388,7 +735,9 @@ Keys: :inference (onnxruntime built in), :running, :frames (inferred),
                intern_c_string (":hands"), make_fixnum (hd.last_n),
                intern_c_string (":latency-ms"),
                make_float ((double) hd.latency_us / 1000.0),
-               intern_c_string (":target"), hd.target);
+               intern_c_string (":target"), hd.target,
+               intern_c_string (":pointer"), hd.cursor.enabled ? Qt : Qnil,
+               intern_c_string (":pointer-held"), hd.cursor.held ? Qt : Qnil);
 }
 
 DEFUN ("cmacs-handtrack-hands", Fcmacs_handtrack_hands,
@@ -433,6 +782,14 @@ KEY is one of:
   `swap-hands'          non-nil: take the model's left for right
   `orbit-gain'          scene-orbit mouse pixels per metre of pull (2500)
   `zoom-gain'           wheel ticks per e-fold of two-hand stretch (9.5)
+  `pointer'             non-nil: a hand drives the gowl desktop pointer
+  `pointer-hand'        `left' or `right' (right)
+  `pointer-region'      (X0 Y0 X1 Y1) of the mirrored image, 0..1, mapped
+                        onto the output ((0.2 0.2 0.8 0.8))
+  `pointer-output'      output name, or nil for the one under the pointer
+  `pointer-deadzone'    pixels the pointer must move before it is sent (1.5)
+  `pointer-min-cutoff'  One-Euro minimum cutoff, Hz (1.2): lower is steadier
+  `pointer-beta'        One-Euro speed coefficient (0.02): higher is snappier
 The thresholds apply from the next `cmacs-handtrack-open'.  Return VALUE.  */)
   (Lisp_Object key, Lisp_Object value)
 {
@@ -440,6 +797,47 @@ The thresholds apply from the next `cmacs-handtrack-open'.  Return VALUE.  */)
   if (EQ (key, intern_c_string ("swap-hands")))
     {
       hd.swap_hands = !NILP (value);
+      return value;
+    }
+  if (EQ (key, intern_c_string ("pointer")))
+    {
+      hd.cursor.enabled = !NILP (value);
+      if (!hd.cursor.enabled)
+        cursor_release (&hd.cursor, &ht_desktop);
+      hd.cursor.have_last = false;
+      hd.cursor.ex.init = hd.cursor.ey.init = false;
+      ht_watchdog_set (hd.cursor.enabled && cmacs_ht_worker_running ());
+      return value;
+    }
+  if (EQ (key, intern_c_string ("pointer-hand")))
+    {
+      cursor_release (&hd.cursor, &ht_desktop);
+      hd.cursor.hand = EQ (value, intern_c_string ("left")) ? 0 : 1;
+      return value;
+    }
+  if (EQ (key, intern_c_string ("pointer-output")))
+    {
+      if (NILP (value))
+        hd.cursor.output[0] = '\0';
+      else
+        {
+          CHECK_STRING (value);
+          g_strlcpy (hd.cursor.output, SSDATA (value), sizeof hd.cursor.output);
+        }
+      return value;
+    }
+  if (EQ (key, intern_c_string ("pointer-region")))
+    {
+      float r[4];
+      Lisp_Object t = value;
+      int k;
+
+      for (k = 0; k < 4; k++, t = Fcdr (t))
+        r[k] = ht_float (Fcar (t));
+      if (!(r[0] >= 0.0f && r[2] <= 1.0f && r[1] >= 0.0f && r[3] <= 1.0f
+            && r[2] - r[0] > 0.05f && r[3] - r[1] > 0.05f))
+        args_out_of_range (value, intern_c_string ("pointer-region"));
+      memcpy (hd.cursor.region, r, sizeof r);
       return value;
     }
   CHECK_NUMBER (value);
@@ -458,6 +856,16 @@ The thresholds apply from the next `cmacs-handtrack-open'.  Return VALUE.  */)
     hd.orbit_gain = (float) XFLOATINT (value);
   else if (EQ (key, intern_c_string ("zoom-gain")))
     hd.zoom_gain = (float) XFLOATINT (value);
+  else if (EQ (key, intern_c_string ("pointer-deadzone")))
+    hd.cursor.deadzone_px = (float) XFLOATINT (value);
+  else if (EQ (key, intern_c_string ("pointer-min-cutoff")))
+    {
+      if (XFLOATINT (value) <= 0.0)
+        args_out_of_range (value, make_fixnum (0));
+      hd.cursor.min_cutoff = (float) XFLOATINT (value);
+    }
+  else if (EQ (key, intern_c_string ("pointer-beta")))
+    hd.cursor.beta = (float) XFLOATINT (value);
   else
     error ("Unknown hand-tracking option");
   return value;
@@ -574,8 +982,8 @@ from nothing, sends nothing, moves no camera.  Return the gestures as
           ht_landmarks_of (r, &lm[n]);
           lm[n++].handedness = 1.0f;
         }
-      k = ht_track (&tr, lm, n, 0.75f, XFIXNUM (XCAR (fr)) * 1000, act,
-                    HT_ACTIONS);
+      k = ht_track (&tr, lm, n, 0.75f, XFIXNUM (XCAR (fr)) * 1000, NULL, NULL,
+                    &ht_desktop, act, HT_ACTIONS);
       for (i = 0; i < k; i++)
         {
           const struct cmacs_hg_action *a = &act[i];
@@ -595,6 +1003,70 @@ from nothing, sends nothing, moves no camera.  Return the gestures as
         }
     }
   return Fnreverse (result);
+}
+
+DEFUN ("cmacs-handtrack--simulate-pointer", Fcmacs_handtrack__simulate_pointer,
+       Scmacs_handtrack__simulate_pointer, 2, 2, 0,
+       doc: /* Run camera FRAMES through the hand cursor on output GEOMETRY.  For tests.
+FRAMES is as for `cmacs-handtrack--simulate', with a frame of nil hands
+\(MILLISECONDS) also meaning "no result yet" -- the watchdog runs on
+every frame.  GEOMETRY is (X Y WIDTH HEIGHT).  The cursor hand and its
+region are the current options; nothing reaches the desktop.  Return
+the pointer calls in order: (warp X Y), (button CODE press|release),
+\(scroll HORIZONTAL NOTCHES).  */)
+  (Lisp_Object frames, Lisp_Object geometry)
+{
+  struct ht_tracker tr;
+  struct ht_cursor cur = hd.cursor;
+  Lisp_Object log = Qnil, tail;
+  struct ht_pointer_out rec = { rec_warp, rec_button, rec_scroll, &log };
+  int geom[4], k;
+
+  for (k = 0, tail = geometry; k < 4; k++, tail = Fcdr (tail))
+    {
+      CHECK_FIXNUM (Fcar (tail));
+      geom[k] = (int) XFIXNUM (Fcar (tail));
+    }
+  if (geom[2] <= 0 || geom[3] <= 0)
+    args_out_of_range (geometry, Qnil);
+  memset (&tr, 0, sizeof tr);
+  lrg_vr_hand_state_reset (&tr.hands[0]);
+  lrg_vr_hand_state_reset (&tr.hands[1]);
+  cur.enabled = true;
+  cur.held = cur.have_last = cur.two_finger = cur.was_pinched = false;
+  cur.ex.init = cur.ey.init = false;
+  cur.last_us = cur.seen_us = 0;
+  CHECK_LIST (frames);
+  for (tail = frames; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object fr = XCAR (tail), l, r;
+      CmacsHtLandmarks lm[2];
+      struct cmacs_hg_action act[HT_ACTIONS];
+      gint64 now;
+      int n = 0, i, got;
+
+      CHECK_CONS (fr);
+      CHECK_FIXNUM (XCAR (fr));
+      now = XFIXNUM (XCAR (fr)) * 1000;
+      l = Fnth (make_fixnum (1), fr);
+      r = Fnth (make_fixnum (2), fr);
+      if (!NILP (l))
+        {
+          ht_landmarks_of (l, &lm[n]);
+          lm[n++].handedness = 0.0f;
+        }
+      if (!NILP (r))
+        {
+          ht_landmarks_of (r, &lm[n]);
+          lm[n++].handedness = 1.0f;
+        }
+      cursor_watch (&cur, &rec, now);
+      got = ht_track (&tr, lm, n, 0.75f, now, &cur, geom, &rec, act,
+                      HT_ACTIONS);
+      for (i = 0; i < got; i++)
+        cursor_apply (&cur, &rec, &act[i]);
+    }
+  return Fnreverse (log);
 }
 
 DEFUN ("cmacs-handtrack--anchors", Fcmacs_handtrack__anchors,
@@ -779,6 +1251,7 @@ syms_of_cmacs_handtrack_defuns (void)
   defsubr (&Scmacs_handtrack__synthetic_landmarks);
   defsubr (&Scmacs_handtrack__map);
   defsubr (&Scmacs_handtrack__simulate);
+  defsubr (&Scmacs_handtrack__simulate_pointer);
   defsubr (&Scmacs_handtrack__anchors);
   defsubr (&Scmacs_handtrack__decode);
   defsubr (&Scmacs_handtrack__letterbox);

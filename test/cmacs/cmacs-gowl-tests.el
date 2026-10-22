@@ -2034,11 +2034,16 @@ The one exception is `gowl-stop', which joins the dispatch thread: a
 lock held across that join is a deadlock, and once the thread is gone
 there is nobody to race."
   (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c"))
+        ;; The injected-pointer DEFUNs live beside it.
+        (pointer (cmacs-gowl-tests--source-file
+                  "cmacs/gowl/cmacs-gowl-pointer.c"))
         ;; `GOWL_CHECK_RUNNING (' is not a call into gowl.
         (case-fold-search nil))
     (skip-unless source)
     (let ((checked 0))
-      (dolist (chunk (cmacs-gowl-tests--defun-chunks source))
+      (dolist (chunk (append (cmacs-gowl-tests--defun-chunks source)
+                             (and pointer
+                                  (cmacs-gowl-tests--defun-chunks pointer))))
         (let ((name (car chunk))
               (text (cdr chunk)))
           (when (and (not (equal name "gowl-stop"))

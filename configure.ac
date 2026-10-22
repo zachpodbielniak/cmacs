@@ -874,7 +874,7 @@ if test "$with_cmacs_gowl" != "no"; then
       [AC_MSG_WARN([libdecor not found - nested window decorations disabled])])
   fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
-  CMACS_GOWL_OBJ="cmacs-gowl.o cmacs-gowl-loop.o keyboard-shortcuts-inhibit-v1-protocol.o"
+  CMACS_GOWL_OBJ="cmacs-gowl.o cmacs-gowl-loop.o cmacs-gowl-pointer.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
 if test "$with_cmacs_podomation" != "no"; then
   if test "$with_cmacs_podomation" = "system"; then

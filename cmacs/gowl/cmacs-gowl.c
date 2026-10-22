@@ -19,6 +19,7 @@
 #include "xwidget.h"
 #include <epaths.h>
 #include "cmacs-gowl.h"
+#include "cmacs-gowl-pointer.h"
 #include "cmacs-gobject.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
@@ -13082,6 +13083,7 @@ cmacs_gowl_connect_dbus_signals (GowlCompositor *comp)
 void
 syms_of_cmacs_gowl (void)
 {
+  syms_of_cmacs_gowl_pointer ();   /* cmacs-gowl-pointer.c */
   DEFSYM (Qgowl_error, "gowl-error");
   DEFSYM (Qnormal, "normal");
   DEFSYM (Q90, "90");

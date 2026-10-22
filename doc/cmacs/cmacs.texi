@@ -2918,6 +2918,26 @@ the static @file{libgowl.a} now calls @code{libinput_device_config_*}
 directly, cmacs links @code{libinput} (the @code{CMACS_GOWL_DEPS}
 pkg-config list in @file{configure.ac}).
 
+@section Driving the Pointer
+@cindex pointer, injected
+@findex gowl-pointer-warp
+@findex gowl-pointer-button
+
+@code{gowl-pointer-position}, @code{gowl-pointer-warp} @var{x} @var{y},
+@code{gowl-pointer-move} @var{dx} @var{dy}, @code{gowl-pointer-button}
+@var{button} @var{state} (@code{left}, @code{right}, @code{middle},
+@code{back}, @code{forward} or an evdev code; @code{press},
+@code{release}, or nil for a click), @code{gowl-pointer-scroll}
+@var{dy} @var{dx} (wheel notches, each with its value120) and
+@code{gowl-output-geometry} drive the compositor's pointer through gowl's
+injected-input path, as a software KVM does: a locked pointer stays put
+and its client gets relative motion, a confined one slides along its
+region, clicks go through the compositor's own hit test and focus rules,
+and every injection closes its own pointer frame.  While the session is
+locked they signal, except a release.  Each holds the gowl lock; the C
+functions behind them serve the camera hand cursor (@pxref{CMacs
+Camera}).
+
 @section Per-device Input Remapping
 @cindex input remapping
 @cindex foot pedal
@@ -13003,8 +13023,13 @@ the tests exercise).  Models are installed only when you run @kbd{M-x
 cmacs-handtrack-download-models}; they are looked up along
 @code{cmacs-handtrack-models-search-path}.  See
 @file{doc_org/cmacs/cmacs-camera.org} for the pipeline, the joint
-mapping and the threads.  Moving gowl's pointer with a hand is a
-follow-up: it needs gowl primitives that do not exist yet.
+mapping and the threads.  Moving gowl's pointer with a hand is the
+job for @code{cmacs-handtrack-pointer-mode}: the hand moves the gowl
+pointer (smoothed, through a region of the image mapped onto an output),
+a thumb-index tap clicks and the pinch moved drags, and with the middle
+finger in the pinch it scrolls (moved) or right-clicks (tapped) --- in C,
+through the same functions the @code{gowl-pointer-*} DEFUNs wrap, with
+anything held released when the hand is lost.
 
 @node Build Configuration
 @chapter Build Configuration

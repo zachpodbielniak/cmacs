@@ -1680,6 +1680,51 @@ anything from a YAML config, or a module's own binds --- falls back to
 its action and argument (=spawn: wofi --show drun=), which is still
 more use than a bare action nick.
 
+** Driving the pointer from Lisp and C
+:PROPERTIES:
+:CUSTOM_ID: injected-pointer
+:END:
+
+=cmacs/gowl/cmacs-gowl-pointer.c= moves, clicks and scrolls the
+compositor's pointer -- the same injected-input path a software KVM
+uses, so it behaves exactly like a physical device:
+
+| DEFUN                                  | Does                                                    |
+|----------------------------------------+---------------------------------------------------------|
+| ~gowl-pointer-position~                | (X . Y) in layout pixels, read from the compositor      |
+| ~gowl-pointer-warp~ =X Y=              | move there (layout-absolute *motion*: clamped onto the layout, held by a lock, slid along a confinement) |
+| ~gowl-pointer-move~ =DX DY=            | relative motion, same constraints                       |
+| ~gowl-pointer-button~ =BUTTON &optional STATE= | =left= =right= =middle= =back= =forward= or an evdev code; =press=, =release= or nil for a click |
+| ~gowl-pointer-scroll~ =DY &optional DX= | wheel notches (fractions too), each with its value120  |
+| ~gowl-output-geometry~ =&optional NAME= | (X Y W H) of an output, or of the one under the pointer |
+
+- *Constraints.*  Warp is =gowl_compositor_inject_pointer_warp=, which
+  is motion, not a teleport: a pointer locked by a game stays put and
+  the game gets the motion on the relative stream (measured from the
+  last position asked for, not the held cursor -- the "hyper speed"
+  fix); a confined one slides along its region.
+- *Clicks* go through the compositor's own button handling -- its hit
+  test (the bar is clickable) and its focus rules, the ones a real
+  click gets.  cmacs never moves focus itself here, so there is no
+  path around a keyboard grab (a launcher, an X11 popup).
+- *Scroll* carries =value120= = 120 per notch, so gowl reports a WHEEL
+  source; a wheel with no discrete amount scrolls by nothing in
+  Firefox.
+- *Locked session:* every action signals, except a release, which is
+  always delivered so a button held as the lock came up is not left
+  down.
+- *Every injection closes its own =wl_pointer.frame=* (gowl does it), so
+  a client that batches until the frame sees the click at once.
+
+Locking: each DEFUN holds =cmacs_gowl_lock_scoped ()= and returns
+through =unbind_to=; the C functions (=cmacs_gowl_pointer_warp= and
+friends, used at frame rate by the hand cursor) take the recursive
+gowl lock themselves and never signal.
+~cmacs-gowl-test-compositor-defuns-take-the-lock~ covers the file, and
+=test/cmacs/cmacs-gowl-pointer-tests.el= drives a headless compositor in
+a child cmacs.  The position comes from
+~gowl_compositor_get_cursor_position~ (gowl's one addition for this).
+
 ** Pointer lock (games, VMs, remote desktops)
 :PROPERTIES:
 :CUSTOM_ID: pointer-lock

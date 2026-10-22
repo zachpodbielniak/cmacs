@@ -27,6 +27,19 @@
 ;;   <hand-left-palm-down>  <hand-right-palm-down>   ... and back
 ;;   <hand-zoom-in>         <hand-zoom-out>          a stretch ended
 ;;
+;; With `cmacs-handtrack-pointer-mode' one hand is the gowl desktop's
+;; pointer instead -- moved, clicked and scrolled in C at the camera's
+;; rate through gowl's injected-input path:
+;;
+;;   hand moves                       the pointer follows (smoothed)
+;;   thumb + index tap                left click
+;;   thumb + index pinch, moved       drag (left button held)
+;;   thumb + index + middle, moved    scroll (the content follows)
+;;   thumb + index + middle tap       right click
+;;
+;; A hand that leaves view, a camera that stops, or turning the mode off
+;; releases any held button.
+;;
 ;; Models are not shipped and never fetched behind your back:
 ;; \\[cmacs-handtrack-download-models] puts them in
 ;; `cmacs-handtrack-models-directory' when you ask.  The camera opens
@@ -48,6 +61,8 @@
 (declare-function cmacs-handtrack-set-option "cmacs-handtrack-defuns.c"
                   (key value))
 (declare-function cmacs-handtrack-event-codes "cmacs-handtrack-defuns.c")
+
+(defvar cmacs-handtrack-pointer-mode)
 
 (defgroup cmacs-handtrack nil
   "Camera hand tracking (MediaPipe models on onnxruntime)."
@@ -136,6 +151,43 @@ scenes alone (events still arrive)."
          (when (fboundp 'cmacs-handtrack-set-target)
            (cmacs-handtrack-set-target value))))
 
+(defgroup cmacs-handtrack-pointer nil
+  "A camera hand as the gowl desktop's pointer."
+  :group 'cmacs-handtrack
+  :prefix "cmacs-handtrack-pointer-")
+
+(defcustom cmacs-handtrack-pointer-hand 'right
+  "The hand that drives the pointer in `cmacs-handtrack-pointer-mode'."
+  :type '(choice (const left) (const right))
+  :set (cmacs-handtrack--set 'pointer-hand))
+
+(defcustom cmacs-handtrack-pointer-region '(0.2 0.2 0.8 0.8)
+  "The part of the camera image mapped onto the output, (X0 Y0 X1 Y1).
+Fractions of the mirrored image: a hand at the region's edge puts the
+pointer at the output's edge, so a smaller region needs less reach."
+  :type '(list number number number number)
+  :set (cmacs-handtrack--set 'pointer-region))
+
+(defcustom cmacs-handtrack-pointer-output nil
+  "The output the pointer moves on, by name, or nil for the one it is on."
+  :type '(choice (const :tag "Under the pointer" nil) string)
+  :set (cmacs-handtrack--set 'pointer-output))
+
+(defcustom cmacs-handtrack-pointer-deadzone 1.5
+  "Pixels the smoothed pointer must move before it is sent."
+  :type 'number
+  :set (cmacs-handtrack--set 'pointer-deadzone))
+
+(defcustom cmacs-handtrack-pointer-min-cutoff 1.2
+  "One-Euro minimum cutoff in Hz: lower holds a still hand steadier."
+  :type 'number
+  :set (cmacs-handtrack--set 'pointer-min-cutoff))
+
+(defcustom cmacs-handtrack-pointer-beta 0.02
+  "One-Euro speed coefficient: higher follows fast motion with less lag."
+  :type 'number
+  :set (cmacs-handtrack--set 'pointer-beta))
+
 (defun cmacs-handtrack-built-p ()
   "Return non-nil when this build has hand tracking."
   (fboundp 'cmacs-handtrack-open))
@@ -184,6 +236,13 @@ Only ever run by you: nothing in cmacs fetches a model by itself."
                                 cmacs-handtrack-presence-threshold)
     (cmacs-handtrack-set-option 'orbit-gain cmacs-handtrack-orbit-gain)
     (cmacs-handtrack-set-option 'zoom-gain cmacs-handtrack-zoom-gain)
+    (cmacs-handtrack-set-option 'pointer-hand cmacs-handtrack-pointer-hand)
+    (cmacs-handtrack-set-option 'pointer-region cmacs-handtrack-pointer-region)
+    (cmacs-handtrack-set-option 'pointer-output cmacs-handtrack-pointer-output)
+    (cmacs-handtrack-set-option 'pointer-deadzone cmacs-handtrack-pointer-deadzone)
+    (cmacs-handtrack-set-option 'pointer-min-cutoff
+                                cmacs-handtrack-pointer-min-cutoff)
+    (cmacs-handtrack-set-option 'pointer-beta cmacs-handtrack-pointer-beta)
     (cmacs-handtrack-set-target cmacs-handtrack-target)))
 
 ;;;###autoload
@@ -227,6 +286,8 @@ on onnxruntime.  Needs the models: \\[cmacs-handtrack-download-models]."
   :group 'cmacs-handtrack
   (cond
    ((not cmacs-handtrack-mode)
+    (when cmacs-handtrack-pointer-mode
+      (cmacs-handtrack-pointer-mode -1))
     (when (cmacs-handtrack-built-p)
       (cmacs-handtrack-close))
     (when (fboundp 'cmacs-camera-release)
@@ -254,6 +315,33 @@ on onnxruntime.  Needs the models: \\[cmacs-handtrack-download-models]."
       (error
        (setq cmacs-handtrack-mode nil)
        (cmacs-camera-release 'cmacs-handtrack)
+       (signal (car err) (cdr err)))))))
+
+;;;###autoload
+(define-minor-mode cmacs-handtrack-pointer-mode
+  "Make a camera hand the gowl desktop's pointer.
+Turns on `cmacs-handtrack-mode' if it is off.  The hand moves the
+pointer; a thumb-index tap clicks, the same pinch moved drags; with the
+middle finger in the pinch too, moving scrolls and a tap right-clicks.
+Off by default; turning it off releases anything held."
+  :global t
+  :group 'cmacs-handtrack-pointer
+  (cond
+   ((not cmacs-handtrack-pointer-mode)
+    (when (fboundp 'cmacs-handtrack-set-option)
+      (cmacs-handtrack-set-option 'pointer nil)))
+   ((not (fboundp 'gowl-pointer-warp))
+    (setq cmacs-handtrack-pointer-mode nil)
+    (user-error "This build has no gowl compositor to point at"))
+   (t
+    (condition-case err
+        (progn
+          (unless cmacs-handtrack-mode
+            (cmacs-handtrack-mode 1))
+          (cmacs-handtrack--apply-options)
+          (cmacs-handtrack-set-option 'pointer t))
+      (error
+       (setq cmacs-handtrack-pointer-mode nil)
        (signal (car err) (cdr err)))))))
 
 (provide 'cmacs-handtrack)
