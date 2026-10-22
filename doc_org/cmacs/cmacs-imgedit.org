@@ -18,9 +18,13 @@ Two facets:
   native Emacs image (works under pgtk and the terminal) and supports both
   command-driven editing and direct mouse painting.
 
-A smooth in-engine libregnum viewport (GPU brush + the GTK / =--lrg=
-right-click menus, mirroring ~cmacs-libregnum-editor~) is a planned follow-on
-layer; the model and the native-image UI work today without it.
+Right-click anywhere (or press the menu key) for a menu built from what is
+under the pointer --- the layer painted there, the selection, the undo
+history --- that pops as a GTK menu under pgtk and as the in-engine menu under
+=emacs --lrg=; see [[*Right-click menu][Right-click menu]].  A fully in-engine
+GPU editing viewport (GPU brush strokes, in-viewport tool palettes) is still
+future work; the model, the native-image UI and the live preview viewport
+below work today without it.
 
 It is off by default; build with =--with-cmacs-imgedit= (requires
 =--with-cmacs-libregnum= and =--with-cmacs-glib=).
@@ -109,7 +113,7 @@ flips apply to the whole document.
   DEFUNs ~cmacs-imgedit-flip/rotate/resize/crop/gradient~ delegate the
   dimension-changing ops to new libregnum ~lrg_image_document_resize/crop/
   rotate~ helpers (all layers + canvas).
-- *Vector* (right-click → Transform): Bézier curve
+- *Vector* (right-click → Draw): Bézier curve
   (~cmacs-imgedit-draw-bezier-cmd~ / model ~cmacs-imgedit-bezier~, control
   points as ~(X . Y)~ conses) and SVG import (~cmacs-imgedit-import-svg-file~ /
   model ~cmacs-imgedit-import-svg~ renders an SVG file onto the active layer at
@@ -128,11 +132,12 @@ flips apply to the whole document.
   median-cut swatches; click to pick), *Export GIF (frames)…*, and *Export
   indexed PNG…* (~cmacs-imgedit-export-indexed-png~: Floyd–Steinberg-dithered
   colour reduction).
-- *Animation*: right-click → Edit → *Export GIF (layers)…* renders each layer
+- *Animation*: right-click → File → *Export GIF (layers as frames)…* renders each layer
   as one frame of an animated GIF (~cmacs-imgedit-export-gif-file~ / model
   ~cmacs-imgedit-export-gif~, DELAY centiseconds/frame) --- a quick way to turn
   a layered sprite into a looping animation.
-- *Layer* (right-click → Layer): Duplicate, Rename, Move up/down, Blend mode
+- *Layer* (right-click on the layer, or on its row in the layers panel):
+  Duplicate, Rename, Move up/down, Merge down, Blend mode
   (Replace/Normal/Add/Multiply/Subtract + the extended Photoshop modes
   Screen/Overlay/Soft-light/Color-dodge/Color-burn), Toggle lock.  A *locked* layer refuses
   edits until unlocked (~cmacs-imgedit-set-layer-locked~ /
@@ -164,15 +169,16 @@ Copy (~y~/~w~) and paste (~C-y~, ~-from-clipboard~) try, in order:
 
 The copy echo names the backend used (=(GTK)=, =(wl-copy)=, =(gowl)=).
 
-~mouse-3~ anywhere pops the full context menu (a native GTK menu under pgtk,
-the in-engine libregnum menu under ~--lrg~).
+~mouse-3~ anywhere pops the context menu (a native GTK menu under pgtk, the
+in-engine libregnum menu under ~--lrg~) --- see [[*Right-click menu][Right-click menu]].
 
 ** Default keybindings (~cmacs-imgedit-mode~)
 
 | Key       | Action                                              |
 |-----------+-----------------------------------------------------|
 | ~mouse-1~ | Use the active tool on the canvas                   |
-| ~mouse-3~ | Context menu                                        |
+| ~mouse-3~ | Context menu for what is under the pointer          |
+| ~<menu>~ / ~S-<f10>~ | The same menu from the keyboard (about the active layer) |
 | ~b l > r c E t F e~ | Select tool: brush / line / arrow / rect / circle / ellipse / text / bucket / pick |
 | ~x~       | Toggle filled vs outline for rect/circle/ellipse    |
 | ~C~ / ~A~ / ~z~ / ~T~ | Foreground colour / alpha / brush size / text size |
@@ -204,6 +210,124 @@ mode map itself is installed as an Evil *intercept map* by
 and its add-ons — an overriding map was not enough, because =evil-snipe= owns
 ~s~ (save) in normal state and ~f~/~t~/~T~ in motion state.  See
 [[file:evil.org][Evil / Doom compatibility]].
+
+* Right-click menu
+
+The menu is not a fixed list: it is *built from the click*.  A right-click
+on the canvas, on a row of the layers panel, in the live viewport, or the
+menu key gives a *click context* --- a plist of what is under the pointer ---
+and every function on ~cmacs-imgedit-context-menu-functions~ turns that
+context into menu items.  The editor's own sections are ordinary members of
+that hook, so other code adds items exactly the way the editor does.
+
+** What is "under the pointer"
+
+| Context key  | Meaning |
+|--------------+---------|
+| ~:layer~     | The *topmost visible layer painted at the clicked pixel* (alpha > 0), found by compositing each layer alone from the top down.  A layers-panel row gives that row's layer; the keyboard (or a click where nothing is painted) gives the active layer. |
+| ~:layer-hit~ | Non-nil when ~:layer~ was found under the pointer. |
+| ~:x~ ~:y~    | The document pixel clicked; nil for the keyboard and the panels, which greys out the "…here" entries. |
+| ~:selection~ | The selection bounding box ~(X Y W H)~, or nil. |
+| ~:source~    | ~canvas~, ~viewport~, ~layers-panel~ or ~keyboard~. |
+| ~:buffer~ ~:handle~ | The editor buffer and its document. |
+
+The hit test temporarily shows one layer at a time with normal blending at
+full opacity (a Multiply layer composited over nothing is transparent, so
+its own blend mode would hide it), then restores every layer's visibility,
+blend mode and opacity.  Past ~cmacs-imgedit-menu-hit-test-max-layers~ (32)
+layers it stops guessing and uses the active layer.
+
+** Menu reference
+
+Entries greyed out are disabled *from the model's real state*, not
+hidden, so the menu keeps its shape.
+
+| Entry | Enabled when | Does |
+|-------+--------------+------|
+| *Layer N: NAME* | never (header) | Names the layer the menu is about. |
+| Select | the layer is not already active | Makes it the active layer. |
+| Rename… | always | ~cmacs-imgedit-rename-layer~ on that layer. |
+| Hide / Show | always (label follows visibility) | Toggles that layer's visibility. |
+| Lock / Unlock | always (label follows the lock) | Toggles the lock; a locked layer refuses pixel edits. |
+| Opacity ▸ 25/50/75/100%, Custom… | always; the current one is marked "(current)" | Sets that layer's opacity. |
+| Blend mode ▸ (10 modes) | always; current marked | Sets that layer's blend mode. |
+| Duplicate | always | Duplicates it and selects the copy. |
+| Merge down | there is a layer below and neither is locked | ~cmacs-imgedit-merge-layer-down~: composites the pair (each with its own opacity/blend/visibility) into one normal, opaque-opacity layer in the lower slot, keeping the lower layer's name. |
+| Move up / Move down | not already top / bottom | Reorders the stack. |
+| Delete layer… | more than one layer | ~cmacs-imgedit-delete-layer~; asks first (~cmacs-imgedit-confirm-layer-delete~) because layer structure is not undoable. |
+| New layer… | always | ~cmacs-imgedit-add-layer-cmd~. |
+| Undo / Redo | ~cmacs-imgedit-can-undo-p~ / ~-can-redo-p~ | ~u~ / ~U~. |
+| Clipboard ▸ Copy image, Paste image as layer, Paste screenshot | always | The clipboard commands above. |
+| Select ▸ Select all, Deselect, Invert selection, Magic wand here, Magic wand…, Fill selection, Delete selection, Crop to selection | Deselect / Delete / Crop need a selection; "here" needs a clicked pixel | Selection commands. |
+| Tools ▸ the ten tools, Brush size ▸, Shapes: filled/outline, Text size…, Foreground colour…, Alpha…, Pick colour here | current tool and size marked "(current)"; Pick needs a pixel | Tool state. |
+| Transform ▸ Flip H/V, Rotate 90° CW/CCW, Resize…, Crop…, Crop to selection | Crop to selection needs a selection | Whole-document transforms. |
+| Adjust ▸ Brightness…, Contrast…, Saturation…, Invert, Grayscale, Threshold…, Posterize…, Tint…, Histogram… | the layer is unlocked | Acts on *the layer the menu is about*, which it makes active first. |
+| Filter ▸ Blur…, Bloom, Sharpen, Edge detect, Emboss, Pixelate…, Noise… | the layer is unlocked | Same: the clicked layer. |
+| Draw ▸ Fill layer, Flood fill here, Gradient fill…, Line…, Arrow…, Rectangle…, Circle…, Ellipse…, Bézier curve…, Text…, Import SVG… | Fill/Flood/Gradient need an unlocked layer; Flood needs a pixel | Drawing by coordinates. |
+| Sprite ▸ Slice into frames…, Onion-skin (toggle), Palette… | always | Sprite tools. |
+| File ▸ Save, Save as…, Export GIF (layers as frames)…, Export indexed PNG… | always | |
+| Zoom in / Zoom out | Zoom out needs zoom > 1 | |
+| AI ▸ Edit by instruction…, Generate a new layer…, Describe this image | shown when ~cmacs-ai-supported-p~; enabled when the AI library / image generation library can load | Registered by =cmacs-imgedit-ai.el= through the hook. |
+
+** Display paths
+
+- *pgtk*: ~x-popup-menu~ renders a real GTK menu from the same keymap.
+- *=emacs --lrg=*: ~x-popup-menu~ is a silent no-op on that backend (its
+  =menu_show_hook= returns no selection), so the menu goes through
+  ~cmacs-menu-popup-keymap~, which flattens the keymap --- honouring the
+  greyed-out state --- for the in-engine ~lrg-popup-menu~.  This is the same
+  routing the 3D ~cmacs-libregnum-editor~ menus use.
+- *=context-menu-mode=*: when it is on (and
+  ~cmacs-media-menu-use-context-menu-mode~ is non-nil) a right-click builds the
+  menu through ~context-menu-map~ from the buffer-local
+  ~context-menu-functions~, which imgedit sets to its own menu function ---
+  so anything else added there contributes --- and pops it through
+  ~cmacs-menu-open-context-menu~, which also works under =--lrg=.  The stock
+  global entries (Emacs-buffer Undo, Cut, Copy…) are left out because they
+  would act on the rendered preview text; set
+  ~cmacs-media-menu-include-global-context-items~ to keep them.  With
+  =context-menu-mode= off, ~mouse-3~ pops the editor menu directly.
+- *Live viewport*: the C input layer reports the document pixel and the
+  frame pixel of a right-click; the menu is built from that pixel and popped
+  from a 0-delay timer (never inside the pselect wait).
+- *Keyboard*: ~<menu>~ or ~S-<f10>~ opens the same menu about the active
+  layer, near the top-left of the window.
+
+Under Doom/Evil the canvas and the panels carry a =keymap= text property,
+which outranks Evil's state maps and =context-menu-mode='s ~down-mouse-3~, and
+the mode map (with ~<menu>~ / ~S-<f10>~) is an Evil intercept map, so the
+menu opens in normal and motion state too.
+
+** Adding items
+
+#+begin_src emacs-lisp
+(add-hook 'cmacs-imgedit-context-menu-functions
+          (lambda (ctx)
+            `((:in filter :label "Halftone"          ; into Filter ▸
+               :enable ,(plist-get ctx :layer-hit)
+               :action ,(lambda (c) (my-halftone (plist-get c :layer))))
+              (:label "Count layers"                  ; a top-level entry
+               :action ,(lambda (c)
+                          (message "%d" (cmacs-imgedit-n-layers
+                                         (plist-get c :handle)))))))
+          50)
+#+end_src
+
+An item is a plist: ~:label~ plus one of ~:command~ (called interactively, or
+applied to ~:args~), ~:action~ (called with the context) or ~:items~ (a
+submenu, possibly a function of the context); ~:enable~ / ~:visible~ (values
+or functions of the context); ~:id~ on a submenu and ~:in~ on an item to put
+it there (an ~:in~ whose submenu is absent lands at the top level); ~(:sep)~
+for a separator.  Submenu ids: =tools= =edit= =select= =transform= =adjust=
+=filter= =draw= =sprite= =file= =ai=.  A chosen item runs in the editor buffer
+with the context bound to ~cmacs-media-menu-context~.  The machinery is
+=lisp/cmacs/cmacs-media-menu.el=, shared with vidstudio.
+
+A provider in a lazily loaded file must not decide its visibility with
+~fboundp~ on that file's own functions --- that empties the menu on a fresh
+session.  The AI layer shows the pattern: its hook entry is autoloaded, its
+visibility comes from the C DEFUN ~cmacs-ai-supported-p~, and calling its
+(autoloaded) item function is what loads it.
 
 * Model API (the ~cmacs-imgedit-*~ primitives)
 
@@ -300,8 +424,10 @@ node's texture in the 3D scene via ~cmacs-imgedit-after-save-functions~.
 | Plain-C bridge (no raylib =Color= in the DEFUN TU) | =cmacs/imgedit/cmacs-imgedit-doc.{c,h}= |
 | DEFUNs + handle registry | =cmacs/imgedit/cmacs-imgedit-defuns.c= |
 | Init / sym registration | =cmacs/imgedit/cmacs-imgedit-init.c= |
-| Major mode + commands | =lisp/cmacs/cmacs-imgedit.el= |
-| Tests (headless) | =test/cmacs/cmacs-imgedit-tests.el=, =deps/libregnum/tests/test-image-document.c= |
+| Major mode + commands + right-click menu | =lisp/cmacs/cmacs-imgedit.el= |
+| Context-menu builder (shared with vidstudio) | =lisp/cmacs/cmacs-media-menu.el= |
+| AI menu entries | =lisp/cmacs/cmacs-imgedit-ai.el= |
+| Tests (headless) | =test/cmacs/cmacs-imgedit-tests.el=, =test/cmacs/cmacs-imgedit-menu-tests.el=, =deps/libregnum/tests/test-image-document.c= |
 
 The DEFUN translation unit includes =lisp.h= only; the bridge
 (=cmacs-imgedit-doc.c=) is the single imgedit TU that includes =<libregnum.h>=,

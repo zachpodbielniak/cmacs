@@ -11,7 +11,9 @@
 ;; This mode displays the composited document as a native Emacs image and
 ;; supports both command-driven editing and direct mouse painting.  It works
 ;; under pgtk and the terminal; an in-engine libregnum viewport (smooth
-;; real-time brush + the GTK/lrg right-click menus) is a separate layer.
+;; real-time brush) is a separate layer.  The right-click menu is built
+;; from what was clicked (see `cmacs-imgedit-context-menu-functions') and
+;; pops as a GTK menu under pgtk or the in-engine menu under --lrg.
 ;;
 ;; The model is also fully scriptable / MCP-driveable through the
 ;; `cmacs-imgedit-*' primitives, independent of this UI.
@@ -19,7 +21,8 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'cmacs-libregnum)  ; live viewport hooks (image-* hook variables)
+(require 'cmacs-media-menu) ; context-built right-click menus (GTK + --lrg)
 (require 'cmacs-evil)       ; Evil/Doom keymap precedence
 (require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
@@ -105,6 +108,8 @@ libregnum backend are available; nil falls back to the insert-image path.")
 (defun cmacs-imgedit--checkerboard-p ()
   "Return non-nil if the display backend can show PNG images."
   (image-type-available-p 'png))
+
+(defvar cmacs-imgedit--panel-row-map)   ; defined with the context menu
 
 (defvar cmacs-imgedit--canvas-map (make-sparse-keymap)
   "Keymap applied as a text property over the rendered canvas.
@@ -491,20 +496,6 @@ headless / no-GL, where the native insert-image path is used instead."
                                       cmacs-imgedit-text-size)
              (cmacs-imgedit--vp-refresh))))
         (_ (cmacs-imgedit--vp-refresh))))))
-
-(defun cmacs-imgedit--vp-context-menu (buffer _dx _dy fx fy)
-  "Pop the imgedit context menu for a viewport right-click at frame (FX FY).
-Runs deferred inside the pselect wait, so schedule the pop onto the command
-loop with a 0-delay timer (the 3D editor does the same)."
-  (run-at-time
-   0 nil
-   (lambda ()
-     (when (buffer-live-p buffer)
-       (with-current-buffer buffer
-         (let ((choice (cmacs-libregnum-popup-menu
-                        (list (list fx fy) (selected-window))
-                        (cmacs-imgedit--menu))))
-           (when (commandp choice) (call-interactively choice))))))))
 
 (defun cmacs-imgedit--install-image-hooks (buffer)
   "Install the viewport input hook functions in BUFFER."
@@ -1082,7 +1073,10 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
          'action (lambda (_)
                    (cmacs-imgedit--panel-act
                     canvas (lambda () (cmacs-imgedit-set-active-layer h idx))))
-         'follow-link t 'help-echo "Select this layer")
+         'follow-link t
+         'help-echo "mouse-1: select this layer  mouse-3: layer menu"
+         'keymap cmacs-imgedit--panel-row-map
+         'cmacs-imgedit-layer idx)
         (insert " ")
         (insert-text-button "[v]"
                             'action (lambda (_)
@@ -1091,7 +1085,9 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
                                        (lambda ()
                                          (cmacs-imgedit-set-active-layer h idx)
                                          (cmacs-imgedit-toggle-layer-visible))))
-                            'follow-link t 'help-echo "Toggle visibility")
+                            'follow-link t 'help-echo "Toggle visibility"
+                            'keymap cmacs-imgedit--panel-row-map
+                            'cmacs-imgedit-layer idx)
         (insert "\n")))
     (insert "\n")
     (dolist (b '(("+ Add layer" . cmacs-imgedit-add-layer-cmd)
@@ -1111,10 +1107,12 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
   (let ((canvas (current-buffer)))
     (when (buffer-live-p cmacs-imgedit--tools-panel)
       (with-current-buffer cmacs-imgedit--tools-panel
-        (cmacs-imgedit--build-tools-panel canvas)))
+        (cmacs-imgedit--build-tools-panel canvas)
+        (cmacs-imgedit--claim-panel-mouse-3)))
     (when (buffer-live-p cmacs-imgedit--layers-panel)
       (with-current-buffer cmacs-imgedit--layers-panel
-        (cmacs-imgedit--build-layers-panel canvas)))))
+        (cmacs-imgedit--build-layers-panel canvas)
+        (cmacs-imgedit--claim-panel-mouse-3)))))
 
 (defun cmacs-imgedit--open-panels ()
   "Create + display the tools and layers side windows for this canvas."
@@ -1129,7 +1127,9 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
       (with-current-buffer b
         (unless (derived-mode-p 'special-mode) (special-mode))
         (setq-local cmacs-imgedit--canvas-buffer canvas)
-        (setq-local cursor-type nil)))
+        (setq-local cursor-type nil)
+        (cmacs-media-menu-install-context-function
+         #'cmacs-imgedit--context-menu-function)))
     (cmacs-imgedit--refresh-panels)
     (display-buffer-in-side-window tbuf '((side . left) (window-width . 22)
                                           (slot . 0)))
@@ -1137,7 +1137,7 @@ GTK clipboard (any compositor / X11), then `wl-paste'."
                                           (slot . 0)))))
 
 ;; --------------------------------------------------------------------------
-;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
+;; Adjustments / filters / transforms (menu and key targets)
 ;; --------------------------------------------------------------------------
 
 ;; ── Adjustments / filters / flip (active layer, one undo step) ──────────
@@ -1526,99 +1526,578 @@ Photoshop modes implemented in the document compositor).")
       (display-buffer (current-buffer)))))
 
 
-(defun cmacs-imgedit--menu ()
-  "Return the image-editor context-menu alist (shared by native + viewport)."
-  '("Image editor"
-            ("Tools"
-             ("Fill layer" . cmacs-imgedit-fill-layer)
-             ("Flood fill…" . cmacs-imgedit-flood-fill-at)
-             ("Pencil…" . cmacs-imgedit-pencil)
-             ("Line…" . cmacs-imgedit-draw-line-cmd)
-             ("Arrow…" . cmacs-imgedit-draw-arrow-cmd)
-             ("Rectangle…" . cmacs-imgedit-draw-rect-cmd)
-             ("Circle…" . cmacs-imgedit-draw-circle-cmd)
-             ("Ellipse…" . cmacs-imgedit-draw-ellipse-cmd)
-             ("Text…" . cmacs-imgedit-draw-text-cmd)
-             ("Eyedropper…" . cmacs-imgedit-eyedropper)
-             ("Foreground colour…" . cmacs-imgedit-set-foreground-color)
-             ("Brush size…" . cmacs-imgedit-set-brush-size)
-             ("Text size…" . cmacs-imgedit-set-text-size))
-            ("Layer"
-             ("Add layer…" . cmacs-imgedit-add-layer-cmd)
-             ("Remove active layer" . cmacs-imgedit-remove-active-layer)
-             ("Duplicate layer" . cmacs-imgedit-duplicate-active-layer)
-             ("Rename layer…" . cmacs-imgedit-rename-layer)
-             ("Move layer up" . cmacs-imgedit-move-layer-up)
-             ("Move layer down" . cmacs-imgedit-move-layer-down)
-             ("Blend mode…" . cmacs-imgedit-set-layer-blend-mode)
-             ("Toggle lock" . cmacs-imgedit-toggle-layer-lock)
-             ("Select layer…" . cmacs-imgedit-set-active-layer-cmd)
-             ("Toggle visibility" . cmacs-imgedit-toggle-layer-visible)
-             ("Opacity…" . cmacs-imgedit-set-layer-opacity-cmd)
-             ("List layers" . cmacs-imgedit-list-layers))
-            ("Adjust"
-             ("Brightness…" . cmacs-imgedit-adjust-brightness)
-             ("Contrast…" . cmacs-imgedit-adjust-contrast)
-             ("Saturation…" . cmacs-imgedit-adjust-saturation)
-             ("Invert" . cmacs-imgedit-invert-colors)
-             ("Grayscale" . cmacs-imgedit-desaturate)
-             ("Threshold…" . cmacs-imgedit-threshold-layer)
-             ("Posterize…" . cmacs-imgedit-posterize-layer)
-             ("Tint…" . cmacs-imgedit-tint-layer)
-             ("Histogram…" . cmacs-imgedit-show-histogram))
-            ("Filter"
-             ("Blur…" . cmacs-imgedit-blur-layer)
-             ("Bloom" . cmacs-imgedit-bloom-layer)
-             ("Sharpen" . cmacs-imgedit-sharpen-layer)
-             ("Edge detect" . cmacs-imgedit-edge-detect-layer)
-             ("Emboss" . cmacs-imgedit-emboss-layer)
-             ("Pixelate…" . cmacs-imgedit-pixelate-layer)
-             ("Noise…" . cmacs-imgedit-noise-layer))
-            ("Transform"
-             ("Flip horizontal" . cmacs-imgedit-flip-horizontal)
-             ("Flip vertical" . cmacs-imgedit-flip-vertical)
-             ("Rotate CW" . cmacs-imgedit-rotate-cw)
-             ("Rotate CCW" . cmacs-imgedit-rotate-ccw)
-             ("Resize…" . cmacs-imgedit-resize-image)
-             ("Crop…" . cmacs-imgedit-crop-image)
-             ("Gradient fill…" . cmacs-imgedit-gradient-fill)
-             ("Bézier curve…" . cmacs-imgedit-draw-bezier-cmd)
-             ("Import SVG…" . cmacs-imgedit-import-svg-file))
-            ("Select"
-             ("Magic wand…" . cmacs-imgedit-magic-wand-select)
-             ("Select all" . cmacs-imgedit-select-all-cmd)
-             ("Deselect" . cmacs-imgedit-deselect)
-             ("Invert" . cmacs-imgedit-invert-selection)
-             ("Fill selection" . cmacs-imgedit-fill-selection)
-             ("Delete selection" . cmacs-imgedit-delete-selection)
-             ("Crop to selection" . cmacs-imgedit-crop-to-selection))
-            ("Sprite"
-             ("Slice into frames…" . cmacs-imgedit-slice-to-frames)
-             ("Toggle onion-skin" . cmacs-imgedit-toggle-onion-skin)
-             ("Palette…" . cmacs-imgedit-show-palette)
-             ("Export GIF (frames)…" . cmacs-imgedit-export-gif-file)
-             ("Export indexed PNG…" . cmacs-imgedit-export-indexed))
-            ("Clipboard"
-             ("Copy image" . cmacs-imgedit-copy-to-clipboard)
-             ("Paste image" . cmacs-imgedit-paste-from-clipboard)
-             ("Paste screenshot" . cmacs-imgedit-paste-screenshot))
-            ("Edit"
-             ("Undo" . cmacs-imgedit-undo-cmd)
-             ("Redo" . cmacs-imgedit-redo-cmd)
-             ("Zoom in" . cmacs-imgedit-zoom-in)
-             ("Zoom out" . cmacs-imgedit-zoom-out)
-             ("Export GIF (layers)…" . cmacs-imgedit-export-gif-file)
-             ("Save…" . cmacs-imgedit-save-cmd))))
+;; ── Layer operations the menu needs beyond the layer commands above ────
+
+(defcustom cmacs-imgedit-confirm-layer-delete t
+  "Ask before deleting a layer from the right-click menu.
+Layer structure is not covered by imgedit's undo (the undo stack keeps
+pixel snapshots of one layer), so a deleted layer cannot be brought back
+with `u'."
+  :type 'boolean)
+
+(defcustom cmacs-imgedit-menu-hit-test-max-layers 32
+  "Most layers the right-click menu hit-tests to find the layer clicked.
+
+Finding the layer under the pointer flattens the document once per
+layer, from the top down, until one has a non-transparent pixel there.
+Past this many layers the menu stops guessing and offers the active
+layer instead, so a right-click never stalls on a huge stack."
+  :type 'integer)
+
+(defun cmacs-imgedit--layer-at (handle x y)
+  "Index of the topmost visible layer of HANDLE painted at (X Y), or nil.
+
+The model composites only the whole stack, so each candidate is shown
+alone in turn -- with normal blending at full opacity, since a Multiply
+layer composited over nothing comes out transparent -- and the flattened
+pixel read back.  Every layer's visibility, blend mode and opacity are
+restored afterwards whatever happens.  A layer counts as painted there
+when that pixel's alpha is non-zero; a layer whose own opacity is 0 is
+skipped."
+  (let ((n (cmacs-imgedit-n-layers handle)))
+    (when (and (integerp x) (integerp y)
+               (<= n cmacs-imgedit-menu-hit-test-max-layers))
+      (let ((vis (mapcar (lambda (i) (cmacs-imgedit-layer-visible-p handle i))
+                         (number-sequence 0 (1- n))))
+            (found nil))
+        (unwind-protect
+            (progn
+              (dotimes (i n) (cmacs-imgedit-set-layer-visible handle i nil))
+              (let ((i (1- n)))
+                (while (and (>= i 0) (not found))
+                  (when (and (nth i vis)
+                             (> (cmacs-imgedit-layer-opacity handle i) 0.0))
+                    (let ((blend (cmacs-imgedit-layer-blend handle i))
+                          (opacity (cmacs-imgedit-layer-opacity handle i)))
+                      (unwind-protect
+                          (progn
+                            (cmacs-imgedit-set-layer-blend handle i 1)
+                            (cmacs-imgedit-set-layer-opacity handle i 1.0)
+                            (cmacs-imgedit-set-layer-visible handle i t)
+                            (let ((px (cmacs-imgedit-pixel-at handle x y)))
+                              (when (and px (> (nth 3 px) 0))
+                                (setq found i))))
+                        (cmacs-imgedit-set-layer-blend handle i blend)
+                        (cmacs-imgedit-set-layer-opacity handle i opacity)
+                        (cmacs-imgedit-set-layer-visible handle i nil))))
+                  (setq i (1- i)))))
+          (let ((i 0))
+            (dolist (v vis)
+              (cmacs-imgedit-set-layer-visible handle i (and v t))
+              (setq i (1+ i)))))
+        found))))
+
+(defun cmacs-imgedit-delete-layer (&optional index)
+  "Delete layer INDEX (default: the active layer), asking first.
+See `cmacs-imgedit-confirm-layer-delete'.  The last layer is kept."
+  (interactive)
+  (let* ((h cmacs-imgedit--handle)
+         (i (or index (cmacs-imgedit-active-layer h))))
+    (cond
+     ((<= (cmacs-imgedit-n-layers h) 1)
+      (user-error "imgedit: cannot delete the only layer"))
+     ((or (not cmacs-imgedit-confirm-layer-delete)
+          (yes-or-no-p (format "Delete layer %d \"%s\"? (not undoable) "
+                               i (cmacs-imgedit-layer-name h i))))
+      (cmacs-imgedit-remove-layer h i)
+      (cmacs-imgedit--render)
+      (message "Deleted layer %d" i)))))
+
+(defun cmacs-imgedit-merge-layer-down (&optional index)
+  "Merge layer INDEX (default: the active layer) into the layer below.
+
+The two layers are composited exactly as they show -- each layer's own
+opacity, blend mode, offset and visibility -- into one new layer that
+takes the lower layer's place and name, with normal blending at full
+opacity.  The model has no merge primitive, so this flattens just the
+pair (every other layer hidden for the moment), loads the result back as
+a layer, and removes the two originals.  Like every structural layer
+change it is not covered by undo."
+  (interactive)
+  (let* ((h cmacs-imgedit--handle)
+         (i (or index (cmacs-imgedit-active-layer h)))
+         (n (cmacs-imgedit-n-layers h)))
+    (when (<= i 0)
+      (user-error "imgedit: there is no layer below layer %d" i))
+    (when (or (cmacs-imgedit-layer-locked-p h i)
+              (cmacs-imgedit-layer-locked-p h (1- i)))
+      (user-error "imgedit: unlock both layers before merging"))
+    (let ((vis (mapcar (lambda (k) (cmacs-imgedit-layer-visible-p h k))
+                       (number-sequence 0 (1- n))))
+          (name (cmacs-imgedit-layer-name h (1- i)))
+          (file (make-temp-file "cmacs-imgedit-merge" nil ".png"))
+          (png nil))
+      (unwind-protect
+          (progn
+            ;; 1. Flatten only the pair, each still honouring its own
+            ;;    visibility.
+            (dotimes (k n)
+              (cmacs-imgedit-set-layer-visible
+               h k (and (memq k (list i (1- i))) (nth k vis) t)))
+            (setq png (cmacs-imgedit-export-png-bytes h))
+            ;; 2. Put every layer's visibility back before the stack moves.
+            (let ((k 0))
+              (dolist (v vis)
+                (cmacs-imgedit-set-layer-visible h k (and v t))
+                (setq k (1+ k))))
+            ;; 3. The pair becomes one layer in the lower one's slot.
+            (let ((coding-system-for-write 'binary))
+              (with-temp-file file
+                (set-buffer-multibyte nil)
+                (insert png)))
+            (let ((new (cmacs-imgedit-add-layer-from-file h file name)))
+              (cmacs-imgedit-remove-layer h i)
+              (cmacs-imgedit-remove-layer h (1- i))
+              ;; The new layer was appended on top: N + 1 - 2 = N - 1.
+              (ignore new)
+              (cmacs-imgedit-move-layer h (- n 2) (1- i))
+              (cmacs-imgedit-set-active-layer h (1- i))))
+        (ignore-errors (delete-file file))))
+    (cmacs-imgedit--render)
+    (message "Merged layer %d down" i)))
+
+;; --------------------------------------------------------------------------
+;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
+;; --------------------------------------------------------------------------
+;;
+;; The menu is a function of the click context, built by
+;; cmacs-media-menu.el.  Every section below is an ordinary member of
+;; `cmacs-imgedit-context-menu-functions'; other code -- the AI layer in
+;; cmacs-imgedit-ai.el, a user's init -- adds items with `add-hook' in
+;; exactly the same way.
+
+(defvar cmacs-imgedit-context-menu-functions
+  '(cmacs-imgedit-menu-layer-items
+    cmacs-imgedit-menu-edit-items
+    cmacs-imgedit-menu-tool-items
+    cmacs-imgedit-menu-image-items
+    cmacs-imgedit-menu-file-items)
+  "Functions that contribute items to the imgedit right-click menu.
+
+Each is called with the click CONTEXT, a plist:
+
+  :editor    the symbol `imgedit'
+  :buffer    the editor (canvas) buffer
+  :handle    its document handle
+  :x :y      the document pixel clicked, or nil (keyboard, panels)
+  :layer     the layer the menu is about: the one painted under the
+             pointer, the panel row clicked, or the active layer
+  :layer-hit non-nil when :layer was found under the pointer
+  :selection the selection bounding box (X Y W H), or nil
+  :source    `canvas', `viewport', `layers-panel' or `keyboard'
+
+and returns a list of menu items in the shape `cmacs-media-menu.el'
+documents (`:label' + `:command'/`:action'/`:items', `:enable',
+`:visible', `:id'/`:in').  Items are shown in hook order; use `add-hook'
+with a depth to place new ones, and `:in' with one of the submenu ids
+below to extend an existing submenu:
+
+  tools  edit  select  transform  adjust  filter  draw  sprite  file")
+
+(defvar cmacs-imgedit-menu-opacity-steps '(0.25 0.5 0.75 1.0)
+  "Opacity presets offered in the layer menu's Opacity submenu.")
+
+(defvar cmacs-imgedit-menu-brush-sizes '(1 2 4 8 16 32)
+  "Brush sizes offered in the Tools menu's Brush size submenu.")
+
+(defun cmacs-imgedit-menu-context (&optional x y source layer)
+  "Build the click context for the current editor buffer.
+X Y is the document pixel clicked (nil when the menu was opened from the
+keyboard or a panel); SOURCE says where; LAYER, when given, is the layer
+the menu is about -- otherwise the one painted at X Y, else the active
+layer.  See `cmacs-imgedit-context-menu-functions'."
+  (let* ((h cmacs-imgedit--handle)
+         (hit (and (null layer) (cmacs-imgedit--layer-at h x y))))
+    (list :editor 'imgedit
+          :buffer (current-buffer)
+          :handle h
+          :x x :y y
+          :source (or source 'canvas)
+          :layer (or layer hit (cmacs-imgedit-active-layer h))
+          :layer-hit (and (or layer hit) t)
+          :selection (cmacs-imgedit-selection-bbox h))))
+
+(defun cmacs-imgedit--menu-on-layer (ctx fn)
+  "Make CTX's layer active, then call FN (a command or a function)."
+  (cmacs-imgedit-set-active-layer (plist-get ctx :handle)
+                                  (plist-get ctx :layer))
+  (if (commandp fn) (call-interactively fn) (funcall fn)))
+
+(defun cmacs-imgedit--menu-layer-action (fn)
+  "A menu :action running FN with the clicked layer made active."
+  (lambda (ctx) (cmacs-imgedit--menu-on-layer ctx fn)))
+
+(defun cmacs-imgedit--menu-unlocked-p (ctx)
+  "Non-nil when CTX's layer accepts pixel edits."
+  (not (cmacs-imgedit-layer-locked-p (plist-get ctx :handle)
+                                     (plist-get ctx :layer))))
+
+(defun cmacs-imgedit--menu-current (label currentp)
+  "LABEL, marked as the current choice when CURRENTP."
+  (if currentp (format "%s (current)" label) label))
+
+(defun cmacs-imgedit-menu-layer-items (ctx)
+  "Menu section for the layer CTX is about: select, rename, show/hide,
+lock, opacity, blend mode, duplicate, merge down, reorder, delete."
+  (let* ((h (plist-get ctx :handle))
+         (i (plist-get ctx :layer))
+         (n (cmacs-imgedit-n-layers h))
+         (active (cmacs-imgedit-active-layer h))
+         (visible (cmacs-imgedit-layer-visible-p h i))
+         (locked (cmacs-imgedit-layer-locked-p h i))
+         (opacity (cmacs-imgedit-layer-opacity h i))
+         (blend (cmacs-imgedit-layer-blend h i)))
+    `((:label ,(format "Layer %d: %s" i (cmacs-imgedit-layer-name h i))
+       :enable nil)
+      (:label ,(if (= i active) "Select (active)" "Select")
+       :enable ,(/= i active)
+       :action ,(lambda (c)
+                  (cmacs-imgedit-set-active-layer h (plist-get c :layer))
+                  (cmacs-imgedit--render)))
+      (:label "Rename…"
+       :action ,(cmacs-imgedit--menu-layer-action #'cmacs-imgedit-rename-layer))
+      (:label ,(if visible "Hide" "Show")
+       :action ,(cmacs-imgedit--menu-layer-action
+                 #'cmacs-imgedit-toggle-layer-visible))
+      (:label ,(if locked "Unlock" "Lock")
+       :action ,(cmacs-imgedit--menu-layer-action
+                 #'cmacs-imgedit-toggle-layer-lock))
+      (:label "Opacity"
+       :items
+       (,@(mapcar
+           (lambda (o)
+             (list :label (cmacs-imgedit--menu-current
+                           (format "%d%%" (round (* 100 o)))
+                           (< (abs (- o opacity)) 0.005))
+                   :action (lambda (c)
+                             (cmacs-imgedit-set-layer-opacity
+                              h (plist-get c :layer) o)
+                             (cmacs-imgedit--render))))
+           cmacs-imgedit-menu-opacity-steps)
+        (:sep)
+        (:label "Custom…"
+         :action ,(cmacs-imgedit--menu-layer-action
+                   #'cmacs-imgedit-set-layer-opacity-cmd))))
+      (:label "Blend mode"
+       :items
+       ,(mapcar
+         (lambda (m)
+           (list :label (cmacs-imgedit--menu-current (car m)
+                                                     (eql (cdr m) blend))
+                 :action (lambda (c)
+                           (cmacs-imgedit-set-layer-blend
+                            h (plist-get c :layer) (cdr m))
+                           (cmacs-imgedit--render))))
+         cmacs-imgedit--blend-modes))
+      (:label "Duplicate"
+       :action ,(cmacs-imgedit--menu-layer-action
+                 #'cmacs-imgedit-duplicate-active-layer))
+      (:label "Merge down"
+       :enable ,(and (> i 0) (not locked)
+                     (not (cmacs-imgedit-layer-locked-p h (max 0 (1- i)))))
+       :action ,(lambda (c)
+                  (cmacs-imgedit-merge-layer-down (plist-get c :layer))))
+      (:label "Move up" :enable ,(< (1+ i) n)
+       :action ,(cmacs-imgedit--menu-layer-action
+                 #'cmacs-imgedit-move-layer-up))
+      (:label "Move down" :enable ,(> i 0)
+       :action ,(cmacs-imgedit--menu-layer-action
+                 #'cmacs-imgedit-move-layer-down))
+      (:label "Delete layer…" :enable ,(> n 1)
+       :action ,(lambda (c) (cmacs-imgedit-delete-layer (plist-get c :layer))))
+      (:label "New layer…" :command cmacs-imgedit-add-layer-cmd)
+      (:sep))))
+
+(defun cmacs-imgedit-menu-edit-items (ctx)
+  "Menu section: undo/redo (enabled from the model), clipboard, select."
+  (let* ((h (plist-get ctx :handle))
+         (x (plist-get ctx :x)) (y (plist-get ctx :y))
+         (sel (plist-get ctx :selection)))
+    `((:label "Undo" :enable ,(cmacs-imgedit-can-undo-p h)
+       :command cmacs-imgedit-undo-cmd :keys "u")
+      (:label "Redo" :enable ,(cmacs-imgedit-can-redo-p h)
+       :command cmacs-imgedit-redo-cmd :keys "U")
+      (:sep)
+      (:id edit :label "Clipboard"
+       :items
+       ((:label "Copy image" :command cmacs-imgedit-copy-to-clipboard)
+        (:label "Paste image as layer"
+         :command cmacs-imgedit-paste-from-clipboard)
+        (:label "Paste screenshot" :command cmacs-imgedit-paste-screenshot)))
+      (:id select :label "Select"
+       :items
+       ((:label "Select all" :command cmacs-imgedit-select-all-cmd)
+        (:label "Deselect" :enable ,(and sel t)
+         :command cmacs-imgedit-deselect)
+        (:label "Invert selection" :command cmacs-imgedit-invert-selection)
+        (:label "Magic wand here" :enable ,(and x y t)
+         :command cmacs-imgedit-magic-wand-select :args (,x ,y))
+        (:label "Magic wand…" :command cmacs-imgedit-magic-wand-select)
+        (:sep)
+        (:label "Fill selection" :command cmacs-imgedit-fill-selection)
+        (:label "Delete selection" :enable ,(and sel t)
+         :command cmacs-imgedit-delete-selection)
+        (:label "Crop to selection" :enable ,(and sel t)
+         :command cmacs-imgedit-crop-to-selection))))))
+
+(defun cmacs-imgedit-menu-tool-items (ctx)
+  "Menu section: the active tool, brush size, colours, text size."
+  (let ((x (plist-get ctx :x)) (y (plist-get ctx :y)))
+    `((:id tools :label "Tools"
+       :items
+       (,@(mapcar
+           (lambda (tc)
+             (list :label (cmacs-imgedit--menu-current
+                           (cdr tc) (eq (car tc) cmacs-imgedit--tool))
+                   :command #'cmacs-imgedit-set-tool :args (list (car tc))))
+           cmacs-imgedit-tools)
+        (:sep)
+        (:label "Brush size"
+         :items
+         (,@(mapcar
+             (lambda (n)
+               (list :label (cmacs-imgedit--menu-current
+                             (format "%d px" n)
+                             (= n cmacs-imgedit--brush-size))
+                     :command #'cmacs-imgedit-set-brush-size :args (list n)))
+             cmacs-imgedit-menu-brush-sizes)
+          (:sep)
+          (:label "Custom…" :command cmacs-imgedit-set-brush-size)))
+        (:label ,(format "Shapes: %s (toggle)"
+                         (if cmacs-imgedit--shape-fill "filled" "outline"))
+         :command cmacs-imgedit-toggle-shape-fill)
+        (:label "Text size…" :command cmacs-imgedit-set-text-size)
+        (:sep)
+        (:label "Foreground colour…"
+         :command cmacs-imgedit-set-foreground-color)
+        (:label "Alpha…" :command cmacs-imgedit-set-alpha)
+        (:label "Pick colour here" :enable ,(and x y t)
+         :command cmacs-imgedit-eyedropper :args (,x ,y)))))))
+
+(defun cmacs-imgedit-menu-image-items (ctx)
+  "Menu section: transforms, adjustments, filters, drawing and sprites.
+Adjustments and filters act on the layer CTX is about, which they make
+active, and are greyed out while that layer is locked."
+  (let* ((x (plist-get ctx :x)) (y (plist-get ctx :y))
+         (sel (plist-get ctx :selection))
+         (editable (cmacs-imgedit--menu-unlocked-p ctx))
+         (on-layer (lambda (cmd)
+                     (list :action (cmacs-imgedit--menu-layer-action cmd)
+                           :enable editable))))
+    `((:id transform :label "Transform"
+       :items
+       ((:label "Flip horizontal" :command cmacs-imgedit-flip-horizontal)
+        (:label "Flip vertical" :command cmacs-imgedit-flip-vertical)
+        (:label "Rotate 90° clockwise" :command cmacs-imgedit-rotate-cw)
+        (:label "Rotate 90° counter-clockwise"
+         :command cmacs-imgedit-rotate-ccw)
+        (:sep)
+        (:label "Resize…" :command cmacs-imgedit-resize-image)
+        (:label "Crop…" :command cmacs-imgedit-crop-image)
+        (:label "Crop to selection" :enable ,(and sel t)
+         :command cmacs-imgedit-crop-to-selection)))
+      (:id adjust :label "Adjust"
+       :items
+       ((:label "Brightness…" ,@(funcall on-layer
+                                         #'cmacs-imgedit-adjust-brightness))
+        (:label "Contrast…" ,@(funcall on-layer
+                                       #'cmacs-imgedit-adjust-contrast))
+        (:label "Saturation…" ,@(funcall on-layer
+                                         #'cmacs-imgedit-adjust-saturation))
+        (:label "Invert" ,@(funcall on-layer #'cmacs-imgedit-invert-colors))
+        (:label "Grayscale" ,@(funcall on-layer #'cmacs-imgedit-desaturate))
+        (:label "Threshold…" ,@(funcall on-layer
+                                        #'cmacs-imgedit-threshold-layer))
+        (:label "Posterize…" ,@(funcall on-layer
+                                        #'cmacs-imgedit-posterize-layer))
+        (:label "Tint…" ,@(funcall on-layer #'cmacs-imgedit-tint-layer))
+        (:sep)
+        (:label "Histogram…" :command cmacs-imgedit-show-histogram)))
+      (:id filter :label "Filter"
+       :items
+       ((:label "Blur…" ,@(funcall on-layer #'cmacs-imgedit-blur-layer))
+        (:label "Bloom" ,@(funcall on-layer #'cmacs-imgedit-bloom-layer))
+        (:label "Sharpen" ,@(funcall on-layer #'cmacs-imgedit-sharpen-layer))
+        (:label "Edge detect" ,@(funcall on-layer
+                                         #'cmacs-imgedit-edge-detect-layer))
+        (:label "Emboss" ,@(funcall on-layer #'cmacs-imgedit-emboss-layer))
+        (:label "Pixelate…" ,@(funcall on-layer
+                                       #'cmacs-imgedit-pixelate-layer))
+        (:label "Noise…" ,@(funcall on-layer #'cmacs-imgedit-noise-layer))))
+      (:id draw :label "Draw"
+       :items
+       ((:label "Fill layer" ,@(funcall on-layer #'cmacs-imgedit-fill-layer))
+        (:label "Flood fill here" :enable ,(and x y editable t)
+         :action ,(lambda (c)
+                    (cmacs-imgedit--menu-on-layer
+                     c (lambda ()
+                         (cmacs-imgedit-flood-fill-at (plist-get c :x)
+                                                      (plist-get c :y) 0)))))
+        (:label "Gradient fill…" ,@(funcall on-layer
+                                            #'cmacs-imgedit-gradient-fill))
+        (:sep)
+        (:label "Line…" :command cmacs-imgedit-draw-line-cmd)
+        (:label "Arrow…" :command cmacs-imgedit-draw-arrow-cmd)
+        (:label "Rectangle…" :command cmacs-imgedit-draw-rect-cmd)
+        (:label "Circle…" :command cmacs-imgedit-draw-circle-cmd)
+        (:label "Ellipse…" :command cmacs-imgedit-draw-ellipse-cmd)
+        (:label "Bézier curve…" :command cmacs-imgedit-draw-bezier-cmd)
+        (:label "Text…" :command cmacs-imgedit-draw-text-cmd)
+        (:label "Import SVG…" :command cmacs-imgedit-import-svg-file)))
+      (:id sprite :label "Sprite"
+       :items
+       ((:label "Slice into frames…" :command cmacs-imgedit-slice-to-frames)
+        (:label ,(format "Onion-skin: %s (toggle)"
+                         (if cmacs-imgedit--onion "on" "off"))
+         :command cmacs-imgedit-toggle-onion-skin)
+        (:label "Palette…" :command cmacs-imgedit-show-palette))))))
+
+(defun cmacs-imgedit-menu-file-items (_ctx)
+  "Menu section: save, export, zoom."
+  `((:sep)
+    (:id file :label "File"
+     :items
+     ((:label ,(if cmacs-imgedit--path
+                   (format "Save %s" (file-name-nondirectory
+                                      cmacs-imgedit--path))
+                 "Save…")
+       :command cmacs-imgedit-save-cmd :keys "s")
+      (:label "Save as…"
+       :action ,(lambda (_c)
+                  (cmacs-imgedit-save-cmd
+                   (read-file-name "Save image as: " nil nil nil
+                                   (and cmacs-imgedit--path
+                                        (file-name-nondirectory
+                                         cmacs-imgedit--path))))))
+      (:sep)
+      (:label "Export GIF (layers as frames)…"
+       :command cmacs-imgedit-export-gif-file)
+      (:label "Export indexed PNG…" :command cmacs-imgedit-export-indexed)))
+    (:label "Zoom in" :command cmacs-imgedit-zoom-in :keys "+")
+    (:label "Zoom out" :enable ,(> cmacs-imgedit--zoom 1)
+     :command cmacs-imgedit-zoom-out :keys "-")))
+
+(defun cmacs-imgedit-context-menu-keymap (ctx)
+  "The imgedit right-click menu for click context CTX, as a menu keymap.
+Collects every function on `cmacs-imgedit-context-menu-functions'."
+  (with-current-buffer (plist-get ctx :buffer)
+    (cmacs-media-menu-keymap
+     "Image editor"
+     (cmacs-media-menu-collect 'cmacs-imgedit-context-menu-functions ctx)
+     ctx)))
+
+(defun cmacs-imgedit--click-context (event)
+  "The click context for mouse EVENT, with the canvas buffer current.
+
+EVENT may land on the canvas (the document pixel and the layer painted
+there) or in one of the side panels (a layers-panel row gives that row's
+layer, anywhere else the active layer).  Returns nil when it is none of
+these."
+  (let* ((posn (event-start event))
+         (win (posn-window posn))
+         (buf (and (windowp win) (window-buffer win))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (cond
+         (cmacs-imgedit--handle
+          (let ((xy (cmacs-imgedit--event-doc-xy event)))
+            (cmacs-imgedit-menu-context (car xy) (cdr xy) 'canvas)))
+         ((buffer-live-p cmacs-imgedit--canvas-buffer)
+          (let ((layer (and (integer-or-marker-p (posn-point posn))
+                            (get-text-property (posn-point posn)
+                                               'cmacs-imgedit-layer))))
+            (with-current-buffer cmacs-imgedit--canvas-buffer
+              (and cmacs-imgedit--handle
+                   (cmacs-imgedit-menu-context nil nil 'layers-panel
+                                               layer))))))))))
+
+(defun cmacs-imgedit--context-menu-function (menu click)
+  "`context-menu-functions' entry: add the imgedit items for CLICK to MENU."
+  (let ((ctx (cmacs-media-menu-context-for 'imgedit click
+                                           #'cmacs-imgedit--click-context)))
+    (if ctx
+        (cmacs-media-menu-fill-context-menu
+         menu (cmacs-imgedit-context-menu-keymap ctx))
+      menu)))
 
 (defun cmacs-imgedit-context-menu (event)
-  "Pop the image-editor context menu for mouse EVENT (native path).
-Routes through `cmacs-libregnum-popup-menu' so it is a native GTK menu under
-pgtk and the in-engine libregnum menu under the --lrg backend."
+  "Pop the image-editor menu for mouse EVENT, built from what was clicked.
+
+The menu is a GTK menu under pgtk and the in-engine menu under --lrg.
+With `context-menu-mode' on (and `cmacs-media-menu-use-context-menu-mode'),
+it is built through `context-menu-map', so the buffer's
+`context-menu-functions' contribute too."
   (interactive "e")
-  (cmacs-imgedit--select-event-window event)  ; commands need the canvas buffer
-  (let ((choice (cmacs-libregnum-popup-menu event (cmacs-imgedit--menu))))
-    (when (commandp choice)
-      (call-interactively choice))))
+  (cmacs-imgedit--select-event-window event)  ; commands need the canvas
+  (let ((ctx (cmacs-imgedit--click-context event)))
+    (unless ctx
+      (user-error "imgedit: this click did not land on an editor canvas"))
+    (cmacs-media-menu-show ctx #'cmacs-imgedit-context-menu-keymap event)))
+
+(defun cmacs-imgedit-context-menu-at-point ()
+  "Open the image-editor menu from the keyboard.
+It describes the active layer, since there is no pointer to read."
+  (interactive)
+  (let ((buf (if cmacs-imgedit--handle (current-buffer)
+               cmacs-imgedit--canvas-buffer)))
+    (unless (and (buffer-live-p buf)
+                 (buffer-local-value 'cmacs-imgedit--handle buf))
+      (user-error "imgedit: not in an image editor"))
+    (let ((pos (cmacs-media-menu-position)))
+      (with-current-buffer buf
+        (cmacs-media-menu-show (cmacs-imgedit-menu-context nil nil 'keyboard)
+                               #'cmacs-imgedit-context-menu-keymap pos)))))
+
+(defun cmacs-imgedit--vp-context-menu (buffer dx dy fx fy &optional _clip)
+  "Pop the imgedit menu for a live-viewport right-click.
+DX DY is the document pixel under the pointer, FX FY the frame pixel.
+This runs inside the pselect wait, so the pop is scheduled onto the
+command loop with a 0-delay timer (the 3D editor does the same)."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (when cmacs-imgedit--handle
+           (let* ((w (cmacs-imgedit-width cmacs-imgedit--handle))
+                  (h (cmacs-imgedit-height cmacs-imgedit--handle))
+                  (inside (and (integerp dx) (integerp dy)
+                               (>= dx 0) (>= dy 0) (< dx w) (< dy h)))
+                  (win (get-buffer-window buffer t)))
+             (cmacs-media-menu-show
+              (cmacs-imgedit-menu-context (and inside dx) (and inside dy)
+                                          'viewport)
+              #'cmacs-imgedit-context-menu-keymap
+              (list (list fx fy)
+                    (if win (window-frame win) (selected-frame)))))))))))
+
+(defvar cmacs-imgedit--panel-row-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map [down-mouse-3] #'cmacs-imgedit-context-menu)
+    (define-key map [mouse-3] #'ignore)
+    map)
+  "Keymap of a layers-panel row: a button that also takes mouse-3.")
+
+(defvar cmacs-imgedit--panel-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [down-mouse-3] #'cmacs-imgedit-context-menu)
+    (define-key map [mouse-3] #'ignore)
+    map)
+  "Keymap over the parts of a side panel that are not buttons.")
+
+(defun cmacs-imgedit--claim-panel-mouse-3 ()
+  "Give mouse-3 to the editor menu everywhere in the current panel.
+Buttons keep their own keymap (a layer row's already takes mouse-3);
+the gaps between them get `cmacs-imgedit--panel-map'.  A position
+`keymap' property outranks Evil's state maps and `context-menu-mode',
+exactly as on the canvas."
+  (let ((inhibit-read-only t) (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change pos 'keymap nil (point-max))))
+        (unless (get-text-property pos 'keymap)
+          (put-text-property pos next 'keymap cmacs-imgedit--panel-map))
+        (setq pos next)))))
 
 ;; --------------------------------------------------------------------------
 ;; Mode
@@ -1712,7 +2191,11 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "+") #'cmacs-imgedit-zoom-in)
     (define-key map (kbd "-") #'cmacs-imgedit-zoom-out)
     (define-key map (kbd "<down-mouse-1>") #'cmacs-imgedit-mouse-1)
-    (define-key map (kbd "<mouse-3>") #'cmacs-imgedit-context-menu)
+    (define-key map (kbd "<down-mouse-3>") #'cmacs-imgedit-context-menu)
+    (define-key map (kbd "<mouse-3>") #'ignore)
+    ;; The same menu from the keyboard (the menu key, and GTK's S-F10).
+    (define-key map (kbd "<menu>") #'cmacs-imgedit-context-menu-at-point)
+    (define-key map (kbd "S-<f10>") #'cmacs-imgedit-context-menu-at-point)
     (define-key map (kbd "D") #'cmacs-imgedit-diagnose))
 
 (defun cmacs-imgedit--cleanup ()
@@ -1737,6 +2220,8 @@ Press a key to run its command, or q / C-g to dismiss."
   (setq-local cursor-type nil)
   (setq-local cmacs-imgedit--zoom cmacs-imgedit-default-zoom)
   (buffer-disable-undo)
+  (cmacs-media-menu-install-context-function
+   #'cmacs-imgedit--context-menu-function)
   (add-hook 'kill-buffer-hook #'cmacs-imgedit--cleanup nil t))
 
 ;; --------------------------------------------------------------------------
@@ -1763,7 +2248,7 @@ sprite zoom, so scale down as the image grows."
           cmacs-imgedit--zoom (cmacs-imgedit--fit-zoom handle))
     (cmacs-imgedit--apply-color)
     (setq header-line-format
-          '(:eval (format " imgedit v%d %dx%d  tool=%s  fg=%s  brush=%d  zoom=%dx  [mouse-1 draw, mouse-3 menu, D diagnose]"
+          '(:eval (format " imgedit v%d %dx%d  tool=%s  fg=%s  brush=%d  zoom=%dx  [mouse-1 draw, mouse-3/menu key: menu, D diagnose]"
                           cmacs-imgedit--ui-version
                           (cmacs-imgedit-width cmacs-imgedit--handle)
                           (cmacs-imgedit-height cmacs-imgedit--handle)

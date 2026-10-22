@@ -266,6 +266,9 @@ the whole desktop."
   (interactive "sGenerate layer: ")
   (unless (and (boundp 'cmacs-imgedit--handle) cmacs-imgedit--handle)
     (user-error "Not in an imgedit buffer"))
+  ;; cmacs-ai-image is lazily loaded like the rest of cmacs-ai: load it
+  ;; here rather than asking `fboundp' about a file nothing has loaded.
+  (require 'cmacs-ai-image nil t)
   (unless (fboundp 'cmacs-ai-image--run)
     (user-error "Image generation is not available in this build"))
   (let* ((doc cmacs-imgedit--handle)
@@ -297,6 +300,44 @@ the whole desktop."
   (unless (and (boundp 'cmacs-imgedit--handle) cmacs-imgedit--handle)
     (user-error "Not in an imgedit buffer"))
   (message "%s" (cmacs-imgedit-ai--describe cmacs-imgedit--handle)))
+
+
+;;;; Right-click menu
+;;
+;; Registered on `cmacs-imgedit-context-menu-functions' like any other
+;; provider -- imgedit itself knows nothing about this file.  The hook
+;; form is autoloaded, so the AI entries are in the menu from the first
+;; right-click of a session; calling the (autoloaded) item function is
+;; what loads this file.  Visibility is decided by the C DEFUN
+;; `cmacs-ai-supported-p', never by `fboundp' on lazily-loaded Elisp,
+;; which reports "no AI" until something else happens to load it.
+
+(defun cmacs-imgedit-ai--library-p (feature)
+  "Non-nil when FEATURE is loaded or can be loaded."
+  (or (featurep feature) (and (locate-library (symbol-name feature)) t)))
+
+;;;###autoload
+(defun cmacs-imgedit-ai-context-menu-items (_ctx)
+  "The AI entries of the imgedit right-click menu."
+  (when (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p))
+    (let ((model (or (fboundp 'cmacs-ai-call)
+                     (cmacs-imgedit-ai--library-p 'cmacs-ai-call))))
+      `((:sep)
+        (:id ai :label "AI"
+         :items
+         ((:label "Edit by instruction…" :enable ,model
+           :command cmacs-imgedit-ai-prompt)
+          (:label "Generate a new layer…"
+           :enable ,(or (fboundp 'cmacs-ai-image--run)
+                        (cmacs-imgedit-ai--library-p 'cmacs-ai-image))
+           :command cmacs-imgedit-ai-generate-layer)
+          (:label "Describe this image" :enable ,model
+           :command cmacs-imgedit-ai-describe)))))))
+
+;;;###autoload
+(with-eval-after-load 'cmacs-imgedit
+  (add-hook 'cmacs-imgedit-context-menu-functions
+            #'cmacs-imgedit-ai-context-menu-items 90))
 
 
 ;;;; Brigade tools

@@ -12241,13 +12241,10 @@ drawn in-engine.  On a tty / headless / no-GL frame it falls back automatically
 to the native @code{insert-image} preview (buffer-local
 @code{cmacs-imgedit--live} nil).
 
-The right-click menu exposes @emph{Adjust} (brightness, contrast, invert,
-grayscale, tint, exact colour-replace), @emph{Filter} (box blur, bloom,
-noise), and @emph{Transform} (flip horizontal/vertical) --- adjustments and
-filters act on the active layer, flips on the whole document.  The @emph{Layer}
-submenu surfaces the model reorder/rename/duplicate/blend-mode DEFUNs and a
-lock toggle (a locked layer refuses edits).  See
-@file{doc_org/cmacs/cmacs-imgedit.org} for the command + DEFUN names.
+The right-click menu is built from what is under the pointer (@pxref{Imgedit
+Right-click Menu}): the layer painted there, the selection and the undo
+history decide what it offers.  A fully in-engine GPU editing viewport (GPU
+brush strokes, in-viewport tool palettes) is still future work.
 
 @section Commands
 
@@ -12264,8 +12261,9 @@ Capture a gowl screenshot into a new editor buffer.
 @end table
 
 In @code{cmacs-imgedit-mode}: @kbd{mouse-1} paints; @kbd{mouse-3} pops the
-context menu (a native GTK menu under pgtk, the in-engine libregnum menu under
-@option{--lrg}).  Tools: @kbd{b} brush, @kbd{l} line, @kbd{>} arrow (filled
+context menu for what is under the pointer (a native GTK menu under pgtk, the
+in-engine libregnum menu under @option{--lrg}), and @kbd{@key{menu}} or
+@kbd{S-@key{F10}} opens it from the keyboard.  Tools: @kbd{b} brush, @kbd{l} line, @kbd{>} arrow (filled
 head at the release point), @kbd{r} rectangle, @kbd{c} circle, @kbd{E}
 ellipse, @kbd{t} text (@kbd{T} sets the text size), @kbd{k} bucket, @kbd{e}
 eyedropper; also @kbd{f} fill layer, @kbd{p} pencil, @kbd{G} flood fill,
@@ -12322,11 +12320,79 @@ save / info / set_color / draw_shape / draw_text / add_layer / undo, plus
 @code{imgedit_adjust} / @code{imgedit_filter} / @code{imgedit_transform}) let
 an agent do all of this headlessly.
 
+@section Right-click menu
+@anchor{Imgedit Right-click Menu}
+
+The menu is a function of the @emph{click context}, a plist describing what
+was clicked: @code{:layer} (the topmost visible layer painted at the clicked
+pixel, found by compositing each layer alone from the top down; a layers-panel
+row gives that row's layer; the keyboard gives the active layer),
+@code{:layer-hit}, @code{:x}/@code{:y} (the document pixel, or nil),
+@code{:selection} (the selection bounding box), @code{:source}
+(@code{canvas}, @code{viewport}, @code{layers-panel} or @code{keyboard}),
+@code{:buffer} and @code{:handle}.  Every function on
+@code{cmacs-imgedit-context-menu-functions} turns the context into items; the
+editor's own sections are ordinary members of that hook.  Greyed-out entries
+are disabled from the model's real state.
+
+@multitable @columnfractions .34 .30 .36
+@headitem Entry @tab Enabled when @tab Does
+@item @emph{Layer N: NAME} @tab never (header) @tab names the layer
+@item Select @tab not already active @tab makes it active
+@item Rename@dots{}, Hide/Show, Lock/Unlock @tab always @tab on that layer
+@item Opacity, Blend mode (submenus) @tab always; current marked @tab on that layer
+@item Duplicate @tab always @tab copies it
+@item Merge down @tab a layer below, neither locked @tab @code{cmacs-imgedit-merge-layer-down}
+@item Move up / Move down @tab not at top / bottom @tab reorders
+@item Delete layer@dots{} @tab more than one layer @tab asks first (not undoable)
+@item Undo / Redo @tab @code{cmacs-imgedit-can-undo-p} / @code{-can-redo-p} @tab
+@item Clipboard, Select @tab Deselect/Delete/Crop need a selection; @samp{here} entries need a pixel @tab
+@item Tools @tab current tool/size marked @tab tool, brush size, colours
+@item Transform @tab Crop to selection needs one @tab flip, rotate, resize, crop
+@item Adjust, Filter @tab the layer is unlocked @tab on the clicked layer, made active
+@item Draw, Sprite, File, Zoom @tab Flood fill here needs a pixel @tab
+@item AI @tab shown when @code{cmacs-ai-supported-p} @tab from @file{cmacs-imgedit-ai.el}
+@end multitable
+
+Display paths: a GTK menu (@code{x-popup-menu}) under pgtk; under
+@code{emacs --lrg}, where @code{x-popup-menu} is a silent no-op, the same
+keymap is flattened by @code{cmacs-menu-popup-keymap} for the in-engine
+@code{lrg-popup-menu}, greyed-out state included.  With
+@code{context-menu-mode} on (and @code{cmacs-media-menu-use-context-menu-mode})
+the menu is built through @code{context-menu-map} from the buffer-local
+@code{context-menu-functions} and popped by @code{cmacs-menu-open-context-menu}
+(which also works under @option{--lrg}); the global Emacs-buffer entries are
+left out unless @code{cmacs-media-menu-include-global-context-items}.  A
+live-viewport right-click is popped from a 0-delay timer.  The canvas and the
+panels carry a @code{keymap} text property and the mode map is an Evil
+intercept map, so the menu works in Evil normal/motion state too.
+
+Adding items:
+
+@lisp
+(add-hook 'cmacs-imgedit-context-menu-functions
+          (lambda (ctx)
+            `((:in filter :label "Halftone"
+               :action ,(lambda (c) (my-halftone (plist-get c :layer))))))
+          50)
+@end lisp
+
+An item is a plist: @code{:label} plus @code{:command} (called
+interactively, or applied to @code{:args}), @code{:action} (called with the
+context) or @code{:items} (a submenu); optional @code{:enable} /
+@code{:visible} (values or functions of the context) and @code{:id} /
+@code{:in} to extend a named submenu (@code{tools edit select transform
+adjust filter draw sprite file ai}).  The builder is
+@file{lisp/cmacs/cmacs-media-menu.el}, shared with vidstudio.  A provider in a
+lazily-loaded file must gate on a C DEFUN or @code{locate-library}, never on
+@code{fboundp} of its own Elisp; the AI layer's hook entry is autoloaded for
+that reason.
+
 @section Adjustments, filters, selection, and sprite mode
 
 Beyond the basic tools, the editor exposes the full graylib/libregnum image
-surface (right-click menus @emph{Adjust}, @emph{Filter}, @emph{Transform},
-@emph{Vector}, @emph{Select}, @emph{Sprite}, @emph{Layer}):
+surface (right-click submenus @emph{Adjust}, @emph{Filter}, @emph{Transform},
+@emph{Draw}, @emph{Select}, @emph{Sprite}, and the layer section):
 
 @itemize @bullet
 @item @strong{Adjust}: brightness, contrast, saturation, invert, grayscale,
