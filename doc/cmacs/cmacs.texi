@@ -8498,6 +8498,136 @@ Voice commands intercepted before insertion (configured via
 @item "undo"         -> undo
 @end table
 
+@section Duplex Voice Loop (cmacs-voice-loop)
+
+@cindex voice loop
+@cindex Jarvis loop
+@cindex wake word
+@cindex barge-in
+
+@kbd{C-c v l} (@code{cmacs-voice-loop-mode}) is a global minor mode
+that holds a spoken conversation with a cmacs-ai chat.  The microphone
+stays open; say the wake phrase (@code{cmacs-voice-loop-wake-phrase},
+default @code{"jarvis"}) and your request; partial transcripts appear
+while you talk; the final transcript is sent when you stop; the reply
+streams in and is spoken sentence by sentence; and talking over the
+reply stops it.  For @code{cmacs-voice-loop-follow-up-seconds} (8)
+after a reply no wake phrase is needed.  @kbd{C-c v j}
+(@code{cmacs-voice-loop-listen-now}) addresses the loop once without
+the phrase.  The full reference is
+@file{doc_org/cmacs/cmacs-voice-loop.org}.
+
+The mode line shows the state: @code{Voice} (listening; a trailing
+@code{+} means no wake phrase is needed right now),
+@code{Voice:hearing}, @code{Voice:thinking}, @code{Voice:speaking}.
+@code{cmacs-voice-loop-state-change-functions} runs with
+@code{(@var{new} @var{old})} on every change.
+
+@subsection How it works
+
+@table @asis
+@item Capture
+A 16 kHz mono capture is drained every 0.1 s and cut into 512-sample
+(32 ms) frames, the Silero window.
+
+@item Voice activity
+With the Silero model installed (@kbd{M-x
+cmacs-whisper-download-vad-model}, about 1 MB) each frame gets a
+speech probability from @code{cmacs-whisper-vad-feed} on a worker
+thread.  Without it an adaptive energy detector
+(@code{cmacs-whisper-pcm-levels}) is used; both map onto one
+probability scale.  Two frames over @code{cmacs-voice-loop-vad-threshold}
+start a segment (with 320 ms of pre-roll); 640 ms of silence ends it.
+
+@item Wake phrase
+No hotword engine: a small whisper model
+(@code{cmacs-voice-loop-wake-model}, default @code{ggml-tiny.en.bin},
+falling back to the default model) transcribes the speech, and a word
+matches when its Levenshtein similarity to the phrase reaches
+@code{cmacs-voice-loop-wake-threshold} (0.75).  A bare phrase arms the
+loop for @code{cmacs-voice-loop-armed-seconds}.  A nil phrase is an
+open mic.
+
+@item Partials
+Every @code{cmacs-voice-loop-partial-interval} (0.8 s) the last 10 s
+of speech is re-transcribed, the sliding window of whisper.cpp's
+@command{stream} example.  Partials show in the echo area and as an
+overlay at the end of the chat; the first partial containing the
+phrase marks the speech as addressed.
+
+@item Sending
+@code{cmacs-voice-loop-send-function} gets the final text; the
+default inserts it into the chat's compose area and calls
+@code{cmacs-ai-chat-send-compose}.  The reply is spoken through
+advice on @code{cmacs-ai-chat--stream-callback} (so continuations after
+a tool call are spoken too), one sentence synthesised at a time so the
+order holds.
+
+@item Barge-in
+Speech lasting @code{cmacs-voice-loop-barge-in-min-ms} (250) while the
+loop thinks or speaks stops piper, cancels the streaming reply, and is
+taken as the next request.
+@end table
+
+@subsection Self-echo and echo cancellation
+
+Through speakers the microphone hears the reply.
+@code{cmacs-voice-loop-tts-gating} is @code{threshold} (raise the
+speech threshold to @code{cmacs-voice-loop-tts-vad-threshold}, 0.85,
+while speaking; the default), @code{mute} (ignore the microphone while
+speaking) or @code{none} (headset or echo cancellation).  Real echo
+cancellation is PipeWire's @code{libpipewire-module-echo-cancel} with
+the WebRTC canceller, both in Fedora's @code{pipewire-libs}: @kbd{M-x
+cmacs-voice-loop-echo-cancel-config} shows a drop-in that defines an
+echo-cancelled source @code{cmacs-echo-cancel-source}; with a prefix
+argument it offers to write it under
+@file{~/.config/pipewire/pipewire.conf.d/}.  Restart PipeWire
+yourself, then:
+
+@lisp
+(setq cmacs-voice-loop-device "cmacs-echo-cancel-source"
+      cmacs-voice-loop-tts-gating 'none)
+@end lisp
+
+Device hints now reach @code{pipewiresrc} as its @code{target-object}
+property; it has no @code{device} property, so before this they were
+silently ignored under PipeWire.
+
+@subsection Privacy
+
+The mode is off by default.  Audio stays in memory only until whisper
+has copied it, and is then overwritten; the worker wipes its copies
+with @code{memset_explicit}.  Speech without the wake phrase is
+transcribed once by the wake model and dropped.  Nothing is written to
+disk unless @code{cmacs-voice-loop-save-directory} is set.
+
+@section Streaming VAD and PCM Helpers
+
+@table @code
+@item (cmacs-whisper-vad-open @var{model} &optional @var{threads})
+Open a streaming Silero VAD; the model loads off the main thread on
+the first feed.  Signals when @var{model} does not exist.
+@item (cmacs-whisper-vad-feed @var{handle} @var{pcm} @var{callback})
+Queue S16LE 16 kHz @var{pcm}; @var{callback} later receives
+@code{((:probs . [@var{p} @dots{}]) (:window . 512))} or
+@code{((:error . @var{msg}))}.  The LSTM state carries across feeds.
+@item (cmacs-whisper-vad-reset @var{handle})
+@itemx (cmacs-whisper-vad-close @var{handle})
+@itemx (cmacs-whisper-vad-list)
+Reset, release and list streams.
+@item (cmacs-whisper-pcm-levels @var{pcm} &optional @var{window})
+RMS level in dBFS of each @var{window} (512) samples.
+@item (cmacs-whisper-pcm-resample @var{pcm} @var{from} @var{to})
+Linear resampler for mono S16LE.
+@end table
+
+All VAD operations run on one worker thread, in the order they were
+issued; results come back on the main thread through the GC-rooted
+callback registry.  Transcription jobs that overlap on one model no
+longer share its default state: the first job claims it, the others
+run on a private @code{whisper_state}.  whisper.cpp's INFO logging is
+filtered out unless @env{CMACS_WHISPER_DEBUG} is set.
+
 @section MCP Tool
 
 The @code{transcribe} MCP tool (registered when both
@@ -8529,6 +8659,14 @@ ISO 2-letter language code (default @code{"en"}).
 @item cmacs-whisper-download-base-url
 Upstream model mirror; default
 @code{https://huggingface.co/ggerganov/whisper.cpp/resolve/main/}.
+
+@item cmacs-whisper-default-vad-model
+Silero VAD model basename (default @code{ggml-silero-v6.2.0.bin}),
+resolved through the model search path.
+
+@item cmacs-whisper-vad-download-base-url
+Where @code{cmacs-whisper-download-vad-model} fetches it from; default
+@code{https://huggingface.co/ggml-org/whisper-vad/resolve/main/}.
 
 @item cmacs-whisper-dictate-window-seconds
 Sliding window length for live dictation (default 3.0 s).

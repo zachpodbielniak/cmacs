@@ -19,6 +19,11 @@
 ;; (`. ? !` followed by space or newline) is seen, so the user
 ;; hears the reply unfolding live rather than after the model
 ;; finishes.
+;;
+;; For hands-free conversation -- always listening, a wake word,
+;; partial transcripts, talking over the reply -- see
+;; `cmacs-voice-loop-mode' (cmacs-voice-loop.el).  Turned on from a
+;; voice chat buffer (C-c v l there) it adopts that buffer.
 
 ;;; Code:
 
@@ -36,6 +41,7 @@
 (declare-function cmacs-piper-speak-region "cmacs-piper")
 (declare-function cmacs-piper-stop "cmacs-piper")
 (declare-function cmacs-piper-supported-p "cmacs-piper-defuns.c")
+(declare-function cmacs-voice-loop-mode "cmacs-voice-loop" (&optional arg))
 
 (defun cmacs-ai-voice--speak (text)
   (when (and cmacs-ai-voice-auto-speak
@@ -73,6 +79,7 @@
     (set-keymap-parent m cmacs-ai-chat-mode-map)
     (define-key m (kbd "C-c v t") #'cmacs-ai-voice-dictate)
     (define-key m (kbd "C-c v s") #'cmacs-piper-stop)
+    (define-key m (kbd "C-c v l") #'cmacs-voice-loop-mode)
     m)
   "Keymap for cmacs-ai voice mode (extends `cmacs-ai-chat-mode-map').")
 
@@ -81,8 +88,10 @@
   (interactive)
   (unless (fboundp 'cmacs-whisper-dictate)
     (user-error "cmacs-whisper not available"))
-  (let ((buf (current-buffer))
-        (cmacs-whisper-dictate-target-buffer (current-buffer)))
+  ;; `cmacs-whisper-dictate' targets the current buffer itself, so
+  ;; there is nothing to bind (an earlier lexical binding of a variable
+  ;; dictate never reads did nothing).
+  (let ((buf (current-buffer)))
     ;; Use whisper-dictate's record-stop loop; user finishes by
     ;; toggling the same command (whisper-dictate is a minor mode).
     (cmacs-whisper-dictate)

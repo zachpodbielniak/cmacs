@@ -25,6 +25,7 @@
 #include "lisp.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
+#include "cmacs-whisper.h"
 
 #include <glib.h>
 #include <stdint.h>
@@ -32,8 +33,6 @@
 #include <stdlib.h>
 #include <whisper.h>
 
-extern struct whisper_context *cmacs_whisper_context_get (const char *path,
-                                                          GError **error);
 
 /* --- Internal job struct --- */
 
@@ -172,24 +171,63 @@ cmacs_whisper__run (CmacsWhisperJob *j)
   wp.n_threads         = j->n_threads > 0
                          ? j->n_threads : (int) g_get_num_processors ();
 
-  int rc = whisper_full (ctx, wp, j->samples, (int) j->n_samples);
+  /* Use the context's default state when no other job holds it, else
+   * a private one: two threads in one whisper_state corrupt each other
+   * (the voice loop overlaps partial and final transcriptions, and
+   * cmacs-transcribe runs files in parallel on one model).  */
+  gboolean own_default = cmacs_whisper_context_claim_default (ctx);
+  struct whisper_state *st = NULL;
+  int rc;
+  if (own_default)
+    rc = whisper_full (ctx, wp, j->samples, (int) j->n_samples);
+  else
+    {
+      st = whisper_init_state (ctx);
+      if (!st)
+        {
+          j->error_msg = g_strdup ("whisper_init_state failed");
+          return FALSE;
+        }
+      rc = whisper_full_with_state (ctx, st, wp, j->samples,
+                                    (int) j->n_samples);
+    }
   if (rc != 0)
     {
       j->error_msg = g_strdup_printf ("whisper_full returned %d", rc);
+      if (st)
+        whisper_free_state (st);
+      else
+        cmacs_whisper_context_release_default (ctx);
       return FALSE;
     }
-  int n_seg = whisper_full_n_segments (ctx);
+  int n_seg = st ? whisper_full_n_segments_from_state (st)
+                 : whisper_full_n_segments (ctx);
   j->full_text = g_string_sized_new (256);
   j->segments  = g_array_new (FALSE, FALSE, sizeof (CmacsSeg));
   for (int i = 0; i < n_seg; i++)
     {
-      const char *text = whisper_full_get_segment_text (ctx, i);
-      int64_t t0 = whisper_full_get_segment_t0 (ctx, i) * 10; /* centisec -> ms */
-      int64_t t1 = whisper_full_get_segment_t1 (ctx, i) * 10;
+      const char *text;
+      int64_t t0, t1;
+      if (st)
+        {
+          text = whisper_full_get_segment_text_from_state (st, i);
+          t0 = whisper_full_get_segment_t0_from_state (st, i) * 10;
+          t1 = whisper_full_get_segment_t1_from_state (st, i) * 10;
+        }
+      else
+        {
+          text = whisper_full_get_segment_text (ctx, i);
+          t0 = whisper_full_get_segment_t0 (ctx, i) * 10; /* cs -> ms */
+          t1 = whisper_full_get_segment_t1 (ctx, i) * 10;
+        }
       g_string_append (j->full_text, text);
       CmacsSeg s = { t0, t1, g_strdup (text) };
       g_array_append_val (j->segments, s);
     }
+  if (st)
+    whisper_free_state (st);
+  else
+    cmacs_whisper_context_release_default (ctx);
   return TRUE;
 }
 
@@ -201,6 +239,8 @@ cmacs_whisper__job_free (CmacsWhisperJob *j)
   if (!j) return;
   g_free (j->model_path);
   g_free (j->language);
+  if (j->samples)
+    memset_explicit (j->samples, 0, j->n_samples * sizeof (float));
   g_free (j->samples);
   if (j->full_text) g_string_free (j->full_text, TRUE);
   if (j->segments)
@@ -349,6 +389,8 @@ cmacs_whisper_transcribe_pcm_sync (const char *model_path,
   /* Don't free j here; it lives on stack.  Free the heap fields manually. */
   g_free (j.model_path);
   g_free (j.language);
+  if (j.samples)
+    memset_explicit (j.samples, 0, j.n_samples * sizeof (float));
   g_free (j.samples);
   if (j.full_text) g_string_free (j.full_text, TRUE);
   if (j.segments)
@@ -381,6 +423,353 @@ cmacs_whisper_transcribe_file_sync (const char *model_path,
   Lisp_Object out = cmacs_whisper_transcribe_pcm_sync (model_path, language,
                                                        pcm, n, n_threads);
   g_free (pcm);
+  return out;
+}
+
+/* --- Streaming voice-activity detection ---------------------------
+ *
+ * whisper.cpp v1.9 ships the Silero VAD as a ggml model and exposes
+ * `whisper_vad_detect_speech_no_reset', which keeps the model's LSTM
+ * state across calls -- exactly what a microphone stream needs: feed
+ * each new run of 512-sample windows as it arrives and get one speech
+ * probability per window back, with the network still remembering the
+ * audio before it.
+ *
+ * Threading.  Every VAD operation (feed, reset, close) goes through
+ * ONE GThreadPool with a single worker, so the operations on a stream
+ * run strictly in the order Lisp issued them -- a reset can never
+ * overtake the feed before it, and a close always runs last.  The
+ * worker owns `vctx': it loads the model lazily on the first feed (so
+ * opening a stream never blocks Emacs on file I/O), runs inference,
+ * and frees it on close.  Results go back to the main thread with
+ * g_main_context_invoke, where the Lisp callback runs through the
+ * GC-rooted cookie registry in cmacs-eval-dispatch -- no Lisp_Object
+ * is ever held in this heap memory, and no Lisp runs off the main
+ * thread.
+ *
+ * The handle table is touched only on the main thread (the DEFUNs),
+ * so it needs no lock.  A stream is removed from it by close before
+ * its CLOSE job is queued, so no feed can be queued after the close.
+ *
+ * Privacy.  Sample buffers are wiped (memset_explicit) before they
+ * are freed; nothing is written to disk.  */
+
+typedef struct {
+  uint64_t                    handle;
+  char                       *model_path;
+  int                         n_threads;
+  struct whisper_vad_context *vctx;        /* worker thread only */
+  char                       *load_error;  /* worker thread only */
+} CmacsWhisperVad;
+
+typedef enum {
+  CMACS_WHISPER_VAD_OP_FEED = 0,
+  CMACS_WHISPER_VAD_OP_RESET,
+  CMACS_WHISPER_VAD_OP_CLOSE
+} CmacsWhisperVadOp;
+
+typedef struct {
+  CmacsWhisperVadOp  op;
+  CmacsWhisperVad   *vad;
+  float             *samples;     /* FEED input, owned */
+  size_t             n_samples;
+  uint64_t           cb_cookie;   /* FEED only */
+  float             *probs;       /* FEED output, owned */
+  int                n_probs;
+  char              *error_msg;   /* FEED output, owned */
+} CmacsWhisperVadJob;
+
+static GThreadPool *vad_pool = NULL;        /* created on first open */
+static GHashTable  *vad_streams = NULL;     /* handle -> stream; main thread */
+static uint64_t     vad_next_handle = 1;
+
+/* cmacs_whisper__wipe_free:
+ * @p: (nullable): a buffer of @n floats.
+ * @n: element count.
+ *
+ * Zero @p in a way the compiler may not elide, then free it.  */
+static void
+cmacs_whisper__wipe_free (float *p, size_t n)
+{
+  if (!p)
+    return;
+  memset_explicit (p, 0, n * sizeof (float));
+  g_free (p);
+}
+
+static void
+cmacs_whisper__vad_job_free (CmacsWhisperVadJob *j)
+{
+  cmacs_whisper__wipe_free (j->samples, j->n_samples);
+  g_free (j->probs);
+  g_free (j->error_msg);
+  g_free (j);
+}
+
+/* cmacs_whisper__vad_main_completion:
+ * @user: (transfer full): the finished CmacsWhisperVadJob.
+ *
+ * Main-thread half of a FEED: build the result alist and hand it to
+ * the registered Lisp callback.
+ *
+ * Result: `((:probs . [P0 P1 ...]) (:window . 512))', one probability
+ * in [0, 1] per 512-sample window, or `((:error . MESSAGE))'.  */
+static gboolean
+cmacs_whisper__vad_main_completion (gpointer user)
+{
+  CmacsWhisperVadJob *j = user;
+  Lisp_Object res;
+
+  if (j->error_msg)
+    res = list1 (Fcons (intern (":error"), build_string (j->error_msg)));
+  else
+    {
+      Lisp_Object v = make_nil_vector (j->n_probs);
+      for (int i = 0; i < j->n_probs; i++)
+        ASET (v, i, make_float ((double) j->probs[i]));
+      res = list2 (Fcons (intern (":probs"), v),
+                   Fcons (intern (":window"),
+                          make_fixnum (CMACS_WHISPER_VAD_WINDOW)));
+    }
+  cmacs_dispatch_callback_invoke1 (j->cb_cookie, res);
+  cmacs_whisper__vad_job_free (j);
+  return G_SOURCE_REMOVE;
+}
+
+/* cmacs_whisper__vad_load:
+ * @v: the stream, on the worker thread.
+ *
+ * Load @v's model once.  A failure is remembered, so a missing or
+ * corrupt model costs one attempt rather than one per feed.
+ *
+ * Returns: TRUE when @v->vctx is usable.  */
+static gboolean
+cmacs_whisper__vad_load (CmacsWhisperVad *v)
+{
+  if (v->vctx)
+    return TRUE;
+  if (v->load_error)
+    return FALSE;
+
+  struct whisper_vad_context_params cp = whisper_vad_default_context_params ();
+  cp.n_threads = v->n_threads > 0 ? v->n_threads : 1;
+  cp.use_gpu   = false;
+  v->vctx = whisper_vad_init_from_file_with_params (v->model_path, cp);
+  if (!v->vctx)
+    v->load_error = g_strdup_printf ("cmacs-whisper: failed to load VAD "
+                                     "model: %s", v->model_path);
+  return v->vctx != NULL;
+}
+
+/* cmacs_whisper__vad_worker:
+ * @data: (transfer full): a CmacsWhisperVadJob.
+ * @user: unused.
+ *
+ * The single VAD worker.  FEED posts its job to the main thread;
+ * RESET and CLOSE finish here.  */
+static void
+cmacs_whisper__vad_worker (gpointer data, gpointer user)
+{
+  CmacsWhisperVadJob *j = data;
+  CmacsWhisperVad *v = j->vad;
+
+  (void) user;
+  switch (j->op)
+    {
+    case CMACS_WHISPER_VAD_OP_FEED:
+      if (j->n_samples == 0)
+        j->n_probs = 0;
+      else if (!cmacs_whisper__vad_load (v))
+        j->error_msg = g_strdup (v->load_error);
+      else if (!whisper_vad_detect_speech_no_reset (v->vctx, j->samples,
+                                                    (int) j->n_samples))
+        j->error_msg = g_strdup ("cmacs-whisper: VAD inference failed");
+      else
+        {
+          int n = whisper_vad_n_probs (v->vctx);
+          const float *p = whisper_vad_probs (v->vctx);
+          j->n_probs = n > 0 ? n : 0;
+          j->probs = g_new0 (float, j->n_probs > 0 ? j->n_probs : 1);
+          if (p && n > 0)
+            memcpy (j->probs, p, (size_t) n * sizeof (float));
+        }
+      /* Done with the audio before the round-trip to the main thread. */
+      cmacs_whisper__wipe_free (j->samples, j->n_samples);
+      j->samples = NULL;
+      g_main_context_invoke (cmacs_glib_get_context (),
+                             cmacs_whisper__vad_main_completion, j);
+      return;
+
+    case CMACS_WHISPER_VAD_OP_RESET:
+      if (v->vctx)
+        whisper_vad_reset_state (v->vctx);
+      break;
+
+    case CMACS_WHISPER_VAD_OP_CLOSE:
+      if (v->vctx)
+        whisper_vad_free (v->vctx);
+      g_free (v->model_path);
+      g_free (v->load_error);
+      g_free (v);
+      j->vad = NULL;
+      break;
+
+    default:
+      break;
+    }
+  cmacs_whisper__vad_job_free (j);
+}
+
+/* cmacs_whisper__vad_push:
+ * @j: (transfer full): the job to queue.
+ *
+ * Queue @j on the VAD worker.  On the (practically impossible) failure
+ * to queue, a FEED still answers its callback, with an error, so the
+ * cookie's GC root is released.  */
+static void
+cmacs_whisper__vad_push (CmacsWhisperVadJob *j)
+{
+  GError *err = NULL;
+
+  if (g_thread_pool_push (vad_pool, j, &err))
+    return;
+  if (j->op == CMACS_WHISPER_VAD_OP_FEED)
+    {
+      j->error_msg = g_strdup_printf ("cmacs-whisper: VAD queue: %s",
+                                      err ? err->message : "push failed");
+      cmacs_whisper__vad_main_completion (j);
+    }
+  else
+    cmacs_whisper__vad_job_free (j);
+  if (err)
+    g_error_free (err);
+}
+
+/* cmacs_whisper_vad_open:
+ * @model_path: the Silero ggml model file (already file-name encoded).
+ * @n_threads: inference threads; <= 0 means 1.
+ *
+ * Create a streaming VAD.  Main thread only.  The model is loaded by
+ * the worker on the first feed.
+ *
+ * Returns: the new handle, or 0 if the worker could not be started.  */
+uint64_t
+cmacs_whisper_vad_open (const char *model_path, int n_threads)
+{
+  if (!vad_pool)
+    {
+      GError *err = NULL;
+      vad_pool = g_thread_pool_new (cmacs_whisper__vad_worker, NULL,
+                                    1, FALSE, &err);
+      if (!vad_pool)
+        {
+          if (err)
+            g_error_free (err);
+          return 0;
+        }
+      vad_streams = g_hash_table_new (g_int64_hash, g_int64_equal);
+    }
+
+  CmacsWhisperVad *v = g_new0 (CmacsWhisperVad, 1);
+  v->handle     = vad_next_handle++;
+  v->model_path = g_strdup (model_path);
+  v->n_threads  = n_threads;
+  g_hash_table_insert (vad_streams, &v->handle, v);
+  return v->handle;
+}
+
+static CmacsWhisperVad *
+cmacs_whisper__vad_lookup (uint64_t handle)
+{
+  if (!vad_streams)
+    return NULL;
+  return g_hash_table_lookup (vad_streams, &handle);
+}
+
+/* cmacs_whisper_vad_feed:
+ * @handle: a handle from cmacs_whisper_vad_open().
+ * @pcm: S16LE mono 16 kHz samples (copied before return).
+ * @n_samples: sample count.  Whole multiples of
+ *   CMACS_WHISPER_VAD_WINDOW keep the windows aligned across calls; a
+ *   ragged tail is zero-padded by whisper.cpp.
+ * @callback: Lisp function called on the main thread with the result.
+ *
+ * Returns: FALSE when @handle is unknown (nothing was queued).  */
+gboolean
+cmacs_whisper_vad_feed (uint64_t handle, const int16_t *pcm,
+                        size_t n_samples, Lisp_Object callback)
+{
+  CmacsWhisperVad *v = cmacs_whisper__vad_lookup (handle);
+  if (!v)
+    return FALSE;
+
+  CmacsWhisperVadJob *j = g_new0 (CmacsWhisperVadJob, 1);
+  j->op        = CMACS_WHISPER_VAD_OP_FEED;
+  j->vad       = v;
+  j->samples   = n_samples ? s16_to_f32 (pcm, n_samples) : NULL;
+  j->n_samples = n_samples;
+  j->cb_cookie = cmacs_dispatch_callback_register (callback);
+  cmacs_whisper__vad_push (j);
+  return TRUE;
+}
+
+/* cmacs_whisper_vad_reset:
+ * @handle: a VAD handle.
+ *
+ * Queue a reset of the model's recurrent state, ordered after every
+ * feed already queued.
+ *
+ * Returns: FALSE when @handle is unknown.  */
+gboolean
+cmacs_whisper_vad_reset (uint64_t handle)
+{
+  CmacsWhisperVad *v = cmacs_whisper__vad_lookup (handle);
+  if (!v)
+    return FALSE;
+  CmacsWhisperVadJob *j = g_new0 (CmacsWhisperVadJob, 1);
+  j->op  = CMACS_WHISPER_VAD_OP_RESET;
+  j->vad = v;
+  cmacs_whisper__vad_push (j);
+  return TRUE;
+}
+
+/* cmacs_whisper_vad_close:
+ * @handle: a VAD handle.
+ *
+ * Forget @handle and queue the release of its model.  Feeds already
+ * queued still answer their callbacks.
+ *
+ * Returns: FALSE when @handle is unknown.  */
+gboolean
+cmacs_whisper_vad_close (uint64_t handle)
+{
+  CmacsWhisperVad *v = cmacs_whisper__vad_lookup (handle);
+  if (!v)
+    return FALSE;
+  g_hash_table_remove (vad_streams, &handle);
+  CmacsWhisperVadJob *j = g_new0 (CmacsWhisperVadJob, 1);
+  j->op  = CMACS_WHISPER_VAD_OP_CLOSE;
+  j->vad = v;
+  cmacs_whisper__vad_push (j);
+  return TRUE;
+}
+
+/* cmacs_whisper_vad_list:
+ *
+ * Returns: a Lisp list of the open VAD handles.  Main thread only.  */
+Lisp_Object
+cmacs_whisper_vad_list (void)
+{
+  Lisp_Object out = Qnil;
+  GHashTableIter it;
+  gpointer key, val;
+
+  if (!vad_streams)
+    return Qnil;
+  g_hash_table_iter_init (&it, vad_streams);
+  while (g_hash_table_iter_next (&it, &key, &val))
+    out = Fcons (make_int ((EMACS_INT) ((CmacsWhisperVad *) val)->handle),
+                 out);
   return out;
 }
 

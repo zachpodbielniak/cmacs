@@ -13,8 +13,6 @@
 #include <stdbool.h>
 
 extern void syms_of_cmacs_whisper_defuns (void);
-extern void cmacs_whisper_context_init (void);
-extern void cmacs_whisper_context_free_all (void);
 
 static bool init_done = false;
 

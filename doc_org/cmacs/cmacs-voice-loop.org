@@ -1,0 +1,228 @@
+#+TITLE: cmacs-voice-loop — the always-on duplex voice loop ("Jarvis")
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+~cmacs-voice-loop-mode~ is a global minor mode that holds a spoken conversation with a cmacs-ai chat.  The microphone stays open; you say the wake phrase ("jarvis" by default) and your request in one breath or two; partial transcripts appear while you talk; the final transcript is sent to the chat when you stop; the reply streams in and is spoken sentence by sentence; and you can talk over the reply to stop it.  For a few seconds after a reply no wake phrase is needed, so a back-and-forth flows like a conversation.
+
+It is built from the existing subsystems — cmacs-audio (capture), cmacs-whisper (VAD and STT), cmacs-piper (TTS) and cmacs-ai (chat) — and adds no dependency and no configure flag.  It lives in ~lisp/cmacs/cmacs-voice-loop.el~; the C it needs (streaming VAD, PCM levels, resampling) is in ~cmacs/whisper/~.
+
+#+begin_example
+mic ──cmacs-audio 16 kHz──▶ 32 ms frames ──▶ Silero VAD (worker thread)
+                                              │  or energy detector
+                                              ▼
+                                    segmenter (pre-roll, hysteresis,
+                                    end-of-speech, max length)
+                     ┌────────────────────────┴───────────────────────┐
+             partials every 0.8 s                              segment ends
+             (small model, last 10 s)                                │
+             wake phrase seen? → addressed            addressed? ── no ──▶ wake model:
+             show partial text                              │ yes          phrase? else drop
+                                                            ▼
+                                              final model → strip phrase
+                                                            ▼
+                                       cmacs-voice-loop-send-function (chat)
+                                                            ▼
+                                 reply deltas → sentences → piper (in order)
+                                 speech over the reply → barge-in: stop + listen
+#+end_example
+
+* Quick start
+
+1. A whisper model must be installed (~M-x cmacs-whisper-download-model~; ~ggml-base.en.bin~ is the default and image builds ship it).
+2. Optional but recommended:
+   - ~M-x cmacs-whisper-download-vad-model~ — the Silero VAD (about 1 MB).  Without it the loop uses an energy detector, which is fine in a quiet room and poor in a noisy one.
+   - ~M-x cmacs-whisper-download-model RET ggml-tiny.en.bin~ — a fast model for wake-word spotting and partials.  Without it the default model does that work too, at a higher CPU cost.
+   - A piper voice, for spoken replies (see [[file:cmacs-piper.org][cmacs-piper.org]]).
+3. ~C-c v l~ (~cmacs-voice-loop-mode~).  The mode line shows ~Voice~.
+4. Say "Jarvis, what's on my agenda today?"
+
+The loop opens a cmacs-ai chat on first use and displays it without selecting it; when you turn the mode on from a chat buffer (for example one from ~M-x cmacs-ai-voice-chat~) it uses that buffer instead.
+
+* States and the mode line
+
+| State       | Lighter          | Meaning                                                         |
+|-------------+------------------+-----------------------------------------------------------------|
+| ~idle~      | (none)           | Mode off                                                        |
+| ~listening~ | ~Voice~ / ~Voice+~ | Waiting for speech.  ~+~: no wake phrase needed right now       |
+| ~hearing~   | ~Voice:hearing~  | Speech in progress (partials are shown once it is addressed)    |
+| ~thinking~  | ~Voice:thinking~ | Transcribing the request, or waiting for the reply              |
+| ~speaking~  | ~Voice:speaking~ | The reply is being spoken                                       |
+
+Change the text with ~cmacs-voice-loop-lighters~.  ~cmacs-voice-loop-state-change-functions~ is an abnormal hook run with ~(NEW OLD)~ on every change — use it to drive a bar widget, an LED, or a sound.
+
+* How it works
+
+** Capture and frames
+
+The mode opens a 16 kHz mono capture stream (~cmacs-audio--capture-open-1~), whatever ~cmacs-audio-default-rate~ says, because whisper and Silero both want 16 kHz.  A timer drains it every ~cmacs-voice-loop-poll-interval~ (0.1 s).  Drained PCM is cut into 512-sample (32 ms) frames — the Silero window — and a ragged tail waits for the next drain, so frames stay aligned with the VAD's recurrent state.  The capture stream's own buffer is bounded (about 10 s) and drained, so no history accumulates in C.
+
+** Voice activity detection
+
+With a Silero model installed, frames go to ~cmacs-whisper-vad-feed~, which runs ~whisper_vad_detect_speech_no_reset~ on a worker thread and answers one speech probability per frame.  The ~_no_reset~ variant keeps the LSTM state across calls, so each 100 ms feed is judged in the context of the audio before it.  At most one feed is in flight; audio that arrives meanwhile queues (capped at 5 s) and is fed when the answer comes back.  If the model fails to load, the loop says so once and switches to the energy detector rather than going deaf.
+
+Without a model, ~cmacs-whisper-pcm-levels~ computes each frame's RMS in dBFS and an adaptive noise floor turns that into a probability: 0.5 at ~cmacs-voice-loop-energy-margin-db~ (12 dB) above the floor, scaled 20 dB per unit and clamped.  The floor follows quiet frames quickly and loud ones with a ~6 s time constant, so it settles on a fan that never stops but not on a speaker, who pauses.  Frames below ~cmacs-voice-loop-energy-floor-db~ (-50 dBFS) are never speech.  Mapping both detectors onto one probability scale means one set of thresholds governs both.
+
+** Segmentation
+
+Two consecutive frames at or above ~cmacs-voice-loop-vad-threshold~ (0.5) open a segment, which starts with the last ~cmacs-voice-loop-pre-roll-ms~ (320 ms) of audio so the first syllable survives.  Speech continues while frames stay above the threshold minus 0.15 (Silero's usual hysteresis).  ~cmacs-voice-loop-end-silence-ms~ (640 ms) of silence ends it, and ~cmacs-voice-loop-max-utterance-seconds~ (30) cuts one that never pauses.  Segments with less than ~cmacs-voice-loop-min-speech-ms~ (200 ms) of speech are dropped without being transcribed.
+
+** The wake phrase
+
+There is no separate hotword engine: the wake phrase is whisper on the speech itself, with a small model (~cmacs-voice-loop-wake-model~, default ~ggml-tiny.en.bin~, falling back to the default model).  A heard word matches when its similarity to the phrase — 1 minus the Levenshtein distance over the longer length, on lower-cased words without punctuation — reaches ~cmacs-voice-loop-wake-threshold~ (0.75).  So "Jarvis," "jarvis." and "Jervis" match; "Travis" (0.67) does not.  A phrase of N words is compared against each run of N words, and against each run of N+1 words glued together, so "jar vis" still matches.  ~cmacs-voice-loop-wake-match~ is a public function if you want the same matching elsewhere.
+
+A segment is /addressed/ when one of these holds:
+- it started inside a follow-up window or after a bare wake phrase (~cmacs-voice-loop--armed-p~),
+- a partial transcript of it contained the phrase,
+- it barged in on a reply (unless ~cmacs-voice-loop-barge-in-requires-wake~).
+
+An addressed segment goes straight to the final model.  An unaddressed one is transcribed once by the wake model: no phrase, and it is dropped; the phrase and nothing after it ("Jarvis."), and the loop arms for ~cmacs-voice-loop-armed-seconds~ (6) and waits for the request; the phrase and a request, and the request is sent.  When the wake and final models differ, the request is re-transcribed by the final model for accuracy, and the phrase is stripped from that transcript — or, if the final model spelled it differently, as many leading words as the wake model said the phrase covered.
+
+Set ~cmacs-voice-loop-wake-phrase~ to nil for an open mic: every utterance is sent.
+
+** Partial transcripts
+
+While you speak, every ~cmacs-voice-loop-partial-interval~ (0.8 s) the last ~cmacs-voice-loop-partial-window-seconds~ (10 s) of the segment is re-transcribed with the wake model — the sliding-window scheme of whisper.cpp's ~stream~ example.  Only one partial is in flight at a time and a partial for a segment that has ended is discarded.  Partials double as early wake detection: the first one containing the phrase marks the segment addressed.  Partials of unaddressed speech are never displayed.
+
+They show in the echo area (not logged to ~*Messages*~) and as an overlay ~after-string~ at the end of the chat buffer — an overlay, not text, because the chat history is sealed read-only and a partial is never part of the transcript.  ~cmacs-voice-loop-partial-display~ picks either or both.  ~cmacs-voice-loop-partial-functions~ is called with each partial.  The final transcript replaces the partial when it arrives.
+
+** Sending and the reply
+
+~cmacs-voice-loop-send-function~ receives the final text.  The default, ~cmacs-voice-loop-send-to-chat~, inserts it into the chat buffer's compose area and calls ~cmacs-ai-chat-send-compose~ — the same path as typing it, so slash commands, tools, the system prompt and autosave all apply.
+
+The reply is spoken by advice on ~cmacs-ai-chat--stream-callback~ that only acts on the loop's chat buffer.  Advice rather than a callback wrapped at send time, because after a tool call the chat drives a continuation stream itself, and a wrapper would never see it.  Deltas accumulate until a sentence ends (~.~ ~?~ ~!~ ~:~ followed by whitespace, or a newline); each sentence has markup that reads badly aloud removed and is queued.  Sentences are synthesised strictly one at a time (synthesis is faster than playback, so this costs no latency) because separate piper jobs can finish out of order.  The loop estimates when playback ends from the PCM length; that, plus an empty queue and a closed stream, ends ~speaking~ and opens the follow-up window (~cmacs-voice-loop-follow-up-seconds~, 8).
+
+A custom send function that answers aloud calls ~cmacs-voice-loop-speak~; one that does not answer returns the loop to listening (with the follow-up window open) on the next tick.
+
+** Barge-in
+
+While the loop is thinking or speaking, speech that lasts ~cmacs-voice-loop-barge-in-min-ms~ (250 ms) is a barge-in: piper stops (~cmacs-piper-stop~ plus a generation bump, so a sentence still being synthesised is dropped when it arrives), the streaming reply is cancelled (~cmacs-voice-loop-barge-in-cancels-stream~), the state becomes ~hearing~, and what you say is treated as addressed.  Shorter bursts leave the reply playing and are discarded.  ~cmacs-voice-loop-barge-in~ nil ignores the microphone while a reply plays.
+
+** Self-echo
+
+Through speakers, the microphone hears the reply.  ~cmacs-voice-loop-tts-gating~ decides what to do about it:
+
+| Value       | While the loop speaks                                                                          |
+|-------------+------------------------------------------------------------------------------------------------|
+| ~threshold~ | speech must reach ~cmacs-voice-loop-tts-vad-threshold~ (0.85) — you can interrupt, louder (default) |
+| ~mute~      | the microphone is ignored; no barge-in                                                          |
+| ~none~      | no gating — for a headset or real echo cancellation                                            |
+
+Gating is a heuristic; the real fix is acoustic echo cancellation, which PipeWire already ships (~libpipewire-module-echo-cancel~ with the WebRTC canceller, both in Fedora's ~pipewire-libs~).  ~M-x cmacs-voice-loop-echo-cancel-config~ shows a drop-in config that defines an echo-cancelled microphone; with a prefix argument it offers to write it to ~~/.config/pipewire/pipewire.conf.d/60-cmacs-echo-cancel.conf~ (never overwriting).  Nothing else is changed: restart PipeWire yourself,
+
+#+begin_src sh
+systemctl --user restart pipewire pipewire-pulse
+#+end_src
+
+then point the loop at the new source and drop the gating:
+
+#+begin_src emacs-lisp
+(setq cmacs-voice-loop-device "cmacs-echo-cancel-source"
+      cmacs-voice-loop-tts-gating 'none)
+#+end_src
+
+The config uses ~monitor.mode = true~, so the canceller takes the default sink's monitor as its reference and no playback has to be rerouted.  (Device hints reach ~pipewiresrc~ as ~target-object~; before this change cmacs-audio set a ~device~ property, which ~pipewiresrc~ does not have, so every device hint was silently ignored under PipeWire.)
+
+* Privacy
+
+- Off by default.  Nothing listens until you turn the mode on, and turning it off closes the microphone.
+- Audio stays in memory.  A segment's PCM lives in Lisp strings only until whisper has copied it; the strings are then overwritten (~fillarray~), as are the pre-roll and residue buffers, and the C worker's float copies are wiped with ~memset_explicit~ before they are freed.  Turning the mode off wipes everything it holds.
+- Speech without the wake phrase is transcribed once by the wake model to find out whether it is addressed, and then dropped — text and audio.  Nothing is logged: partials bypass ~*Messages*~.
+- Nothing is written to disk unless you set ~cmacs-voice-loop-save-directory~, in which case each final utterance is kept there as a WAV.
+- What /is/ sent is the text of addressed requests, to the chat's provider — exactly as if you had typed it.  An open mic (~cmacs-voice-loop-wake-phrase~ nil) sends everything it hears.
+
+* Commands
+
+| Key       | Command                               | What it does                                              |
+|-----------+---------------------------------------+-----------------------------------------------------------|
+| ~C-c v l~ | ~cmacs-voice-loop-mode~               | Toggle the loop                                           |
+| ~C-c v j~ | ~cmacs-voice-loop-listen-now~         | Address the loop without the wake phrase (starts it if off) |
+|           | ~cmacs-voice-loop-start~ / ~-stop~      | Explicit on / off                                         |
+|           | ~cmacs-voice-loop-stop-speaking~      | Silence the reply                                          |
+|           | ~cmacs-voice-loop-status~             | State, detector, models, chat buffer                      |
+|           | ~cmacs-voice-loop-echo-cancel-config~ | Show (C-u: write) the PipeWire echo-cancel config         |
+|           | ~cmacs-whisper-download-vad-model~    | Fetch the Silero VAD model                                |
+
+* Customization
+
+| Variable                                     | Default                  | Purpose                                              |
+|----------------------------------------------+--------------------------+------------------------------------------------------|
+| ~cmacs-voice-loop-wake-phrase~               | ~"jarvis"~               | Phrase that addresses the loop; nil = open mic       |
+| ~cmacs-voice-loop-wake-threshold~            | 0.75                     | Word similarity needed to match                      |
+| ~cmacs-voice-loop-wake-model~                | ~"ggml-tiny.en.bin"~     | Model for the wake phrase and partials               |
+| ~cmacs-voice-loop-model~                     | nil (default model)      | Model for the final transcript                       |
+| ~cmacs-voice-loop-vad-model~                 | nil (~cmacs-whisper-default-vad-model~) | Silero model; absent = energy detector |
+| ~cmacs-voice-loop-device~                    | nil                      | Capture device / PipeWire node                        |
+| ~cmacs-voice-loop-threads~                   | nil (all)                | Whisper threads per transcription                    |
+| ~cmacs-voice-loop-vad-threshold~             | 0.5                      | Speech probability that starts speech                |
+| ~cmacs-voice-loop-tts-gating~                | ~threshold~              | Self-echo handling (see above)                       |
+| ~cmacs-voice-loop-tts-vad-threshold~         | 0.85                     | Threshold while speaking                             |
+| ~cmacs-voice-loop-barge-in~                  | t                        | Talking over a reply interrupts it                   |
+| ~cmacs-voice-loop-barge-in-min-ms~           | 250                      | Speech needed to interrupt                           |
+| ~cmacs-voice-loop-barge-in-cancels-stream~   | t                        | Also cancel the streaming reply                      |
+| ~cmacs-voice-loop-barge-in-requires-wake~    | nil                      | Interrupting needs the phrase too                    |
+| ~cmacs-voice-loop-follow-up-seconds~         | 8                        | No-wake window after a reply                         |
+| ~cmacs-voice-loop-armed-seconds~             | 6                        | Wait for the request after a bare phrase             |
+| ~cmacs-voice-loop-min-speech-ms~             | 200                      | Shorter segments are noise                           |
+| ~cmacs-voice-loop-end-silence-ms~            | 640                      | Silence that ends an utterance                       |
+| ~cmacs-voice-loop-pre-roll-ms~               | 320                      | Audio kept from before speech                        |
+| ~cmacs-voice-loop-max-utterance-seconds~     | 30                       | Longest utterance                                    |
+| ~cmacs-voice-loop-energy-floor-db~           | -50.0                    | Energy detector: never speech below                  |
+| ~cmacs-voice-loop-energy-margin-db~          | 12.0                     | Energy detector: margin over the noise floor         |
+| ~cmacs-voice-loop-partial-interval~          | 0.8                      | Seconds between partials; nil = none                 |
+| ~cmacs-voice-loop-partial-window-seconds~    | 10                       | Audio re-transcribed per partial                     |
+| ~cmacs-voice-loop-partial-display~           | ~(echo buffer)~          | Where partials show                                  |
+| ~cmacs-voice-loop-poll-interval~             | 0.1                      | Microphone drain interval                            |
+| ~cmacs-voice-loop-speak~                     | t                        | Speak replies                                        |
+| ~cmacs-voice-loop-voice~                     | nil (piper default)      | Piper voice                                          |
+| ~cmacs-voice-loop-wake-acknowledgement~      | nil                      | Said after a bare phrase ("Yes?")                    |
+| ~cmacs-voice-loop-send-function~             | ~cmacs-voice-loop-send-to-chat~ | Where final text goes                         |
+| ~cmacs-voice-loop-display-chat~              | t                        | Show the chat buffer when used                       |
+| ~cmacs-voice-loop-save-directory~            | nil                      | Keep utterances as WAVs (off)                        |
+| ~cmacs-voice-loop-lighters~                  | see above                | Mode-line text                                       |
+
+Hooks: ~cmacs-voice-loop-state-change-functions~ ~(NEW OLD)~, ~cmacs-voice-loop-partial-functions~ ~(TEXT)~, ~cmacs-voice-loop-utterance-functions~ ~(TEXT)~ (before sending).
+
+* The C primitives
+
+All in ~cmacs/whisper/~ (DEFUNs in ~cmacs-whisper-defuns.c~, the worker in ~cmacs-whisper-job.c~); see [[file:cmacs-whisper.org][cmacs-whisper.org]] for details.
+
+| DEFUN                          | Thread                    | Purpose                                         |
+|--------------------------------+---------------------------+-------------------------------------------------|
+| ~cmacs-whisper-vad-open~       | main (no I/O but a stat)  | New streaming VAD handle; model loads on first feed |
+| ~cmacs-whisper-vad-feed~       | worker → main callback    | Probabilities for queued PCM                    |
+| ~cmacs-whisper-vad-reset~      | worker (queued)           | Reset the LSTM state                            |
+| ~cmacs-whisper-vad-close~      | worker (queued)           | Release the model                               |
+| ~cmacs-whisper-vad-list~       | main                      | Open handles                                    |
+| ~cmacs-whisper-pcm-levels~     | main (one pass)           | RMS dBFS per window — the energy detector       |
+| ~cmacs-whisper-pcm-resample~   | main (one pass)           | Linear resampler (piper 22.05 kHz → 16 kHz)     |
+
+* Testing
+
+~test/cmacs/cmacs-voice-loop-tests.el~ drives the loop through ~cmacs-voice-loop--ingest~ with synthetic PCM (silence and sine tones through the energy detector), so it needs no microphone.  Whisper and piper are stubbed for the state-machine tests: wake-then-send, no-wake-dropped, noise bursts, bare wake arming, the follow-up window, open mic, the length cap, partials spotting the phrase, barge-in, threshold and mute gating, ordered and interruptible speech.  Tests against the real engines skip when the files are absent: the VAD worker round-trip (with a deliberately invalid model file, so it always runs), real Silero on silence (needs the VAD model), overlapping transcriptions on one model, and an end-to-end run in which piper says "Jarvis, what is the capital of France?" and the loop sends "what is the capital of France?".
+
+#+begin_src sh
+make -C test cmacs/cmacs-voice-loop-tests
+#+end_src
+
+A live microphone cannot be tested headless; try it with ~C-c v l~ and watch the lighter.
+
+* Troubleshooting
+
+** It never wakes
+
+- ~M-x cmacs-voice-loop-status~ shows the wake model in use.  The tiny model mishears more; try lowering ~cmacs-voice-loop-wake-threshold~ to 0.65, or setting ~cmacs-voice-loop-wake-model~ to the base model.
+- Check the lighter turns to ~Voice:hearing~ when you talk.  If it does not, the detector is not hearing you: install the VAD model, or lower ~cmacs-voice-loop-energy-floor-db~ for a quiet microphone.
+
+** It interrupts itself
+
+The reply is reaching the microphone loud enough to beat the raised threshold.  Install the echo-cancel config, use a headset, raise ~cmacs-voice-loop-tts-vad-threshold~, or set ~cmacs-voice-loop-tts-gating~ to ~mute~.
+
+** Partials are slow or the fan spins
+
+Each partial is a whisper run.  Install ~ggml-tiny.en.bin~, lengthen ~cmacs-voice-loop-partial-interval~, shorten ~cmacs-voice-loop-partial-window-seconds~, or set the interval to nil.
+
+** The device hint is ignored
+
+Under PipeWire the hint is a node /name/ (~pw-cli ls Node~, the ~node.name~ field), passed as ~target-object~.

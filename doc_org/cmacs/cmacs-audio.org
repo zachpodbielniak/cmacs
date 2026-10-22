@@ -175,6 +175,8 @@ conditionally based on which subsystems are built:
 | ~C-c v d~ | ~cmacs-whisper-dictate~ | cmacs-whisper |
 | ~C-c v s~ | ~cmacs-piper-speak-region~ | cmacs-piper |
 | ~C-c v S~ | ~cmacs-piper-stop~ | cmacs-piper |
+| ~C-c v l~ | ~cmacs-voice-loop-mode~ | cmacs-whisper (always-on voice loop) |
+| ~C-c v j~ | ~cmacs-voice-loop-listen-now~ | cmacs-whisper |
 
 * Composition
 
@@ -182,6 +184,14 @@ conditionally based on which subsystems are built:
 
 The 16 kHz/mono/S16LE capture caps mean drained PCM is whisper-ready
 with no resample.  See [[file:cmacs-whisper.org][cmacs-whisper.org]].
+
+** Device hints
+
+~:device~ (and ~cmacs-audio-default-device~) is applied through whichever property the source element has: ~target-object~ for ~pipewiresrc~ (a node name or serial, e.g. ~"cmacs-echo-cancel-source"~), ~device~ for ~pulsesrc~ / ~osxaudiosrc~, the deprecated ~path~ for old ~pipewiresrc~.  ~pipewiresrc~ has no ~device~ property, so until this was fixed every device hint was silently ignored under PipeWire (GLib logged a warning and the default source was used).
+
+** With the voice loop
+
+~cmacs-voice-loop-mode~ keeps a 16 kHz capture open and drains it every 0.1 s.  The stream's double buffer is bounded and drained, so no capture history accumulates.  See [[file:cmacs-voice-loop.org][cmacs-voice-loop.org]].
 
 ** With cmacs-piper
 

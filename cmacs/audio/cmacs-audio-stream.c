@@ -385,6 +385,34 @@ cmacs_audio__factory_for_kind (CmacsAudioSourceKind k)
   return NULL;
 }
 
+/* cmacs_audio__set_device:
+ * @e: a capture source element.
+ * @device: (nullable): the device hint.
+ *
+ * Point @e at @device using whichever property the element has.
+ * pulsesrc and osxaudiosrc call it "device"; pipewiresrc has no
+ * "device" at all -- it takes "target-object" (a node name or serial,
+ * e.g. the "cmacs-echo-cancel-source" the voice loop's echo-cancel
+ * helper defines), with the deprecated "path" before PipeWire 0.3.64.
+ * Setting a property an element lacks only logs a GLib warning, which
+ * is how a device hint used to be silently ignored under PipeWire.  */
+static void
+cmacs_audio__set_device (GstElement *e, const char *device)
+{
+  static const char *const props[] = { "target-object", "device", "path" };
+  GObjectClass *klass;
+
+  if (!e || !device || !*device)
+    return;
+  klass = G_OBJECT_GET_CLASS (e);
+  for (gsize i = 0; i < G_N_ELEMENTS (props); i++)
+    if (g_object_class_find_property (klass, props[i]))
+      {
+        g_object_set (e, props[i], device, NULL);
+        return;
+      }
+}
+
 static GstElement *
 cmacs_audio__make_capture_source (CmacsAudioSourceKind requested,
                                   const char *device,
@@ -397,8 +425,7 @@ cmacs_audio__make_capture_source (CmacsAudioSourceKind requested,
       if (e) { *out_chosen = CMACS_AUDIO_SOURCE_PIPEWIRE; }
       else   { e = gst_element_factory_make ("pulsesrc", "cmacs-audio-src");
                if (e) *out_chosen = CMACS_AUDIO_SOURCE_PULSE; }
-      if (e && device)
-        g_object_set (e, "device", device, NULL);
+      cmacs_audio__set_device (e, device);
       return e;
     }
   const char *fac = cmacs_audio__factory_for_kind (requested);
@@ -406,8 +433,8 @@ cmacs_audio__make_capture_source (CmacsAudioSourceKind requested,
   GstElement *e = gst_element_factory_make (fac, "cmacs-audio-src");
   if (!e) return NULL;
   *out_chosen = requested;
-  if (device && requested != CMACS_AUDIO_SOURCE_AUDIOTESTSRC)
-    g_object_set (e, "device", device, NULL);
+  if (requested != CMACS_AUDIO_SOURCE_AUDIOTESTSRC)
+    cmacs_audio__set_device (e, device);
   return e;
 }
 

@@ -108,6 +108,41 @@ Recommended starter set:
 path is only contended on the very first reference per model.  No
 eviction at v1.
 
+** Concurrent jobs on one model
+
+A ~whisper_context~'s weights are shareable between threads, but its /default state/ — the scratch space ~whisper_full~ writes — is not.  Overlapping jobs on one model are normal: the voice loop runs partial, wake-word and final transcriptions that overlap, and cmacs-transcribe runs files in parallel.  Each job therefore calls ~cmacs_whisper_context_claim_default~ (non-blocking): the winner uses the default state, any other job allocates a private one with ~whisper_init_state~ and runs ~whisper_full_with_state~, then frees it.  Weights stay shared, inference stays parallel, and no two threads ever write one state.  (Before this, two overlapping jobs on one model ran ~whisper_full~ on the same state.)
+
+** Log filter
+
+whisper.cpp and ggml log several INFO lines per call, and the streaming VAD is called ten times a second — under ~--gowl~ stderr is the journal.  ~init_cmacs_whisper~ installs a ~whisper_log_set~ callback that passes only WARN and ERROR (continuation lines follow their first line).  Set ~CMACS_WHISPER_DEBUG=1~ in the environment to see everything.
+
+** Streaming VAD
+
+whisper.cpp v1.9 ships the Silero voice-activity model in ggml form and exports ~whisper_vad_detect_speech_no_reset~, which keeps the model's LSTM state across calls — what a live microphone needs.  cmacs exposes it as a handle-based stream:
+
+| DEFUN | Purpose |
+|-------+---------|
+| ~(cmacs-whisper-vad-open MODEL &optional THREADS)~ | New stream; signals if MODEL does not exist.  The model is loaded by the worker on the first feed, so opening never blocks on I/O |
+| ~(cmacs-whisper-vad-feed HANDLE PCM CALLBACK)~ | Queue S16LE 16 kHz PCM; CALLBACK later gets ~((:probs . [P ...]) (:window . 512))~ or ~((:error . MSG))~ |
+| ~(cmacs-whisper-vad-reset HANDLE)~ | Reset the LSTM state (queued behind earlier feeds) |
+| ~(cmacs-whisper-vad-close HANDLE)~ | Release the model (queued last) |
+| ~(cmacs-whisper-vad-list)~ | Open handles |
+
+All VAD work goes through one ~GThreadPool~ with a single worker, so operations run in exactly the order Lisp issued them — a reset cannot overtake the feed before it, a close always runs last — and the worker alone owns each ~whisper_vad_context~.  Results return through ~g_main_context_invoke~ and the GC-rooted callback registry (~cmacs_dispatch_callback_register~), like transcription jobs.  A model that fails to load is remembered, so it costs one attempt, not one per feed.  Feed whole multiples of 512 samples (1024 bytes): a ragged tail is zero-padded by whisper.cpp and would skew the next window.  Sample buffers are wiped with ~memset_explicit~ before they are freed.
+
+The model is ~cmacs-whisper-default-vad-model~ (~ggml-silero-v6.2.0.bin~), found through the same search path as whisper models; ~M-x cmacs-whisper-download-vad-model~ fetches it (about 1 MB) from ~cmacs-whisper-vad-download-base-url~ (the ~ggml-org/whisper-vad~ repository, which is not the one whisper models come from).
+
+** PCM helpers
+
+| DEFUN | Purpose |
+|-------+---------|
+| ~(cmacs-whisper-pcm-levels PCM &optional WINDOW)~ | Vector of RMS levels in dBFS (-120..0), one per complete WINDOW (512) samples — the voice loop's energy detector |
+| ~(cmacs-whisper-pcm-resample PCM FROM TO)~ | Linear-interpolation resampler for mono S16LE, e.g. piper's 22050 Hz to 16000 Hz |
+
+Both are single passes, cheap enough for the main thread.
+
+These are what [[file:cmacs-voice-loop.org][cmacs-voice-loop.org]] (the always-on "Jarvis" loop) is built on.
+
 * Quick Start
 
 #+begin_src elisp
@@ -191,6 +226,8 @@ Add your own by ~customize-variable~ or via DSL.
 | ~cmacs-whisper-default-model~           | ~ggml-base.en.bin~                     | Default model basename |
 | ~cmacs-whisper-language~                | ~"en"~                                 | ISO 2-letter language code |
 | ~cmacs-whisper-download-base-url~       | huggingface ggerganov mirror           | Where ~download-model~ pulls from |
+| ~cmacs-whisper-default-vad-model~       | ~ggml-silero-v6.2.0.bin~               | Silero VAD model basename |
+| ~cmacs-whisper-vad-download-base-url~   | huggingface ggml-org/whisper-vad       | Where ~download-vad-model~ pulls from |
 
 * MCP tool
 

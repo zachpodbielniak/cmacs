@@ -104,6 +104,10 @@ Lisp string and handed to the user's callback.
 4. Starts the stream and pushes the handle onto
    ~cmacs-piper--playback-stack~ so ~cmacs-piper-stop~ can interrupt.
 
+** Speaking a streamed reply
+
+The voice loop ([[file:cmacs-voice-loop.org][cmacs-voice-loop.org]]) speaks a reply sentence by sentence as it streams in.  It calls ~cmacs-piper--synth-async-1~ for one sentence at a time, because separate synthesis jobs can finish out of order, and pushes each result into the shared playback handle (~cmacs-piper--ensure-playback~), estimating from the PCM length when playback ends.  ~cmacs-piper-stop~ flushes what is queued on that handle; the loop also bumps a generation counter on a barge-in so a sentence still being synthesised is dropped when it arrives.
+
 * Quick Start
 
 #+begin_src elisp

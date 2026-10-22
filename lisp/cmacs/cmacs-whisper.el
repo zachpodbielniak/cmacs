@@ -69,6 +69,23 @@ trade latency for accuracy."
   :type 'string
   :group 'cmacs-whisper)
 
+(defcustom cmacs-whisper-default-vad-model "ggml-silero-v6.2.0.bin"
+  "Basename of the Silero voice-activity model (ggml form).
+Resolved through `cmacs-whisper-models-search-path' like a whisper
+model; used by `cmacs-whisper-vad-open' callers such as
+`cmacs-voice-loop-mode'.  Fetch it with
+\\[cmacs-whisper-download-vad-model]."
+  :type 'string
+  :group 'cmacs-whisper)
+
+(defcustom cmacs-whisper-vad-download-base-url
+  "https://huggingface.co/ggml-org/whisper-vad/resolve/main/"
+  "Base URL `cmacs-whisper-download-vad-model' fetches VAD models from.
+The VAD models live in a different repository from the whisper models
+\(the one whisper.cpp's models/download-vad-model.sh uses)."
+  :type 'string
+  :group 'cmacs-whisper)
+
 (defun cmacs-whisper-model-path (&optional name)
   "Resolve NAME (or `cmacs-whisper-default-model') to an absolute path.
 Walks `cmacs-whisper-models-search-path' and returns the first
@@ -93,14 +110,15 @@ existing match.  If none is found, returns the path under
     (sort (hash-table-keys seen) #'string<)))
 
 ;;;###autoload
-(defun cmacs-whisper-download-model (model)
-  "Download MODEL (basename) from `cmacs-whisper-download-base-url'."
+(defun cmacs-whisper-download-model (model &optional base-url)
+  "Download MODEL (basename) from `cmacs-whisper-download-base-url'.
+Optional BASE-URL fetches from somewhere else instead."
   (interactive
    (list (read-string "Model basename (e.g. ggml-base.en.bin): "
                       cmacs-whisper-default-model)))
   (unless (file-directory-p cmacs-whisper-models-directory)
     (make-directory cmacs-whisper-models-directory t))
-  (let* ((url  (concat cmacs-whisper-download-base-url model))
+  (let* ((url  (concat (or base-url cmacs-whisper-download-base-url) model))
          (dest (expand-file-name model cmacs-whisper-models-directory)))
     (when (file-exists-p dest)
       (user-error "Model already present: %s" dest))
@@ -108,6 +126,15 @@ existing match.  If none is found, returns the path under
     (url-copy-file url dest)
     (message "cmacs-whisper: wrote %s" dest)
     dest))
+
+;;;###autoload
+(defun cmacs-whisper-download-vad-model (model)
+  "Download the Silero VAD MODEL (basename) into the models directory.
+Defaults to `cmacs-whisper-default-vad-model', from
+`cmacs-whisper-vad-download-base-url'.  About 1 MB."
+  (interactive
+   (list (read-string "VAD model basename: " cmacs-whisper-default-vad-model)))
+  (cmacs-whisper-download-model model cmacs-whisper-vad-download-base-url))
 
 ;;;###autoload
 (defun cmacs-whisper-transcribe-region (beg end)
