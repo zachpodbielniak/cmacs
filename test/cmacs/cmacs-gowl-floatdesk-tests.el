@@ -256,7 +256,9 @@ module is in cmacs's default set."
                    1))))
     (with-temp-buffer
       (insert-file-contents c)
-      (should (search-forward "\"floatdesk\" };" nil t)))))
+      ;; An entry of the default module list, wherever it sits in it --
+      ;; anchoring on the closing brace broke when gabbrev went after it.
+      (should (re-search-forward "\"floatdesk\"[ \t\n]*[,}]" nil t)))))
 
 (ert-deftest cmacs-gowl-floatdesk-test-dbus-source ()
   "D-Bus Floatdesk checks its verb and escapes its arguments; emacsctl
