@@ -279,7 +279,7 @@ C source `cmacs/<name>/`, Elisp `lisp/cmacs/`, tests `test/cmacs/`, docs
 | **print** | `cmacs/print/` | "Print to cmacs" CUPS virtual printer → annotatable org docs |
 | **video** | `cmacs/video/` | GStreamer video overlay (playbin3 → BGRA appsink → Cairo blit). Compositor-agnostic |
 | **audio** | `cmacs/audio/` | GStreamer audio capture/playback; `#+BEGIN_AUDIO` waveform |
-| **whisper** | `cmacs/whisper/` | Offline STT (whisper.cpp) + live dictation (`C-c v d`) |
+| **whisper** | `cmacs/whisper/` | Offline STT (whisper.cpp) + live dictation (`C-c v d`) + streaming Silero VAD; drives the always-on duplex voice loop (`cmacs-voice-loop-mode`, `C-c v l`, `lisp/cmacs/cmacs-voice-loop.el`: configurable wake phrase, partials, barge-in). Overlapping jobs on one model each get a private `whisper_state` |
 | **piper** | `cmacs/piper/` | Offline TTS (Piper subprocess) — `C-c v s` |
 | **cintrospect** | `cmacs/cintrospect/` | Runtime C self-introspection (DWARF + libgccjit JIT). Default-on |
 | **cpatch** | `cmacs/cpatch/` | Runtime C hot-patching (Lisp_Subr swap + detours). Off by default |

@@ -1904,8 +1904,8 @@ order.  @code{CMacs-Debug} keeps the session's own identity.
 @code{wlroots} is what the @command{xdg-desktop-portal-wlr} backend
 matches on (its @code{UseIn} lists
 @code{wlroots;sway;Wayfire;river;phosh;Hyprland}), so screen-sharing apps
-(Zoom, OBS, browsers) reach the wlroots @code{ScreenCast} portal instead
-of the GNOME backend, which fails under gowl because it requires Mutter;
+(Zoom, OBS, browsers) fall back to the wlroots @code{ScreenCast} portal,
+when gowl's own backend declines, instead of the GNOME backend, which fails under gowl because it requires Mutter;
 without it the portal frontend finds no @code{ScreenCast} backend and the
 share picker silently does nothing.  @code{GNOME} goes @emph{last} and is
 what keeps the keyring working --- see the subsection
@@ -2045,8 +2045,8 @@ it: @code{CMacs:gowl:GNOME} for @file{cmacs.desktop},
 @code{GNOME} goes @emph{last} in all three.  @command{xdg-desktop-portal}
 resolves @file{<desktop>-portals.conf} and @code{UseIn} by @emph{first}
 match, so an earlier @code{GNOME} would silently move
-InputCapture/RemoteDesktop off the gowl backend and ScreenCast off
-wlroots --- breaking KVM capture and screen sharing in order to fix the
+InputCapture/RemoteDesktop/ScreenCast/Screenshot off the gowl backend
+and its wlroots fallback --- breaking KVM capture and screen sharing in order to fix the
 keyring.  It cannot trip @code{OnlyShowIn=GNOME} autostart entries
 either: gowl runs no XDG autostart @file{.desktop} files at all, only the
 explicit command list in its @code{autostart} module config.
@@ -2207,10 +2207,42 @@ server deskflow connects to.  The full architecture is documented in gowl's
 
 To enable it: install @code{libeis-devel}, then @code{make install} installs
 the portal binary, its @file{.portal} registration, a @file{portals.conf}
-routing InputCapture/RemoteDesktop to gowl (ScreenCast still goes to
-@command{xdg-desktop-portal-wlr}), and a D-Bus @file{.service}.  The session's
+routing InputCapture, RemoteDesktop, ScreenCast and Screenshot to gowl (the
+last two as @code{gowl;wlr}), and a D-Bus @file{.service}.  The session's
 @env{XDG_CURRENT_DESKTOP} must contain @code{gowl}; @command{install-wm} sets
 @code{DesktopNames=CMacs:gowl} accordingly.
+
+The same binary serves @code{ScreenCast} (version 6) and @code{Screenshot}
+(version 3, with @code{PickColor}).  @command{xdg-desktop-portal-wlr} can
+only share whole outputs; gowl's backend can share a single window
+(@code{ext-image-capture-source-v1}).  It needs PipeWire for casts, and
+declines the interface at startup without it so the frontend falls back to
+portal-wlr.  Cursor modes are Hidden and Embedded; Metadata is not
+advertised.
+
+@table @asis
+@item The picker
+Tried in order: @env{GOWL_PORTAL_CHOOSER} (any dmenu-style command), the
+Super+space menu card, then bemenu, fuzzel, wofi, rofi or dmenu.  The card
+is driven by the @code{menu-choose PROMPT<TAB>LINE...} IPC command, which
+any script can use as a dmenu: it answers @code{OK TOKEN}, and the pick
+arrives as the event @code{menu chosen TOKEN N} or
+@code{menu cancelled TOKEN}; @code{menu-choice [TOKEN]} reads the last
+answer and @code{menu-pick N} picks a row.  The wait times out after
+@env{GOWL_PORTAL_CHOOSER_TIMEOUT} (5 minutes).
+@item Sharing again without asking
+@code{persist_mode} is honoured.  Mode 2 grants live in
+@file{$XDG_STATE_HOME/gowl/screencast-grants.yaml} (mode 0600, at most 64);
+mode 1 stays in memory.  A grant is single use, bound to the application
+it was given to, and matches outputs by connector plus make/model and
+windows by app_id plus title, with a fallback only when exactly one
+candidate fits; otherwise the picker returns.
+@item Screenshots
+Targets are the focused output, a window, the active window, or an area
+picked with @command{slurp}; PNGs land under
+@file{$XDG_PICTURES_DIR/Screenshots} and are returned as @code{file://}
+URIs.
+@end table
 
 Both KVM roles work.  They are not the same mechanism: libei clients
 declare a direction when they connect and the portal takes the opposite
