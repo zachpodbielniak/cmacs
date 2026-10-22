@@ -12,6 +12,7 @@
 | Voice chat (~C-c v c~ in ~M-x cmacs-ai-voice-chat~) | ~cmacs-ai-voice.el~ | push-to-talk |
 | VR hold-A dictation / hold-Y commands | ~cmacs-lrg-vr-voice.el~ | push-to-talk |
 | Brigade dictation and questions (~cmacs-brigade-voice-listen~) | ~cmacs-brigade-voice.el~ | push-to-talk |
+| Voice commands (~C-c v v~) | ~cmacs-voice-commands.el~ | push-to-talk |
 
 ~cmacs-whisper-dictate~ (~C-c v d~) deliberately keeps its own capture: it streams text into a buffer as you talk, which is a different shape, and it predates the engine.
 
@@ -81,6 +82,7 @@ These moved from the loop to the engine when it became shared; the old names are
 | ~s~ / ~S~ | global | ~cmacs-piper-speak-region~ / ~cmacs-piper-stop~ |
 | ~r~ ~R~ ~p~ ~x~ | global | cmacs-audio record / finish / play / stop all |
 | ~l~ / ~j~ | global | ~cmacs-voice-loop-mode~ / ~cmacs-voice-loop-listen-now~ |
+| ~v~ / ~?~ | global | ~cmacs-voice-command~ (push-to-talk command) / ~cmacs-voice-commands-help~ |
 | ~c~ (~t~) | voice chat buffer | ~cmacs-ai-voice-dictate~ (push-to-talk toggle) |
 | ~s~ | voice chat buffer | ~cmacs-voice-stop-speaking~ (shadows speak-region there) |
 | ~SPC~ ~i~ ~m~ ~h~ ~o~ ~n~ ~]~ ~[~ ~w~ ~q~ ~c~ ~k~ | VR mode | VR voice, menu, workspaces, recenter, keyboard |

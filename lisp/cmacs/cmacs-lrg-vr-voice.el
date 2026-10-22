@@ -35,6 +35,7 @@
 (require 'subr-x)
 (require 'cmacs-lrg-vr)
 (require 'cmacs-voice)
+(require 'cmacs-voice-commands)
 
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c" (&rest plist))
 (declare-function cmacs-audio-start "cmacs-audio-defuns.c" (handle))
@@ -356,55 +357,29 @@ Bound to holding A in VR.  Off a controller, toggles like
 
 ;;;; Voice commands
 
-(defvar cmacs-lrg-vr-voice-commands nil
-  "Voice commands: a list of (REGEXP FUNCTION DOC), tried in order.
-The spoken text is lower-cased, its punctuation removed and number words
-turned into digits (\"workspace two\" -> \"workspace 2\") before it is
-matched against each REGEXP, whole.  FUNCTION is called, as a command
-\(from the command loop), with the regexp's groups as string arguments
-\(nil for a group that did not match).  DOC is shown by
-\\[cmacs-lrg-vr-voice-help].  Add your own with
-`cmacs-lrg-vr-define-voice-command'.")
+;; The registry is the general one in cmacs-voice-commands.el; the VR
+;; commands below are entries in it restricted to the `vr' context, so
+;; "workspace two" means a VR workspace here and a gowl tag elsewhere.
+(defvaralias 'cmacs-lrg-vr-voice-commands 'cmacs-voice-commands
+  "Voice commands: see `cmacs-voice-commands'.
+The VR ones carry `:context vr'.  Add your own with
+`cmacs-lrg-vr-define-voice-command' or `cmacs-voice-define-command'.")
+
+(defvar cmacs-lrg-vr-voice--defining-defaults nil
+  "Non-nil while the shipped VR commands are being installed.")
 
 (defun cmacs-lrg-vr-define-voice-command (regexp function &optional doc append)
   "Add a voice command: speech matching REGEXP calls FUNCTION.
 FUNCTION gets REGEXP's groups as arguments.  New commands are tried
 before the shipped ones unless APPEND.  DOC is a short description
-\(\"new workspace [called NAME]\").  A REGEXP already defined is replaced."
-  (setq cmacs-lrg-vr-voice-commands
-        (cl-remove regexp cmacs-lrg-vr-voice-commands
-                   :key #'car :test #'equal))
-  (let ((entry (list regexp function doc)))
-    (setq cmacs-lrg-vr-voice-commands
-          (if append
-              (append cmacs-lrg-vr-voice-commands (list entry))
-            (cons entry cmacs-lrg-vr-voice-commands))))
-  regexp)
+\(\"new workspace [called NAME]\").  A REGEXP already defined is
+replaced.  A command added this way applies in and out of VR; the
+shipped VR commands apply only in VR."
+  (apply #'cmacs-voice-define-command regexp function doc append
+         (and cmacs-lrg-vr-voice--defining-defaults '(:context vr))))
 
-(defconst cmacs-lrg-vr-voice--numbers
-  '(("zero" . 0) ("one" . 1) ("won" . 1) ("two" . 2) ("to" . 2) ("too" . 2)
-    ("three" . 3) ("four" . 4) ("for" . 4) ("five" . 5) ("six" . 6)
-    ("seven" . 7) ("eight" . 8) ("nine" . 9) ("ten" . 10) ("eleven" . 11)
-    ("twelve" . 12) ("first" . 1) ("second" . 2) ("third" . 3)
-    ("fourth" . 4) ("fifth" . 5))
-  "Spoken numbers and their values, for workspace and line numbers.")
-
-(defun cmacs-lrg-vr-voice--normalize (text)
-  "TEXT lower-cased, without punctuation, with number words as digits.
-Number words become digits only after \"workspace\", \"line\" or
-\"number\", where a number is expected: \"open two files\" stays put."
-  (let* ((s (downcase text))
-         (s (replace-regexp-in-string "[^[:alnum:] '._/-]" " " s))
-         (s (replace-regexp-in-string "\\.\\'\\|\\. " " " s))
-         (s (string-trim (replace-regexp-in-string "[ \t]+" " " s))))
-    (replace-regexp-in-string
-     "\\(\\(?:workspace\\|line\\|number\\|tab\\) \\)\\([a-z]+\\)\\b"
-     (lambda (m)
-       (let ((n (assoc (match-string 2 m) cmacs-lrg-vr-voice--numbers)))
-         (if n
-             (concat (match-string 1 m) (number-to-string (cdr n)))
-           m)))
-     s t t)))
+(defvaralias 'cmacs-lrg-vr-voice--numbers 'cmacs-voice-command-numbers)
+(defalias 'cmacs-lrg-vr-voice--normalize #'cmacs-voice-command-normalize)
 
 (defun cmacs-lrg-vr-voice--say (fmt &rest args)
   "Show FMT with ARGS, and speak it when `cmacs-lrg-vr-voice-speak-feedback'."
@@ -414,38 +389,16 @@ Number words become digits only after \"workspace\", \"line\" or
       (ignore-errors (cmacs-voice-speak msg)))
     msg))
 
-(defun cmacs-lrg-vr-voice--command-name (words)
-  "The command WORDS name (\"org agenda\" -> `org-agenda'), or nil."
-  (let ((sym (intern-soft (replace-regexp-in-string " " "-" words))))
-    (and sym (commandp sym) sym)))
+(defalias 'cmacs-lrg-vr-voice--command-name #'cmacs-voice--command-name)
 
 (defun cmacs-lrg-vr-voice-run (text)
   "Do what the spoken TEXT says: a voice command, a command name, or M-x.
-Returns the function run, or nil."
-  (let ((s (cmacs-lrg-vr-voice--normalize text))
-        (case-fold-search t))
-    (catch 'done
-      (pcase-dolist (`(,re ,fn ,_doc) cmacs-lrg-vr-voice-commands)
-        (when (string-match (concat "\\`\\(?:" re "\\)\\'") s)
-          (let ((args (cl-loop for i from 1 to (regexp-opt-depth re)
-                               collect (match-string i s))))
-            (cmacs-lrg-vr-voice--say "\"%s\"" text)
-            (apply fn args)
-            (throw 'done fn))))
-      (let ((cmd (cmacs-lrg-vr-voice--command-name s)))
-        (when cmd
-          (cmacs-lrg-vr-voice--say "\"%s\" -> %s" text cmd)
-          (setq this-command cmd)
-          (call-interactively cmd)
-          (throw 'done cmd)))
-      (if (eq cmacs-lrg-vr-voice-unmatched 'minibuffer)
-          (progn
-            (cmacs-lrg-vr-voice--say "\"%s\" -- pick a command" text)
-            (minibuffer-with-setup-hook
-                (lambda () (insert (replace-regexp-in-string " " "-" s)))
-              (call-interactively #'execute-extended-command)))
-        (cmacs-lrg-vr-voice--say "Didn't understand \"%s\"" text))
-      nil)))
+The VR commands come first, then the general ones (macros, tools,
+podomation); see `cmacs-voice-command-run'.  Returns the function run,
+or nil."
+  (let ((cmacs-voice-commands-speak-feedback cmacs-lrg-vr-voice-speak-feedback))
+    (cmacs-voice-command-run text :context 'vr
+                             :unmatched cmacs-lrg-vr-voice-unmatched)))
 
 ;;;###autoload
 (defun cmacs-lrg-vr-voice-command-hold ()
@@ -471,8 +424,9 @@ understood.  Off a controller, toggles like \\[cmacs-lrg-vr-voice-command]."
   (interactive)
   (with-help-window "*VR Voice Commands*"
     (princ "Voice commands (hold Y in VR, or C-c v SPC):\n\n")
-    (pcase-dolist (`(,_re ,fn ,doc) cmacs-lrg-vr-voice-commands)
-      (princ (format "  %-38s %s\n" (or doc "") fn)))
+    (dolist (e cmacs-voice-commands)
+      (when (cmacs-voice--entry-applies-p e 'vr)
+        (princ (format "  %-38s %s\n" (or (nth 2 e) "") (nth 1 e)))))
     (princ "\nAnything else is tried as a command name (\"org agenda\"),\n")
     (princ "then opens M-x with the words typed.\n\n")
     (princ "Dictation (hold A, or C-c v i) types at the cursor; say\n")
@@ -610,7 +564,8 @@ understood.  Off a controller, toggles like \\[cmacs-lrg-vr-voice-command]."
                          (lambda () (insert (replace-regexp-in-string " " "-" words)))
                        (call-interactively #'execute-extended-command)))))
               "run COMMAND NAME")))
-    (cmacs-lrg-vr-define-voice-command (nth 0 c) (nth 1 c) (nth 2 c) t)))
+    (let ((cmacs-lrg-vr-voice--defining-defaults t))
+      (cmacs-lrg-vr-define-voice-command (nth 0 c) (nth 1 c) (nth 2 c) t))))
 
 (cmacs-lrg-vr-voice--define-defaults)
 

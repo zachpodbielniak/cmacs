@@ -8676,6 +8676,45 @@ became @code{cmacs-voice-device} and so on; the old names are obsolete
 aliases.  In a voice chat @kbd{C-c v c} records, except with VR mode on,
 where VR's recenter wins; @kbd{C-c v t} is the same command.
 
+@section Voice Commands (cmacs-voice-commands)
+
+@cindex voice commands
+@cindex desktop voice control
+
+Spoken commands that act without a chat model:
+@file{lisp/cmacs/cmacs-voice-commands.el}, reference
+@file{doc_org/cmacs/cmacs-voice-commands.org}.  Say them after
+@kbd{C-c v v} (@code{cmacs-voice-command}, push-to-talk), after a wake
+phrase routed to @code{commands}, or holding Y in VR.  @kbd{C-c v ?}
+lists them.
+
+@table @asis
+@item ``workspace three'', ``move this to workspace two''
+@code{gowl-view-tags}, @code{gowl-set-tags}.
+@item ``focus firefox'', ``focus left'', ``close window''
+@code{gowl-focus-client} on the best-matching app id or title,
+@code{gowl-focus-direction}, @code{gowl-close-client} (asks first).
+@item ``tile left'', ``monocle'', ``layout scrolling''
+@code{gowl-set-layout}.
+@item ``run standup'', ``run macro NAME'', ``use tool NAME for ARG''
+A gowl macro (@code{cmacs-gowl-macro-run}), else a brigade tool
+(@code{cmacs-brigade-call-tool}), else an Emacs command.
+@item ``fire event NAME'', ``run rule NAME''
+@code{cmacs-podomation-emit-event}; rules are reached through the
+@code{voice_rule} event.
+@end table
+
+Names are matched exactly, then by containing every spoken word, then
+fuzzily (@code{cmacs-voice-command-threshold}).  Destructive actions --
+closing a window, a tool marked @code{:destructive}, a macro in
+@code{cmacs-voice-destructive-macros} -- are confirmed by a spoken
+``yes''/``no'' or @kbd{y}/@kbd{n}, without blocking
+(@code{cmacs-voice-confirm-destructive}: @code{t}, @code{keyboard} or
+@code{nil}).  The registry @code{cmacs-voice-commands} is the VR one
+generalised (@code{cmacs-lrg-vr-voice-commands} is an alias); add to it
+with @code{cmacs-voice-define-command}.  Every compositor call is a
+locked gowl DEFUN on the main thread.
+
 @section Streaming VAD and PCM Helpers
 
 @table @code

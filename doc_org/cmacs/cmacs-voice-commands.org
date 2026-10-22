@@ -1,0 +1,100 @@
+#+TITLE: cmacs-voice-commands — voice control of Emacs and the desktop
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+Spoken commands that act directly, with no chat model in between: switch workspaces, focus or close windows, change the layout, run a gowl macro by name, call a brigade tool, fire a podomation event, run an Emacs command.  ~lisp/cmacs/cmacs-voice-commands.el~.
+
+Three ways in:
+
+| How | |
+|-----+-|
+| ~C-c v v~ (~cmacs-voice-command~) | push-to-talk: press, speak, press |
+| A wake phrase routed to ~commands~ | hands-free, see [[file:cmacs-voice-loop.org][cmacs-voice-loop.org]], /Routes/ |
+| Hold Y in VR | the VR commands first, then these |
+
+~C-c v ?~ (~cmacs-voice-commands-help~) lists what applies where you are.
+
+* What you can say
+
+| Say | Does | Needs |
+|-----+------+-------|
+| "workspace three", "go to workspace 3" | ~gowl-view-tags~ | gowl |
+| "move this to workspace two" | ~gowl-set-tags~ on the focused window | gowl |
+| "focus firefox", "switch to window zsh" | ~gowl-focus-client~ on the best-matching app id / title | gowl |
+| "focus left" / right / up / down | ~gowl-focus-direction~ | gowl |
+| "close window", "close firefox" | ~gowl-close-client~ — *asks first* | gowl |
+| "float this", "fullscreen" | ~gowl-toggle-client-floating~ / ~-fullscreen~ | gowl |
+| "tile left", "tile", "monocle", "tabbed", "floating", "scrolling" | ~gowl-set-layout~ | gowl |
+| "layout NAME" | the registered layout (~gowl-list-layouts~) NAME best matches | gowl |
+| "run standup", "start sort windows" | the gowl macro of that name, else the brigade tool, else the Emacs command | — |
+| "run macro NAME" | ~cmacs-gowl-macro-run~ | gowl |
+| "use tool NAME [for ARG]" | ~cmacs-brigade-call-tool~ with ARG as the tool's one string parameter | brigade |
+| "fire event backup now" | ~cmacs-podomation-emit-event~ ~backup_now~ | podomation |
+| "run rule standup" | emits ~voice_rule~ with ~name = "standup"~ | podomation |
+| "save", "save all", "undo", "other window" | the Emacs commands | — |
+| "org agenda", any command name | ~org-agenda~ … | — |
+
+"tile left" is dwm's tile layout: master on the left, the stack on the right.  Number words after "workspace", "line", "number" or "tab" become digits ("workspace two" → 2).
+
+* Names: exact, then fuzzy
+
+Spoken names are matched against what is registered /now/ — ~cmacs-gowl-macro-list~, ~cmacs-brigade-registry-list~, ~gowl-list-clients~ (app id + title), ~gowl-list-layouts~ — by ~cmacs-voice-best-name~: lower-cased, with ~-~ ~_~ ~.~ read as spaces and the file extension dropped; an exact match wins, then a candidate containing every spoken word ("stand up" → ~standup~), then the most similar above ~cmacs-voice-command-threshold~ (0.7, Levenshtein).  "run NAME" tries macros first, then tools, then Emacs commands.
+
+* Confirmation
+
+Destructive actions ask first: closing a window, a brigade tool marked ~:destructive~, a macro listed in ~cmacs-voice-destructive-macros~, and any registry entry with ~:destructive~.  The question is shown and spoken ("Close Mozilla Firefox?"); answer by saying "yes"/"no" (the next utterance — with the loop on, no wake phrase is needed while it waits) or pressing ~y~/~n~.  Nothing blocks meanwhile; the question lapses after ~cmacs-voice-confirm-seconds~ (15).
+
+| ~cmacs-voice-confirm-destructive~ | |
+|-----------------------------------+-|
+| ~t~ (default) | ask; voice or keyboard answers |
+| ~keyboard~ | ask; only ~y~/~n~ answer |
+| ~nil~ | act at once |
+
+A brigade tool with its own ~:confirm~ is additionally gated by the brigade's approval handler, as for any caller.
+
+* The registry
+
+~cmacs-voice-commands~ is a list of ~(REGEXP FUNCTION DOC PROPS)~, tried in order against the normalised text, matched whole.  It is the VR voice-command registry generalised: ~cmacs-lrg-vr-voice-commands~ is an alias of it, ~cmacs-lrg-vr-define-voice-command~ still works, and the shipped VR commands are entries with ~:context vr~.  PROPS:
+
+| Key | |
+|-----+-|
+| ~:context~ | ~vr~ or ~desktop~ (everywhere else); nil = both |
+| ~:when~ | a predicate: the gowl entries need ~gowl-running-p~ |
+| ~:destructive~ | confirm first; a function of the groups may decide per call and return the question |
+
+Add your own:
+
+#+begin_src emacs-lisp
+(cmacs-voice-define-command
+ "\\(?:open\\|show\\) \\(?:my \\)?inbox"
+ (lambda () (find-file "~/Documents/notes/00_inbox/00_index.org"))
+ "open inbox")
+
+(cmacs-voice-define-command
+ "reboot\\(?: the\\)? \\(.+\\)"
+ (lambda (host) (async-shell-command (format "ssh %s sudo reboot" host)))
+ "reboot HOST" nil :destructive t)
+#+end_src
+
+Groups become string arguments.  Commands added this way are tried before the shipped ones (APPEND nil).  ~cmacs-voice-command-functions~ runs with ~(TEXT FUNCTION)~ after each.
+
+* Threads and the compositor
+
+Every compositor call is one of gowl's own DEFUNs, called on the main thread; each takes the gowl lock itself (see AGENTS.md, /The gowl lock/).  Results from whisper arrive in a callback, and the command then runs from the command loop (~cmacs-voice-run-later~).  No Lisp runs anywhere else.
+
+* Customization
+
+| Variable | Default | |
+|----------+---------+-|
+| ~cmacs-voice-confirm-destructive~ | ~t~ | see above |
+| ~cmacs-voice-confirm-seconds~ | 15 | how long a question waits |
+| ~cmacs-voice-command-threshold~ | 0.7 | fuzzy name match |
+| ~cmacs-voice-destructive-macros~ | nil | macros that ask first |
+| ~cmacs-voice-commands-unmatched~ | ~message~ | or ~minibuffer~ (M-x with the words) |
+| ~cmacs-voice-commands-speak-feedback~ | nil | say what was done |
+
+* Testing
+
+~test/cmacs/cmacs-voice-commands-tests.el~ stubs every gowl, macro and podomation primitive (C DEFUN stubs take ~&rest~), so no test touches a compositor: workspaces, move-to, focus by name and direction, layouts, close with spoken yes/no, the keyboard-only and no-confirm modes and lapsing, the ~:when~ gate without a compositor, VR vs desktop context, macros (including a destructive one), podomation events and rules, real brigade tools (registered and removed), and ~C-c v v~ end to end with a fake microphone.  A live desktop is needed to hear it work.
