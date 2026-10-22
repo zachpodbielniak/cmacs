@@ -1345,4 +1345,31 @@ cmacs_libregnum_spacemouse_motion (Lisp_Object buffer, const float *t,
   return true;
 }
 
+/* Hand gestures from the camera (cmacs-handtrack): a pinch dragged is a
+ * mouse drag of the scene, a two-hand stretch a zoom.  Already in mouse
+ * units, so this only routes. */
+bool
+cmacs_libregnum_camera_gesture (Lisp_Object buffer, double orbit_dx,
+                                double orbit_dy, double zoom)
+{
+  CmacsLibregnumView *v;
+  CmacsLibregnumRenderCtx *ctx;
+
+  if (!BUFFERP (buffer) || cmacs_libregnum_view_registry_empty_p ())
+    return false;
+  v = cmacs_libregnum_view_for_buffer (buffer);
+  if (v == NULL)
+    return false;
+  ctx = cmacs_libregnum_view_get_render_ctx (v);
+  if (ctx == NULL || cmacs_libregnum_render_ctx_is_game (ctx)
+      || cmacs_libregnum_render_ctx_is_image (ctx))
+    return false;
+  if (orbit_dx != 0.0 || orbit_dy != 0.0)
+    cmacs_libregnum_render_ctx_orbit_camera (ctx, orbit_dx, orbit_dy);
+  if (zoom != 0.0)
+    cmacs_libregnum_render_ctx_zoom_camera (ctx, zoom);
+  cmacs_libregnum_view_request_redraw (v);
+  return true;
+}
+
 #endif /* HAVE_CMACS_LIBREGNUM */

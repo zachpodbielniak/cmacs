@@ -1,0 +1,280 @@
+#+TITLE: cmacs-camera and cmacs-handtrack — Camera Capture and Hand Gestures
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Two subsystems, one on top of the other:
+
+- *cmacs-camera* (=--with-cmacs-camera=) -- a camera as a frame source:
+  GStreamer, into memory, on a worker thread, with a privacy model.
+- *cmacs-handtrack* (=--with-cmacs-handtrack=) -- hands in those frames,
+  as gestures: MediaPipe's palm detector and hand landmark model on
+  onnxruntime, feeding the very gesture classifier VR hands use.
+
+#+begin_src emacs-lisp
+(cmacs-camera-start)            ; the indicator appears
+(cmacs-camera-preview)          ; what it sees, from memory
+(cmacs-handtrack-mode 1)        ; hands as gestures (needs the models)
+#+end_src
+
+Both are in the default flag set.  ~IS-CMACS-CAMERA~ and
+~IS-CMACS-HANDTRACK~ say whether a build has them;
+~(cmacs-handtrack-available-p)~ whether it has onnxruntime too.
+
+** Why two flags
+
+The camera is useful without hands -- a preview, and the obvious next
+consumers (QR codes, a whiteboard, presence) -- and it has a privacy
+model of its own that every consumer inherits.  Hand tracking needs
+libregnum (hands are libregnum's =LrgVRHandState=, shared with VR) and
+wants onnxruntime; folding it into the camera would make a camera-only
+build drag libregnum in.  And hand tracking is one flag rather than two
+(with and without inference) because almost all of it -- the pipeline's
+arithmetic, the landmark mapping, the gestures -- needs no network, and
+its tests are exactly that part.  So =--with-cmacs-handtrack= always
+builds; onnxruntime, when configure finds it (=pkg-config
+libonnxruntime=), adds inference, and its absence is a run-time "not
+available" rather than a build failure.
+
+* The camera
+
+** Privacy
+
+- *Off until asked.*  Nothing in cmacs opens a camera on its own; only
+  ~cmacs-camera-start~ does, or a feature you started that calls it
+  (~cmacs-camera-acquire~, used by ~cmacs-handtrack-mode~).
+- *Nothing on disk.*  Frames live in memory.  The preview is made from a
+  PPM image in a string (~cmacs-camera-frame-ppm~ → ~create-image~ with
+  DATA-P), never a file.  No code path in either subsystem writes a frame.
+- *Visible.*  While the camera is open, ~cmacs-camera-indicator~ (a red
+  "●CAM") is in the mode line, kept honest by a one-second check that
+  drops it if the camera closed by itself; under gowl a bar toast
+  (=gowl-bar-notify=, an existing push API -- nothing in =deps/gowl= is
+  changed) says "Camera on" and "Camera off".
+- *Closed means closed.*  ~cmacs-camera-stop~ sets the pipeline to NULL,
+  which joins the streaming thread and releases the device -- its light
+  goes out -- before the command returns.  ~cmacs-camera-release~ closes
+  it when the last feature holding it lets go.
+
+** Sources
+
+| ~cmacs-camera-device~   | Opens                                                         |
+|-------------------------+---------------------------------------------------------------|
+| nil                     | the first camera GStreamer's device monitor lists, PipeWire's before V4L2's; inside a Flatpak, the portal |
+| ="pipewire:SERIAL"=     | =pipewiresrc target-object=SERIAL= (see ~cmacs-camera-devices~) |
+| ="/dev/videoN"=         | =v4l2src device=/dev/videoN=                                    |
+| ="portal"=              | the xdg-desktop-portal Camera, then its PipeWire remote        |
+| ="test"=, ="test:ball"= | =videotestsrc= (pattern), for tests                            |
+| anything else           | the device whose name contains it                              |
+
+~cmacs-camera-devices~ lists (NAME API SPEC); listing opens no camera.
+With =C-u M-x cmacs-camera-start= you pick from it.
+
+*The portal.*  Inside a Flatpak the camera is reached through
+=org.freedesktop.portal.Camera=: =AccessCamera= (the desktop may ask the
+user), then =OpenPipeWireRemote=, whose fd goes to =pipewiresrc fd==.
+All of it is asynchronous -- a permission dialog must not freeze Emacs --
+with the cmacs GMainContext pushed as thread-default around the calls so
+the replies and the =Response= signal are dispatched there, on the main
+thread.  ~cmacs-camera-open~ returns =pending= until the user answers.
+
+** Pipeline and threads
+
+#+begin_example
+source ! videoconvert ! videoscale ! videorate
+       ! video/x-raw,format=RGB,width=W,height=H,framerate=F/1
+       ! appsink max-buffers=1 drop=true sync=false
+#+end_example
+
+W, H and F are ~cmacs-camera-width~, ~-height~, ~-fps~ (640, 480, 30).
+=drop=true max-buffers=1= is the backpressure: a slow consumer gets the
+newest frame, never a queue.  =new-sample= runs on GStreamer's streaming
+thread; there the latest frame is copied (for the preview) and every
+registered consumer is called, all under the camera lock -- so
+~cmacs_camera_remove_consumer~ returning means the consumer will never
+be called again.  The pipeline's bus is a GSource on the cmacs
+GMainContext: an error or end of stream closes the camera on the main
+thread and keeps the message for ~cmacs-camera-status~.
+
+** Lisp API
+
+| Function                        | Does                                                      |
+|---------------------------------+-----------------------------------------------------------|
+| ~cmacs-camera-start~ / ~-stop~      | open / close, with the indicator and toast                |
+| ~cmacs-camera-preview~          | a buffer refreshed from memory at ~cmacs-camera-preview-fps~ |
+| ~cmacs-camera-describe~         | what is open                                              |
+| ~cmacs-camera-acquire~ / ~-release~ | reference-counted use by features                     |
+| ~cmacs-camera-open~ =SPEC W H FPS= | the primitive (no indicator)                          |
+| ~cmacs-camera-close~            | the primitive                                             |
+| ~cmacs-camera-status~           | =:open :pending :source :frames :width :height :error :sandboxed= |
+| ~cmacs-camera-devices~          | (NAME API SPEC) per camera                                |
+| ~cmacs-camera-frame-ppm~ =&optional MAX-WIDTH= | the latest frame as a PPM string          |
+
+*Why not the video subsystem's blit path for the preview:* it is built
+around a =playbin3= URI it owns; a second consumer of the camera there
+would open the device twice.  A PPM string per tick is a few lines,
+needs no window-system code, and works under pgtk and =--lrg= alike.
+
+* Hand tracking
+
+** The pipeline
+
+MediaPipe's two-stage hand pipeline, with the networks on onnxruntime
+and everything else in plain C (=cmacs-handtrack-model.c=):
+
+1. *Palm detection* on the whole frame, letterboxed to 192 x 192: an SSD
+   over 2016 anchors (stride 8: 24 x 24 cells of 2; strides 16: 12 x 12
+   cells of 6), each a box and seven palm keypoints; sigmoid scores
+   above ~cmacs-handtrack-palm-threshold~; weighted non-maximum
+   suppression (IoU > 0.3 merge into their score-weighted mean).
+2. *A region of interest* per palm: turned so the wrist → middle-knuckle
+   vector points up, shifted half a box toward the fingers, squared to
+   the long side x 2.6.
+3. *Hand landmarks* on that region, cropped to 224 x 224 (bilinear, with
+   the rotation): 21 points, a presence score, handedness.
+4. *Tracking*: next frame's regions come from those landmarks (the
+   wrist, thumb base and the first two joints of each finger, x 2.0,
+   shifted 0.1); the detector runs again only while a hand is missing.
+
+The networks see the mirrored (selfie) image -- MediaPipe's handedness
+assumes it -- unless ~cmacs-handtrack-mirror~ is nil.  Model inputs are
+read from the models (NHWC or NCHW); outputs are found by size, not
+position (the 18-per-anchor boxes, the per-anchor scores, the 63
+landmark floats, then the 1-float presence and handedness), because
+conversions order them differently.
+
+** Threads
+
+#+begin_example
+camera streaming thread   copy the frame, signal          (never waits)
+inference thread          newest frame -> palm? -> landmarks -> result
+main thread               result -> LrgVRHandState -> latch -> classifier
+                          -> scene camera (C) / <hand-...> events
+#+end_example
+
+Frames older than the newest are dropped, and so are results: at most
+one delivery is queued (~cmacs_glib_invoke_on_main~), so a busy Emacs
+sees the latest hands, not a backlog.  No Lisp runs off the main thread;
+the only Lisp value kept is the target, ~staticpro~'d.
+
+** 21 landmarks → 26 joints
+
+Each hand is placed in a viewer's space -- the user at the origin
+looking down -Z, +Y up -- on a virtual plane 0.5 m away, 0.577 m wide (a
+~60° camera), z from MediaPipe's relative depth; then scaled about the
+wrist to a standard palm (wrist to middle knuckle, 0.094 m), so pinch
+distances -- which the latch's thresholds are in metres -- do not change
+with the hand's distance from the camera.
+
+| MediaPipe       | OpenXR / =LrgVRHandJoint=                              |
+|-----------------+------------------------------------------------------|
+| 0 wrist         | WRIST                                                |
+| 1-4 thumb       | THUMB_METACARPAL, _PROXIMAL, _DISTAL, _TIP           |
+| 5-8 index       | INDEX_PROXIMAL, _INTERMEDIATE, _DISTAL, _TIP         |
+| 9-12 middle     | MIDDLE_PROXIMAL ... _TIP                             |
+| 13-16 ring      | RING_PROXIMAL ... _TIP                               |
+| 17-20 little    | LITTLE_PROXIMAL ... _TIP                             |
+| /none/          | PALM: the midpoint of the wrist and the middle knuckle |
+| /none/          | INDEX/MIDDLE/RING/LITTLE_METACARPAL: a quarter of the way from the wrist to the knuckle |
+
+The five synthesised joints are marked valid.  MediaPipe gives positions
+only, so every joint gets the palm's orientation: +Y out of the back of
+the hand (from index knuckle x little knuckle, signed by handedness), +Z
+back along the fingers.  That is what the palm-up test reads.
+
+** Gestures: the same classifier
+
+The camera's hands go through =cmacs-hand-gesture.c= -- the classifier
+VR hands use, factored out of =cmacs-lrgvr.c= into a shared object
+linked once when either is built -- after the same libregnum pinch
+latch (closes at 0.85, opens at 0.60).  The desktop has no laser, so
+every sample's target is "nothing":
+
+| Gesture                              | Does                                            |
+|--------------------------------------+-------------------------------------------------|
+| quick pinch                          | =<hand-left-pinch>= / =<hand-right-pinch>=      |
+| pinch and move                       | orbit the scene (~cmacs-handtrack-orbit-gain~ mouse pixels per metre) |
+| both hands pinch and stretch         | zoom the scene; =<hand-zoom-in>= / =-out>= at the end |
+| palm up for 0.3 s / turned back      | =<hand-left-palm-up>=, =<hand-right-palm-down>=, ... |
+
+The scene is the libregnum view in the selected window (roamgraph, the
+second brain, gnuseye, the CAD viewer), or ~cmacs-handtrack-target~; it
+moves in C, at the camera's frame rate, through the mouse's own orbit
+and zoom helpers (=cmacs_libregnum_camera_gesture=).  Lisp sees only the
+events, keystrokes with codes above every keysym range that
+~cmacs-handtrack-mode~ names (as the SpaceMouse's buttons are).
+
+** Models
+
+Not shipped, never fetched behind your back.  Defaults are OpenCV
+Zoo's ONNX conversions of MediaPipe's models (Apache-2.0):
+
+| ~cmacs-handtrack-palm-model~     | =palm_detection_mediapipe_2023feb.onnx= (192 x 192 NHWC) |
+| ~cmacs-handtrack-landmark-model~ | =handpose_estimation_mediapipe_2023feb.onnx= (224 x 224 NHWC) |
+
+Resolved along ~cmacs-handtrack-models-search-path~ (the user directory,
+then =/usr/share/cmacs/handtrack-models/= for image builds), like the
+whisper models.  To install them, you run:
+
+#+begin_src emacs-lisp
+M-x cmacs-handtrack-download-models
+#+end_src
+
+which fetches each from ~cmacs-handtrack-download-base-urls~ (the
+OpenCV Hugging Face mirrors) into ~cmacs-handtrack-models-directory~.
+Or by hand:
+
+#+begin_src sh
+mkdir -p ~/.local/share/cmacs/handtrack-models && cd "$_"
+curl -LO https://huggingface.co/opencv/palm_detection_mediapipe/resolve/main/palm_detection_mediapipe_2023feb.onnx
+curl -LO https://huggingface.co/opencv/handpose_estimation_mediapipe/resolve/main/handpose_estimation_mediapipe_2023feb.onnx
+#+end_src
+
+The decoder is MediaPipe's 192-pixel palm SSD; a palm model with another
+input size is refused at open.
+
+** Lisp API
+
+| Function / variable                      | Does                                     |
+|------------------------------------------+------------------------------------------|
+| ~cmacs-handtrack-mode~                   | camera + models + gestures, on and off   |
+| ~cmacs-handtrack-describe~               | what is tracked, how fast                |
+| ~cmacs-handtrack-hands~                  | the hands now: pinch, palm-up, positions |
+| ~cmacs-handtrack-download-models~        | install the models (you run it)          |
+| ~cmacs-handtrack-open~ / ~-close~         | the primitives                           |
+| ~cmacs-handtrack-status~                 | =:inference :running :frames :results :events :hands :latency-ms :target= |
+| ~cmacs-handtrack-set-target~, ~-set-option~ | the C side of the defcustoms          |
+| ~cmacs-handtrack-event-codes~            | (NAME . CODE) per event                  |
+
+For tests: ~cmacs-handtrack--synthetic-landmarks~ (libregnum's synthetic
+hand projected onto the camera), ~--map~, ~--simulate~ (landmark frames
+through latch and classifier), ~--anchors~, ~--decode~, ~--letterbox~,
+~--roi-from-palm~.
+
+* Tests
+
+- =test/cmacs/cmacs-camera-tests.el= -- closed by default, videotestsrc
+  frames at the asked size, the in-memory preview, reopen, a bad device,
+  the indicator, acquire/release.  Real devices only with
+  =CMACS_TEST_CAMERA_DEVICES=1=.
+- =test/cmacs/cmacs-handtrack-tests.el= -- anchors, palm decoding and NMS
+  on synthetic tensors, the letterbox, regions of interest, the landmark
+  mapping round trip (palm up/down, pinch, distance independence),
+  gestures through the shared classifier (tap, palm, pull, two-hand
+  zoom), event names, options, and refusals without onnxruntime or
+  models.  The one end-to-end test (models on videotestsrc frames) skips
+  unless onnxruntime and the models are present.
+
+* Not yet
+
+- *gowl desktop pointer from a hand* -- moving and clicking the
+  compositor's pointer: it needs gowl pointer primitives that take the
+  gowl lock from the main thread; none exists today and =deps/gowl= is
+  not changed here.  Follow-up.
+- Camera hands in a headset that has no hand tracking of its own.
+- The 3D lrg frame's camera as a gesture target (the SpaceMouse has it).
+- A persistent gowl bar widget for the camera (today: a toast on open
+  and close, and the mode line).
+- One-euro smoothing of the landmarks; the latch's hysteresis is the only
+  filtering now.

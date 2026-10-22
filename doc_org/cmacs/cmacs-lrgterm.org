@@ -846,9 +846,13 @@ unused banks: alt F32/F33 palm up, super F32/F33 palm down, hyper F32/F33
 empty-space pinch, alt F34/F35 the end of a stretch; the layer of a
 controller in the other hand still applies.
 
-*Not yet:* camera-based hand tracking for the desktop (an ONNX hand-pose
-model on onnxruntime over a camera capture), and hand grabs of panels --
-the controller grip carries them.
+*Camera hands.*  The classifier now lives in
+=cmacs/gesture/cmacs-hand-gesture.c=, shared with
+=--with-cmacs-handtrack=, which feeds it hands a desktop camera sees
+(MediaPipe models on onnxruntime): [[file:cmacs-camera.org][cmacs-camera]].
+
+*Not yet:* hand grabs of panels -- the controller grip carries them --
+and camera hands in a headset without hand tracking of its own.
 
 ** SpaceMouse in VR
 

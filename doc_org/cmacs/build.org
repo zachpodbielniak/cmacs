@@ -121,6 +121,8 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-lsp=            | In-binary LSP language servers (=emacs --cmacs-lsp LANG=); the gnucalc =.calc= server needs the calculator too |
 | =--with-cmacs-dbexplorer=    | Database explorer: query, browse, edit and export SQLite / PostgreSQL / MySQL in Emacs buffers (orm-glib) |
 | =--with-cmacs-clawtilla=     | Clawtilla fleet client: drive a running clawtillad, locally or over TCP, from Emacs buffers |
+| =--with-cmacs-camera=        | Camera capture through GStreamer (PipeWire, V4L2, the Camera portal); frames in memory only, an indicator while open (requires glib) |
+| =--with-cmacs-handtrack=     | Camera hand tracking: MediaPipe palm + landmark models on onnxruntime (optional), desktop hand gestures through the VR gesture classifier (requires camera + libregnum) |
 | =--with-cmacs-spacemouse=    | SpaceMouse / 6DOF input via spacenavd (libspnav when found): orbit/pan/zoom libregnum scenes, the 3D lrg frame and the VR viewer; buttons as =<spacemouse-N>= (requires glib) |
 | =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
@@ -173,6 +175,8 @@ Example with explicit flags:
   --with-cmacs-dbexplorer \
   --with-cmacs-clawtilla \
   --with-cmacs-spacemouse \
+  --with-cmacs-camera \
+  --with-cmacs-handtrack \
   --with-cmacs-ai-brigade \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection

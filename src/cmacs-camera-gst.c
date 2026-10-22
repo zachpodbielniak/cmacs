@@ -1,0 +1,1 @@
+./../cmacs/camera/cmacs-camera-gst.c

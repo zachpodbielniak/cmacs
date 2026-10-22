@@ -5607,6 +5607,14 @@ extern void init_cmacs_clawtilla (void);
 extern void syms_of_cmacs_spacemouse (void);
 extern void init_cmacs_spacemouse (void);
 #endif
+#ifdef HAVE_CMACS_CAMERA
+extern void syms_of_cmacs_camera (void);
+extern void init_cmacs_camera (void);
+#endif
+#ifdef HAVE_CMACS_HANDTRACK
+extern void syms_of_cmacs_handtrack (void);
+extern void init_cmacs_handtrack (void);
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
 extern void syms_of_cmacs_gnuseye (void);
 extern void init_cmacs_gnuseye (void);

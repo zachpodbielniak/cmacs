@@ -733,6 +733,8 @@ cd cmacs
   --with-cmacs-dbexplorer \
   --with-cmacs-clawtilla \
   --with-cmacs-spacemouse \
+  --with-cmacs-camera \
+  --with-cmacs-handtrack \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 make -j$(nproc)
@@ -884,6 +886,8 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-dbexplorer \
   --with-cmacs-clawtilla \
   --with-cmacs-spacemouse \
+  --with-cmacs-camera \
+  --with-cmacs-handtrack \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 #+end_src
@@ -951,6 +955,10 @@ Module flags:
 - =--with-cmacs-dbexplorer= — *Database explorer*: query, browse, edit and export databases in Emacs buffers, over [[https://git.podbielniak.com/zachpodbielniak/orm-glib][orm-glib]] (SQLite, PostgreSQL, MySQL/MariaDB — and whatever orm-glib gains later, since backends are looked up by URL scheme rather than compiled into a switch).  A connections list, a schema browser, a SQL editor and a results grid, plus row editing that stages your changes and applies them in one transaction so you get to read the generated SQL before it runs.  Saved connections carry no passwords — those come from =auth-source= at connect time — and any connection can be marked read-only, which the C layer enforces for every caller including agents.  Reachable from the AI context menu, ai-brigade tools, MCP, D-Bus and =emacsctl=.  Part of the standard flag set.  See [[file:doc_org/cmacs/dbexplorer.org][the database explorer manual]].
 
 - =--with-cmacs-spacemouse= — *SpaceMouse / 6DOF input*: a 3Dconnexion SpaceMouse (or anything =spacenavd= drives) as the camera of cmacs's 3D views.  Tilt, twist and push the cap to orbit, pan and zoom the libregnum scene in the selected window (roamgraph, the second brain, gnuseye's globe, the CAD viewer), the 3D =--lrg= frame, or -- in a headset -- to fly the VR viewer.  Motion is applied in C at the device's rate, straight from the GLib loop; Lisp picks the target and the tuning (sensitivity, deadzone, per-axis inversion, dominant-axis mode) and gets the buttons as =<spacemouse-1>=, =<spacemouse-2>=, ... events.  Uses =libspnav= when installed, otherwise a built-in client of spacenavd's protocol; with no daemon running it is a silent no-op that connects when one appears.  =M-x cmacs-spacemouse-mode=.  Part of the standard flag set.  See [[file:doc_org/cmacs/cmacs-spacemouse.org][the SpaceMouse manual]].
+
+- =--with-cmacs-camera= — *Camera capture*: a camera as an in-memory frame source, through GStreamer -- PipeWire's camera, else a V4L2 node, else (inside a Flatpak) the xdg-desktop-portal Camera -- on GStreamer's own streaming thread.  Off until =M-x cmacs-camera-start=, never writes a frame to disk, shows a mode-line indicator (and a gowl bar toast) while open, and releases the device before =cmacs-camera-stop= returns.  =M-x cmacs-camera-preview= shows what it sees.  Part of the standard flag set.  See [[file:doc_org/cmacs/cmacs-camera.org][the camera manual]].
+
+- =--with-cmacs-handtrack= — *Camera hand tracking*: MediaPipe's palm detector and hand landmark model (their ONNX conversions, Apache-2.0) on onnxruntime, on a thread of their own.  Each hand becomes the same libregnum hand a VR headset reports and goes through the same pinch latch and gesture classifier: pinch and move to orbit the libregnum scene in the selected window, stretch with both hands to zoom it (both in C, at the camera's frame rate), and =<hand-left-pinch>=, =<hand-right-palm-up>= and friends as events.  Builds without onnxruntime too (inference then reports itself unavailable); models are installed by you with =M-x cmacs-handtrack-download-models=, never fetched otherwise.  =M-x cmacs-handtrack-mode=.  Part of the standard flag set (requires camera + libregnum).
 
 - =--with-cmacs-clawtilla= — *Clawtilla fleet client*: drive a fleet of agents from Emacs — teams, conversations, each agent's computer, routines, triggers, tasks, decisions, skills, memory, alerts and settings. A client, not an embedded daemon: it connects to a =clawtillad= that is already running, locally over its socket or remotely over TCP, so the fleet outlives the editor. Shares clawtilla's own =connections.yaml=, and is held to the GTK client's feature set by =admin/cmacs-clawtilla-parity.sh=.
 - =--with-cmacs-ai-brigade= — The AI *fabric*: the layer other cmacs subsystems and your own config lay on top of to get AI capability, agent orchestration and memory.  Its primary deliverable is the *extension surface* — a single =cmacs-brigade-deftool= form in =init.el= publishes a capability to in-process HTTP agents, to CLI agents (=claude-code=, =opencode=) over an =emacs --mcp-relay= MCP bridge scoped by a freshly minted per-agent capability token, *and* to external MCP clients, all at once.  Public registries cover tools, agents, execution workers, isolation backends, memory sources, deliverables and dashboard panels; the shipped features consume exactly that API, with no private back doors.  Out of the box: a self-contained mmap'd fp16 memory index over your notes (runtime F16C dispatch with a scalar fallback, so one binary runs anywhere), an org-file-as-plan model where C owns runtime state and org owns intent, an agent dashboard that degrades cleanly to TUI and =--lrg=, GenMail, and deliverable generators.  Part of the standard flag set; *requires* =--with-cmacs-ai=, and =--with-cmacs-libreclaw= is optional.  See [[file:doc_org/cmacs/ai-brigade/index.org][the manual]] and [[file:doc_org/cmacs/ai-brigade/extending.org][the extension guide]].

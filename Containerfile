@@ -194,6 +194,7 @@ RUN set -eux; \
             poppler-utils \
             libacl-devel libattr-devel \
             libspnav-devel \
+            pipewire-gstreamer onnxruntime-devel \
             curl \
         ; \
         dnf clean all; \
@@ -259,6 +260,10 @@ RUN set -eux; \
         fi; \
         apt_try libspnav-dev \
             || echo "NOTE: no libspnav-dev; cmacs-spacemouse uses its built-in client"; \
+        apt_try gstreamer1.0-pipewire \
+            || echo "NOTE: no gstreamer1.0-pipewire; cmacs-camera uses v4l2src"; \
+        apt_try libonnxruntime-dev \
+            || echo "NOTE: no libonnxruntime-dev; cmacs-handtrack builds without inference"; \
         for v in 0.20 0.19; do \
             apt_try "libwlroots-${v}-dev" && break; \
         done \
@@ -304,6 +309,8 @@ RUN set -eux; \
             || pacman -S --noconfirm --needed wlroots0.19; \
         pacman -S --noconfirm --needed libspnav \
             || echo "NOTE: no libspnav; cmacs-spacemouse uses its built-in client"; \
+        pacman -S --noconfirm --needed gst-plugin-pipewire onnxruntime-cpu \
+            || echo "NOTE: no pipewire GStreamer plugin / onnxruntime; camera uses v4l2src, handtrack builds without inference"; \
         pacman -Scc --noconfirm; \
         ;; \
     *) \
@@ -319,6 +326,10 @@ RUN set -eux; \
 # libspnav: --with-cmacs-spacemouse reads spacenavd through it.  Optional
 # (a built-in client of spacenavd's protocol covers its absence), so the
 # Debian and Arch branches install it opportunistically.
+# pipewire-gstreamer + onnxruntime: --with-cmacs-camera's PipeWire source
+# and --with-cmacs-handtrack's inference.  Both optional (v4l2src from
+# plugins-good still works; handtrack builds without inference), so the
+# Debian and Arch branches install them opportunistically too.
 # python3-pip: installs the piper-tts CLI in the later RUN step.
 # opencascade: the OpenCASCADE B-rep kernel for --with-cmacs-cad.
 # Fedora ships no opencascade.pc, so cad-glib probes it by header+library
@@ -576,6 +587,8 @@ RUN ./autogen.sh \
         --with-cmacs-dbexplorer \
         --with-cmacs-clawtilla \
         --with-cmacs-spacemouse \
+        --with-cmacs-camera \
+        --with-cmacs-handtrack \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"${CMACS_JOBS:-$(nproc)}" \

@@ -129,6 +129,8 @@ configure_flags := """
     --with-cmacs-dbexplorer
     --with-cmacs-clawtilla
     --with-cmacs-spacemouse
+    --with-cmacs-camera
+    --with-cmacs-handtrack
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

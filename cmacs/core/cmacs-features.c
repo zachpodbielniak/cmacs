@@ -103,6 +103,12 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_SPACEMOUSE
   "spacemouse",
 #endif
+#ifdef HAVE_CMACS_CAMERA
+  "camera",
+#endif
+#ifdef HAVE_CMACS_HANDTRACK
+  "handtrack",
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   "lrgscript",
 #endif
@@ -330,6 +336,19 @@ syms_of_cmacs_features (void)
   is_cmacs_spacemouse = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-CAMERA", is_cmacs_camera,
+    doc: /* Non-nil if this build was configured --with-cmacs-camera.  */);
+#ifdef HAVE_CMACS_CAMERA
+  is_cmacs_camera = true;
+#endif
+
+  DEFVAR_BOOL ("IS-CMACS-HANDTRACK", is_cmacs_handtrack,
+    doc: /* Non-nil if this build was configured --with-cmacs-handtrack.
+The networks also need onnxruntime: see `cmacs-handtrack-available-p'.  */);
+#ifdef HAVE_CMACS_HANDTRACK
+  is_cmacs_handtrack = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-LRGSCRIPT", is_cmacs_lrgscript,
     doc: /* Non-nil if this build was configured --with-cmacs-lrgscript.  */);
 #ifdef HAVE_CMACS_LRGSCRIPT
@@ -451,6 +470,8 @@ syms_of_cmacs_features (void)
   cmacs_features__alias ("is-cmacs-dbexplorer", "IS-CMACS-DBEXPLORER");
   cmacs_features__alias ("is-cmacs-clawtilla",  "IS-CMACS-CLAWTILLA");
   cmacs_features__alias ("is-cmacs-spacemouse", "IS-CMACS-SPACEMOUSE");
+  cmacs_features__alias ("is-cmacs-camera",     "IS-CMACS-CAMERA");
+  cmacs_features__alias ("is-cmacs-handtrack",  "IS-CMACS-HANDTRACK");
   cmacs_features__alias ("is-cmacs-lrgscript",   "IS-CMACS-LRGSCRIPT");
   cmacs_features__alias ("is-cmacs-cad",         "IS-CMACS-CAD");
   cmacs_features__alias ("is-cmacs-screensaver", "IS-CMACS-SCREENSAVER");

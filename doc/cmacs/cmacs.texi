@@ -81,6 +81,7 @@ interaction.
 * CMacs Dbexplorer::            Query, browse, edit and export databases in buffers.
 * CMacs Clawtilla::             Drive a fleet of agents from the editor.
 * CMacs Spacemouse::            A SpaceMouse / 6DOF device as the 3D camera.
+* CMacs Camera::                Camera capture, and hands seen by it as gestures.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -12074,8 +12075,8 @@ pure arithmetic in @file{lrg-vr-hand.c}.  The gestures are classified in
 C at the headset's frame rate by @code{vr_gesture_step}, a pure function
 that @code{cmacs-lrg-vr--simulate-hand-gestures} runs from tests; only
 the discrete outcomes reach Lisp, on the flick keys' unused banks (alt,
-super and hyper of F32--F35).  Camera-based hand tracking for the desktop
-(an ONNX hand-pose model on onnxruntime) is future work.
+super and hyper of F32--F35).  The classifier is shared with camera
+hand tracking on the desktop (@pxref{CMacs Camera}).
 
 @subsection SpaceMouse in VR
 
@@ -12923,6 +12924,50 @@ a socket of their own.  What they cannot check is a physical cap's axis
 directions: the defaults assume spacenavd's (+X right, +Y up, +Z toward
 you); invert an axis that moves a view the wrong way.
 
+@node CMacs Camera
+@chapter CMacs Camera: Capture and Hand Gestures
+
+@cindex camera
+@cindex hand tracking, camera
+@cindex onnxruntime
+
+@code{--with-cmacs-camera} makes a camera an in-memory frame source
+through GStreamer: PipeWire's camera, else a V4L2 node, else (inside a
+Flatpak) the xdg-desktop-portal Camera; @code{"test"} is
+@code{videotestsrc}.  @kbd{M-x cmacs-camera-start} opens it (with
+@kbd{C-u}, choose from @code{cmacs-camera-devices}), @kbd{M-x
+cmacs-camera-preview} shows it, @kbd{M-x cmacs-camera-stop} closes it.
+
+Privacy: nothing opens a camera unless you start it or a feature you
+started does; frames are never written to disk (the preview is a PPM
+string handed to @code{create-image}); while it is open the mode line
+shows @code{cmacs-camera-indicator} and, under gowl, a bar toast says so;
+@code{cmacs-camera-stop} releases the device before it returns.  Frames
+arrive on GStreamer's streaming thread, where consumers take them.
+
+@code{--with-cmacs-handtrack} finds hands in those frames: MediaPipe's
+palm detector and hand landmark model (OpenCV Zoo's ONNX conversions,
+Apache-2.0) on onnxruntime, on a thread of their own, the newest frame
+only.  Each hand's 21 landmarks become libregnum's 26-joint
+@code{LrgVRHandState} (the palm and the four finger metacarpal bases
+synthesised), scaled to a standard palm, and go through the same pinch
+latch and the same gesture classifier VR hands use
+(@file{cmacs/gesture/cmacs-hand-gesture.c}).  Pinch and move to orbit the
+libregnum scene in the selected window, pinch with both hands and
+stretch to zoom it --- in C, at the camera's rate --- and get
+@code{<hand-left-pinch>}, @code{<hand-right-palm-up>},
+@code{<hand-zoom-in>} and the rest as events.  @kbd{M-x
+cmacs-handtrack-mode} turns it on.
+
+It builds without onnxruntime (@code{cmacs-handtrack-available-p} is
+then nil, and everything but the networks still works, which is what
+the tests exercise).  Models are installed only when you run @kbd{M-x
+cmacs-handtrack-download-models}; they are looked up along
+@code{cmacs-handtrack-models-search-path}.  See
+@file{doc_org/cmacs/cmacs-camera.org} for the pipeline, the joint
+mapping and the threads.  Moving gowl's pointer with a hand is a
+follow-up: it needs gowl primitives that do not exist yet.
+
 @node Build Configuration
 @chapter Build Configuration
 
@@ -13069,6 +13114,8 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-dbexplorer \
   --with-cmacs-clawtilla \
   --with-cmacs-spacemouse \
+  --with-cmacs-camera \
+  --with-cmacs-handtrack \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

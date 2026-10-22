@@ -27,7 +27,7 @@ exactly as in `--lrg=3d'; this file adds:
     trigger -- tap to click, hold still to drag, move to scroll, pull on
     empty space to move yourself -- both hands pinching stretch the world,
     and a palm turned up is a menu.  The pinch is classified here at frame
-    rate (vr_gesture_step); Lisp only sees the discrete results as
+    rate (cmacs_hg_step); Lisp only sees the discrete results as
     <vr-hand-...> events.  See "hand tracking" below.
 
 Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
@@ -65,6 +65,7 @@ Default controls (right hand points, left hand moves; see cmacs-lrg-vr.el):
 #include "blockinput.h"
 #include "coding.h"
 #include "cmacs-lrgterm.h"
+#include "cmacs-hand-gesture.h"
 
 /* X keysyms for the keys the in-world keyboard and the buttons produce.  */
 #define VR_XK_BackSpace 0xff08
@@ -269,330 +270,6 @@ struct vr_hand
   guint8 indicator_rgb[3];
 };
 
-/* ------------------------------------------------- hand tracking: gestures
-
-   A pinch is one of five things, decided while it is held:
-
-     tap      released quickly without moving: a click at the laser (on a
-              panel), a key (on the keyboard), <vr-hand-*-pinch> (on
-              nothing);
-     drag     held still on a panel for VR_HAND_HOLD_US: mouse-1 goes down
-              where the pinch began and follows the laser until release --
-              selecting text, dragging a scroll bar, orbiting a globe;
-     scroll   moved on a panel before that: the content follows the hand,
-              VR_HAND_SCROLL_PX of laser travel per wheel step;
-     pull     moved on empty space: the world follows the hand (a world
-              grab, as the controller grip does);
-     zoom     both hands pinching at once, neither busy on a panel: the
-              world scale follows the distance between them.
-
-   A palm turned up and held for VR_HAND_PALM_US is <vr-hand-*-palm-up>;
-   turning it back is <vr-hand-*-palm-down>.
-
-   vr_gesture_step is the whole classifier and is pure -- samples in,
-   actions out, no Emacs or libregnum state -- so it runs per headset frame
-   here and from `cmacs-lrg-vr--simulate-hand-gestures' in tests alike.  */
-
-#define VR_HAND_HOLD_US    450000  /* still this long on a panel: drag */
-#define VR_HAND_TAP_EMPTY_US 600000 /* longest tap on empty space */
-#define VR_HAND_MOVE_PX    14      /* laser travel: a pending pinch scrolls */
-#define VR_HAND_MOVE_M     0.03f   /* hand travel: a pending pinch pulls */
-#define VR_HAND_SCROLL_PX  36      /* laser pixels per wheel step */
-#define VR_HAND_PALM_COS   0.70f   /* palm within ~45 degrees of up */
-#define VR_HAND_PALM_US    300000  /* palm up this long: the event */
-#define VR_HAND_ZOOM_MIN_M 0.05f   /* hands closer than this cannot zoom */
-#define VR_HAND_ZOOM_DEAD  0.05f   /* scale change that counts as a zoom */
-#define VR_HAND_MAX_ACTIONS 24
-
-enum vr_hand_target { HT_NONE, HT_PANEL, HT_KEYBOARD, HT_WORKSPACE };
-
-/* One hand, one frame, as the classifier sees it.  */
-struct vr_hand_sample
-{
-  bool tracked;                  /* hand tracking drives this hand */
-  bool pinched;                  /* the latch, hysteresis applied */
-  bool palm_up;
-  enum vr_hand_target target;    /* under the laser */
-  int fx, fy;                    /* frame pixel under the laser */
-  float pos[3];                  /* pinch point, tracking metres */
-};
-
-enum vr_pinch_mode { PM_IDLE, PM_PENDING, PM_DRAG, PM_SCROLL, PM_PULL,
-                     PM_KEY, PM_ZOOM };
-
-struct vr_hand_gesture
-{
-  enum vr_pinch_mode mode;
-  gint64 t0;                     /* pinch start */
-  enum vr_hand_target target0;   /* what it started on */
-  int fx0, fy0, lastfx, lastfy;
-  float pos0[3], lastpos[3];
-  float acc_x, acc_y;            /* scroll travel not yet a wheel step */
-  bool palm_up, palm_sent;
-  gint64 palm_since;
-};
-
-struct vr_gestures
-{
-  struct vr_hand_gesture h[2];
-  bool zooming;
-  float zoom_d0, zoom_ratio;
-};
-
-enum vr_hand_action_kind
-{
-  HA_CLICK, HA_DRAG_BEGIN, HA_DRAG_END, HA_SCROLL, HA_PULL_BEGIN,
-  HA_PULL_MOVE, HA_PULL_END, HA_TAP, HA_KEY_DOWN, HA_KEY_UP, HA_PALM_UP,
-  HA_PALM_DOWN, HA_ZOOM_BEGIN, HA_ZOOM, HA_ZOOM_END
-};
-
-struct vr_hand_action
-{
-  enum vr_hand_action_kind kind;
-  int hand;                      /* 0 left, 1 right, -1 both (zoom) */
-  int x, y;                      /* pixels (click/drag), wheel steps (scroll) */
-  float v[3];                    /* metres (pull), ratio in v[0] (zoom) */
-};
-
-static float
-v3_dist (const float *a, const float *b)
-{
-  float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
-  return sqrtf (dx * dx + dy * dy + dz * dz);
-}
-
-static int
-vr_gesture_push (struct vr_hand_action *out, int n, int max,
-                 enum vr_hand_action_kind kind, int hand, int x, int y,
-                 const float *v)
-{
-  if (n >= max)
-    return n;
-  out[n].kind = kind;
-  out[n].hand = hand;
-  out[n].x = x;
-  out[n].y = y;
-  out[n].v[0] = v != NULL ? v[0] : 0.0f;
-  out[n].v[1] = v != NULL ? v[1] : 0.0f;
-  out[n].v[2] = v != NULL ? v[2] : 0.0f;
-  return n + 1;
-}
-
-/* End hand H's pinch, whatever it was doing.  RELEASED: the fingers
-   opened (a pending pinch is then a tap); otherwise the hand was lost.  */
-static int
-vr_gesture_end (struct vr_hand_gesture *g, int h, gint64 now, bool released,
-                struct vr_hand_action *out, int n, int max)
-{
-  switch (g->mode)
-    {
-    case PM_PENDING:
-      if (!released)
-        break;
-      if (g->target0 == HT_PANEL || g->target0 == HT_WORKSPACE)
-        n = vr_gesture_push (out, n, max, HA_CLICK, h, g->fx0, g->fy0, NULL);
-      else if (g->target0 == HT_NONE && now - g->t0 <= VR_HAND_TAP_EMPTY_US)
-        n = vr_gesture_push (out, n, max, HA_TAP, h, 0, 0, NULL);
-      break;
-    case PM_DRAG:
-      n = vr_gesture_push (out, n, max, HA_DRAG_END, h, g->lastfx, g->lastfy,
-                           NULL);
-      break;
-    case PM_PULL:
-      n = vr_gesture_push (out, n, max, HA_PULL_END, h, 0, 0, NULL);
-      break;
-    case PM_KEY:
-      n = vr_gesture_push (out, n, max, HA_KEY_UP, h, 0, 0, NULL);
-      break;
-    default:
-      break;
-    }
-  g->mode = PM_IDLE;
-  return n;
-}
-
-/* Advance the gesture state G by one frame of samples S (both hands) at
-   NOW (microseconds).  Writes up to MAX actions to OUT; returns how many.  */
-static int
-vr_gesture_step (struct vr_gestures *g, const struct vr_hand_sample *s,
-                 gint64 now, struct vr_hand_action *out, int max)
-{
-  int n = 0, h;
-
-  /* Two hands: a stretch.  Starts when both hold a pinch that is still
-     undecided or pulling the world -- not one busy on a panel or the
-     keyboard -- and lasts while both stay pinched.  */
-  if (!g->zooming)
-    {
-      bool ready = true;
-      for (h = 0; h < 2; h++)
-        ready = ready && s[h].tracked && s[h].pinched
-                && (g->h[h].mode == PM_PENDING || g->h[h].mode == PM_PULL);
-      if (ready && v3_dist (s[0].pos, s[1].pos) >= VR_HAND_ZOOM_MIN_M)
-        {
-          for (h = 0; h < 2; h++)
-            {
-              if (g->h[h].mode == PM_PULL)
-                n = vr_gesture_push (out, n, max, HA_PULL_END, h, 0, 0, NULL);
-              g->h[h].mode = PM_ZOOM;
-            }
-          g->zooming = true;
-          g->zoom_d0 = v3_dist (s[0].pos, s[1].pos);
-          g->zoom_ratio = 1.0f;
-          n = vr_gesture_push (out, n, max, HA_ZOOM_BEGIN, -1, 0, 0, NULL);
-        }
-    }
-  else
-    {
-      if (s[0].tracked && s[0].pinched && s[1].tracked && s[1].pinched)
-        {
-          float r[3];
-          g->zoom_ratio = v3_dist (s[0].pos, s[1].pos) / g->zoom_d0;
-          r[0] = g->zoom_ratio; r[1] = r[2] = 0.0f;
-          n = vr_gesture_push (out, n, max, HA_ZOOM, -1, 0, 0, r);
-        }
-      else
-        {
-          float r[3];
-          r[0] = g->zoom_ratio; r[1] = r[2] = 0.0f;
-          g->zooming = false;
-          n = vr_gesture_push (out, n, max, HA_ZOOM_END, -1, 0, 0, r);
-          /* A hand still pinched stays spent until it lets go.  */
-        }
-    }
-
-  for (h = 0; h < 2; h++)
-    {
-      struct vr_hand_gesture *hg = &g->h[h];
-      const struct vr_hand_sample *hs = &s[h];
-
-      if (!hs->tracked)
-        {
-          n = vr_gesture_end (hg, h, now, false, out, n, max);
-          if (hg->palm_up && hg->palm_sent)
-            n = vr_gesture_push (out, n, max, HA_PALM_DOWN, h, 0, 0, NULL);
-          hg->palm_up = hg->palm_sent = false;
-          continue;
-        }
-
-      /* The palm: up and held (not while pinching), then back down.  */
-      if (hs->palm_up && !hs->pinched)
-        {
-          if (!hg->palm_up)
-            {
-              hg->palm_up = true;
-              hg->palm_sent = false;
-              hg->palm_since = now;
-            }
-          else if (!hg->palm_sent && now - hg->palm_since >= VR_HAND_PALM_US)
-            {
-              hg->palm_sent = true;
-              n = vr_gesture_push (out, n, max, HA_PALM_UP, h, 0, 0, NULL);
-            }
-        }
-      else if (hg->palm_up && !hs->palm_up)
-        {
-          if (hg->palm_sent)
-            n = vr_gesture_push (out, n, max, HA_PALM_DOWN, h, 0, 0, NULL);
-          hg->palm_up = hg->palm_sent = false;
-        }
-
-      if (!hs->pinched)
-        {
-          if (hg->mode != PM_IDLE)
-            n = vr_gesture_end (hg, h, now, true, out, n, max);
-          continue;
-        }
-
-      switch (hg->mode)
-        {
-        case PM_IDLE:
-          hg->t0 = now;
-          hg->target0 = hs->target;
-          hg->fx0 = hg->lastfx = hs->fx;
-          hg->fy0 = hg->lastfy = hs->fy;
-          memcpy (hg->pos0, hs->pos, sizeof hg->pos0);
-          memcpy (hg->lastpos, hs->pos, sizeof hg->lastpos);
-          hg->acc_x = hg->acc_y = 0.0f;
-          if (hs->target == HT_KEYBOARD)
-            {
-              hg->mode = PM_KEY;
-              n = vr_gesture_push (out, n, max, HA_KEY_DOWN, h, 0, 0, NULL);
-            }
-          else
-            hg->mode = PM_PENDING;
-          break;
-
-        case PM_PENDING:
-          if (hg->target0 == HT_PANEL)
-            {
-              int moved = (hs->target == HT_PANEL)
-                          ? abs (hs->fx - hg->fx0) + abs (hs->fy - hg->fy0) : 0;
-              if (moved >= VR_HAND_MOVE_PX)
-                {
-                  hg->mode = PM_SCROLL;
-                  hg->lastfx = hs->fx;
-                  hg->lastfy = hs->fy;
-                }
-              else if (now - hg->t0 >= VR_HAND_HOLD_US)
-                {
-                  hg->mode = PM_DRAG;
-                  n = vr_gesture_push (out, n, max, HA_DRAG_BEGIN, h, hg->fx0,
-                                       hg->fy0, NULL);
-                }
-            }
-          else if (hg->target0 == HT_NONE
-                   && v3_dist (hs->pos, hg->pos0) >= VR_HAND_MOVE_M)
-            {
-              hg->mode = PM_PULL;
-              memcpy (hg->lastpos, hs->pos, sizeof hg->lastpos);
-              n = vr_gesture_push (out, n, max, HA_PULL_BEGIN, h, 0, 0, NULL);
-            }
-          break;
-
-        case PM_SCROLL:
-          if (hs->target == HT_PANEL)
-            {
-              int sx, sy;
-              hg->acc_x += (float) (hs->fx - hg->lastfx);
-              hg->acc_y += (float) (hs->fy - hg->lastfy);
-              hg->lastfx = hs->fx;
-              hg->lastfy = hs->fy;
-              sx = (int) (hg->acc_x / VR_HAND_SCROLL_PX);
-              sy = (int) (hg->acc_y / VR_HAND_SCROLL_PX);
-              hg->acc_x -= (float) (sx * VR_HAND_SCROLL_PX);
-              hg->acc_y -= (float) (sy * VR_HAND_SCROLL_PX);
-              if (sx != 0 || sy != 0)
-                n = vr_gesture_push (out, n, max, HA_SCROLL, h, sx, sy, NULL);
-            }
-          break;
-
-        case PM_DRAG:
-          if (hs->target == HT_PANEL)
-            {
-              hg->lastfx = hs->fx;
-              hg->lastfy = hs->fy;
-            }
-          break;
-
-        case PM_PULL:
-          {
-            float d[3];
-            int i;
-            for (i = 0; i < 3; i++)
-              d[i] = hs->pos[i] - hg->lastpos[i];
-            memcpy (hg->lastpos, hs->pos, sizeof hg->lastpos);
-            if (d[0] != 0.0f || d[1] != 0.0f || d[2] != 0.0f)
-              n = vr_gesture_push (out, n, max, HA_PULL_MOVE, h, 0, 0, d);
-          }
-          break;
-
-        default:   /* PM_KEY, PM_ZOOM: nothing until release */
-          break;
-        }
-    }
-  return n;
-}
 
 static struct
 {
@@ -614,7 +291,7 @@ static struct
 
   struct vr_hand hand[2];
   LrgVRHandState hs[2];          /* tracked hands, this frame */
-  struct vr_gestures gestures;   /* pinch classifier (vr_gesture_step) */
+  struct cmacs_hg_state gestures;   /* pinch classifier (cmacs_hg_step) */
   float zoom_scale0;             /* world scale when a stretch began */
   bool hands_enabled;            /* hands drive lasers (option `hands') */
   bool show_joints;              /* draw tracked hands (`hand-joints') */
@@ -2021,9 +1698,9 @@ vr_hand_press (struct input_event *hold_quit, int h, int x, int y, bool drag)
   return count;
 }
 
-/* Apply one classified gesture (vr_gesture_step).  */
+/* Apply one classified gesture (cmacs_hg_step).  */
 static int
-vr_hand_apply (struct input_event *hold_quit, const struct vr_hand_action *a)
+vr_hand_apply (struct input_event *hold_quit, const struct cmacs_hg_action *a)
 {
   struct vr_hand *hand = a->hand >= 0 ? &vr.hand[a->hand] : NULL;
   bool left = a->hand == LRG_VR_HAND_LEFT;
@@ -2031,13 +1708,13 @@ vr_hand_apply (struct input_event *hold_quit, const struct vr_hand_action *a)
 
   switch (a->kind)
     {
-    case HA_CLICK:
+    case CMACS_HG_CLICK:
       count += vr_hand_press (hold_quit, a->hand, a->x, a->y, false);
       break;
-    case HA_DRAG_BEGIN:
+    case CMACS_HG_DRAG_BEGIN:
       count += vr_hand_press (hold_quit, a->hand, a->x, a->y, true);
       break;
-    case HA_DRAG_END:
+    case CMACS_HG_DRAG_END:
       if (hand->trigger_mouse)
         count += vr_emit_mouse (hold_quit, 0, false, hand->last_fx,
                                 hand->last_fy, vr.layer);
@@ -2046,7 +1723,7 @@ vr_hand_apply (struct input_event *hold_quit, const struct vr_hand_action *a)
                                     hand->last_fy);
       hand->trigger_mouse = hand->trigger_view = false;
       break;
-    case HA_SCROLL:
+    case CMACS_HG_SCROLL:
       /* The content follows the hand: moving it down (laser y grows)
          shows what is above -- the wheel turned up.  */
       for (i = 0; i < abs (a->y); i++)
@@ -2060,48 +1737,48 @@ vr_hand_apply (struct input_event *hold_quit, const struct vr_hand_action *a)
           count += vr_emit_wheel (hold_quit, true, a->x > 0, hand->fx,
                                   hand->fy);
       break;
-    case HA_PULL_MOVE:
+    case CMACS_HG_PULL_MOVE:
       vr_pull_world (a->v[0], a->v[1], a->v[2]);
       break;
-    case HA_TAP:
+    case CMACS_HG_TAP:
       count += vr_emit_keysym (hold_quit, left ? VR_XK_F32 : VR_XK_F33,
                                vr.layer | VR_HAND_PINCH_MOD);
       break;
-    case HA_KEY_DOWN:
+    case CMACS_HG_KEY_DOWN:
       if (hand->kb_row >= 0)
         {
           hand->kb_trigger = true;
           count += kb_press (hold_quit, hand, hand->kb_row, hand->kb_col);
         }
       break;
-    case HA_KEY_UP:
+    case CMACS_HG_KEY_UP:
       if (hand->kb_trigger)
         kb_trigger_up (hand);
       break;
-    case HA_PALM_UP:
+    case CMACS_HG_PALM_UP:
       count += vr_emit_keysym (hold_quit, left ? VR_XK_F32 : VR_XK_F33,
                                vr.layer | VR_HAND_PALM_UP_MOD);
       break;
-    case HA_PALM_DOWN:
+    case CMACS_HG_PALM_DOWN:
       count += vr_emit_keysym (hold_quit, left ? VR_XK_F32 : VR_XK_F33,
                                vr.layer | VR_HAND_PALM_DOWN_MOD);
       break;
-    case HA_ZOOM_BEGIN:
+    case CMACS_HG_ZOOM_BEGIN:
       vr.zoom_scale0 = lrg_3d_surface_get_vr_scale (vr.s3);
       break;
-    case HA_ZOOM:
+    case CMACS_HG_ZOOM:
       /* Hands apart: everything bigger, as a pinch-zoom on a phone.  */
       lrg_3d_surface_set_vr_scale (vr.s3, vr.zoom_scale0 * a->v[0]);
       break;
-    case HA_ZOOM_END:
-      if (a->v[0] > 1.0f + VR_HAND_ZOOM_DEAD)
+    case CMACS_HG_ZOOM_END:
+      if (a->v[0] > 1.0f + CMACS_HG_ZOOM_DEAD)
         count += vr_emit_keysym (hold_quit, VR_XK_F34,
                                  vr.layer | VR_HAND_ZOOM_MOD);
-      else if (a->v[0] < 1.0f - VR_HAND_ZOOM_DEAD)
+      else if (a->v[0] < 1.0f - CMACS_HG_ZOOM_DEAD)
         count += vr_emit_keysym (hold_quit, VR_XK_F35,
                                  vr.layer | VR_HAND_ZOOM_MOD);
       break;
-    default:   /* HA_PULL_BEGIN, HA_PULL_END: nothing to do */
+    default:   /* CMACS_HG_PULL_BEGIN, CMACS_HG_PULL_END: nothing to do */
       break;
     }
   return count;
@@ -2109,7 +1786,7 @@ vr_hand_apply (struct input_event *hold_quit, const struct vr_hand_action *a)
 
 /* This frame's sample of hand H for the classifier.  */
 static void
-vr_hand_sample_of (int h, struct vr_hand_sample *out)
+vr_hand_sample_of (int h, struct cmacs_hg_sample *out)
 {
   const struct vr_hand *hand = &vr.hand[h];
   const LrgVRHandState *st = &vr.hs[h];
@@ -2119,11 +1796,11 @@ vr_hand_sample_of (int h, struct vr_hand_sample *out)
   if (!out->tracked)
     return;
   out->pinched = lrg_vr_hand_state_is_pinched (st);
-  out->palm_up = lrg_vr_hand_state_is_palm_up (st, VR_HAND_PALM_COS);
-  out->target = hand->kb_row >= 0 ? HT_KEYBOARD
-                : !hand->hit_panel ? HT_NONE
-                : cmacs_lrgterm_workspace_key_p (hand->key) ? HT_WORKSPACE
-                : HT_PANEL;
+  out->palm_up = lrg_vr_hand_state_is_palm_up (st, CMACS_HG_PALM_COS);
+  out->target = hand->kb_row >= 0 ? CMACS_HG_KEYBOARD
+                : !hand->hit_panel ? CMACS_HG_NONE
+                : cmacs_lrgterm_workspace_key_p (hand->key) ? CMACS_HG_WORKSPACE
+                : CMACS_HG_PANEL;
   out->fx = hand->fx;
   out->fy = hand->fy;
   if (!lrg_vr_hand_state_get_pinch_point (st, out->pos))
@@ -2137,8 +1814,8 @@ vr_hand_sample_of (int h, struct vr_hand_sample *out)
 static int
 vr_handtrack_tick (struct input_event *hold_quit)
 {
-  struct vr_hand_sample smp[2];
-  struct vr_hand_action act[VR_HAND_MAX_ACTIONS];
+  struct cmacs_hg_sample smp[2];
+  struct cmacs_hg_action act[CMACS_HG_MAX_ACTIONS];
   int n, i, h, count = 0;
 
   for (h = 0; h < 2; h++)
@@ -2158,8 +1835,8 @@ vr_handtrack_tick (struct input_event *hold_quit)
                                               : 0;
         }
     }
-  n = vr_gesture_step (&vr.gestures, smp, g_get_monotonic_time (), act,
-                       VR_HAND_MAX_ACTIONS);
+  n = cmacs_hg_step (&vr.gestures, smp, g_get_monotonic_time (), act,
+                      CMACS_HG_MAX_ACTIONS);
   for (i = 0; i < n; i++)
     count += vr_hand_apply (hold_quit, &act[i]);
   return count;
@@ -2905,7 +2582,7 @@ read from evdev) and :window-hidden.  */)
 /* One hand of a simulated frame: nil (untracked) or a plist (see
    `cmacs-lrg-vr--simulate-hand-gestures').  */
 static void
-vr_sim_hand (Lisp_Object spec, struct vr_hand_sample *out)
+vr_sim_hand (Lisp_Object spec, struct cmacs_hg_sample *out)
 {
   Lisp_Object target, pos;
   int i;
@@ -2918,10 +2595,10 @@ vr_sim_hand (Lisp_Object spec, struct vr_hand_sample *out)
   out->pinched = !NILP (plist_get (spec, intern_c_string (":pinch")));
   out->palm_up = !NILP (plist_get (spec, intern_c_string (":palm-up")));
   target = plist_get (spec, intern_c_string (":target"));
-  out->target = EQ (target, intern_c_string ("panel")) ? HT_PANEL
-                : EQ (target, intern_c_string ("keyboard")) ? HT_KEYBOARD
-                : EQ (target, intern_c_string ("workspace")) ? HT_WORKSPACE
-                : HT_NONE;
+  out->target = EQ (target, intern_c_string ("panel")) ? CMACS_HG_PANEL
+                : EQ (target, intern_c_string ("keyboard")) ? CMACS_HG_KEYBOARD
+                : EQ (target, intern_c_string ("workspace")) ? CMACS_HG_WORKSPACE
+                : CMACS_HG_NONE;
   {
     Lisp_Object x = plist_get (spec, intern_c_string (":x"));
     Lisp_Object y = plist_get (spec, intern_c_string (":y"));
@@ -2941,7 +2618,7 @@ DEFUN ("cmacs-lrg-vr--simulate-hand-gestures",
        Scmacs_lrg_vr__simulate_hand_gestures, 1, 1, 0,
        doc: /* Run the hand-gesture classifier over FRAMES; return its actions.
 For tests: no headset is needed, and nothing is sent anywhere.  This is
-the same classifier the headset frame runs (vr_gesture_step), started
+the same classifier the headset frame runs (cmacs_hg_step), started
 fresh.
 
 FRAMES is a list of (MILLISECONDS LEFT RIGHT).  LEFT and RIGHT are nil
@@ -2966,7 +2643,7 @@ Each action is (KIND HAND . ARGS), HAND `left', `right' or `both':
     "pull-end", "tap", "key-down", "key-up", "palm-up", "palm-down",
     "zoom-begin", "zoom", "zoom-end"
   };
-  struct vr_gestures g;
+  struct cmacs_hg_state g;
   Lisp_Object result = Qnil, tail;
 
   memset (&g, 0, sizeof g);
@@ -2974,19 +2651,19 @@ Each action is (KIND HAND . ARGS), HAND `left', `right' or `both':
   for (tail = frames; CONSP (tail); tail = XCDR (tail))
     {
       Lisp_Object fr = XCAR (tail);
-      struct vr_hand_sample smp[2];
-      struct vr_hand_action act[VR_HAND_MAX_ACTIONS];
+      struct cmacs_hg_sample smp[2];
+      struct cmacs_hg_action act[CMACS_HG_MAX_ACTIONS];
       int n, i;
 
       CHECK_CONS (fr);
       CHECK_FIXNUM (XCAR (fr));
       vr_sim_hand (Fnth (make_fixnum (1), fr), &smp[0]);
       vr_sim_hand (Fnth (make_fixnum (2), fr), &smp[1]);
-      n = vr_gesture_step (&g, smp, XFIXNUM (XCAR (fr)) * 1000, act,
-                           VR_HAND_MAX_ACTIONS);
+      n = cmacs_hg_step (&g, smp, XFIXNUM (XCAR (fr)) * 1000, act,
+                          CMACS_HG_MAX_ACTIONS);
       for (i = 0; i < n; i++)
         {
-          const struct vr_hand_action *a = &act[i];
+          const struct cmacs_hg_action *a = &act[i];
           Lisp_Object hand = intern_c_string (a->hand < 0 ? "both"
                                               : a->hand == LRG_VR_HAND_LEFT
                                               ? "left" : "right");
@@ -2994,14 +2671,15 @@ Each action is (KIND HAND . ARGS), HAND `left', `right' or `both':
 
           switch (a->kind)
             {
-            case HA_CLICK: case HA_DRAG_BEGIN: case HA_DRAG_END: case HA_SCROLL:
+            case CMACS_HG_CLICK: case CMACS_HG_DRAG_BEGIN:
+            case CMACS_HG_DRAG_END: case CMACS_HG_SCROLL:
               args = list2 (make_fixnum (a->x), make_fixnum (a->y));
               break;
-            case HA_PULL_MOVE:
+            case CMACS_HG_PULL_MOVE:
               args = list3 (make_float (a->v[0]), make_float (a->v[1]),
                             make_float (a->v[2]));
               break;
-            case HA_ZOOM: case HA_ZOOM_END:
+            case CMACS_HG_ZOOM: case CMACS_HG_ZOOM_END:
               args = list1 (make_float (a->v[0]));
               break;
             default:

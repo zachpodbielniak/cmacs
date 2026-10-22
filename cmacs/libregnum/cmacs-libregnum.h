@@ -107,6 +107,14 @@ extern bool cmacs_libregnum_spacemouse_motion (Lisp_Object buffer,
                                                const float *r,
                                                float dt);
 
+/* Gesture camera motion (cmacs-handtrack): orbit BUFFER's scene camera by
+ * (ORBIT_DX, ORBIT_DY) mouse-drag pixels and zoom it by ZOOM wheel
+ * ticks (positive: closer), through the mouse's own helpers.  False
+ * when BUFFER shows no 3D scene, or a game or an image.  Never signals. */
+extern bool cmacs_libregnum_camera_gesture (Lisp_Object buffer,
+                                            double orbit_dx, double orbit_dy,
+                                            double zoom);
+
 /* ── Registry init (called from init_cmacs_libregnum) ───────────── */
 extern void     cmacs_libregnum_view_registry_init    (void);
 extern gboolean cmacs_libregnum_view_registry_empty_p (void);

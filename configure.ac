@@ -696,6 +696,10 @@ OPTION_DEFAULT_OFF([cmacs-lrgvr],
   [OpenXR VR presentation for emacs --lrg=3dvr (SteamVR/Monado headsets + motion controllers; requires --with-cmacs-lrgterm and openxr)])
 OPTION_DEFAULT_OFF([cmacs-spacemouse],
   [CMacs SpaceMouse / 6DOF input via spacenavd (libspnav when found; drives libregnum, 3D lrg and VR cameras; requires --with-cmacs-glib)])
+OPTION_DEFAULT_OFF([cmacs-camera],
+  [CMacs camera capture (GStreamer: PipeWire, V4L2, the Camera portal; frames in memory only; requires --with-cmacs-glib)])
+OPTION_DEFAULT_OFF([cmacs-handtrack],
+  [CMacs camera hand tracking (MediaPipe models on onnxruntime when found; desktop hand gestures; requires --with-cmacs-camera and --with-cmacs-libregnum)])
 
 # Accept --with-gsurf as a convenience alias for --with-cmacs-gsurf.
 AC_ARG_WITH([gsurf],
@@ -1428,6 +1432,49 @@ if test "$with_cmacs_spacemouse" != "no"; then
   CMACS_SPACEMOUSE_OBJ="cmacs-spacemouse-init.o cmacs-spacemouse-defuns.o \
     cmacs-spacemouse-conn.o cmacs-spacemouse-proto.o"
 fi
+if test "$with_cmacs_camera" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-camera requires --with-cmacs-glib (the pipeline's bus is watched on the cmacs GMainContext)])
+  fi
+  # Camera capture through GStreamer: a GstDevice's own source
+  # (pipewiresrc from pipewire-gstreamer, or v4l2src from
+  # gst-plugins-good), or the xdg Camera portal's PipeWire remote inside
+  # a Flatpak, into an appsink.  Those plugins are run-time choices; the
+  # build needs only the GStreamer core, app and video libraries.
+  PKG_CHECK_MODULES([CMACS_CAMERA],
+    [gstreamer-1.0 >= 1.20 gstreamer-app-1.0 gstreamer-video-1.0 gio-unix-2.0])
+  AC_DEFINE([HAVE_CMACS_CAMERA], 1, [CMacs camera capture])
+  CMACS_CAMERA_OBJ="cmacs-camera-init.o cmacs-camera-defuns.o \
+    cmacs-camera-gst.o"
+fi
+if test "$with_cmacs_handtrack" != "no"; then
+  if test "$with_cmacs_camera" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-handtrack requires --with-cmacs-camera (frames come from it)])
+  fi
+  if test "$with_cmacs_libregnum" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-handtrack requires --with-cmacs-libregnum (hands are libregnum LrgVRHandStates, shared with VR)])
+  fi
+  # Hand tracking over onnxruntime (Fedora onnxruntime-devel, which
+  # ships libonnxruntime.pc).  Without it the subsystem still builds --
+  # the landmark mapping, the pipeline arithmetic and the gesture
+  # classifier, which its tests need -- and reports inference as
+  # unavailable at run time, rather than failing the build.  pkg-config,
+  # not AC_CHECK_HEADER: this block runs before AC_PROG_CC (14d9dcb8bd0).
+  PKG_CHECK_EXISTS([libonnxruntime],
+    [AC_DEFINE([HAVE_ONNXRUNTIME], 1, [onnxruntime is available for cmacs-handtrack])
+     CMACS_HANDTRACK_CFLAGS="`$PKG_CONFIG --cflags libonnxruntime`"
+     CMACS_HANDTRACK_LIBS="`$PKG_CONFIG --libs libonnxruntime`"],
+    [AC_MSG_NOTICE([onnxruntime not found -- cmacs-handtrack builds without inference])])
+  AC_DEFINE([HAVE_CMACS_HANDTRACK], 1, [CMacs camera hand tracking])
+  CMACS_HANDTRACK_OBJ="cmacs-handtrack-init.o cmacs-handtrack-defuns.o \
+    cmacs-handtrack-model.o cmacs-handtrack-ort.o cmacs-handtrack-worker.o"
+fi
+# The hand-gesture classifier is shared by VR hands and camera hands:
+# one object, linked once, when either is built.
+if test "$with_cmacs_lrgvr" != "no" || test "$with_cmacs_handtrack" != "no"; then
+  AC_DEFINE([HAVE_CMACS_HAND_GESTURE], 1, [CMacs shared hand-gesture classifier])
+  CMACS_GESTURE_OBJ="cmacs-hand-gesture.o"
+fi
 if test "$with_cmacs_gnuseye" != "no"; then
   if test "$with_cmacs_libregnum" = "no"; then
     AC_MSG_ERROR([--with-cmacs-gnuseye requires --with-cmacs-libregnum (the globe is rendered through libregnum)])
@@ -2115,6 +2162,13 @@ AC_SUBST(CMACS_ROAMGRAPH_LIBS)
 AC_SUBST(CMACS_OFFICE_OBJ)
 AC_SUBST(CMACS_OFFICE_CFLAGS)
 AC_SUBST(CMACS_OFFICE_LIBS)
+AC_SUBST(CMACS_CAMERA_OBJ)
+AC_SUBST(CMACS_CAMERA_CFLAGS)
+AC_SUBST(CMACS_CAMERA_LIBS)
+AC_SUBST(CMACS_HANDTRACK_OBJ)
+AC_SUBST(CMACS_HANDTRACK_CFLAGS)
+AC_SUBST(CMACS_HANDTRACK_LIBS)
+AC_SUBST(CMACS_GESTURE_OBJ)
 AC_SUBST(CMACS_SPACEMOUSE_OBJ)
 AC_SUBST(CMACS_SPACEMOUSE_CFLAGS)
 AC_SUBST(CMACS_SPACEMOUSE_LIBS)
@@ -9456,6 +9510,7 @@ for cmacs_isystem_var in \
   CMACS_OFFICE_CFLAGS CMACS_ORG_EX_CFLAGS CMACS_PIPER_CFLAGS \
   CMACS_PODOMATION_CFLAGS CMACS_ROAMGRAPH_CFLAGS \
   CMACS_SECONDBRAIN_CFLAGS CMACS_SPACEMOUSE_CFLAGS \
+  CMACS_CAMERA_CFLAGS CMACS_HANDTRACK_CFLAGS \
   CMACS_SCREENSAVER_CFLAGS CMACS_VIDEO_CFLAGS CMACS_VIDSTUDIO_CFLAGS \
   CMACS_WHISPER_CFLAGS; do
   eval "cmacs_isystem_val=\$$cmacs_isystem_var"

@@ -357,6 +357,11 @@ set_packages_fedora () {
 	# daemon that owns the device.  Enable it with
 	# `systemctl enable --now spacenavd'.
 	PKGS_SPACEMOUSE=(libspnav-devel spacenavd)
+	# cmacs-camera + cmacs-handtrack: the camera sources GStreamer picks at
+	# run time (pipewiresrc, v4l2src) and onnxruntime for the hand models.
+	# onnxruntime is optional at build: without it hand tracking builds
+	# with no inference and says so.
+	PKGS_CAMERA=(pipewire-gstreamer gstreamer1-plugins-good onnxruntime-devel)
 	PKG_CMD="${SUDO} dnf install -y"
 }
 
@@ -465,6 +470,8 @@ set_packages_debian () {
 	PKGS_DBEXPLORER=(default-libmysqlclient-dev)
 	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
 	PKGS_SPACEMOUSE=(libspnav-dev spacenavd)
+	# cmacs-camera + cmacs-handtrack.  See the Fedora block.
+	PKGS_CAMERA=(gstreamer1.0-pipewire gstreamer1.0-plugins-good libonnxruntime-dev)
 	# --no-remove: this is somebody's workstation.  Installing build deps
 	# must never uninstall what is already on it; a conflict should stop
 	# and say so rather than being resolved silently in apt's favour.
@@ -533,6 +540,8 @@ set_packages_arch () {
 	PKGS_DBEXPLORER=(mariadb-libs)
 	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
 	PKGS_SPACEMOUSE=(libspnav spacenavd)
+	# cmacs-camera + cmacs-handtrack.  See the Fedora block.
+	PKGS_CAMERA=(gst-plugin-pipewire gst-plugins-good onnxruntime-cpu)
 	PKG_CMD="${SUDO} pacman -S --needed --noconfirm"
 }
 
@@ -573,6 +582,9 @@ set_packages_macos () {
 	# cmacs-spacemouse: Homebrew packages neither libspnav nor spacenavd;
 	# the built-in client still talks to a spacenavd built by hand.
 	PKGS_SPACEMOUSE=()
+	# cmacs-camera + cmacs-handtrack: no PipeWire or V4L2 on macOS, so the
+	# camera has no source there yet; onnxruntime still builds the models.
+	PKGS_CAMERA=(onnxruntime)
 	PKG_CMD="brew install"
 }
 
@@ -605,6 +617,8 @@ set_packages_freebsd () {
 	PKGS_DBEXPLORER=(mariadb-connector-c)
 	# cmacs-spacemouse: libspnav + the spacenavd daemon.  See the Fedora block.
 	PKGS_SPACEMOUSE=(libspnav spacenavd)
+	# cmacs-camera + cmacs-handtrack.  See the Fedora block.
+	PKGS_CAMERA=(gstreamer1-plugins-v4l2 onnxruntime)
 	PKG_CMD="${SUDO} pkg install -y"
 }
 
@@ -629,7 +643,8 @@ all_packages () {
 	     "${PKGS_OFFICE[@]}" \
 	     "${PKGS_PRINT[@]}" \
 	     "${PKGS_DBEXPLORER[@]}" \
-	     "${PKGS_SPACEMOUSE[@]}"
+	     "${PKGS_SPACEMOUSE[@]}" \
+	     "${PKGS_CAMERA[@]}"
 }
 
 # ── Install system packages ──────────────────────────────────────────
@@ -1065,6 +1080,7 @@ list_packages () {
 	echo "Office:          ${PKGS_OFFICE[*]:-N/A}"
 	echo "dbexplorer:      ${PKGS_DBEXPLORER[*]:-N/A}"
 	echo "SpaceMouse:      ${PKGS_SPACEMOUSE[*]:-N/A}"
+	echo "Camera/hands:    ${PKGS_CAMERA[*]:-N/A}"
 	echo ""
 	echo "From source (deps/): mcp-glib, crispy, bacon, gowl, podomation, libreclaw"
 }

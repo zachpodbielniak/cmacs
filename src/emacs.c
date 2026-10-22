@@ -2986,6 +2986,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_SPACEMOUSE
       syms_of_cmacs_spacemouse ();	/* CMACS: SpaceMouse / 6DOF input */
 #endif
+#ifdef HAVE_CMACS_CAMERA
+      syms_of_cmacs_camera ();	/* CMACS: camera capture */
+#endif
+#ifdef HAVE_CMACS_HANDTRACK
+      syms_of_cmacs_handtrack ();	/* CMACS: camera hand tracking */
+#endif
 #ifdef HAVE_CMACS_LRGSCRIPT
       syms_of_cmacs_lrgscript ();	/* CMACS: elisp scripting for libregnum */
 #endif
@@ -3151,6 +3157,12 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_SPACEMOUSE
   init_cmacs_spacemouse ();	/* CMACS: SpaceMouse / 6DOF input */
+#endif
+#ifdef HAVE_CMACS_CAMERA
+  init_cmacs_camera ();	/* CMACS: camera capture */
+#endif
+#ifdef HAVE_CMACS_HANDTRACK
+  init_cmacs_handtrack ();	/* CMACS: camera hand tracking */
 #endif
 #ifdef HAVE_CMACS_LRGSCRIPT
   init_cmacs_lrgscript ();	/* CMACS: register elisp backend with libregnum */
