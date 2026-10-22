@@ -68,7 +68,7 @@ or read [[file:build.org][build.org]] for the configure flags.
 
 | Subsystem      | Directory            | Purpose                                                   |
 |----------------+----------------------+-----------------------------------------------------------|
-| *whisper*      | =cmacs/whisper/=       | Offline STT via whisper.cpp; live dictation               |
+| *whisper*      | =cmacs/whisper/=       | Offline STT via whisper.cpp; live dictation; always-on voice loop ([[file:cmacs-voice-loop.org][cmacs-voice-loop]]) |
 | *piper*        | =cmacs/piper/=         | Offline TTS via a Piper subprocess                        |
 | *transcribe*   | =lisp/cmacs/=          | Batch speech-to-text (pure Elisp; whisper + transcode)    |
 | *ai*           | =cmacs/ai/=            | Coding-agent surface over ai-glib --- 8 providers, streaming |
