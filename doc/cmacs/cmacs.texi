@@ -8618,7 +8618,7 @@ argument it offers to write it under
 yourself, then:
 
 @lisp
-(setq cmacs-voice-loop-device "cmacs-echo-cancel-source"
+(setq cmacs-voice-device "cmacs-echo-cancel-source"
       cmacs-voice-loop-tts-gating 'none)
 @end lisp
 
@@ -8633,6 +8633,48 @@ has copied it, and is then overwritten; the worker wipes its copies
 with @code{memset_explicit}.  Speech without the wake phrase is
 transcribed once by the wake model and dropped.  Nothing is written to
 disk unless @code{cmacs-voice-loop-save-directory} is set.
+
+@section The Shared Voice Engine (cmacs-voice)
+
+@cindex cmacs-voice
+@cindex push-to-talk
+
+@file{lisp/cmacs/cmacs-voice.el} owns the microphone and the speaker
+for every voice feature; the always-on loop is its streaming client,
+and the voice chat (@kbd{C-c v c} in @kbd{M-x cmacs-ai-voice-chat}),
+VR hold-A/hold-Y and @code{cmacs-brigade-voice-listen} are push-to-talk
+clients.  @code{cmacs-whisper-dictate} keeps its own capture.  The
+reference is @file{doc_org/cmacs/cmacs-voice.org}.
+
+@table @code
+@item (cmacs-voice-acquire @var{id} &key consumer suspend resume preempt exclusive)
+@itemx (cmacs-voice-release @var{id})
+Take or give back the microphone.  One 16 kHz capture serves every
+client; the client on top receives each drained chunk.  An
+@code{:exclusive} (push-to-talk) client suspends a streaming one and
+resumes it on release, and preempts another push-to-talk client.
+@item (cmacs-voice-ptt-start @var{id} &key max-seconds on-timeout preempt)
+@itemx (cmacs-voice-ptt-stop @var{id})
+@itemx (cmacs-voice-ptt-cancel @var{id})
+Record a phrase; stop returns its PCM.
+@item (cmacs-voice-transcribe @var{pcm} @var{callback} &key model threads language)
+Async whisper; @var{pcm} is overwritten once copied.
+@item (cmacs-voice-speak @var{text} &optional @var{voice})
+@itemx (cmacs-voice-stop-speaking)
+One speech queue, synthesised one sentence at a time so it plays in
+order; stopping drops queued and in-flight sentences.
+@item (cmacs-voice-detector-start @var{frame-fn})
+@itemx (cmacs-voice-detect @var{pcm})
+Silero VAD or the energy detector, frame by frame.
+@end table
+
+While a push-to-talk client records, the loop shows
+@code{Voice:paused}.  @code{cmacs-voice-loop-device},
+@code{-poll-interval}, @code{-threads}, @code{-vad-model},
+@code{-energy-floor-db}, @code{-energy-margin-db} and @code{-voice}
+became @code{cmacs-voice-device} and so on; the old names are obsolete
+aliases.  In a voice chat @kbd{C-c v c} records, except with VR mode on,
+where VR's recenter wins; @kbd{C-c v t} is the same command.
 
 @section Streaming VAD and PCM Helpers
 

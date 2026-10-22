@@ -71,10 +71,12 @@ state change (newest first), `stopped' whether piper was stopped."
          (cmacs-voice-loop-barge-in t)
          (cmacs-voice-loop-state-change-functions nil)
          (cmacs-voice-loop--state 'listening)
-         (cmacs-voice-loop--vad nil)
+         (cmacs-voice--vad nil)
+         (cmacs-voice--frame-fn #'cmacs-voice-loop--frame)
          (cmacs-voice-loop--last-sent-seg 0)
-         (cmacs-voice-loop--tts-until 0.0)
-         (cmacs-voice-loop--tts-queue nil)
+         (cmacs-voice--tts-until 0.0)
+         (cmacs-voice--tts-queue nil)
+         (cmacs-voice--tts-synth nil)
          (cmacs-voice-loop--chat-buffer nil))
      (cmacs-voice-loop--reset-state)
      (add-hook 'cmacs-voice-loop-state-change-functions
@@ -102,9 +104,9 @@ state change (newest first), `stopped' whether piper was stopped."
   (skip-unless (cmacs-voice-loop-tests--available-p))
   (let ((cmacs-voice-loop-wake-phrase "jarvis")
         (cmacs-voice-loop-wake-threshold 0.75))
-    (should (equal (butlast (cmacs-voice-loop-wake-match "Jarvis, what time is it?")) '(0 1)))
-    (should (equal (butlast (cmacs-voice-loop-wake-match "hey jervis open it")) '(1 2)))
-    (should (equal (butlast (cmacs-voice-loop-wake-match "Jar vis, lights on")) '(0 2)))
+    (should (equal (cl-subseq (cmacs-voice-loop-wake-match "Jarvis, what time is it?") 0 2) '(0 1)))
+    (should (equal (cl-subseq (cmacs-voice-loop-wake-match "hey jervis open it") 0 2) '(1 2)))
+    (should (equal (cl-subseq (cmacs-voice-loop-wake-match "Jar vis, lights on") 0 2) '(0 2)))
     (should-not (cmacs-voice-loop-wake-match "travis scott is playing"))
     (should-not (cmacs-voice-loop-wake-match "what time is it"))
     (should-not (cmacs-voice-loop-wake-match ""))
@@ -122,7 +124,7 @@ state change (newest first), `stopped' whether piper was stopped."
   "A two-word phrase matches as a run of two words."
   (skip-unless (cmacs-voice-loop-tests--available-p))
   (let ((cmacs-voice-loop-wake-phrase "hey computer"))
-    (should (equal (butlast (cmacs-voice-loop-wake-match "Hey, computer! Status.")) '(0 2)))
+    (should (equal (cl-subseq (cmacs-voice-loop-wake-match "Hey, computer! Status.") 0 2) '(0 2)))
     (should-not (cmacs-voice-loop-wake-match "computer status"))
     (should (equal (cmacs-voice-loop-strip-wake "hey computer status report")
                    "status report"))))
@@ -172,12 +174,12 @@ state change (newest first), `stopped' whether piper was stopped."
 (ert-deftest cmacs-voice-loop-test-energy-detector ()
   "The energy detector calls a tone speech and silence not."
   (skip-unless (cmacs-voice-loop-tests--available-p))
-  (let ((cmacs-voice-loop--noise-db -70.0))
-    (should (= (cmacs-voice-loop--energy-prob -120.0) 0.0))
-    (should (>= (cmacs-voice-loop--energy-prob -12.0) 0.99))
+  (let ((cmacs-voice--noise-db -70.0))
+    (should (= (cmacs-voice-energy-prob -120.0) 0.0))
+    (should (>= (cmacs-voice-energy-prob -12.0) 0.99))
     ;; The floor adapts to steady quiet noise rather than calling it speech.
-    (dotimes (_ 200) (cmacs-voice-loop--energy-prob -45.0))
-    (should (< (cmacs-voice-loop--energy-prob -45.0) 0.5))))
+    (dotimes (_ 200) (cmacs-voice-energy-prob -45.0))
+    (should (< (cmacs-voice-energy-prob -45.0) 0.5))))
 
 (ert-deftest cmacs-voice-loop-test-wake-then-send ()
   "\"Jarvis, ...\" in one breath: wake model hears it, final model's text goes."
@@ -292,7 +294,7 @@ state change (newest first), `stopped' whether piper was stopped."
   (skip-unless (cmacs-voice-loop-tests--available-p))
   (cmacs-voice-loop-tests--with-loop '((final . " no, stop, the other one"))
     (setq cmacs-voice-loop--state 'speaking
-          cmacs-voice-loop--tts-until (+ (float-time) 30))
+          cmacs-voice--tts-until (+ (float-time) 30))
     (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 500 0.5))
     (should stopped)
     (should cmacs-voice-loop--barged)
@@ -306,11 +308,11 @@ state change (newest first), `stopped' whether piper was stopped."
   "Under `threshold' gating a quiet echo of the reply does not barge in."
   (skip-unless (cmacs-voice-loop-tests--available-p))
   (cmacs-voice-loop-tests--with-loop '((final . "echo"))
-   (let ((cmacs-voice-loop-energy-floor-db cmacs-voice-loop-energy-floor-db))
+   (let ((cmacs-voice-energy-floor-db cmacs-voice-energy-floor-db))
     (setq cmacs-voice-loop--state 'speaking
-          cmacs-voice-loop--tts-until (+ (float-time) 30)
-          cmacs-voice-loop--noise-db -70.0
-          cmacs-voice-loop-energy-floor-db -70.0)
+          cmacs-voice--tts-until (+ (float-time) 30)
+          cmacs-voice--noise-db -70.0
+          cmacs-voice-energy-floor-db -70.0)
     ;; -70 + 12 = -58 dB is p 0.5; an echo near -53 dB is p ~0.75, over
     ;; the normal threshold but under the raised one.
     (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 800 0.003))
@@ -324,7 +326,7 @@ state change (newest first), `stopped' whether piper was stopped."
   (cmacs-voice-loop-tests--with-loop '((final . "x"))
     (let ((cmacs-voice-loop-tts-gating 'mute))
       (setq cmacs-voice-loop--state 'speaking
-            cmacs-voice-loop--tts-until (+ (float-time) 30))
+            cmacs-voice--tts-until (+ (float-time) 30))
       (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 800 0.5)
                                     (cmacs-voice-loop-tests--silence 800))
       (should-not stopped)
@@ -340,10 +342,11 @@ state change (newest first), `stopped' whether piper was stopped."
         (cmacs-voice-loop-mode t)
         (cmacs-voice-loop-speak t)
         (cmacs-voice-loop--state 'thinking)
-        (cmacs-voice-loop--tts-queue nil)
-        (cmacs-voice-loop--tts-synth nil)
-        (cmacs-voice-loop--tts-until 0.0)
+        (cmacs-voice--tts-queue nil)
+        (cmacs-voice--tts-synth nil)
+        (cmacs-voice--tts-until 0.0)
         (cmacs-voice-loop--tts-tail "")
+        (cmacs-voice-speech-functions '(cmacs-voice-loop--on-speech))
         (buf (generate-new-buffer " *voice-chat*")))
     (unwind-protect
         (cl-letf (((symbol-function 'cmacs-piper-supported-p) (lambda () t))
@@ -422,7 +425,7 @@ state change (newest first), `stopped' whether piper was stopped."
     (should-error (cmacs-voice-loop-mode 1) :type 'user-error)
     (should-not cmacs-voice-loop-mode)
     (should (eq (cmacs-voice-loop-state) 'idle))
-    (should-not cmacs-voice-loop--capture)))
+    (should-not (cmacs-voice-mic-open-p))))
 
 ;;;; Real engines (skip when models are absent)
 
@@ -451,11 +454,11 @@ energy detector rather than going deaf."
           (should-error (cmacs-whisper-vad-feed h "" #'ignore))
           ;; The loop: a VAD that fails hands its audio to the energy path.
           (cmacs-voice-loop-tests--with-loop '((final . " still hears you"))
-            (setq cmacs-voice-loop--vad (cmacs-whisper-vad-open f))
+            (setq cmacs-voice--vad (cmacs-whisper-vad-open f))
             (cmacs-voice-loop--arm 30)
             (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 700))
             (should (cmacs-voice-loop-tests--wait
-                     (lambda () (null cmacs-voice-loop--vad)) 30))
+                     (lambda () (null cmacs-voice--vad)) 30))
             (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--silence 1000))
             (should (cmacs-voice-loop-tests--wait (lambda () sent) 30))
             (should (equal sent '("still hears you")))))
@@ -520,7 +523,8 @@ energy detector rather than going deaf."
            (cmacs-voice-loop-partial-display nil)
            (cmacs-voice-loop-send-function (lambda (text) (push text sent)))
            (cmacs-voice-loop--state 'listening)
-           (cmacs-voice-loop--vad nil)
+           (cmacs-voice--vad nil)
+           (cmacs-voice--frame-fn #'cmacs-voice-loop--frame)
            (cmacs-voice-loop--last-sent-seg 0))
       (cmacs-voice-loop--reset-state)
       (unwind-protect

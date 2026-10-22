@@ -31,6 +31,13 @@
 ;; Nothing runs Lisp off the main thread and nothing here blocks: the
 ;; microphone is drained by a timer, and every model call is async.
 ;;
+;; The microphone, the detector, transcription and the speech queue
+;; belong to the shared engine in cmacs-voice.el.  The loop is its
+;; streaming client: a push-to-talk client (C-c v c in a voice chat,
+;; holding A or Y in VR, a brigade dictation) takes the mic from it for
+;; the length of a phrase, and the loop picks up where it left off --
+;; state `paused' meanwhile.
+;;
 ;; Privacy: the mode is off by default.  Audio lives only in memory,
 ;; only for as long as a segment is being transcribed, and the
 ;; segment's bytes are overwritten when it is done.  Nothing is
@@ -53,6 +60,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'cmacs-voice)
 
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c" (&rest plist))
 (declare-function cmacs-audio-start "cmacs-audio-defuns.c" (handle))
@@ -121,28 +129,11 @@ used instead."
 nil means `cmacs-whisper-default-model'."
   :type '(choice (const :tag "Default model" nil) string))
 
-(defcustom cmacs-voice-loop-vad-model nil
-  "Silero VAD model (ggml) basename, resolved like whisper models.
-nil means `cmacs-whisper-default-vad-model'.  When the file is absent
-the loop uses the energy detector instead; get the model with
-\\[cmacs-whisper-download-vad-model]."
-  :type '(choice (const :tag "Default VAD model" nil) string))
-
-(defcustom cmacs-voice-loop-device nil
-  "Capture device for the loop, or nil for `cmacs-audio-default-device'.
-Under PipeWire this is a node name -- \"cmacs-echo-cancel-source\" once
-the config from `cmacs-voice-loop-echo-cancel-config' is installed."
-  :type '(choice (const nil) string))
-
-(defcustom cmacs-voice-loop-threads nil
-  "CPU threads whisper may use per transcription, or nil for all."
-  :type '(choice (const :tag "All" nil) integer))
-
 (defcustom cmacs-voice-loop-vad-threshold 0.5
   "Speech probability at which a frame counts as speech.
 Speech then continues while frames stay above this minus 0.15, the
 usual Silero hysteresis.  The energy detector maps its levels onto the
-same scale: 0.5 is `cmacs-voice-loop-energy-margin-db' above the
+same scale: 0.5 is `cmacs-voice-energy-margin-db' above the
 noise floor."
   :type 'number)
 
@@ -202,14 +193,6 @@ nil treats interrupting as addressing the loop."
   "An utterance longer than this is cut and transcribed as it is."
   :type 'number)
 
-(defcustom cmacs-voice-loop-energy-floor-db -50.0
-  "Energy detector: frames quieter than this (dBFS) are never speech."
-  :type 'number)
-
-(defcustom cmacs-voice-loop-energy-margin-db 12.0
-  "Energy detector: how far above the noise floor speech must be."
-  :type 'number)
-
 (defcustom cmacs-voice-loop-partial-interval 0.8
   "Seconds between partial transcripts while you speak; nil disables them."
   :type '(choice (const :tag "No partials" nil) number))
@@ -222,17 +205,9 @@ nil treats interrupting as addressing the loop."
   "Where partial transcripts show: `echo' area and/or the chat `buffer'."
   :type '(set (const echo) (const buffer)))
 
-(defcustom cmacs-voice-loop-poll-interval 0.1
-  "Seconds between microphone drains."
-  :type 'number)
-
 (defcustom cmacs-voice-loop-speak t
   "Non-nil: replies are spoken with piper."
   :type 'boolean)
-
-(defcustom cmacs-voice-loop-voice nil
-  "Piper voice basename for replies, or nil for `cmacs-piper-default-voice'."
-  :type '(choice (const nil) string))
 
 (defcustom cmacs-voice-loop-wake-acknowledgement nil
   "Text spoken after a bare wake phrase (\"Yes?\"), or nil to stay quiet."
@@ -259,14 +234,16 @@ Off unless you set it: the loop otherwise never writes audio to disk."
     (listening . " Voice")
     (hearing . " Voice:hearing")
     (thinking . " Voice:thinking")
-    (speaking . " Voice:speaking"))
+    (speaking . " Voice:speaking")
+    (paused . " Voice:paused"))
   "Mode-line text per loop state.  A trailing `+' marks a follow-up window."
   :type '(alist :key-type symbol :value-type string))
 
 (defvar cmacs-voice-loop-state-change-functions nil
   "Abnormal hook run with (NEW-STATE OLD-STATE) when the loop changes state.
 States: `idle' (mode off), `listening', `hearing' (speech in progress),
-`thinking' (transcribing / waiting for the reply), `speaking'.")
+`thinking' (transcribing / waiting for the reply), `speaking', and
+`paused' (a push-to-talk client has the microphone).")
 
 (defvar cmacs-voice-loop-partial-functions nil
   "Abnormal hook run with the current partial transcript (a string).")
@@ -289,10 +266,8 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 
 ;;;; Constants
 
-(defconst cmacs-voice-loop--rate 16000 "Capture rate; whisper wants 16 kHz.")
-(defconst cmacs-voice-loop--window 512 "Samples per VAD frame.")
-(defconst cmacs-voice-loop--frame-bytes (* 2 512) "Bytes per VAD frame.")
-(defconst cmacs-voice-loop--frame-ms 32.0 "Milliseconds per VAD frame.")
+(defconst cmacs-voice-loop--frame-bytes cmacs-voice-frame-bytes "Bytes per frame.")
+(defconst cmacs-voice-loop--frame-ms cmacs-voice-frame-ms "Milliseconds per frame.")
 (defconst cmacs-voice-loop--onset-frames 2
   "Consecutive speech frames that start a segment (64 ms).")
 
@@ -302,13 +277,6 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 (defvar cmacs-voice-loop--state 'idle "Current loop state.")
 (defvar cmacs-voice-loop--session 0
   "Bumped on every start/stop; async results from an old session are dropped.")
-(defvar cmacs-voice-loop--capture nil "cmacs-audio capture handle.")
-(defvar cmacs-voice-loop--vad nil "cmacs-whisper VAD handle, or nil (energy).")
-(defvar cmacs-voice-loop--vad-busy nil "Non-nil while a VAD feed is queued.")
-(defvar cmacs-voice-loop--vad-backlog "" "PCM waiting for the VAD.")
-(defvar cmacs-voice-loop--timer nil "The drain timer.")
-(defvar cmacs-voice-loop--residue "" "PCM short of a whole frame.")
-(defvar cmacs-voice-loop--noise-db -70.0 "Energy detector noise floor.")
 
 (defvar cmacs-voice-loop--preroll nil "Recent frames before speech, newest first.")
 (defvar cmacs-voice-loop--onset 0 "Consecutive speech frames while not in speech.")
@@ -333,77 +301,25 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 (defvar cmacs-voice-loop--chat-buffer nil "The chat buffer the loop talks to.")
 (defvar cmacs-voice-loop--stream-open nil "Non-nil while a reply streams in.")
 (defvar cmacs-voice-loop--tts-tail "" "Reply text not yet a whole sentence.")
-(defvar cmacs-voice-loop--tts-queue nil "Sentences waiting for synthesis, in order.")
-(defvar cmacs-voice-loop--tts-synth nil "Non-nil while piper synthesises.")
-(defvar cmacs-voice-loop--tts-gen 0 "Bumped by a barge-in; stale speech is dropped.")
-(defvar cmacs-voice-loop--tts-until 0.0 "When queued playback should be done.")
 
 
 ;;;; Text: cleaning and the wake phrase
 
-(defun cmacs-voice-loop--clean (text)
-  "TEXT without whisper's [annotations] and (sounds), trimmed, single-spaced."
-  (let ((s (replace-regexp-in-string
-            "\\[[^]]*\\]\\|([^)]*)\\|\\*[^*]*\\*" " " (or text ""))))
-    (string-trim (replace-regexp-in-string "[ \t\n]+" " " s))))
-
-(defun cmacs-voice-loop--norm (token)
-  "TOKEN lower-cased with everything but letters, digits and \\=' removed."
-  (replace-regexp-in-string "[^[:alnum:]']" "" (downcase token)))
-
-(defun cmacs-voice-loop--tokens (text)
-  "Words of TEXT as a vector of (NORMALIZED . ORIGINAL), skipping punctuation."
-  (vconcat
-   (cl-loop for tok in (split-string (or text "") "[ \t\n]+" t)
-            for n = (cmacs-voice-loop--norm tok)
-            unless (string-empty-p n) collect (cons n tok))))
-
-(defun cmacs-voice-loop--similarity (a b)
-  "Similarity of strings A and B in [0, 1]: 1 - Levenshtein / longer length."
-  (let ((len (max (length a) (length b))))
-    (if (zerop len) 1.0
-      (- 1.0 (/ (float (string-distance a b)) len)))))
+(defalias 'cmacs-voice-loop--clean #'cmacs-voice-clean)
+(defalias 'cmacs-voice-loop--tokens #'cmacs-voice-tokens)
 
 (defun cmacs-voice-loop-wake-match (text &optional phrase threshold)
-  "Find the wake PHRASE in TEXT; return (START END SCORE) or nil.
-START and END index the words of TEXT (as `cmacs-voice-loop--tokens'
-splits them, END exclusive) covered by the match.  PHRASE defaults to
-`cmacs-voice-loop-wake-phrase' and THRESHOLD to
-`cmacs-voice-loop-wake-threshold'.  Each run of as many words as the
-phrase has is compared as a whole, and so is each run of one word
-more glued together, so \"jar vis\" still matches \"jarvis\".  The
-earliest match at or above THRESHOLD wins."
-  (let* ((phrase (or phrase cmacs-voice-loop-wake-phrase))
-         (threshold (or threshold cmacs-voice-loop-wake-threshold))
-         (pw (mapcar #'cmacs-voice-loop--norm (split-string (or phrase "") nil t)))
-         (pw (cl-remove-if #'string-empty-p pw))
-         (target (string-join pw " "))
-         (glued (string-join pw ""))
-         (words (cmacs-voice-loop--tokens text))
-         (n (length pw))
-         (len (length words)))
-    (when (and (> n 0) (> len 0))
-      (catch 'found
-        (dotimes (i len)
-          (dolist (k (list n (1+ n)))
-            (when (<= (+ i k) len)
-              (let* ((run (cl-loop for j from i below (+ i k)
-                                   collect (car (aref words j))))
-                     (score (if (= k n)
-                                (cmacs-voice-loop--similarity
-                                 (string-join run " ") target)
-                              (cmacs-voice-loop--similarity
-                               (string-join run "") glued))))
-                (when (>= score threshold)
-                  (throw 'found (list i (+ i k) score)))))))
-        nil))))
+  "Find the wake PHRASE in TEXT; return (START END SCORE PHRASE) or nil.
+START and END index the words of TEXT (END exclusive) covered by the
+match.  PHRASE defaults to `cmacs-voice-loop-wake-phrase' and THRESHOLD
+to `cmacs-voice-loop-wake-threshold'.  A heard word matches when 1 minus
+its Levenshtein distance over the longer length reaches THRESHOLD; a
+run of one word more glued together is tried too, so \"jar vis\" still
+matches \"jarvis\".  The earliest match wins."
+  (cmacs-voice-phrase-match text (or phrase cmacs-voice-loop-wake-phrase)
+                            (or threshold cmacs-voice-loop-wake-threshold)))
 
-(defun cmacs-voice-loop--after (text end)
-  "The words of TEXT from word index END on, joined, leading punctuation gone."
-  (let ((words (cmacs-voice-loop--tokens text)))
-    (string-trim-left
-     (mapconcat #'cdr (cl-subseq words (min end (length words))) " ")
-     "[[:punct:][:space:]]+")))
+(defalias 'cmacs-voice-loop--after #'cmacs-voice-words-after)
 
 (defun cmacs-voice-loop-strip-wake (text &optional fallback-words)
   "TEXT after the wake phrase, or nil when TEXT holds only the phrase.
@@ -430,7 +346,8 @@ returned whole."
       (force-mode-line-update t))))
 
 (defun cmacs-voice-loop-state ()
-  "The loop's state: `idle', `listening', `hearing', `thinking' or `speaking'."
+  "The loop's state: `idle', `listening', `hearing', `thinking', `speaking'
+or `paused'."
   cmacs-voice-loop--state)
 
 (defun cmacs-voice-loop--armed-p ()
@@ -456,10 +373,8 @@ returned whole."
 
 ;;;; Speaking (piper), in order, interruptible
 
-(defun cmacs-voice-loop--tts-active-p ()
-  "Non-nil while speech is queued, synthesising or playing."
-  (or cmacs-voice-loop--tts-queue cmacs-voice-loop--tts-synth
-      (< (float-time) cmacs-voice-loop--tts-until)))
+(defalias 'cmacs-voice-loop--tts-active-p #'cmacs-voice-speaking-p
+  "Non-nil while the engine's speech is queued, synthesising or playing.")
 
 (defun cmacs-voice-loop--speakable (text)
   "TEXT with markup that reads badly aloud removed."
@@ -470,65 +385,23 @@ returned whole."
     (setq s (replace-regexp-in-string "[*`#~_=]+" "" s))
     (string-trim (replace-regexp-in-string "[ \t\n]+" " " s))))
 
-(defun cmacs-voice-loop--can-speak-p ()
-  "Non-nil when piper is available."
-  (and cmacs-voice-loop-speak
-       (fboundp 'cmacs-piper-supported-p)
-       (cmacs-piper-supported-p)
-       (or (fboundp 'cmacs-piper-voice-path) (require 'cmacs-piper nil t))))
-
 (defun cmacs-voice-loop-speak (text)
   "Queue TEXT to be spoken by the loop, after anything already queued.
-Speech queued this way stops on a barge-in."
-  (let ((s (cmacs-voice-loop--speakable text)))
-    (when (and (not (string-empty-p s)) (cmacs-voice-loop--can-speak-p))
-      (setq cmacs-voice-loop--tts-queue
-            (append cmacs-voice-loop--tts-queue (list s)))
-      (cmacs-voice-loop--tts-pump))))
+Speech goes through the shared engine's queue (`cmacs-voice-speak'),
+so it is in order and stops on a barge-in."
+  (when cmacs-voice-loop-speak
+    (cmacs-voice-speak (cmacs-voice-loop--speakable text))))
 
-(defun cmacs-voice-loop--tts-pump ()
-  "Synthesise the next queued sentence, one at a time so order holds."
-  (when (and cmacs-voice-loop--tts-queue (not cmacs-voice-loop--tts-synth))
-    (let* ((text (pop cmacs-voice-loop--tts-queue))
-           (gen cmacs-voice-loop--tts-gen)
-           (voice (cmacs-piper-voice-path cmacs-voice-loop-voice)))
-      (setq cmacs-voice-loop--tts-synth t)
-      (condition-case err
-          (cmacs-piper--synth-async-1
-           voice text
-           (lambda (result)
-             (setq cmacs-voice-loop--tts-synth nil)
-             (when (= gen cmacs-voice-loop--tts-gen)
-               (if (stringp result)
-                   (cmacs-voice-loop--tts-play result voice)
-                 (message "Voice: %s" (or (cdr-safe (car-safe result))
-                                          "speech synthesis failed")))
-               (cmacs-voice-loop--tts-pump))))
-        (error
-         (setq cmacs-voice-loop--tts-synth nil
-               cmacs-voice-loop--tts-queue nil)
-         (message "Voice: %s" (error-message-string err)))))))
-
-(defun cmacs-voice-loop--tts-play (pcm voice)
-  "Play PCM synthesised with VOICE and note when it will be done."
-  (let* ((rate (cmacs-piper--voice-sample-rate voice))
-         (h (cmacs-piper--ensure-playback rate))
-         (secs (/ (length pcm) (* 2.0 rate))))
-    (cmacs-audio-push-pcm h pcm)
-    (setq cmacs-voice-loop--tts-until
-          (+ (max (float-time) cmacs-voice-loop--tts-until) secs))
-    (when (and cmacs-voice-loop-mode (eq cmacs-voice-loop--state 'thinking))
-      (cmacs-voice-loop--set-state 'speaking))))
+(defun cmacs-voice-loop--on-speech (_text _seconds)
+  "Engine speech started playing: a pending reply is now being spoken."
+  (when (and cmacs-voice-loop-mode (eq cmacs-voice-loop--state 'thinking))
+    (cmacs-voice-loop--set-state 'speaking)))
 
 (defun cmacs-voice-loop-stop-speaking ()
   "Stop the loop's speech now, dropping anything queued."
   (interactive)
-  (cl-incf cmacs-voice-loop--tts-gen)
-  (setq cmacs-voice-loop--tts-queue nil
-        cmacs-voice-loop--tts-until 0.0
-        cmacs-voice-loop--tts-tail "")
-  (when (fboundp 'cmacs-piper-stop)
-    (ignore-errors (cmacs-piper-stop))))
+  (setq cmacs-voice-loop--tts-tail "")
+  (cmacs-voice-stop-speaking))
 
 (defun cmacs-voice-loop--feed-reply (chunk)
   "Accumulate streamed reply CHUNK; queue each completed sentence."
@@ -695,13 +568,8 @@ call, which a callback wrapped at send time would miss."
 (defun cmacs-voice-loop--transcribe (pcm which callback)
   "Transcribe PCM with the model for WHICH; CALLBACK gets the result alist.
 PCM is wiped once whisper has its copy."
-  (condition-case err
-      (cmacs-whisper-transcribe-pcm-async
-       (cmacs-voice-loop--model-path which) pcm callback
-       cmacs-whisper-language cmacs-voice-loop-threads)
-    (error (funcall callback (list (cons :error (error-message-string err))))))
-  ;; The C side converted the samples to floats before returning.
-  (fillarray pcm 0))
+  (cmacs-voice-transcribe pcm callback
+                          :model (cmacs-voice-loop--model-path which)))
 
 
 ;;;; Utterances
@@ -715,8 +583,8 @@ PCM is wiped once whisper has its copy."
                                  (logand (ash v -16) 255) (logand (ash v -24) 255)))
                 (u16 (v) (insert (logand v 255) (logand (ash v -8) 255))))
         (insert "RIFF") (u32 (+ 36 n)) (insert "WAVEfmt ")
-        (u32 16) (u16 1) (u16 1) (u32 cmacs-voice-loop--rate)
-        (u32 (* 2 cmacs-voice-loop--rate)) (u16 2) (u16 16)
+        (u32 16) (u16 1) (u16 1) (u32 cmacs-voice-rate)
+        (u32 (* 2 cmacs-voice-rate)) (u16 2) (u16 16)
         (insert "data") (u32 n))
       (insert pcm)
       (let ((coding-system-for-write 'binary))
@@ -960,88 +828,12 @@ wake model heard it, or nil when the segment needed no phrase."
                       (* 1000 cmacs-voice-loop-max-utterance-seconds)))
           (cmacs-voice-loop--end-segment))))))
 
-(defun cmacs-voice-loop--energy-prob (db)
-  "Map frame level DB (dBFS) to a speech probability; track the noise floor."
-  (let* ((floor cmacs-voice-loop--noise-db)
-         (on (+ floor cmacs-voice-loop-energy-margin-db)))
-    ;; The floor follows quiet frames quickly and loud ones slowly
-    ;; (a time constant of about 6 s), so it settles on the room -- a
-    ;; fan that never stops -- and not on a speaker, who pauses.
-    (setq cmacs-voice-loop--noise-db
-          (max -90.0 (if (< db on)
-                         (+ (* 0.95 floor) (* 0.05 db))
-                       (+ (* 0.995 floor) (* 0.005 db)))))
-    (if (< db cmacs-voice-loop-energy-floor-db)
-        0.0
-      (min 1.0 (max 0.0 (+ 0.5 (/ (- db on) 20.0)))))))
-
-(defun cmacs-voice-loop--frames (pcm probs)
-  "Run each 1024-byte frame of PCM through the segmenter with PROBS."
-  (let ((n (min (length probs) (/ (length pcm) cmacs-voice-loop--frame-bytes))))
-    (dotimes (i n)
-      (cmacs-voice-loop--frame
-       (substring pcm (* i cmacs-voice-loop--frame-bytes)
-                  (* (1+ i) cmacs-voice-loop--frame-bytes))
-       (aref probs i)))
-    (fillarray pcm 0)))
-
-(defun cmacs-voice-loop--vad-feed (pcm)
-  "Hand whole-frame PCM to the VAD, or queue it behind the feed in flight."
-  (if cmacs-voice-loop--vad-busy
-      (let ((backlog (concat cmacs-voice-loop--vad-backlog pcm))
-            ;; Never let a stalled VAD hoard more than ~5 s of audio.
-            (cap (* 160 cmacs-voice-loop--frame-bytes)))
-        (fillarray pcm 0)
-        (fillarray cmacs-voice-loop--vad-backlog 0)
-        (setq cmacs-voice-loop--vad-backlog
-              (if (> (length backlog) cap)
-                  (prog1 (substring backlog (- (length backlog) cap))
-                    (fillarray backlog 0))
-                backlog)))
-    (let ((session cmacs-voice-loop--session))
-      (setq cmacs-voice-loop--vad-busy t)
-      (cmacs-whisper-vad-feed
-       cmacs-voice-loop--vad pcm
-       (lambda (result)
-         (when (= session cmacs-voice-loop--session)
-           (setq cmacs-voice-loop--vad-busy nil)
-           (if-let* ((probs (cdr (assq :probs result))))
-               (cmacs-voice-loop--frames pcm probs)
-             ;; No model after all: carry on with the energy detector.
-             (message "Voice: VAD failed (%s); using the energy detector"
-                      (cdr (assq :error result)))
-             (ignore-errors (cmacs-whisper-vad-close cmacs-voice-loop--vad))
-             (setq cmacs-voice-loop--vad nil)
-             (cmacs-voice-loop--energy-frames pcm))
-           (let ((next cmacs-voice-loop--vad-backlog))
-             (setq cmacs-voice-loop--vad-backlog "")
-             (unless (string-empty-p next)
-               (cmacs-voice-loop--detect next)))))))))
-
-(defun cmacs-voice-loop--energy-frames (pcm)
-  "Segment PCM using frame energy alone."
-  (cmacs-voice-loop--frames
-   pcm (vconcat (mapcar #'cmacs-voice-loop--energy-prob
-                        (cmacs-whisper-pcm-levels pcm cmacs-voice-loop--window)))))
-
-(defun cmacs-voice-loop--detect (pcm)
-  "Classify whole-frame PCM with the VAD, or the energy detector."
-  (if cmacs-voice-loop--vad
-      (cmacs-voice-loop--vad-feed pcm)
-    (cmacs-voice-loop--energy-frames pcm)))
-
 (defun cmacs-voice-loop--ingest (pcm)
   "Take newly captured PCM (S16LE mono 16 kHz) into the loop.
-Whole frames go to detection; a ragged tail waits for the next call.
-The test suite drives the loop through here with synthetic audio."
-  (let* ((all (concat cmacs-voice-loop--residue pcm))
-         (whole (* cmacs-voice-loop--frame-bytes
-                   (/ (length all) cmacs-voice-loop--frame-bytes))))
-    (fillarray cmacs-voice-loop--residue 0)
-    (setq cmacs-voice-loop--residue (substring all whole))
-    (when (> whole 0)
-      (cmacs-voice-loop--detect (substring all 0 whole)))
-    (fillarray all 0)))
+The engine's detector splits it into frames and calls
+`cmacs-voice-loop--frame' with each.  The test suite drives the loop
+through here with synthetic audio."
+  (cmacs-voice-detect pcm))
 
 (defun cmacs-voice-loop--housekeeping ()
   "Per-tick upkeep: partials, the end of a reply, the mode line."
@@ -1065,98 +857,69 @@ The test suite drives the loop through here with synthetic audio."
     (setq cmacs-voice-loop--armed-until 0.0)
     (force-mode-line-update t)))
 
-(defun cmacs-voice-loop--tick ()
-  "Timer: drain the microphone and advance the loop."
-  (when cmacs-voice-loop--capture
-    (condition-case err
-        (let ((pcm (cmacs-audio-read-pcm cmacs-voice-loop--capture
-                                         (* 2 cmacs-voice-loop--rate))))
-          (when (and pcm (> (length pcm) 0))
-            (cmacs-voice-loop--ingest pcm))
-          (cmacs-voice-loop--housekeeping))
-      (error
-       (message "Voice: %s" (error-message-string err))))))
-
-
 ;;;; Mode
 
 (defun cmacs-voice-loop--reset-state ()
   "Forget all audio and per-utterance state."
   (cmacs-voice-loop--drop-segment)
   (cmacs-voice-loop--wipe cmacs-voice-loop--preroll)
-  (fillarray cmacs-voice-loop--residue 0)
-  (fillarray cmacs-voice-loop--vad-backlog 0)
+  (cmacs-voice-detector-reset)
   (setq cmacs-voice-loop--preroll nil
-        cmacs-voice-loop--residue ""
-        cmacs-voice-loop--vad-backlog ""
-        cmacs-voice-loop--vad-busy nil
         cmacs-voice-loop--onset 0
-        cmacs-voice-loop--noise-db -70.0
         cmacs-voice-loop--armed-until 0.0
         cmacs-voice-loop--partial-busy nil
         cmacs-voice-loop--finals 0
-        cmacs-voice-loop--stream-open nil
-        cmacs-voice-loop--tts-synth nil)
+        cmacs-voice-loop--stream-open nil)
   (cmacs-voice-loop--clear-partial))
-
-(defun cmacs-voice-loop--vad-model-path ()
-  "The VAD model file, or nil when it is not installed."
-  (let ((p (cmacs-whisper-model-path
-            (or cmacs-voice-loop-vad-model cmacs-whisper-default-vad-model))))
-    (and (file-exists-p p) p)))
 
 (defun cmacs-voice-loop--check ()
   "Signal a `user-error' naming what this build or machine lacks."
-  (unless (and (fboundp 'cmacs-audio--capture-open-1)
-               (fboundp 'cmacs-whisper-supported-p)
-               (fboundp 'cmacs-whisper-pcm-levels))
+  (unless (and (cmacs-voice-available-p) (fboundp 'cmacs-whisper-pcm-levels))
     (user-error "The voice loop needs cmacs built with audio and whisper"))
-  (require 'cmacs-audio)
-  (require 'cmacs-whisper)
   (unless (file-exists-p (cmacs-voice-loop--model-path 'final))
     (user-error "No whisper model at %s: M-x cmacs-whisper-download-model"
                 (abbreviate-file-name (cmacs-voice-loop--model-path 'final)))))
 
+(defun cmacs-voice-loop--suspend ()
+  "A push-to-talk client took the mic: drop what was being heard."
+  (cmacs-voice-loop--drop-segment)
+  (cmacs-voice-loop--clear-partial)
+  (cmacs-voice-detector-reset)
+  (cmacs-voice-loop--set-state 'paused))
+
+(defun cmacs-voice-loop--resume ()
+  "The mic came back from a push-to-talk client."
+  (when cmacs-voice-loop-mode
+    (cmacs-voice-loop--set-state
+     (if (cmacs-voice-speaking-p) 'speaking 'listening))))
+
 (defun cmacs-voice-loop--open ()
-  "Open the microphone and the VAD; start the drain timer."
+  "Take the microphone from the engine and start the detector."
   (cl-incf cmacs-voice-loop--session)
   (cmacs-voice-loop--reset-state)
-  (setq cmacs-voice-loop--capture
-        (cmacs-audio--capture-open-1
-         :source cmacs-audio-capture-source
-         :rate cmacs-voice-loop--rate
-         :channels 1
-         :device (or cmacs-voice-loop-device cmacs-audio-default-device)))
-  (cmacs-audio-start cmacs-voice-loop--capture)
-  (let ((vad (cmacs-voice-loop--vad-model-path)))
-    (setq cmacs-voice-loop--vad
-          (and vad (ignore-errors (cmacs-whisper-vad-open vad))))
-    (unless cmacs-voice-loop--vad
-      (message "Voice: no VAD model, using the energy detector (%s)"
-               (substitute-command-keys "\\[cmacs-whisper-download-vad-model]"))))
+  (cmacs-voice-loop--set-state 'listening)
+  (cmacs-voice-acquire 'loop
+                       :consumer #'cmacs-voice-loop--ingest
+                       :suspend #'cmacs-voice-loop--suspend
+                       :resume #'cmacs-voice-loop--resume)
+  (when (eq (cmacs-voice-detector-start #'cmacs-voice-loop--frame) 'energy)
+    (message "Voice: no VAD model, using the energy detector (%s)"
+             (substitute-command-keys "\\[cmacs-whisper-download-vad-model]")))
   (when (and (derived-mode-p 'cmacs-ai-chat-mode)
              (not (buffer-live-p cmacs-voice-loop--chat-buffer)))
     (setq cmacs-voice-loop--chat-buffer (current-buffer)))
   (advice-add 'cmacs-ai-chat--stream-callback :before
               #'cmacs-voice-loop--stream-tap)
-  (setq cmacs-voice-loop--timer
-        (run-with-timer cmacs-voice-loop-poll-interval
-                        cmacs-voice-loop-poll-interval
-                        #'cmacs-voice-loop--tick))
-  (cmacs-voice-loop--set-state 'listening))
+  (add-hook 'cmacs-voice-tick-functions #'cmacs-voice-loop--housekeeping)
+  (add-hook 'cmacs-voice-speech-functions #'cmacs-voice-loop--on-speech))
 
 (defun cmacs-voice-loop--close ()
-  "Stop listening and speaking; release every handle and buffer of audio."
+  "Stop listening and speaking; give the mic back and drop all audio."
   (cl-incf cmacs-voice-loop--session)
-  (when (timerp cmacs-voice-loop--timer)
-    (cancel-timer cmacs-voice-loop--timer))
-  (setq cmacs-voice-loop--timer nil)
-  (when cmacs-voice-loop--capture
-    (ignore-errors (cmacs-audio-close cmacs-voice-loop--capture)))
-  (when cmacs-voice-loop--vad
-    (ignore-errors (cmacs-whisper-vad-close cmacs-voice-loop--vad)))
-  (setq cmacs-voice-loop--capture nil
-        cmacs-voice-loop--vad nil)
+  (remove-hook 'cmacs-voice-tick-functions #'cmacs-voice-loop--housekeeping)
+  (remove-hook 'cmacs-voice-speech-functions #'cmacs-voice-loop--on-speech)
+  (cmacs-voice-release 'loop)
+  (cmacs-voice-detector-stop)
   (cmacs-voice-loop-stop-speaking)
   (cmacs-voice-loop--reset-state)
   (advice-remove 'cmacs-ai-chat--stream-callback #'cmacs-voice-loop--stream-tap)
@@ -1172,7 +935,8 @@ After a reply, `cmacs-voice-loop-follow-up-seconds' need no wake
 phrase.  Audio stays in memory and is discarded after use.
 
 The mode line shows the state: listening (a trailing + means no wake
-phrase is needed right now), hearing, thinking, speaking."
+phrase is needed right now), hearing, thinking, speaking, paused
+\(a push-to-talk command has the microphone)."
   :global t
   :group 'cmacs-voice-loop
   :lighter (:eval (cmacs-voice-loop--lighter))
@@ -1218,7 +982,7 @@ Stops any reply being spoken.  Starts the loop if it is off."
   (interactive)
   (message "Voice loop: %s; detector %s; wake %s; final %s; chat %s"
            cmacs-voice-loop--state
-           (if cmacs-voice-loop--vad "Silero VAD" "energy")
+           (if (eq (cmacs-voice-detector-kind) 'vad) "Silero VAD" "energy")
            (if cmacs-voice-loop-wake-phrase
                (format "\"%s\" (%s)" cmacs-voice-loop-wake-phrase
                        (file-name-nondirectory (cmacs-voice-loop--model-path 'wake)))
@@ -1241,7 +1005,7 @@ Stops any reply being spoken.  Starts the loop if it is off."
 # Written by M-x cmacs-voice-loop-echo-cancel-config.  Restart PipeWire
 # to load it:  systemctl --user restart pipewire pipewire-pulse
 # Then point the loop at the new source:
-#   (setq cmacs-voice-loop-device \"cmacs-echo-cancel-source\")
+#   (setq cmacs-voice-device \"cmacs-echo-cancel-source\")
 #
 # monitor.mode makes the canceller use the monitor of the default sink
 # as its reference, so whatever plays -- piper included -- is removed
@@ -1281,7 +1045,7 @@ left to you."
          ((y-or-n-p (format "Write %s? " file))
           (make-directory (file-name-directory file) t)
           (with-temp-file file (insert text))
-          (message "Wrote %s -- restart PipeWire, then set cmacs-voice-loop-device"
+          (message "Wrote %s -- restart PipeWire, then set cmacs-voice-device"
                    file)))
       (with-current-buffer (get-buffer-create "*cmacs-voice-loop echo-cancel*")
         (let ((inhibit-read-only t))

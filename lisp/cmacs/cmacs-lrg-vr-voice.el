@@ -34,6 +34,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'cmacs-lrg-vr)
+(require 'cmacs-voice)
 
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c" (&rest plist))
 (declare-function cmacs-audio-start "cmacs-audio-defuns.c" (handle))
@@ -79,8 +80,11 @@
   :type 'number)
 
 (defcustom cmacs-lrg-vr-voice-poll-seconds 0.25
-  "How often captured audio is drained while recording."
+  "How often captured audio was drained while recording.
+No longer used: the shared engine drains every `cmacs-voice-poll-interval'."
   :type 'number)
+(make-obsolete-variable 'cmacs-lrg-vr-voice-poll-seconds
+                        'cmacs-voice-poll-interval "cmacs 2026-10")
 
 (defcustom cmacs-lrg-vr-voice-threads nil
   "CPU threads whisper may use, or nil for all of them."
@@ -134,11 +138,13 @@ just says it was not understood."
 
 
 ;;;; Recording
+;;
+;; The microphone belongs to the shared voice engine (cmacs-voice.el).
+;; Holding a button is a push-to-talk client of it: it takes the mic
+;; from the always-on loop, if that is running, and gives it back on
+;; release -- and a second push-to-talk elsewhere (a brigade dictation)
+;; preempts this one, cancelling it.
 
-(defvar cmacs-lrg-vr-voice--handle nil "The capture handle while recording.")
-(defvar cmacs-lrg-vr-voice--timer nil)
-(defvar cmacs-lrg-vr-voice--chunks nil)
-(defvar cmacs-lrg-vr-voice--started nil)
 (defvar cmacs-lrg-vr-voice--purpose nil
   "What the current recording is for: `dictate' or `command'.")
 (defvar cmacs-lrg-vr-voice--callback nil)
@@ -149,7 +155,7 @@ just says it was not understood."
 
 (defun cmacs-lrg-vr-voice-recording-p ()
   "Non-nil while push-to-talk is recording."
-  (and cmacs-lrg-vr-voice--handle t))
+  (cmacs-voice-ptt-active-p 'vr))
 
 (defun cmacs-lrg-vr-voice--light (color)
   "Set the voice light to COLOR (\"#RRGGBB\") or off (nil)."
@@ -165,20 +171,6 @@ just says it was not understood."
     (ignore-errors
       (cmacs-lrg-vr-haptic cmacs-lrg-vr-voice--hand seconds amplitude))))
 
-(defun cmacs-lrg-vr-voice--drain ()
-  "Move whatever the capture has buffered into the accumulator."
-  (when cmacs-lrg-vr-voice--handle
-    ;; Ask for several polls' worth: read-pcm drains *up to* this many.
-    (let ((pcm (ignore-errors
-                 (cmacs-audio-read-pcm cmacs-lrg-vr-voice--handle
-                                       (* cmacs-audio-default-rate 2)))))
-      (when (and pcm (> (length pcm) 0))
-        (push pcm cmacs-lrg-vr-voice--chunks)))
-    (when (> (- (float-time) cmacs-lrg-vr-voice--started)
-             cmacs-lrg-vr-voice-max-seconds)
-      (message "Voice: stopped after %ds" cmacs-lrg-vr-voice-max-seconds)
-      (cmacs-lrg-vr-voice-stop))))
-
 (defun cmacs-lrg-vr-voice-start (purpose callback &optional hand)
   "Start recording speech for PURPOSE; CALLBACK gets the text later.
 PURPOSE is `dictate' or `command', for the messages.  HAND (`left' or
@@ -188,30 +180,17 @@ text, from the command loop (`cmacs-lrg-vr-run-later')."
   (cmacs-lrg-vr-voice--check)
   (when (cmacs-lrg-vr-voice-recording-p)
     (cmacs-lrg-vr-voice-cancel))
-  (setq cmacs-lrg-vr-voice--chunks nil
-        cmacs-lrg-vr-voice--purpose purpose
+  (setq cmacs-lrg-vr-voice--purpose purpose
         cmacs-lrg-vr-voice--callback callback
-        cmacs-lrg-vr-voice--hand hand
-        cmacs-lrg-vr-voice--started (float-time))
+        cmacs-lrg-vr-voice--hand hand)
   (condition-case err
-      (progn
-        (setq cmacs-lrg-vr-voice--handle
-              (cmacs-audio--capture-open-1
-               :source cmacs-audio-capture-source
-               :rate cmacs-audio-default-rate
-               :channels 1
-               :device cmacs-audio-default-device))
-        (cmacs-audio-start cmacs-lrg-vr-voice--handle))
+      (cmacs-voice-ptt-start 'vr
+                             :max-seconds cmacs-lrg-vr-voice-max-seconds
+                             :on-timeout #'cmacs-lrg-vr-voice-stop
+                             :preempt #'cmacs-lrg-vr-voice-cancel)
     (error
-     (when cmacs-lrg-vr-voice--handle
-       (ignore-errors (cmacs-audio-close cmacs-lrg-vr-voice--handle)))
-     (setq cmacs-lrg-vr-voice--handle nil)
      (user-error "Voice: could not open the microphone: %s"
                  (error-message-string err))))
-  (setq cmacs-lrg-vr-voice--timer
-        (run-with-timer cmacs-lrg-vr-voice-poll-seconds
-                        cmacs-lrg-vr-voice-poll-seconds
-                        #'cmacs-lrg-vr-voice--drain))
   (cmacs-lrg-vr-voice--light "#ff3030")
   (cmacs-lrg-vr-voice--buzz 0.04 0.6)
   (message "%s" (propertize (if (eq purpose 'dictate)
@@ -219,11 +198,8 @@ text, from the command loop (`cmacs-lrg-vr-run-later')."
                               "Listening -- say a command...")
                             'face 'cmacs-lrg-vr-voice-heard)))
 
-(defun cmacs-lrg-vr-voice--clean (text)
-  "Whisper's TEXT without its annotations, trimmed and single-spaced."
-  (let ((s (replace-regexp-in-string
-            "\\[[^]]*\\]\\|([^)]*)\\|\\*[^*]*\\*" " " (or text ""))))
-    (string-trim (replace-regexp-in-string "[ \t\n]+" " " s))))
+(defalias 'cmacs-lrg-vr-voice--clean #'cmacs-voice-clean
+  "Whisper's TEXT without its annotations, trimmed and single-spaced.")
 
 (defun cmacs-lrg-vr-voice--finish (callback)
   "Turn the voice light off and hand back a transcription to CALLBACK."
@@ -246,40 +222,26 @@ text, from the command loop (`cmacs-lrg-vr-run-later')."
   (interactive)
   (unless (cmacs-lrg-vr-voice-recording-p)
     (user-error "Voice: not recording"))
-  (when cmacs-lrg-vr-voice--timer
-    (cancel-timer cmacs-lrg-vr-voice--timer)
-    (setq cmacs-lrg-vr-voice--timer nil))
-  (cmacs-lrg-vr-voice--drain)
-  (let ((pcm (apply #'concat (nreverse cmacs-lrg-vr-voice--chunks)))
+  (let ((pcm (cmacs-voice-ptt-stop 'vr))
         (cb cmacs-lrg-vr-voice--callback))
-    (ignore-errors (cmacs-audio-close cmacs-lrg-vr-voice--handle))
-    (setq cmacs-lrg-vr-voice--handle nil
-          cmacs-lrg-vr-voice--chunks nil
-          cmacs-lrg-vr-voice--callback nil)
+    (setq cmacs-lrg-vr-voice--callback nil)
     ;; Under ~0.25 s of 16-bit mono: a brush of the button, not speech.
-    (if (< (length pcm) (* cmacs-audio-default-rate 2 0.25))
+    (if (< (length pcm) (* cmacs-voice-rate 2 0.25))
         (progn
+          (fillarray pcm 0)
           (cmacs-lrg-vr-voice--light nil)
           (message "Voice: too short -- hold the button while you speak"))
       (setq cmacs-lrg-vr-voice--busy t)
       (cmacs-lrg-vr-voice--light "#ffb020")
       (message "Voice: transcribing...")
-      (cmacs-whisper-transcribe-pcm-async
-       (cmacs-whisper-model-path) pcm
-       (cmacs-lrg-vr-voice--finish cb)
-       cmacs-whisper-language cmacs-lrg-vr-voice-threads))))
+      (cmacs-voice-transcribe pcm (cmacs-lrg-vr-voice--finish cb)
+                              :threads cmacs-lrg-vr-voice-threads))))
 
 (defun cmacs-lrg-vr-voice-cancel ()
   "Stop recording and throw the audio away."
   (interactive)
-  (when cmacs-lrg-vr-voice--timer
-    (cancel-timer cmacs-lrg-vr-voice--timer)
-    (setq cmacs-lrg-vr-voice--timer nil))
-  (when cmacs-lrg-vr-voice--handle
-    (ignore-errors (cmacs-audio-close cmacs-lrg-vr-voice--handle)))
-  (setq cmacs-lrg-vr-voice--handle nil
-        cmacs-lrg-vr-voice--chunks nil
-        cmacs-lrg-vr-voice--callback nil)
+  (cmacs-voice-ptt-cancel 'vr)
+  (setq cmacs-lrg-vr-voice--callback nil)
   (cmacs-lrg-vr-voice--light nil))
 
 (defun cmacs-lrg-vr-voice--hand-of-event ()
@@ -448,9 +410,8 @@ Number words become digits only after \"workspace\", \"line\" or
   "Show FMT with ARGS, and speak it when `cmacs-lrg-vr-voice-speak-feedback'."
   (let ((msg (apply #'format fmt args)))
     (message "%s" (propertize msg 'face 'cmacs-lrg-vr-voice-heard))
-    (when (and cmacs-lrg-vr-voice-speak-feedback
-               (fboundp 'cmacs-piper-speak-async))
-      (ignore-errors (cmacs-piper-speak-async msg)))
+    (when cmacs-lrg-vr-voice-speak-feedback
+      (ignore-errors (cmacs-voice-speak msg)))
     msg))
 
 (defun cmacs-lrg-vr-voice--command-name (words)

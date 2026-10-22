@@ -6,7 +6,9 @@
 
 ~cmacs-voice-loop-mode~ is a global minor mode that holds a spoken conversation with a cmacs-ai chat.  The microphone stays open; you say the wake phrase ("jarvis" by default) and your request in one breath or two; partial transcripts appear while you talk; the final transcript is sent to the chat when you stop; the reply streams in and is spoken sentence by sentence; and you can talk over the reply to stop it.  For a few seconds after a reply no wake phrase is needed, so a back-and-forth flows like a conversation.
 
-It is built from the existing subsystems — cmacs-audio (capture), cmacs-whisper (VAD and STT), cmacs-piper (TTS) and cmacs-ai (chat) — and adds no dependency and no configure flag.  It lives in ~lisp/cmacs/cmacs-voice-loop.el~; the C it needs (streaming VAD, PCM levels, resampling) is in ~cmacs/whisper/~.
+It is built from the existing subsystems — cmacs-audio (capture), cmacs-whisper (VAD and STT), cmacs-piper (TTS) and cmacs-ai (chat) — and adds no dependency and no configure flag.  It lives in ~lisp/cmacs/cmacs-voice-loop.el~ and is the streaming client of the shared voice engine (~lisp/cmacs/cmacs-voice.el~, [[file:cmacs-voice.org][cmacs-voice.org]]), which owns the microphone, the detector, transcription and the speech queue; the C it needs (streaming VAD, PCM levels, resampling) is in ~cmacs/whisper/~.
+
+Push-to-talk commands share that microphone: ~C-c v c~ in a voice chat, holding A or Y in VR, a brigade dictation.  While one records, the loop is paused (~Voice:paused~), dropping whatever it was hearing, and it resumes when the phrase is done.
 
 #+begin_example
 mic ──cmacs-audio 16 kHz──▶ 32 ms frames ──▶ Silero VAD (worker thread)
@@ -49,6 +51,7 @@ The loop opens a cmacs-ai chat on first use and displays it without selecting it
 | ~hearing~   | ~Voice:hearing~  | Speech in progress (partials are shown once it is addressed)    |
 | ~thinking~  | ~Voice:thinking~ | Transcribing the request, or waiting for the reply              |
 | ~speaking~  | ~Voice:speaking~ | The reply is being spoken                                       |
+| ~paused~    | ~Voice:paused~   | A push-to-talk command has the microphone                       |
 
 Change the text with ~cmacs-voice-loop-lighters~.  ~cmacs-voice-loop-state-change-functions~ is an abnormal hook run with ~(NEW OLD)~ on every change — use it to drive a bar widget, an LED, or a sound.
 
@@ -56,13 +59,13 @@ Change the text with ~cmacs-voice-loop-lighters~.  ~cmacs-voice-loop-state-chang
 
 ** Capture and frames
 
-The mode opens a 16 kHz mono capture stream (~cmacs-audio--capture-open-1~), whatever ~cmacs-audio-default-rate~ says, because whisper and Silero both want 16 kHz.  A timer drains it every ~cmacs-voice-loop-poll-interval~ (0.1 s).  Drained PCM is cut into 512-sample (32 ms) frames — the Silero window — and a ragged tail waits for the next drain, so frames stay aligned with the VAD's recurrent state.  The capture stream's own buffer is bounded (about 10 s) and drained, so no history accumulates in C.
+The mode acquires the engine's 16 kHz mono capture stream, whatever ~cmacs-audio-default-rate~ says, because whisper and Silero both want 16 kHz.  The engine drains it every ~cmacs-voice-poll-interval~ (0.1 s).  Drained PCM is cut into 512-sample (32 ms) frames — the Silero window — and a ragged tail waits for the next drain, so frames stay aligned with the VAD's recurrent state.  The capture stream's own buffer is bounded (about 10 s) and drained, so no history accumulates in C.
 
 ** Voice activity detection
 
 With a Silero model installed, frames go to ~cmacs-whisper-vad-feed~, which runs ~whisper_vad_detect_speech_no_reset~ on a worker thread and answers one speech probability per frame.  The ~_no_reset~ variant keeps the LSTM state across calls, so each 100 ms feed is judged in the context of the audio before it.  At most one feed is in flight; audio that arrives meanwhile queues (capped at 5 s) and is fed when the answer comes back.  If the model fails to load, the loop says so once and switches to the energy detector rather than going deaf.
 
-Without a model, ~cmacs-whisper-pcm-levels~ computes each frame's RMS in dBFS and an adaptive noise floor turns that into a probability: 0.5 at ~cmacs-voice-loop-energy-margin-db~ (12 dB) above the floor, scaled 20 dB per unit and clamped.  The floor follows quiet frames quickly and loud ones with a ~6 s time constant, so it settles on a fan that never stops but not on a speaker, who pauses.  Frames below ~cmacs-voice-loop-energy-floor-db~ (-50 dBFS) are never speech.  Mapping both detectors onto one probability scale means one set of thresholds governs both.
+Without a model, ~cmacs-whisper-pcm-levels~ computes each frame's RMS in dBFS and an adaptive noise floor turns that into a probability: 0.5 at ~cmacs-voice-energy-margin-db~ (12 dB) above the floor, scaled 20 dB per unit and clamped.  The floor follows quiet frames quickly and loud ones with a ~6 s time constant, so it settles on a fan that never stops but not on a speaker, who pauses.  Frames below ~cmacs-voice-energy-floor-db~ (-50 dBFS) are never speech.  Mapping both detectors onto one probability scale means one set of thresholds governs both.
 
 ** Segmentation
 
@@ -91,7 +94,7 @@ They show in the echo area (not logged to ~*Messages*~) and as an overlay ~after
 
 ~cmacs-voice-loop-send-function~ receives the final text.  The default, ~cmacs-voice-loop-send-to-chat~, inserts it into the chat buffer's compose area and calls ~cmacs-ai-chat-send-compose~ — the same path as typing it, so slash commands, tools, the system prompt and autosave all apply.
 
-The reply is spoken by advice on ~cmacs-ai-chat--stream-callback~ that only acts on the loop's chat buffer.  Advice rather than a callback wrapped at send time, because after a tool call the chat drives a continuation stream itself, and a wrapper would never see it.  Deltas accumulate until a sentence ends (~.~ ~?~ ~!~ ~:~ followed by whitespace, or a newline); each sentence has markup that reads badly aloud removed and is queued.  Sentences are synthesised strictly one at a time (synthesis is faster than playback, so this costs no latency) because separate piper jobs can finish out of order.  The loop estimates when playback ends from the PCM length; that, plus an empty queue and a closed stream, ends ~speaking~ and opens the follow-up window (~cmacs-voice-loop-follow-up-seconds~, 8).
+The reply is spoken by advice on ~cmacs-ai-chat--stream-callback~ that only acts on the loop's chat buffer.  Advice rather than a callback wrapped at send time, because after a tool call the chat drives a continuation stream itself, and a wrapper would never see it.  Deltas accumulate until a sentence ends (~.~ ~?~ ~!~ ~:~ followed by whitespace, or a newline); each sentence has markup that reads badly aloud removed and is queued.  Sentences go to the engine's speech queue, which synthesises strictly one at a time (synthesis is faster than playback, so this costs no latency) because separate piper jobs can finish out of order.  The loop estimates when playback ends from the PCM length; that, plus an empty queue and a closed stream, ends ~speaking~ and opens the follow-up window (~cmacs-voice-loop-follow-up-seconds~, 8).
 
 A custom send function that answers aloud calls ~cmacs-voice-loop-speak~; one that does not answer returns the loop to listening (with the follow-up window open) on the next tick.
 
@@ -118,7 +121,7 @@ systemctl --user restart pipewire pipewire-pulse
 then point the loop at the new source and drop the gating:
 
 #+begin_src emacs-lisp
-(setq cmacs-voice-loop-device "cmacs-echo-cancel-source"
+(setq cmacs-voice-device "cmacs-echo-cancel-source"
       cmacs-voice-loop-tts-gating 'none)
 #+end_src
 
@@ -152,9 +155,9 @@ The config uses ~monitor.mode = true~, so the canceller takes the default sink's
 | ~cmacs-voice-loop-wake-threshold~            | 0.75                     | Word similarity needed to match                      |
 | ~cmacs-voice-loop-wake-model~                | ~"ggml-tiny.en.bin"~     | Model for the wake phrase and partials               |
 | ~cmacs-voice-loop-model~                     | nil (default model)      | Model for the final transcript                       |
-| ~cmacs-voice-loop-vad-model~                 | nil (~cmacs-whisper-default-vad-model~) | Silero model; absent = energy detector |
-| ~cmacs-voice-loop-device~                    | nil                      | Capture device / PipeWire node                        |
-| ~cmacs-voice-loop-threads~                   | nil (all)                | Whisper threads per transcription                    |
+| ~cmacs-voice-vad-model~ (was ~-loop-vad-model~) | nil (~cmacs-whisper-default-vad-model~) | Silero model; absent = energy detector |
+| ~cmacs-voice-device~ (was ~-loop-device~)   | nil                      | Capture device / PipeWire node                        |
+| ~cmacs-voice-threads~ (was ~-loop-threads~) | nil (all)                | Whisper threads per transcription                    |
 | ~cmacs-voice-loop-vad-threshold~             | 0.5                      | Speech probability that starts speech                |
 | ~cmacs-voice-loop-tts-gating~                | ~threshold~              | Self-echo handling (see above)                       |
 | ~cmacs-voice-loop-tts-vad-threshold~         | 0.85                     | Threshold while speaking                             |
@@ -168,19 +171,21 @@ The config uses ~monitor.mode = true~, so the canceller takes the default sink's
 | ~cmacs-voice-loop-end-silence-ms~            | 640                      | Silence that ends an utterance                       |
 | ~cmacs-voice-loop-pre-roll-ms~               | 320                      | Audio kept from before speech                        |
 | ~cmacs-voice-loop-max-utterance-seconds~     | 30                       | Longest utterance                                    |
-| ~cmacs-voice-loop-energy-floor-db~           | -50.0                    | Energy detector: never speech below                  |
-| ~cmacs-voice-loop-energy-margin-db~          | 12.0                     | Energy detector: margin over the noise floor         |
+| ~cmacs-voice-energy-floor-db~ (was ~-loop-~) | -50.0                    | Energy detector: never speech below                  |
+| ~cmacs-voice-energy-margin-db~ (was ~-loop-~) | 12.0                     | Energy detector: margin over the noise floor         |
 | ~cmacs-voice-loop-partial-interval~          | 0.8                      | Seconds between partials; nil = none                 |
 | ~cmacs-voice-loop-partial-window-seconds~    | 10                       | Audio re-transcribed per partial                     |
 | ~cmacs-voice-loop-partial-display~           | ~(echo buffer)~          | Where partials show                                  |
-| ~cmacs-voice-loop-poll-interval~             | 0.1                      | Microphone drain interval                            |
+| ~cmacs-voice-poll-interval~ (was ~-loop-~)  | 0.1                      | Microphone drain interval                            |
 | ~cmacs-voice-loop-speak~                     | t                        | Speak replies                                        |
-| ~cmacs-voice-loop-voice~                     | nil (piper default)      | Piper voice                                          |
+| ~cmacs-voice-voice~ (was ~-loop-voice~)     | nil (piper default)      | Piper voice                                          |
 | ~cmacs-voice-loop-wake-acknowledgement~      | nil                      | Said after a bare phrase ("Yes?")                    |
 | ~cmacs-voice-loop-send-function~             | ~cmacs-voice-loop-send-to-chat~ | Where final text goes                         |
 | ~cmacs-voice-loop-display-chat~              | t                        | Show the chat buffer when used                       |
 | ~cmacs-voice-loop-save-directory~            | nil                      | Keep utterances as WAVs (off)                        |
 | ~cmacs-voice-loop-lighters~                  | see above                | Mode-line text                                       |
+
+The old ~cmacs-voice-loop-~ names of the engine-level options are obsolete aliases, so existing configuration keeps working.
 
 Hooks: ~cmacs-voice-loop-state-change-functions~ ~(NEW OLD)~, ~cmacs-voice-loop-partial-functions~ ~(TEXT)~, ~cmacs-voice-loop-utterance-functions~ ~(TEXT)~ (before sending).
 

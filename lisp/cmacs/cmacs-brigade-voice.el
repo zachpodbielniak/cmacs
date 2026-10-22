@@ -46,6 +46,11 @@
 (require 'cmacs-whisper nil t)
 (require 'cmacs-audio nil t)
 (require 'cmacs-piper nil t)
+;; The shared voice engine owns the microphone: a phrase recorded here
+;; takes it from the always-on loop for its length and gives it back,
+;; and spoken answers join the one speech queue, so they are heard in
+;; order rather than over each other.
+(require 'cmacs-voice)
 ;; The voice keymap binds `cmacs-brigade-compose-voice', so the compose
 ;; layer has to be there when the map is built.  No cycle: compose pulls
 ;; voice in at call time, not load time.
@@ -103,19 +108,18 @@ something notices."
   :group 'cmacs-brigade-voice)
 
 (defcustom cmacs-brigade-voice-poll-seconds 0.25
-  "How often capture is drained while recording."
+  "How often capture was drained while recording.
+No longer used: the shared engine drains every
+`cmacs-voice-poll-interval'."
   :type 'number
   :group 'cmacs-brigade-voice)
+(make-obsolete-variable 'cmacs-brigade-voice-poll-seconds
+                        'cmacs-voice-poll-interval "cmacs 2026-10")
 
 (declare-function cmacs-whisper-supported-p "cmacs-whisper-defuns.c")
-(declare-function cmacs-whisper-transcribe-pcm-async "cmacs-whisper-defuns.c")
 (declare-function cmacs-whisper-model-path "cmacs-whisper")
 (declare-function cmacs-piper-supported-p "cmacs-piper-defuns.c")
-(declare-function cmacs-piper-speak-async "cmacs-piper")
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c")
-(declare-function cmacs-audio-start "cmacs-audio-defuns.c")
-(declare-function cmacs-audio-close "cmacs-audio-defuns.c")
-(declare-function cmacs-audio-read-pcm "cmacs-audio-defuns.c")
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-mode "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-append-task "cmacs-brigade-plan"
@@ -128,9 +132,6 @@ something notices."
 (defvar cmacs-brigade-plan-todo-line)
 (defvar cmacs-brigade-plan-directory)
 (defvar cmacs-audio-default-rate)
-(defvar cmacs-audio-capture-source)
-(defvar cmacs-audio-default-device)
-(defvar cmacs-whisper-language)
 
 (defun cmacs-brigade-voice-available-p ()
   "Whether voice input is usable in this build.
@@ -150,53 +151,33 @@ until it called `cmacs-whisper-model-path' and died."
   (when (and cmacs-brigade-voice-speak-answers
              (fboundp 'cmacs-piper-supported-p)
              (cmacs-piper-supported-p))
-    (cmacs-piper-speak-async text nil cmacs-brigade-notify-voice))
+    (cmacs-voice-speak text cmacs-brigade-notify-voice))
   text)
 
 
 ;;;; Push to talk
 ;;
-;; One recording at a time, globally.  Two concurrent captures on the
-;; same device is not a state worth supporting, and the second command
-;; stopping the first is what a push-to-talk key is expected to do.
+;; One recording at a time, globally -- the engine guarantees it: its
+;; push-to-talk clients preempt one another, and a second listen stops
+;; (and transcribes) the first, which is what a push-to-talk key is
+;; expected to do.  The always-on loop, if running, is paused for the
+;; length of the phrase.
 
-(defvar cmacs-brigade-voice--handle nil)
-(defvar cmacs-brigade-voice--timer nil)
-(defvar cmacs-brigade-voice--chunks nil)
 (defvar cmacs-brigade-voice--callback nil)
-(defvar cmacs-brigade-voice--started nil)
 (defvar cmacs-brigade-voice--label "")
 
 (defun cmacs-brigade-voice-recording-p ()
   "Whether a phrase is being recorded right now."
-  (and cmacs-brigade-voice--handle t))
-
-(defun cmacs-brigade-voice--drain ()
-  "Move whatever capture has buffered into the accumulator."
-  (when cmacs-brigade-voice--handle
-    ;; `cmacs-audio-read-pcm' drains *up to* this many frames, so ask for
-    ;; several polls' worth: over-requesting costs a transient buffer,
-    ;; under-requesting silently drops the tail of a late tick.
-    (let ((pcm (ignore-errors
-                 (cmacs-audio-read-pcm cmacs-brigade-voice--handle
-                                       (* cmacs-audio-default-rate 2)))))
-      (when (and pcm (> (length pcm) 0))
-        (push pcm cmacs-brigade-voice--chunks)))
-    ;; Stop on our own rather than record forever if the second push
-    ;; never comes.
-    (when (> (- (float-time) cmacs-brigade-voice--started)
-             cmacs-brigade-voice-max-seconds)
-      (message "cmacs-brigade-voice: stopped at %ds"
-               cmacs-brigade-voice-max-seconds)
-      (cmacs-brigade-voice-stop))))
+  (cmacs-voice-ptt-active-p 'brigade))
 
 ;;;###autoload
 (defun cmacs-brigade-voice-listen (label callback)
   "Record a phrase, then call CALLBACK with its text.
 
 LABEL says what is being recorded, for the echo area.  Returns
-immediately: recording stops on the next `cmacs-brigade-voice-stop', and
-CALLBACK runs after transcription.
+immediately: recording stops on the next `cmacs-brigade-voice-stop' (or
+after `cmacs-brigade-voice-max-seconds'), and CALLBACK runs after
+transcription.
 
 The public primitive the other voice commands are built on, and the one
 to reach for when adding your own."
@@ -208,21 +189,12 @@ to reach for when adding your own."
     (unless (file-exists-p model)
       (user-error "Whisper model not found: %s.  Run %s"
                   model "M-x cmacs-whisper-download-model")))
-  (setq cmacs-brigade-voice--chunks nil
-        cmacs-brigade-voice--callback callback
-        cmacs-brigade-voice--label label
-        cmacs-brigade-voice--started (float-time)
-        cmacs-brigade-voice--handle
-        (cmacs-audio--capture-open-1
-         :source cmacs-audio-capture-source
-         :rate cmacs-audio-default-rate
-         :channels 1
-         :device cmacs-audio-default-device))
-  (cmacs-audio-start cmacs-brigade-voice--handle)
-  (setq cmacs-brigade-voice--timer
-        (run-with-timer cmacs-brigade-voice-poll-seconds
-                        cmacs-brigade-voice-poll-seconds
-                        #'cmacs-brigade-voice--drain))
+  (setq cmacs-brigade-voice--callback callback
+        cmacs-brigade-voice--label label)
+  (cmacs-voice-ptt-start 'brigade
+                         :max-seconds cmacs-brigade-voice-max-seconds
+                         :on-timeout #'cmacs-brigade-voice-stop
+                         :preempt #'cmacs-brigade-voice-stop)
   (message "%s -- recording.  %s to stop." label
            (substitute-command-keys "\\[cmacs-brigade-voice-stop]")))
 
@@ -232,22 +204,16 @@ to reach for when adding your own."
   (interactive)
   (unless (cmacs-brigade-voice-recording-p)
     (user-error "cmacs-brigade-voice: not recording"))
-  (when cmacs-brigade-voice--timer
-    (cancel-timer cmacs-brigade-voice--timer)
-    (setq cmacs-brigade-voice--timer nil))
-  (cmacs-brigade-voice--drain)
-  (let ((pcm (apply #'concat (nreverse cmacs-brigade-voice--chunks)))
+  (let ((pcm (cmacs-voice-ptt-stop 'brigade))
         (cb cmacs-brigade-voice--callback))
-    (cmacs-audio-close cmacs-brigade-voice--handle)
-    (setq cmacs-brigade-voice--handle nil
-          cmacs-brigade-voice--chunks nil
-          cmacs-brigade-voice--callback nil)
+    (setq cmacs-brigade-voice--callback nil)
     ;; Under ~0.1s of audio: a stray double-press, not a phrase.
     (if (< (length pcm) 3200)
-        (message "cmacs-brigade-voice: heard nothing")
+        (progn (fillarray pcm 0)
+               (message "cmacs-brigade-voice: heard nothing"))
       (message "%s -- transcribing..." cmacs-brigade-voice--label)
-      (cmacs-whisper-transcribe-pcm-async
-       (cmacs-whisper-model-path) pcm
+      (cmacs-voice-transcribe
+       pcm
        (lambda (result)
          (let ((err (cdr (assq :error result)))
                (text (string-trim (or (cdr (assq :text result)) ""))))
@@ -255,8 +221,7 @@ to reach for when adding your own."
             (err (message "cmacs-brigade-voice: %s" err))
             ((string-empty-p text)
              (message "cmacs-brigade-voice: heard nothing"))
-            (t (funcall cb text)))))
-       cmacs-whisper-language))))
+            (t (funcall cb text)))))))))
 
 
 ;;;; Dictating a task

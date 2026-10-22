@@ -1,0 +1,92 @@
+#+TITLE: cmacs-voice — the shared voice engine
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+~lisp/cmacs/cmacs-voice.el~ is the one place in cmacs that owns the microphone and the speaker.  Every voice feature is a client of it:
+
+| Client | File | Kind |
+|--------+------+------|
+| Always-on loop (~C-c v l~) | ~cmacs-voice-loop.el~ | streaming |
+| Voice chat (~C-c v c~ in ~M-x cmacs-ai-voice-chat~) | ~cmacs-ai-voice.el~ | push-to-talk |
+| VR hold-A dictation / hold-Y commands | ~cmacs-lrg-vr-voice.el~ | push-to-talk |
+| Brigade dictation and questions (~cmacs-brigade-voice-listen~) | ~cmacs-brigade-voice.el~ | push-to-talk |
+
+~cmacs-whisper-dictate~ (~C-c v d~) deliberately keeps its own capture: it streams text into a buffer as you talk, which is a different shape, and it predates the engine.
+
+Before the engine, each client opened its own capture stream and its own piper jobs.  Two of them active at once meant two captures of one device, and speech from one talking over speech from another; the voice chat even spoke one reply's sentences out of order, because each sentence was its own piper job and a short one could finish first.
+
+* The microphone, and who has it
+
+~(cmacs-voice-acquire ID :consumer FN :suspend FN :resume FN :preempt FN :exclusive BOOL)~ takes the mic for client ID.  The engine opens a single 16 kHz mono capture (~cmacs-voice-device~, else ~cmacs-audio-default-device~) the first time anyone acquires, drains it every ~cmacs-voice-poll-interval~ (0.1 s), hands each chunk to the client on top, and closes it when the last client releases (~cmacs-voice-release~).
+
+Arbitration is a stack with two kinds of client:
+
+- *Streaming* (the loop): fed while nobody else wants the mic.
+- *Exclusive* (push-to-talk): fed ahead of every streaming client.  Acquiring calls the streaming client's ~:suspend~ (the loop drops what it was hearing and shows ~Voice:paused~); releasing calls its ~:resume~.  A second exclusive client /preempts/ the first: its ~:preempt~ runs (the brigade's stops and transcribes, VR's and the voice chat's cancel), and it is removed.  A streaming client that acquires while a push-to-talk client holds the mic waits below it, suspended.
+
+So holding A in VR while the loop is on pauses the loop for exactly the length of the phrase.  ~cmacs-voice-ptt-stops-speech~ (default t) also silences whatever is being spoken when push-to-talk starts — you pressed the button to talk.
+
+~cmacs-voice-owner~, ~cmacs-voice-owners~, ~cmacs-voice-mic-open-p~ report the state; ~cmacs-voice-owner-change-functions~ runs with ~(NEW OLD)~ when the mic changes hands — a bar widget or a VR light can follow it.
+
+* Push to talk
+
+| Function | |
+|----------+-|
+| ~(cmacs-voice-ptt-start ID &key max-seconds on-timeout preempt)~ | take the mic exclusively and record |
+| ~(cmacs-voice-ptt-stop ID)~ | drain the tail, release, return the audio as one unibyte PCM string |
+| ~(cmacs-voice-ptt-cancel ID)~ | release and wipe the audio |
+| ~(cmacs-voice-ptt-active-p &optional ID)~ | recording? |
+
+~max-seconds~ is the backstop for a second push that never comes; ~on-timeout~ (default: cancel) runs when it is reached.
+
+* Transcription
+
+~(cmacs-voice-transcribe PCM CALLBACK &key model threads language)~ starts async whisper (~cmacs-whisper-transcribe-pcm-async~) and overwrites PCM once whisper has copied it.  A failure to start reaches CALLBACK as ~((:error . MSG))~ rather than signalling.  ~cmacs-voice-threads~ is the default thread count.
+
+* Detection
+
+One detector, because there is one mic: ~(cmacs-voice-detector-start FRAME-FN)~ opens the Silero VAD (~cmacs-voice-vad-model~, default ~cmacs-whisper-default-vad-model~) when installed and the energy detector otherwise; ~(cmacs-voice-detect PCM)~ cuts PCM into 512-sample frames (a ragged tail waits for the next call) and calls ~(FRAME-FN FRAME PROB)~ for each, in order — later, when the VAD's worker answers.  A VAD that fails to load falls back to energy.  The energy detector maps RMS onto the same probability scale (0.5 at ~cmacs-voice-energy-margin-db~ above an adaptive noise floor, never speech below ~cmacs-voice-energy-floor-db~).  Details: [[file:cmacs-voice-loop.org][cmacs-voice-loop.org]].
+
+* Speech
+
+~(cmacs-voice-speak TEXT &optional VOICE)~ queues TEXT for piper (~cmacs-voice-voice~ by default).  Sentences are synthesised strictly one at a time, so they play in the order queued, whoever queued them.  ~cmacs-voice-stop-speaking~ flushes playback and drops the queue; a sentence still being synthesised is dropped when it arrives (a generation counter).  ~cmacs-voice-speaking-p~ is true while anything is queued, synthesising, or (by the PCM length) still playing; ~cmacs-voice-speech-functions~ runs with ~(TEXT SECONDS)~ as each sentence starts.
+
+* Running from the command loop
+
+Voice results arrive in timer and process callbacks.  ~(cmacs-voice-run-later FN)~ runs FN from the command loop instead (a ~cmacs-voice-deferred~ event bound in ~global-map~), which is where a command that selects windows or reads the minibuffer belongs.  In batch it runs FN at once.
+
+* Renamed options
+
+These moved from the loop to the engine when it became shared; the old names are obsolete aliases.
+
+| Old | New |
+|-----+-----|
+| ~cmacs-voice-loop-device~ | ~cmacs-voice-device~ |
+| ~cmacs-voice-loop-poll-interval~ | ~cmacs-voice-poll-interval~ |
+| ~cmacs-voice-loop-threads~ | ~cmacs-voice-threads~ |
+| ~cmacs-voice-loop-vad-model~ | ~cmacs-voice-vad-model~ |
+| ~cmacs-voice-loop-energy-floor-db~ | ~cmacs-voice-energy-floor-db~ |
+| ~cmacs-voice-loop-energy-margin-db~ | ~cmacs-voice-energy-margin-db~ |
+| ~cmacs-voice-loop-voice~ | ~cmacs-voice-voice~ |
+
+~cmacs-brigade-voice-poll-seconds~ and ~cmacs-lrg-vr-voice-poll-seconds~ are obsolete (the engine drains on its own interval).
+
+* Keys under C-c v
+
+| Key | Where | Command |
+|-----+-------+---------|
+| ~d~ | global | ~cmacs-whisper-dictate~ |
+| ~s~ / ~S~ | global | ~cmacs-piper-speak-region~ / ~cmacs-piper-stop~ |
+| ~r~ ~R~ ~p~ ~x~ | global | cmacs-audio record / finish / play / stop all |
+| ~l~ / ~j~ | global | ~cmacs-voice-loop-mode~ / ~cmacs-voice-loop-listen-now~ |
+| ~c~ (~t~) | voice chat buffer | ~cmacs-ai-voice-dictate~ (push-to-talk toggle) |
+| ~s~ | voice chat buffer | ~cmacs-voice-stop-speaking~ (shadows speak-region there) |
+| ~SPC~ ~i~ ~m~ ~h~ ~o~ ~n~ ~]~ ~[~ ~w~ ~q~ ~c~ ~k~ | VR mode | VR voice, menu, workspaces, recenter, keyboard |
+
+The one overlap is ~C-c v c~: in a voice chat buffer it records, but with VR mode on VR's recenter wins (minor-mode maps beat the buffer's local map).  Use ~C-c v t~ there.
+
+* Testing
+
+~test/cmacs/cmacs-voice-tests.el~ stubs the capture, whisper and piper primitives and checks: one capture for many owners; push-to-talk suspending and resuming the stream (and getting the drained tail); a stream joining under push-to-talk; preemption; the length limit; an open failure leaving no owner; transcription wiping its input; ordered, stoppable speech; and the ported clients — the brigade listen contract (and a second listen stopping the first), voice-chat record-and-send, its reply going through the queue in order, and VR hold with its red/amber/off light.
