@@ -46,6 +46,14 @@ HAVE_READLINE := $(shell pkg-config --exists readline && echo yes)
 ifeq ($(HAVE_READLINE),yes)
 ARCHIVE_DEPS += $(shell pkg-config --libs readline)
 endif
+# libregnum's ALSA MIDI output (lrg-midi-output-alsa.c) is compiled in when
+# its own `pkg-config alsa' probe succeeds, so the same probe decides here.
+# Emacs's temacs link gets -lasound from LIBSOUND; this binary has no such
+# luck, and without it the link fails on snd_strerror and friends.
+HAVE_ALSA := $(shell pkg-config --exists alsa && echo yes)
+ifeq ($(HAVE_ALSA),yes)
+ARCHIVE_DEPS += $(shell pkg-config --libs alsa)
+endif
 LDFLAGS += -rdynamic $(PKG_LIBS) $(CMACS_LIBREGNUM_LIBS) $(CMACS_CAD_LIBS) \
            $(ARCHIVE_DEPS) -lm
 
@@ -64,7 +72,13 @@ OBJS := $(OBJDIR)/ssr-main.o $(OBJDIR)/ssr-renderer.o $(OBJDIR)/ssr-ipc.o \
 
 all: $(BIN)
 
-$(BIN): $(OBJS)
+# The libregnum archive is a real input of the link, not just a flag: with
+# $(OBJS) alone the binary never relinked after libregnum was rebuilt, and
+# kept running a libregnum from days earlier.  It is named inside
+# CMACS_LIBREGNUM_LIBS, so take it from there rather than a second variable.
+LIBREGNUM_ARCHIVE := $(filter %.a,$(CMACS_LIBREGNUM_LIBS))
+
+$(BIN): $(OBJS) $(LIBREGNUM_ARCHIVE)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
 $(OBJDIR):
