@@ -539,6 +539,25 @@ Stats plist keys: =:events-dispatched=, =:handlers-called=,
 =EVENT-NAME= is a string (e.g. ="on_buffer_save"=).  =DATA= is an
 alist of =(KEY . VALUE)= string pairs.
 
+** Running a pod's rules by name
+
+| Function                       | Args                     | Description |
+|--------------------------------+--------------------------+-------------|
+| =cmacs-podomation-run-pod=     | =NAME &optional EVENT DATA= | Fire pod NAME's source now: its rules run. |
+| =cmacs-podomation-pod-events=  | =NAME=                   | The event names NAME's bindings react to. |
+
+#+begin_src elisp
+;; pod standup = timer->new(3600000);
+;; standup->on_tick => notify->send("Stand up");
+(cmacs-podomation-pod-events "standup")   ; => ("on_tick")
+(cmacs-podomation-run-pod "standup")      ; => "on_tick", the rule runs now
+(cmacs-podomation-run-pod "standup" "on_tick" '(("why" . "manual")))
+#+end_src
+
+The event is emitted on the pod's own source, so it goes through the engine exactly as a real one: guards, pipes, result capture, health bookkeeping.  EVENT nil means the pod's only bound event, and is an error when it has several.  Errors (engine stopped, no such pod, no event source) signal =cmacs-podomation-error=.
+
+The same is reachable as the =run= action of the MCP =podomation_control= tool (={"action":"run","pod":"standup"}=, optional ="event"=) and the D-Bus method =org.cmacs.Editor1.Podomation.RunPod(pod, event)= (empty event = the only one).  "Run rule standup" in the voice commands ([[file:cmacs-voice-commands.org][cmacs-voice-commands.org]]) calls it.
+
 * Elisp Convenience Layer
 
 File: =lisp/cmacs/cmacs-podomation.el=

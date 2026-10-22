@@ -7028,6 +7028,24 @@ Emit an event through the cmacs module.  @var{event-name} is a string
 @code{(KEY . VALUE)} string pairs.
 @end defun
 
+@subsection Running a Pod's Rules
+
+@defun cmacs-podomation-run-pod name &optional event data
+Run pod @var{name}'s rules now, as if its source had fired
+@var{event} (a name its bindings react to; nil means the only one, an
+error when there are several).  @var{data} is an alist for
+@code{@{event->KEY@}}.  The event goes through the engine exactly as a
+real one would.  Returns the event name fired; signals
+@code{cmacs-podomation-error} when the engine is stopped, the pod is
+unknown, or the event cannot be determined.  Also reachable as the
+@code{run} action of the MCP @code{podomation_control} tool and the
+D-Bus method @code{org.cmacs.Editor1.Podomation.RunPod}.
+@end defun
+
+@defun cmacs-podomation-pod-events name
+The event names pod @var{name}'s bindings react to.
+@end defun
+
 @node Podomation Elisp Layer
 @section Elisp Convenience Layer
 

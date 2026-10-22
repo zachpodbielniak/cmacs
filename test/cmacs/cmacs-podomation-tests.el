@@ -85,4 +85,34 @@
                '((user . "zach") (project . "cmacs"))))
     (cmacs-podomation-stop)))
 
+(defvar cmacs-podomation-tests--ran nil
+  "Set by the rule `cmacs-podomation-run-pod' fires.")
+
+(ert-deftest cmacs-podomation-run-pod ()
+  "A pod's rules run by name, as if its source had fired."
+  (skip-unless (fboundp 'cmacs-podomation-run-pod))
+  (should-error (cmacs-podomation-run-pod "ptest") :type 'cmacs-podomation-error)
+  (cmacs-podomation-start)
+  (unwind-protect
+      (progn
+        (setq cmacs-podomation-tests--ran nil)
+        (cmacs-podomation-eval-dsl
+         (concat "pod ptest = timer->new(3600000);"
+                 " ptest->on_tick => cmacs->eval(\"(setq cmacs-podomation-tests--ran t)\");"))
+        (should (equal (cmacs-podomation-pod-events "ptest") '("on_tick")))
+        (should (equal (cmacs-podomation-run-pod "ptest") "on_tick"))
+        ;; the cmacs module's eval handler may land on the next iteration
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not cmacs-podomation-tests--ran) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (should cmacs-podomation-tests--ran)
+        (should (equal (cmacs-podomation-run-pod "ptest" "on_tick"
+                                                 '(("why" . "test")))
+                       "on_tick"))
+        (should-error (cmacs-podomation-run-pod "no-such-pod")
+                      :type 'cmacs-podomation-error)
+        (should-error (cmacs-podomation-pod-events "no-such-pod")
+                      :type 'cmacs-podomation-error))
+    (cmacs-podomation-stop)))
+
 ;;; cmacs-podomation-tests.el ends here

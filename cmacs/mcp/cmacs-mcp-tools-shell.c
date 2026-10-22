@@ -270,8 +270,27 @@ handle_podomation_control (McpServer *s, const gchar *n,
   if (g_strcmp0 (action, "status") == 0)
     return shell_dispatch (
       "(if (cmacs-podomation-running-p) \"running\" \"stopped\")");
+  if (g_strcmp0 (action, "run") == 0)
+    {
+      /* Run a pod's rules by name: cmacs-podomation-run-pod. */
+      const gchar *pod, *event;
+      g_autofree gchar *pe = NULL, *ee = NULL, *expr = NULL;
 
-  return shell_error ("action must be one of: start, stop, status");
+      pod = json_object_get_string_member_with_default (a, "pod", NULL);
+      if (pod == NULL || *pod == '\0')
+        return shell_error ("action run needs a pod");
+      event = json_object_get_string_member_with_default (a, "event", "");
+      pe = cmacs_dispatch_lisp_escape (pod);
+      ee = cmacs_dispatch_lisp_escape (event);
+      expr = g_strdup_printf (
+        "(format \"ran %%s %%s\" \"%s\""
+        " (cmacs-podomation-run-pod \"%s\""
+        "  (and (> (length \"%s\") 0) \"%s\")))",
+        pe, pe, ee, ee);
+      return shell_dispatch (expr);
+    }
+
+  return shell_error ("action must be one of: start, stop, status, run");
 }
 
 static McpToolResult *
@@ -474,13 +493,18 @@ cmacs_mcp_tools_shell_register (McpServer *server)
   g_object_unref (tool);
 
   tool = mcp_tool_new ("podomation_control",
-    "Control the podomation engine lifecycle. action is one of "
-    "\"start\", \"stop\", or \"status\".");
+    "Control the podomation engine. action is one of \"start\", "
+    "\"stop\", \"status\", or \"run\" -- run pod's rules now, as if "
+    "its source had fired event (default: the pod's only bound event).");
   schema = cmacs_mcp_schema_from_string (
     "{\"type\":\"object\",\"properties\":{"
     "\"action\":{\"type\":\"string\","
-    "\"enum\":[\"start\",\"stop\",\"status\"],"
-      "\"description\":\"Lifecycle action\"}"
+    "\"enum\":[\"start\",\"stop\",\"status\",\"run\"],"
+      "\"description\":\"Lifecycle action, or run a pod\"},"
+    "\"pod\":{\"type\":\"string\","
+      "\"description\":\"Pod name, for action run\"},"
+    "\"event\":{\"type\":\"string\","
+      "\"description\":\"Event to fire, for action run (optional)\"}"
     "},\"required\":[\"action\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_podomation_control,

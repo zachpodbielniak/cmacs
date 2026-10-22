@@ -510,6 +510,116 @@ DATA is an alist of (KEY . VALUE) pairs for the event data.  */)
   return Qt;
 }
 
+/* ── Running a pod's rules by name ─────────────────────────────────── */
+
+/* cmacs_pod__lookup_pod:
+ * @name: (type Lisp_Object): the pod name, a Lisp string.
+ *
+ * The running engine's pod NAME.  Signals `cmacs-podomation-error'
+ * when the engine is stopped or there is no such pod.
+ *
+ * Returns: (transfer none): the #PodPod.  */
+static PodPod *
+cmacs_pod__lookup_pod (Lisp_Object name)
+{
+  PodPod *pod;
+
+  CHECK_STRING (name);
+  if (cmacs_pod_engine == NULL)
+    xsignal1 (Qcmacs_podomation_error,
+	      build_string ("Podomation engine not running"));
+  pod = pod_engine_get_pod (cmacs_pod_engine, SSDATA (name));
+  if (pod == NULL)
+    xsignal2 (Qcmacs_podomation_error, build_string ("No such pod"), name);
+  return pod;
+}
+
+/* cmacs_pod__bound_events:
+ * @pod: a #PodPod.
+ *
+ * The distinct event names @pod's bindings react to, in binding order.
+ *
+ * Returns: (type Lisp_Object): a Lisp list of strings.  */
+static Lisp_Object
+cmacs_pod__bound_events (PodPod *pod)
+{
+  GPtrArray  *bindings = pod_pod_get_bindings (pod);
+  Lisp_Object out = Qnil;
+  guint       i;
+
+  for (i = 0; bindings != NULL && i < bindings->len; i++)
+    {
+      PodBinding  *b  = g_ptr_array_index (bindings, i);
+      const gchar *ev = pod_binding_get_event_name (b);
+      Lisp_Object  s;
+
+      if (ev == NULL)
+	continue;
+      s = build_string (ev);
+      if (NILP (Fmember (s, out)))
+	out = Fcons (s, out);
+    }
+  return Fnreverse (out);
+}
+
+DEFUN ("cmacs-podomation-pod-events", Fcmacs_podomation_pod_events,
+       Scmacs_podomation_pod_events, 1, 1, 0,
+       doc: /* Return the event names pod NAME's rules are bound to.
+A list of strings, in the order the bindings were declared: for
+  pod standup = timer->new(3600000);
+  standup->on_tick => notify->send("Stand up");
+it is ("on_tick").  Signals `cmacs-podomation-error' when the engine is
+not running or there is no pod NAME.  */)
+  (Lisp_Object name)
+{
+  return cmacs_pod__bound_events (cmacs_pod__lookup_pod (name));
+}
+
+DEFUN ("cmacs-podomation-run-pod", Fcmacs_podomation_run_pod,
+       Scmacs_podomation_run_pod, 1, 3, 0,
+       doc: /* Run pod NAME's rules now, as if its source had fired EVENT.
+EVENT is one of the event names its bindings react to (see
+`cmacs-podomation-pod-events'); nil means the only one, and is an
+error when the pod's rules react to several.  DATA is an alist of
+(KEY . VALUE) for the event data, reachable as {event->KEY} in the
+rules.
+
+The event goes through the engine exactly as a real one would --
+guards, pipes, result capture, health bookkeeping -- on this thread.
+Returns the event name fired.  Signals `cmacs-podomation-error' when
+the engine is not running, there is no such pod, the pod has no event
+source, or EVENT cannot be determined.  */)
+  (Lisp_Object name, Lisp_Object event, Lisp_Object data)
+{
+  PodPod     *pod = cmacs_pod__lookup_pod (name);
+  PodModule  *src = pod_pod_get_source (pod);
+  Lisp_Object events = cmacs_pod__bound_events (pod);
+  GVariant   *gv = NULL;
+
+  if (src == NULL || !POD_IS_EVENT_SOURCE (src))
+    xsignal2 (Qcmacs_podomation_error,
+	      build_string ("Pod has no event source"), name);
+  if (NILP (event))
+    {
+      if (NILP (events))
+	xsignal2 (Qcmacs_podomation_error,
+		  build_string ("Pod has no rules"), name);
+      if (!NILP (XCDR (events)))
+	xsignal3 (Qcmacs_podomation_error,
+		  build_string ("Pod reacts to several events; name one"),
+		  name, events);
+      event = XCAR (events);
+    }
+  CHECK_STRING (event);
+
+  if (!NILP (data))
+    gv = alist_to_variant (data);
+  g_signal_emit_by_name (src, "event-fired", SSDATA (event), gv);
+  if (gv != NULL)
+    g_variant_unref (gv);
+  return event;
+}
+
 /* ── Init ──────────────────────────────────────────────────────────── */
 
 void
@@ -548,6 +658,10 @@ syms_of_cmacs_podomation (void)
 
   /* Event emission. */
   defsubr (&Scmacs_podomation_emit_event);
+
+  /* Running a pod's rules by name. */
+  defsubr (&Scmacs_podomation_pod_events);
+  defsubr (&Scmacs_podomation_run_pod);
 }
 
 void

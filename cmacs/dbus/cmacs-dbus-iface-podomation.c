@@ -37,6 +37,11 @@ static const gchar *iface_xml =
   "      <arg type='a{ss}' name='data' direction='in'/>"
   "      <arg type='s' name='result' direction='out'/>"
   "    </method>"
+  "    <method name='RunPod'>"
+  "      <arg type='s' name='pod' direction='in'/>"
+  "      <arg type='s' name='event' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
   "    <method name='EvalDsl'>"
   "      <arg type='s' name='dsl' direction='in'/>"
   "      <arg type='s' name='result' direction='out'/>"
@@ -158,6 +163,23 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
          ee, alist, ee));
       g_free (ee);
       g_free (alist);
+    }
+  else if (g_strcmp0 (m, "RunPod") == 0)
+    {
+      /* Run pod NAME's rules now (cmacs-podomation-run-pod).  An empty
+         EVENT means the pod's only bound event. */
+      const gchar *pod, *event;
+      gchar *pe, *ee;
+      g_variant_get (p, "(&s&s)", &pod, &event);
+      pe = cmacs_dbus_lisp_escape (pod);
+      ee = cmacs_dbus_lisp_escape (event);
+      pod_reply (iv, g_strdup_printf
+        ("(format \"ran %%s %%s\" \"%s\""
+         " (cmacs-podomation-run-pod \"%s\""
+         "  (and (> (length \"%s\") 0) \"%s\")))",
+         pe, pe, ee, ee));
+      g_free (pe);
+      g_free (ee);
     }
   else if (g_strcmp0 (m, "EvalDsl") == 0)
     {
