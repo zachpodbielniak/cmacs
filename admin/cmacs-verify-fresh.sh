@@ -52,6 +52,7 @@ vf_system=0
 vf_list=0
 vf_only=""
 vf_max_shown=8
+vf_sandbox_ok=0
 
 # The class table: one entry per index across these arrays.
 VF_NAME=()
@@ -78,9 +79,14 @@ Check that every cmacs build artifact is newer than the files it is
 built from, using the real dependency lists (make databases, compiler
 .d files, pattern rules).  Reports each stale artifact, the newest
 source that makes it stale, and the command that rebuilds it.  Exits 0
-when everything is fresh, 1 when anything is stale, 2 on a usage error.
+when everything is fresh, 1 when anything is stale, 2 on a usage error,
+3 when the tree changed while it was being checked.
 
-Nothing is built unless --fix is given.
+Nothing is built unless --fix is given, and a plain run changes nothing:
+every make it starts runs in a bubblewrap sandbox (tree read through a
+throwaway overlay), and it compares mtime+size of every build output
+before and after.  Needs bwrap; without it the make-database classes are
+skipped with a warning.
 
 Options:
   -f, --fix          run the rebuild command of every stale class, then
@@ -191,6 +197,9 @@ vf_cleanup () {
 #                                       inputs make does not track)
 #                      vf:requires=P    skip the class unless P exists
 #                      vf:gate=no       not part of a bare --gate run
+#                      vf:submake       use the make arguments src/Makefile
+#                                       passes to DIR (vf_capture_submakes);
+#                                       skip the class if it passes none
 #           pattern  a pattern rule: SELECT is a glob of artifacts under
 #                    DIR; ARGs:
 #                      vf:from=SUF vf:to=SUF   artifact -> source suffix
@@ -204,7 +213,10 @@ vf_cleanup () {
 # DIR     relative to the tree root.
 # SELECT  makedb: ERE over root-relative artifact paths; pattern: glob.
 # FIX     shell command, run from the tree root.  `{+}' becomes the stale
-#         artifacts, relative to DIR.
+#         artifacts, relative to DIR; `{submake}' the exact command(s)
+#         cmacs's own build runs in DIR (vf:submake classes), replayed
+#         from where its rule runs them -- never a bare make in a dep,
+#         which would build cmacs's build/<type> with the dep's defaults.
 # DESC    one line for the report.
 vf_class () {
 	if [[ $# -lt 6 ]]
@@ -242,18 +254,18 @@ vf_makefile_var () {
 # shellcheck disable=SC2016
 vf_register_classes () {
 	local r="${vf_root}"
-	local dep_flags
 	local dep_type
 	local dep
 	local gowl_type
 	local gowl_flag
 	local gowl_what
 	local gowl_gate
-	local -a common
+	local gowl_fix
+	local gowl_mods_fix
+	local -a gowl_args
 
 	# Build type of the bundled deps, as configure chose it.
 	dep_type="$(vf_makefile_var "${r}/src/Makefile" CMACS_DEP_BUILDTYPE)"
-	dep_flags="$(vf_makefile_var "${r}/src/Makefile" CMACS_DEP_MAKEFLAGS)"
 	if [[ -z ${dep_type} ]]
 	then
 		dep_type="release"
@@ -265,30 +277,40 @@ vf_register_classes () {
 	# relink (AGENTS.md: `make' may not relink).
 	vf_class src-link makedb src \
 		'^src/(temacs|emacs|emacs\.pdmp|cmacs-screensaver-render)$' \
-		'rm -f src/temacs && make -j"$(nproc)"' \
+		'(cd src && rm -f {+}) && make -j"$(nproc)"' \
 		'C objects, temacs (incl. archives on its link line) and the dump' \
 		vf:link=temacs:LIBES \
 		-o "${r}/src/lisp.mk" -o ../src/verbose.mk
 
+	# Everything cmacs's own build makes through a sub-make is probed
+	# with vf:submake: the make arguments are the ones src/Makefile
+	# itself passes, captured from it (vf_capture_submakes), never a
+	# copy that drifts -- a probe of deps/libregnum with the wrong flags
+	# made its parse-time $(file > .cflags) rewrite the stamp.  A class
+	# whose directory cmacs's build never enters is skipped.
+
 	# Runtime shared objects src/Makefile.in builds only when ABSENT.
+	# Their fixes are the exact commands its rules run.
 	vf_class api-so makedb cmacs/api \
 		'^cmacs/api/libcmacs-api\.so$' \
-		'make -C cmacs/api all' \
-		'libcmacs-api.so (src/Makefile.in builds it only when absent)'
+		'{submake}' \
+		'libcmacs-api.so (src/Makefile.in builds it only when absent)' \
+		vf:submake
 	vf_class bacon-modules makedb cmacs/bacon/modules \
 		'^cmacs/bacon/modules/[^/]+\.so$' \
-		'make -C cmacs/bacon/modules BACON_DIR="$PWD/deps/bacon" API_DIR="$PWD/cmacs/api"' \
+		'{submake}' \
 		'bacon cmacs_gi.so / cmacs_pod.so (built only when absent)' \
-		"BACON_DIR=${r}/deps/bacon" "API_DIR=${r}/cmacs/api"
+		vf:submake
 	vf_class gsurf-modules makedb cmacs/gsurf/modules \
 		'^cmacs/gsurf/modules/[^/]+\.so$' \
-		'make -C cmacs/gsurf/modules GSURF_DIR="$PWD/deps/gsurf"' \
+		'{submake}' \
 		'gsurf modules loaded through CMACS_GSURF_MODULE_DIR' \
-		"GSURF_DIR=${r}/deps/gsurf" vf:find=.
+		vf:submake vf:find=.
 	vf_class org-ex makedb cmacs/org-ex/lib \
 		'^cmacs/org-ex/lib/liborgex-1\.0\.a$' \
-		'make -C cmacs/org-ex/lib static' \
-		'liborgex-1.0.a'
+		'{submake}' \
+		'liborgex-1.0.a' \
+		vf:submake
 
 	# gowl, in both build types: cmacs links and loads the configured
 	# one, `make -C deps/gowl test' and `just gowl' use release.
@@ -310,16 +332,29 @@ vf_register_classes () {
 			gowl_flag="DEBUG=1"
 			gowl_what='gowl-lock'
 		fi
+		# The type cmacs builds is rebuilt through cmacs's build (its
+		# flags, its archive), probed with the arguments it passes; the
+		# other one is gowl's own, built the way `just test-gowl' does.
+		if [[ ${gowl_type} == "${dep_type}" ]]
+		then
+			gowl_fix='{submake} && make -j"$(nproc)"'
+			gowl_mods_fix='make -j"$(nproc)"'
+			gowl_args=(vf:submake)
+		else
+			gowl_fix="make -C deps/gowl ${gowl_flag} YAMLGLIB_DIR=\"\$PWD/deps/yaml-glib\" CRISPY_DIR=\"\$PWD/deps/crispy\" all"
+			gowl_mods_fix="make -C deps/gowl ${gowl_flag} YAMLGLIB_DIR=\"\$PWD/deps/yaml-glib\" CRISPY_DIR=\"\$PWD/deps/crispy\" modules"
+			gowl_args=(${gowl_flag:+"${gowl_flag}"} \
+				"YAMLGLIB_DIR=${r}/deps/yaml-glib" "CRISPY_DIR=${r}/deps/crispy")
+		fi
 		vf_class "gowl-${gowl_type}" makedb deps/gowl \
 			"^deps/gowl/build/${gowl_type}/(libgowl\\.(a|so[.0-9]*)|${gowl_what})\$" \
-			"make -C deps/gowl ${gowl_flag} YAMLGLIB_DIR=\"\$PWD/deps/yaml-glib\" CRISPY_DIR=\"\$PWD/deps/crispy\" all" \
+			"${gowl_fix}" \
 			"libgowl and ${gowl_what//|/, } (${gowl_type})" \
 			"vf:requires=deps/gowl/build/${gowl_type}" "${gowl_gate}" \
-			${gowl_flag:+"${gowl_flag}"} \
-			"YAMLGLIB_DIR=${r}/deps/yaml-glib" "CRISPY_DIR=${r}/deps/crispy"
+			"${gowl_args[@]}"
 		vf_class "gowl-modules-${gowl_type}" makedb 'deps/gowl/modules/*' \
 			"^deps/gowl/build/${gowl_type}/modules/[^/]+\\.so\$" \
-			"make -C deps/gowl ${gowl_flag} YAMLGLIB_DIR=\"\$PWD/deps/yaml-glib\" CRISPY_DIR=\"\$PWD/deps/crispy\" modules" \
+			"${gowl_mods_fix}" \
 			"gowl module .so files (${gowl_type}; no pattern rule names them)" \
 			"vf:requires=deps/gowl/build/${gowl_type}/modules" "${gowl_gate}" \
 			-f Makefile -f ../dependencies.mk \
@@ -327,33 +362,22 @@ vf_register_classes () {
 			"LIBDIR=${r}/deps/gowl/build/${gowl_type}"
 	done
 
-	# Every other bundled dep: its own Makefile's database, with the
-	# same canonical *_DIR overrides src/Makefile.in passes.  Passing an
-	# override a dep does not use is harmless.
-	common=(
-		"CRISPY_DIR=${r}/deps/crispy"
-		"YAMLGLIB_DIR=${r}/deps/yaml-glib"
-		"YAML_GLIB_DIR=${r}/deps/yaml-glib"
-		"MCP_GLIB_DIR=${r}/deps/mcp-glib"
-		"AI_GLIB_DIR=${r}/deps/ai-glib"
-		"LIBREGNUM_DIR=${r}/deps/libregnum"
-	)
-	if [[ -n ${dep_flags} ]]
-	then
-		# Word-split on purpose: it is a make argument list.
-		# shellcheck disable=SC2206
-		common+=(${dep_flags})
-	fi
+	# Every bundled dep cmacs's build enters: its own Makefile's
+	# database, probed with exactly the arguments src/Makefile passes
+	# it.  The fix is cmacs's own top-level build, never a bare make in
+	# the dep: that would build cmacs's build/<type> with the dep's
+	# default flags (libregnum's -Werror set), and cmacs's next build
+	# would recompile all of it again.
 	for dep in bacon crispy yaml-glib podomation ai-glib cad-glib \
 	           orm-glib clawtilla clawtilla/deps/libreclaw libregnum \
 	           gsurf screensavers
 	do
 		vf_class "dep-${dep##*/}" makedb "deps/${dep}" \
 			"^deps/${dep}/build/${dep_type}/(.*/)?lib[^/]*\\.(a|so(\\.[0-9]+)*)\$" \
-			'make -j"$(nproc)"' \
+			'{submake} && make -j"$(nproc)"' \
 			"deps/${dep} libraries (${dep_type})" \
 			"vf:requires=deps/${dep}/build/${dep_type}" \
-			"vf:find=build/${dep_type}" "${common[@]}"
+			vf:submake "vf:find=build/${dep_type}"
 	done
 
 	# cmake: whisper.cpp and its ggml archives.  The top-level make
@@ -816,9 +840,164 @@ vf_makedb_probe () {
 	# SHELL is the refusing wrapper (see vf_write_shell_guard), so even
 	# a makefile remake the -o list missed cannot run.
 	(cd -- "${dir}" >/dev/null && VF_REFUSED_LOG="${out}.refused" LC_ALL=C \
-		make -p -q --no-print-directory "SHELL=${vf_tmp}/shell-guard" \
+		vf_sandbox make -p -q --no-print-directory "SHELL=${vf_tmp}/shell-guard" \
 		"${protect[@]}" "${args[@]}" Makefile) >"${out}" 2>"${out}.err"
 	return 0
+}
+
+# Run a command in a sandbox where the tree cannot change.
+#
+# The shell guard stops recipes, but parsing a makefile has side effects
+# of its own that no SHELL sees: `$(file > ...)' (deps/libregnum writes
+# its build/<type>/obj/.cflags stamp at PARSE time whenever the flags it
+# was given differ from the stamp) and whatever a `$(shell ...)' writes.
+# So every make the guard starts runs under bubblewrap with the whole
+# filesystem read-only, the tree as an overlay whose writes land in a
+# tmpfs that vanishes with the process (so a $(file > ...) succeeds
+# instead of stopping make, and changes nothing), and only the guard's
+# scratch directory writable.  Without a working bwrap, nothing that
+# needs one runs.
+vf_sandbox () {
+	bwrap --ro-bind / / --dev-bind /dev /dev --proc /proc \
+		--overlay-src "${vf_root}" --tmp-overlay "${vf_root}" \
+		--bind "${vf_tmp}" "${vf_tmp}" -- "$@"
+}
+
+# Can vf_sandbox run here (bwrap present, overlay mounts allowed)?
+vf_sandbox_works () {
+	local probe="${vf_root}/.cmacs-verify-fresh-sandbox-probe"
+
+	command -v bwrap >/dev/null 2>&1 || return 1
+	# shellcheck disable=SC2016  # $1 is the inner shell's
+	vf_sandbox bash -c 'echo x >"$1" && test -s "$1"' _ "${probe}" \
+		>/dev/null 2>&1 || return 1
+	# The write must not have reached the real tree.
+	if [[ -e ${probe} ]]
+	then
+		rm -f -- "${probe}"
+		return 1
+	fi
+	return 0
+}
+
+# Capture the make arguments cmacs's own build passes to every
+# directory it builds through a sub-make, by asking src/Makefile:
+# `make -n -B all' with MAKE pointing at a recorder.  make expands each
+# such recipe itself and still RUNS lines that call $(MAKE) under -n, so
+# the recorder sees exactly the argv the real rule would hand the real
+# make -- shell conditionals taken, $$(pkg-config ...) expanded --
+# without anything being copied into this script.  It runs sandboxed.
+#
+# Writes $vf_tmp/submakes: "DIR<TAB>VAR=VALUE<TAB>..." per invocation.
+vf_capture_submakes () {
+	local rec="${vf_tmp}/submake-recorder"
+	local src="${vf_root}/src"
+	local -a protect=()
+	local f
+
+	: >"${vf_tmp}/submakes"
+	: >"${vf_tmp}/submakes.cmd"
+	if [[ ! -f ${src}/Makefile ]]
+	then
+		return 0
+	fi
+
+	cat >"${rec}" <<'EOF'
+#!/usr/bin/env bash
+# Written by cmacs-verify-fresh.sh: records a sub-make's directory and
+# variable assignments instead of running it.
+dir=.
+assign=()
+argv=("$@")
+while [[ $# -gt 0 ]]
+do
+	case "${1}" in
+	-C)
+		dir="${2}"
+		shift 2
+		continue
+		;;
+	-C?*)
+		dir="${1#-C}"
+		;;
+	*=*)
+		assign+=("${1}")
+		;;
+	esac
+	shift
+done
+abs="$(cd -- "${dir}" >/dev/null 2>&1 && pwd -P)" || exit 0
+{
+	printf '%s' "${abs}"
+	printf '\t%s' "${assign[@]}"
+	printf '\n'
+} >>"${VF_SUBMAKE_LOG}"
+# The whole invocation, replayable: the fix for a class is to run
+# exactly what cmacs's rule runs, from where it runs it.
+{
+	printf '%s\t%s\tcd %q && make -j"$(nproc)"' "${abs}" "${PWD}" "${PWD}"
+	printf ' %q' "${argv[@]}"
+	printf '\n'
+} >>"${VF_SUBMAKE_LOG}.cmd"
+exit 0
+EOF
+	chmod +x "${rec}"
+
+	while IFS= read -r -d '' f
+	do
+		protect+=(-o "${f#./}" -o "${src}/${f#./}")
+	done < <(cd -- "${src}" >/dev/null && find . -maxdepth 2 -type f \
+		\( -name '*.d' -o -name '*.mk' -o -name 'Makefile' \) -print0 2>/dev/null)
+
+	(cd -- "${src}" >/dev/null && VF_SUBMAKE_LOG="${vf_tmp}/submakes" LC_ALL=C \
+		vf_sandbox make -n -B -k --no-print-directory "MAKE=${rec}" \
+		"${protect[@]}" -o "${src}/lisp.mk" -o ../src/verbose.mk all) \
+		>/dev/null 2>"${vf_tmp}/submakes.err"
+	return 0
+}
+
+# The commands cmacs's build runs for class I's directories, joined
+# with &&: the replay its fix uses.  Fix commands run from the tree
+# root, so the root is spelled "$R", set from $PWD once per command:
+# a bare $PWD would be expanded after the `cd' and point into src/.
+vf_submake_replay () {
+	local i="${1}"
+	local d
+	local cmd
+	local out=""
+
+	for d in "${vf_root}"/${VF_DIR[i]}
+	do
+		while IFS= read -r cmd
+		do
+			out+="${out:+ && }(R=\$PWD && ${cmd//"${vf_root}"/\"\$R\"})"
+		done < <(awk -F '\t' -v D="${d}" '$1 == D { print $3 }' \
+			"${vf_tmp}/submakes.cmd" 2>/dev/null | sort -u)
+	done
+	if [[ -z ${out} ]]
+	then
+		out=':'
+	fi
+	printf '%s\n' "${out}"
+}
+
+# The arguments cmacs's build passes to DIR (absolute), merged across
+# its invocations (a later VAR= wins), one per line.
+vf_submake_args () {
+	local dir="${1}"
+
+	awk -F '\t' -v D="${dir}" '
+		$1 == D {
+			for (i = 2; i <= NF; i++) {
+				v = $i
+				sub(/=.*/, "", v)
+				if (!(v in val))
+					order[++n] = v
+				val[v] = $i
+			}
+		}
+		END { for (i = 1; i <= n; i++) print val[order[i]] }
+	' "${vf_tmp}/submakes"
 }
 
 # The SHELL every probe runs with.  $(shell ...) functions must work --
@@ -862,6 +1041,8 @@ vf_edges_makedb () {
 	local lk
 	local cands
 	local made
+	local submake=0
+	local -a dargs
 	local IFS=$'\x1f'
 	local -a raw
 
@@ -876,7 +1057,10 @@ vf_edges_makedb () {
 		vf:link=*)
 			links+=("${arg#vf:link=}")
 			;;
-		vf:requires=*)
+		vf:submake)
+			submake=1
+			;;
+		vf:*)
 			;;
 		*)
 			margs+=("${arg}")
@@ -895,13 +1079,19 @@ vf_edges_makedb () {
 		done
 	fi
 
-	# DIR may be a glob.
+	# DIR may be a glob.  A vf:submake directory cmacs's build never
+	# enters is not one of cmacs's artifacts.
 	for d in "${vf_root}"/${VF_DIR[i]}
 	do
-		if [[ -f ${d}/Makefile || -f ${d}/GNUmakefile || -f ${d}/makefile ]]
+		if [[ ! -f ${d}/Makefile && ! -f ${d}/GNUmakefile && ! -f ${d}/makefile ]]
 		then
-			dirs+=("${d}")
+			continue
 		fi
+		if [[ ${submake} -eq 1 ]] && ! grep -q -F -x -e "${d}" <(cut -f1 "${vf_tmp}/submakes")
+		then
+			continue
+		fi
+		dirs+=("${d}")
 	done
 
 	: >"${out}"
@@ -913,7 +1103,13 @@ vf_edges_makedb () {
 	# One probe per directory, in parallel.
 	for d in "${dirs[@]}"
 	do
-		vf_makedb_probe "${d}" "${vf_tmp}/db-${i}-${n}" "${linkfile}" "${margs[@]}" &
+		dargs=("${margs[@]}")
+		if [[ ${submake} -eq 1 ]]
+		then
+			mapfile -t dargs < <(vf_submake_args "${d}")
+			dargs+=("${margs[@]}")
+		fi
+		vf_makedb_probe "${d}" "${vf_tmp}/db-${i}-${n}" "${linkfile}" "${dargs[@]}" &
 		n=$((n + 1))
 	done
 	wait
@@ -1086,6 +1282,10 @@ vf_run_class () {
 	fi
 	case "${VF_KIND[i]}" in
 	makedb)
+		if [[ ${vf_sandbox_ok} -eq 0 ]]
+		then
+			return 0
+		fi
 		vf_edges_makedb "${i}" "${edges}" || return 0
 		;;
 	cmake)
@@ -1140,15 +1340,23 @@ vf_fix_command () {
 	local fix="${VF_FIX[i]}"
 	local dir="${VF_DIR[i]}"
 	local list=""
+	local replay
 	local a
 
+	if [[ ${fix} == *'{submake}'* ]]
+	then
+		# Quoted: bash 5.2 makes an unquoted & in the replacement
+		# mean "the matched text", and the replay is full of &&.
+		replay="$(vf_submake_replay "${i}")"
+		fix="${fix//\{submake\}/"${replay}"}"
+	fi
 	if [[ ${fix} == *'{+}'* ]]
 	then
 		while IFS=$'\t' read -r _ a _
 		do
 			list+=" ${a#"${dir}"/}"
 		done < <(grep '^S' "${vf_tmp}/res-${i}")
-		fix="${fix//\{+\}/${list# }}"
+		fix="${fix//\{+\}/"${list# }"}"
 	fi
 	printf '%s\n' "${fix}"
 }
@@ -1225,7 +1433,7 @@ vf_report_class () {
 		then
 			vf_say "    (not a failure: ${heal_file} rebuilds these before it uses them)"
 		fi
-		vf_say "    fix: $(vf_fix_command "${i}" | cut -c1-200)"
+		vf_say "    fix (from the tree root): $(vf_fix_command "${i}")"
 	fi
 
 	if [[ ${vf_verbose} -eq 1 && ${n_missing} -gt 0 ]]
@@ -1249,6 +1457,35 @@ vf_report_class () {
 	return 1
 }
 
+# Record path, mtime and size of every build output and the Lisp
+# trees, sorted, into OUT.  vf_main compares two of these.
+vf_snapshot () {
+	local out="${1}"
+	local -a dirs=()
+	local d
+
+	for d in src cmacs/api cmacs/bacon/modules cmacs/gsurf/modules \
+	         cmacs/org-ex/lib lisp/cmacs test/cmacs
+	do
+		if [[ -d ${vf_root}/${d} ]]
+		then
+			dirs+=("${d}")
+		fi
+	done
+	if [[ -d ${vf_root}/deps ]]
+	then
+		mapfile -t -O "${#dirs[@]}" dirs < <(cd -- "${vf_root}" >/dev/null && \
+			find deps -name .git -prune -o -type d -name build -prune -print)
+	fi
+	if [[ ${#dirs[@]} -eq 0 ]]
+	then
+		: >"${out}"
+		return 0
+	fi
+	(cd -- "${vf_root}" >/dev/null && find "${dirs[@]}" ! -type d \
+		-printf '%p\t%T@\t%s\n' 2>/dev/null) | LC_ALL=C sort >"${out}"
+}
+
 # Check every selected class; fill vf_stale_classes.
 vf_check () {
 	local i
@@ -1258,6 +1495,11 @@ vf_check () {
 	vf_total_notes=0
 	vf_stale_classes=()
 	rm -f "${vf_tmp}"/res-* "${vf_tmp}"/count-*
+
+	if [[ ${vf_sandbox_ok} -eq 1 ]]
+	then
+		vf_capture_submakes
+	fi
 
 	for i in "${!VF_NAME[@]}"
 	do
@@ -1428,9 +1670,38 @@ vf_main () {
 	vf_tmp="$(mktemp -d "${TMPDIR:-/tmp}/cmacs-verify-fresh.XXXXXX")" || exit 2
 	trap vf_cleanup EXIT
 	vf_write_shell_guard
+	if vf_sandbox_works
+	then
+		vf_sandbox_ok=1
+	else
+		vf_warn "cannot sandbox make probes (needs bwrap with overlay support); the make-database classes are NOT checked"
+	fi
+
+	# A check must change nothing.  Snapshot every build output before
+	# and after; any difference is an error, whoever caused it.
+	if [[ ${vf_fix} -eq 0 ]]
+	then
+		vf_snapshot "${vf_tmp}/snap-before"
+	fi
 
 	vf_check
 	rc=$?
+
+	if [[ ${vf_fix} -eq 0 ]]
+	then
+		vf_snapshot "${vf_tmp}/snap-after"
+		if ! cmp -s "${vf_tmp}/snap-before" "${vf_tmp}/snap-after"
+		then
+			if [[ ${vf_quiet} -eq 0 ]]
+			then
+				echo "${VF_SELF}: ERROR: the tree changed while it was being checked (mtime/size):" >&2
+				diff "${vf_tmp}/snap-before" "${vf_tmp}/snap-after" \
+					| grep '^[<>]' | head -n 20 >&2
+				echo "${VF_SELF}: this check writes nothing itself -- was another build running?" >&2
+			fi
+			exit 3
+		fi
+	fi
 
 	if [[ ${vf_fix} -eq 1 && ${rc} -ne 0 || ${vf_fix} -eq 1 && ${vf_total_notes} -gt 0 ]]
 	then

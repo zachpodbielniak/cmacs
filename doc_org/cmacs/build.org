@@ -1062,7 +1062,8 @@ just verify-fresh                     # report; exit 1 if anything is stale
 just verify-fresh --all               # every stale artifact, not the first 8
 just verify-fresh --only 'gowl-*'     # some classes (--list names them)
 just verify-fresh --fix               # run the rebuild commands, re-check
-admin/cmacs-verify-fresh.sh --quiet   # exit status only
+admin/cmacs-verify-fresh.sh --quiet   # exit status only: 0 fresh, 1 stale,
+                                      # 3 the tree changed during the check
 #+end_example
 
 For each stale artifact it prints the newest file that makes it stale,
@@ -1104,6 +1105,39 @@ functions (config files call =pkg-config=) but refuses any recipe: while
 make remakes a makefile it drops =q= from the =MAKEFLAGS= it exports,
 which is how the guard tells the two apart.  A refused recipe is
 reported, so the class can be given the =-o= that stops make asking.
+
+That is not enough on its own: /parsing/ a makefile has side effects no
+=SHELL= sees.  =deps/libregnum/Makefile= rewrites its
+=build/<type>/obj/.cflags= stamp with =$(file > ...)= at parse time
+whenever the flags it was given differ from the stamp, so a probe with
+the wrong arguments rewrote it, the next cmacs build recompiled all of
+libregnum, and the guard then reported it stale again.  Two rules now
+make that impossible:
+
+- *The arguments are cmacs's own.*  Every directory cmacs's build
+  enters through a sub-make is probed with exactly the arguments
+  =src/Makefile= passes it, captured from =src/Makefile= itself:
+  =make -n -B all= with =MAKE= pointing at a recorder (make still runs
+  =$(MAKE)= lines under =-n=, so the recorder sees the real argv, shell
+  conditionals taken and =$$(pkg-config ...)= expanded).  Nothing is
+  copied into the script to drift.  A dep directory cmacs's build never
+  enters is skipped.
+- *Every make the guard starts runs in a bubblewrap sandbox*: the whole
+  filesystem read-only, the tree as an overlay whose writes land in a
+  throwaway tmpfs (a =$(file > ...)= succeeds and changes nothing), and
+  only the guard's scratch directory writable.  It needs =bwrap= with
+  overlay support; without it the make-database classes are skipped
+  with a warning rather than probed unsafely.
+
+And it checks itself: a run without =--fix= records path, mtime and size
+of everything under =src/=, every =deps/**/build/=, the runtime module
+directories, =lisp/cmacs= and =test/cmacs= before and after, and exits
+3 if anything changed --- whoever changed it.
+
+The fix for a dep class is the same captured command replayed from
+where cmacs's rule runs it, then cmacs's top-level build to relink;
+never a bare =make= in the dep, which builds cmacs's =build/<type>= with
+the dep's own default flags.
 
 *** As a test precondition
 

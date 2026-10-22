@@ -38,7 +38,17 @@
     ;; leaves it older than gl-stamp for good, which is NOT staleness.
     ("src/Makefile" 300 "CMACS_DEP_BUILDTYPE = release
 LIBES = -lm ../deps/x/libx.a
-.PHONY: all
+.PHONY: all api bacon-mods gowl-lib FORCE
+all: emacs api bacon-mods ../deps/bacon/build/release/libbacon.a gowl-lib
+api:
+\t$(MAKE) -C ../cmacs/api all
+bacon-mods:
+\t$(MAKE) -C ../cmacs/bacon/modules API_DIR=$(abspath ../cmacs/api)
+../deps/bacon/build/release/libbacon.a: FORCE
+\t@if true; then $(MAKE) -C ../deps/bacon FLAVOUR=cmacs lib; fi
+gowl-lib:
+\t$(MAKE) -C ../deps/gowl lib
+FORCE:
 temacs: a.o globals.h
 \tcc -o $@ a.o
 emacs: temacs
@@ -101,13 +111,21 @@ build/release/xdg-desktop-portal-gowl: tools/portal/main.c
     ("deps/gowl/build/release/modules/foo.so" 100 "")
     ;; A Make-built dep whose objects come from a PATTERN rule and have
     ;; no .d file (libreclaw and gsurf are like this).
-    ("deps/bacon/Makefile" 300 "build/release/libbacon.a: build/release/obj/x.o
+    ;; FLAVOUR comes only from src/Makefile's sub-make line: the object
+    ;; it names exists only when the guard probes with cmacs's own
+    ;; arguments.  The $(file >) is libregnum's parse-time .cflags stamp.
+    ("deps/bacon/Makefile" 300 "STAMP := build/release/obj/.cflags
+ifneq ($(file < $(STAMP)),$(FLAVOUR))
+$(file > $(STAMP),$(FLAVOUR))
+endif
+build/release/libbacon.a: build/release/obj/$(FLAVOUR).o
 \tar rcs $@ $^
 build/release/obj/%.o: src/%.c
 \tcc -c -o $@ $<
 ")
-    ("deps/bacon/src/x.c" 300 "")
-    ("deps/bacon/build/release/obj/x.o" 150 "")
+    ("deps/bacon/src/cmacs.c" 300 "")
+    ("deps/bacon/build/release/obj/.cflags" 300 "cmacs")
+    ("deps/bacon/build/release/obj/cmacs.o" 150 "")
     ("deps/bacon/build/release/libbacon.a" 100 "")
     ;; cmake: an archive, its CMakeFiles/<T>.dir object and .o.d.
     ("deps/whisper.cpp/build/CMakeCache.txt" 300 "")
@@ -220,7 +238,7 @@ younger than everything it is built from, so the tree is fresh.")
                                     "deps/gowl/tools/portal/main.c"
                                     "deps/gowl/build/release/xdg-desktop-portal-gowl")
 ;; Pattern-rule object with no .d: src/x.c -> obj/x.o -> libbacon.a.
-(cmacs-verify-fresh-tests--deftouch dep-pattern "dep-bacon" "deps/bacon/src/x.c"
+(cmacs-verify-fresh-tests--deftouch dep-pattern "dep-bacon" "deps/bacon/src/cmacs.c"
                                     "deps/bacon/build/release/libbacon.a")
 (cmacs-verify-fresh-tests--deftouch cmake-header "dep-whisper"
                                     "deps/whisper.cpp/include/whisper.h"
@@ -258,6 +276,58 @@ nothing above it.  The fresh tree has exactly that shape."
     (cmacs-verify-fresh-tests--age root "src/gl-stamp" 120)
     (let ((res (cmacs-verify-fresh-tests--run root "--only" "src-link")))
       (should (= (car res) 0)))))
+
+(defun cmacs-verify-fresh-tests--snapshot (root)
+  "Every file under ROOT with its mtime and size, sorted."
+  (sort (mapcar (lambda (f)
+                  (let ((a (file-attributes f)))
+                    (list (file-relative-name f root)
+                          (format-time-string "%s.%N"
+                                              (file-attribute-modification-time a))
+                          (file-attribute-size a))))
+                (directory-files-recursively root "" nil))
+        (lambda (x y) (string< (car x) (car y)))))
+
+(ert-deftest cmacs-verify-fresh-test-plain-run-changes-nothing ()
+  "A run without --fix leaves every file byte-for-byte as it was, even
+when a probed makefile writes at parse time.  deps/bacon/Makefile does
+`$(file > .cflags)' unless the stamp matches FLAVOUR; with the stamp
+set to something else, every probe of it would rewrite the stamp --
+which is how the guard once made cmacs recompile all of libregnum."
+  (skip-unless (and (executable-find "make") (executable-find "bash")
+                    (executable-find "bwrap")))
+  (cmacs-verify-fresh-tests--with-tree root
+    (with-temp-file (expand-file-name "deps/bacon/build/release/obj/.cflags"
+                                      root)
+      (insert "something-else"))
+    (cmacs-verify-fresh-tests--age root "deps/bacon/build/release/obj/.cflags" 300)
+    (let ((before (cmacs-verify-fresh-tests--snapshot root))
+          (res (cmacs-verify-fresh-tests--run root)))
+      (should-not (= (car res) 3))
+      (should (equal before (cmacs-verify-fresh-tests--snapshot root)))
+      (should (equal "something-else"
+                     (with-temp-buffer
+                       (insert-file-contents
+                        (expand-file-name "deps/bacon/build/release/obj/.cflags"
+                                          root))
+                       (buffer-string)))))))
+
+(ert-deftest cmacs-verify-fresh-test-dep-fix-is-cmacs-build ()
+  "The fix for a dep class is cmacs's own build, not a bare make in the
+dep (which would build cmacs's build/<type> with the dep's defaults)."
+  (skip-unless (and (executable-find "make") (executable-find "bash")))
+  (cmacs-verify-fresh-tests--with-tree root
+    (cmacs-verify-fresh-tests--age root "deps/bacon/src/cmacs.c" 1)
+    (let ((res (cmacs-verify-fresh-tests--run root "--only" "dep-bacon")))
+      ;; The replay of src/Makefile's own sub-make line (its cwd, its
+      ;; arguments, its goal), then cmacs's top-level build to relink.
+      (should (string-match-p
+               (concat "^    fix (from the tree root): (R=\\$PWD && "
+                       "cd \"\\$R\"/src && make "
+                       "-j\"\\$(nproc)\" -C \\.\\./deps/bacon FLAVOUR=cmacs lib) "
+                       "&& make -j\"\\$(nproc)\"$")
+               (cdr res)))
+      (should-not (string-match-p "make -C deps/" (cdr res))))))
 
 (ert-deftest cmacs-verify-fresh-test-probe-builds-nothing ()
   "Reading a make database must not run a recipe, even one make wants

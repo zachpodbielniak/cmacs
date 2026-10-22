@@ -13929,6 +13929,21 @@ but refuses any recipe (make drops @code{q} from the exported
 @env{MAKEFLAGS} while it remakes a makefile).  A refused recipe is
 reported.
 
+Parsing a makefile also has side effects no @env{SHELL} sees:
+@file{deps/libregnum/Makefile} rewrites its @file{obj/.cflags} stamp with
+@code{$(file > ...)} at parse time when the flags it was given differ, so
+a probe with the wrong arguments made the next cmacs build recompile all
+of libregnum.  So every directory cmacs's build enters is probed with the
+exact arguments @file{src/Makefile} passes it, captured by running
+@code{make -n -B all} there with @code{MAKE} pointing at a recorder; and
+every make the guard starts runs under bubblewrap, with the filesystem
+read-only and the tree as a throwaway overlay.  Without @command{bwrap}
+the make-database classes are skipped with a warning.  A run without
+@option{--fix} also snapshots mtime and size of every build output before
+and after, and exits 3 if anything changed.  A dep's fix replays cmacs's
+own sub-make command, then the top-level build; never a bare @code{make}
+in the dep.
+
 @code{make -C test check-cmacs} (and so @code{just test}) runs the guard
 with @option{--gate} first, from a @code{## CMACS:} hunk in
 @file{test/Makefile.in}, so a stale tree fails fast with the report.
