@@ -29,6 +29,13 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+(declare-function cmacs-vidstudio--open-handle "cmacs-vidstudio"
+                  (handle name &optional file))
+(declare-function cmacs-vidstudio--secs-to-frames "cmacs-vidstudio" (secs))
+(declare-function cmacs-vidstudio--render "cmacs-vidstudio" ())
+(defvar cmacs-vidstudio--handle)
+(defvar cmacs-vidstudio--active-track)
+
 (defgroup cmacs-vidstudio-ai nil
   "Prompt-driven video editing."
   :group 'cmacs-vidstudio
@@ -192,7 +199,11 @@ surprise."
 
 ;;;###autoload
 (defun cmacs-vidstudio-ai-build-reel (file &optional brief)
-  "Build a highlight reel from FILE into a new vidstudio project."
+  "Build a highlight reel from FILE into a new vidstudio project.
+
+Each suggested span becomes one video clip on the first track, sliced
+from FILE (padded by `cmacs-vidstudio-ai-pad-seconds').  Returns the
+project handle; interactively the project is also opened in an editor."
   (interactive "fRecording: \nsExtra direction (optional): ")
   (unless (fboundp 'cmacs-vidstudio-new)
     (user-error "cmacs-vidstudio is not available in this build"))
@@ -201,37 +212,79 @@ surprise."
     (when (null spans)
       (user-error "cmacs-vidstudio: nothing worth keeping was suggested"))
     (let* ((handle (cmacs-vidstudio-new 1920 1080 30))
-           (track (cmacs-vidstudio-add-track handle))
+           (path (expand-file-name file))
            (pad cmacs-vidstudio-ai-pad-seconds)
            (n 0))
       (dolist (s spans)
         ;; Padded outward and clamped at zero: a cut exactly on a word
-        ;; boundary sounds clipped.
+        ;; boundary sounds clipped.  The DEFUN takes (TRACK PATH DURATION
+        ;; IN-SEC OUT-SEC); DURATION nil derives it from the slice.
         (let ((start (max 0.0 (- (plist-get s :start) pad)))
               (end (+ (plist-get s :end) pad)))
-          (cmacs-vidstudio-add-video-clip handle track file start (- end start))
+          (cmacs-vidstudio-add-video-clip handle 0 path nil start end)
           (setq n (1+ n))))
       (message "cmacs-vidstudio: reel with %d clip(s)" n)
+      (when (and (called-interactively-p 'any)
+                 (fboundp 'cmacs-vidstudio--open-handle))
+        (cmacs-vidstudio--open-handle
+         handle (format "*vidstudio reel: %s*" (file-name-nondirectory file))))
       handle)))
 
 ;;;###autoload
 (defun cmacs-vidstudio-ai-auto-caption (file)
-  "Add captions to FILE's project from its existing transcript.
+  "Caption the current project from FILE's existing transcript.
 
-Costs nothing to compute: transcribe already wrote the timings."
+Costs nothing to compute: transcribe already wrote the timings into a
+sidecar .srt, which is added as a caption clip on the active track,
+running for as long as the transcript does."
   (interactive "fRecording: ")
   (unless (and (boundp 'cmacs-vidstudio--handle) cmacs-vidstudio--handle)
     (user-error "Not in a vidstudio buffer"))
-  (let ((segments (cmacs-vidstudio-ai--transcript file))
-        (handle cmacs-vidstudio--handle)
-        (n 0))
-    (dolist (seg segments)
-      (when (fboundp 'cmacs-vidstudio-add-caption)
-        (cmacs-vidstudio-add-caption handle (nth 2 seg)
-                                     (nth 0 seg) (- (nth 1 seg) (nth 0 seg)))
-        (setq n (1+ n))))
-    (message "cmacs-vidstudio: %d caption(s)" n)
-    n))
+  (let* ((segments (cmacs-vidstudio-ai--transcript file))
+         (srt (concat (file-name-sans-extension (expand-file-name file))
+                      ".srt"))
+         (end (apply #'max 0.1 (mapcar #'cadr segments))))
+    (unless (file-readable-p srt)
+      (user-error "cmacs-vidstudio: no .srt next to %s"
+                  (file-name-nondirectory file)))
+    (cmacs-vidstudio-add-caption cmacs-vidstudio--handle
+                                 cmacs-vidstudio--active-track
+                                 (cmacs-vidstudio--secs-to-frames end) srt)
+    (when (fboundp 'cmacs-vidstudio--render) (cmacs-vidstudio--render))
+    (message "cmacs-vidstudio: %d caption(s)" (length segments))
+    (length segments)))
+
+
+;;;; Right-click menu
+;;
+;; Registered on `cmacs-vidstudio-context-menu-functions' like any other
+;; provider -- vidstudio itself knows nothing about this file.  The hook
+;; form is autoloaded, so the AI entries are in the menu from the first
+;; right-click of a session; calling the (autoloaded) item function is
+;; what loads this file.  Visibility is decided by the C DEFUN
+;; `cmacs-ai-supported-p', never by `fboundp' on lazily-loaded Elisp,
+;; which reports "no AI" until something else happens to load it.
+
+;;;###autoload
+(defun cmacs-vidstudio-ai-context-menu-items (_ctx)
+  "The AI entries of the vidstudio right-click menu."
+  (when (and (fboundp 'cmacs-ai-supported-p) (cmacs-ai-supported-p))
+    (let ((model (or (fboundp 'cmacs-ai-call)
+                     (and (locate-library "cmacs-ai-call") t))))
+      `((:sep)
+        (:id ai :label "AI"
+         :items
+         ((:label "Suggest cuts from a recording…" :enable ,model
+           :command cmacs-vidstudio-ai-suggest-cuts)
+          (:label "Build a highlight reel…" :enable ,model
+           :command cmacs-vidstudio-ai-build-reel)
+          (:label "Captions from a transcript…"
+           :command cmacs-vidstudio-ai-auto-caption)))))))
+
+;;;###autoload
+(with-eval-after-load 'cmacs-vidstudio
+  (add-hook 'cmacs-vidstudio-context-menu-functions
+            #'cmacs-vidstudio-ai-context-menu-items 90))
 
 
 ;;;; Brigade tools

@@ -12450,8 +12450,9 @@ preview (buffer-local @code{cmacs-vidstudio--live} nil).
 
 @kbd{M-x cmacs-vidstudio} creates a project (prompts width x height x fps).  In
 @code{cmacs-vidstudio-mode} the buffer previews the frame at the playhead;
-@kbd{mouse-3} pops the context menu (GTK under pgtk, in-engine under
-@option{--lrg}).  Keys: @kbd{i} import clip, @kbd{C} solid colour, @kbd{T}
+@kbd{mouse-3} pops the context menu for what is under the pointer (GTK under
+pgtk, in-engine under @option{--lrg}; @pxref{Vidstudio Right-click Menu}), and
+@kbd{@key{menu}} or @kbd{S-@key{F10}} opens it from the keyboard.  Keys: @kbd{i} import clip, @kbd{C} solid colour, @kbd{T}
 title, @kbd{n} add track, @kbd{a} active track, @kbd{t} transition, @kbd{e}
 effect, @kbd{s} split at playhead, @kbd{g} go to frame, @kbd{p} (or
 @kbd{SPC}) play/pause, @kbd{@key{left}}/@kbd{@key{right}} step, @kbd{E}
@@ -12487,6 +12488,41 @@ preview width in C, and emitted as uncompressed binary PPM (roughly 5x
 faster end-to-end than the per-frame PNG round-trip), with the previous
 frame's image flushed from the cache on each redraw.
 
+@section Right-click menu
+@anchor{Vidstudio Right-click Menu}
+
+Built from the @emph{click context} by the functions on
+@code{cmacs-vidstudio-context-menu-functions}, exactly as for imgedit
+(@pxref{Imgedit Right-click Menu}).  The context names @code{:clip} (a
+@samp{[#id start+dur]} cell of the textual timeline, a block of the live
+viewport's strip, or a clip-list panel row; the keyboard uses the selected
+clip or the clip under the playhead), @code{:track}, @code{:audio},
+@code{:area} (@code{clip}, @code{audio}, @code{track}, @code{preview},
+@code{empty}, @code{keyboard}), @code{:frame}, @code{:total}, @code{:data}
+(the clip's serialized form) and @code{:source}.  A full in-engine timeline
+with thumbnails for the native preview path is still future work.
+
+@multitable @columnfractions .38 .28 .34
+@headitem Entry @tab Enabled when @tab Does
+@item @emph{Clip #N} header, then Split at playhead, Trim in / Trim out to playhead @tab playhead strictly inside the clip @tab ripple edits; video moves its source in/out point
+@item Ripple delete, Delete (leave gap) @tab always @tab gap delete keeps the timeline length
+@item Move to track, Move earlier / later @tab a neighbour that way @tab
+@item Transition in / Transition out @tab out: a next clip exists; current marked @tab out sets the next clip's leading transition
+@item Effects, Keyframe @tab Clear needs an effect / keyframe @tab
+@item Look, Timing, Extract audio @tab source-only entries need a video clip @tab
+@item Copy, Duplicate, Properties@dots{} @tab always @tab
+@item @emph{Audio #N}: Volume@dots{}, Remove audio@dots{} @tab on an audio segment @tab remove asks first
+@item @emph{Track N}: Make active, Add to this track, Paste clip here, Clear track@dots{} @tab not active / clipboard set / clips present @tab adds land on the clicked track
+@item Add, Paste clip, Render frame, Transport, Audio, Project, Export, View @tab frames needed for render/transport/export @tab
+@item AI @tab shown when @code{cmacs-ai-supported-p} @tab from @file{cmacs-vidstudio-ai.el}
+@end multitable
+
+The model has no track mute/solo and cannot delete a track, so the track
+section offers @emph{Clear track} instead.  Submenu ids for @code{:in}:
+@code{move-to-track transition-in transition-out effects keyframes
+add-to-track add render transport audio project export view ai}; an item
+marked @code{:track-scoped t} makes the clicked track active before it runs.
+
 @section Model API
 
 Projects are referenced by an integer handle; clips by a stable id.  Key
@@ -12507,8 +12543,9 @@ cut a video headlessly.
 
 @section Clip types, animation, audio, and save/load
 
-The editor exposes the full Reel surface (right-click @emph{Add},
-@emph{Clip}, @emph{Audio}, @emph{Project}, @emph{Export} menus):
+The editor exposes the full Reel surface (right-click a clip, a track or
+empty space; @emph{Add}, @emph{Audio}, @emph{Project}, @emph{Export}
+submenus):
 
 @itemize @bullet
 @item @strong{Import}: @code{cmacs-vidstudio-add-video-clip} takes optional

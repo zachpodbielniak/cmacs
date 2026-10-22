@@ -24,8 +24,12 @@ Two facets, like the image editor:
   native Emacs image with a textual timeline, a playhead + transport, and
   editing commands.
 
-The in-engine libregnum timeline strip + thumbnails and the GTK / =--lrg=
-right-click menus are a planned follow-on layer.  Smooth real-time scrubbing of
+Right-click (or the menu key) opens a menu built from what is under the
+pointer --- a clip, an audio segment, a timeline row, the preview, empty
+space --- as a GTK menu under pgtk and the in-engine menu under =emacs --lrg=;
+see [[*Right-click menu][Right-click menu]].  A full in-engine libregnum timeline (clip
+thumbnails, an editable strip for the native preview path) is still future
+work.  Smooth real-time scrubbing of
 source clips is served by the libregnum =LrgVideoPlayer= FFmpeg backend
 (=FFMPEG=1=), documented in the libregnum video module.
 
@@ -72,7 +76,8 @@ textual timeline is shown in the native path meanwhile.
 | ~E~       | ~cmacs-vidstudio-export-video-cmd~   | Export MP4 (H.264)           |
 | ~X~       | ~cmacs-vidstudio-export-gif-cmd~     | Export animated GIF          |
 
-~mouse-3~ pops the editor context menu.  Like imgedit, the rendered buffer
+~mouse-3~ pops the editor context menu for what is under the pointer, and
+~<menu>~ / ~S-<f10>~ open it from the keyboard.  Like imgedit, the rendered buffer
 carries a =keymap= text property and the mode map is installed as an Evil
 *intercept map* by ~cmacs-evil-setup-mode-map~ (see [[file:evil.org][Evil / Doom
 compatibility]]), so the menu and the keys above work unmodified under
@@ -109,6 +114,102 @@ maps — use ~p~ for play/pause there.)
   compositing: this is a CPU compositor (and cmacs dev builds compile
   deps at -O0); the in-engine libregnum viewport is the planned
   true-realtime path.
+
+* Right-click menu
+
+The menu is *built from the click*.  A right-click on the textual timeline,
+on the preview, on the live viewport's timeline strip, on a row of the
+clip-list panel, or the menu key gives a *click context*, and every function
+on ~cmacs-vidstudio-context-menu-functions~ turns it into items.  The editor's
+sections are ordinary members of that hook; other code adds items the same
+way (see [[*Adding items][Adding items]]).
+
+** What is "under the pointer"
+
+| Context key | Meaning |
+|-------------+---------|
+| ~:clip~ | The clip id under the pointer: a ~[#id start+dur]~ cell of the textual timeline (each carries a =cmacs-vidstudio-clip= text property), a clip block on the live viewport's strip, or a clip row of the clip-list panel.  The keyboard uses the selected clip, else the clip under the playhead on the active track. |
+| ~:track~ | That clip's track, or the timeline row (=cmacs-vidstudio-track=) or panel track heading clicked. |
+| ~:audio~ | The audio segment under the pointer (the textual timeline's =audio:= line, the panel's Audio rows, or the strip's audio lane). |
+| ~:area~ | ~clip~, ~audio~, ~track~, ~preview~, ~empty~ or ~keyboard~. |
+| ~:frame~ ~:total~ | The playhead and the timeline length. |
+| ~:data~ | The clip's serialized ~(clip ...)~ form: its kind, transition, effects, keyframes. |
+| ~:source~ | ~timeline~, ~viewport~, ~clips-panel~ or ~keyboard~. |
+
+The viewport strip reports a bare block id for clips and audio segments
+alike, so it is resolved as a clip first and as an audio segment otherwise.
+Right-clicking a clip also selects it.  Commands that would prompt for a
+clip id use the clicked clip instead.
+
+** Menu reference
+
+Entries greyed out are disabled *from the project's real state*.
+
+| Section / entry | Enabled when | Does |
+|-----------------+--------------+------|
+| *Clip #N · kind · frames A–B* | never (header) | Names the clip the menu is about. |
+| Split at playhead | the playhead is strictly inside the clip | ~cmacs-vidstudio-split-at-playhead~. |
+| Trim in to playhead | same | ~cmacs-vidstudio-trim-in-to-playhead~: a ripple edit.  A video clip moves its source in-point; other clips lose the frames before the playhead.  The playhead parks on the clip's start. |
+| Trim out to playhead | same | ~cmacs-vidstudio-trim-out-to-playhead~: video moves its out-point, other clips get shorter. |
+| Ripple delete | always | Removes the clip; later clips close up. |
+| Delete (leave gap) | always | Replaces the clip with a transparent gap of the same length. |
+| Move to track ▸ Track K…, New track | always | ~cmacs-vidstudio-move-clip-to-track~ (appends to that track). |
+| Move earlier / Move later | there is a neighbour that way | Reorders within the track. |
+| Transition in ▸ None, Fade, Dissolve, … Clock-wipe, Custom… | always; current marked | The clip's leading transition, ~cmacs-vidstudio-menu-transition-seconds~ long, linear (Custom… prompts). |
+| Transition out ▸ (same list) | the clip has a next clip (otherwise absent) | Sets the *next* clip's leading transition. |
+| Effects ▸ Add blur/bloom/color-grade/vignette/grain, Effect parameter…, Clear effects | Clear needs an effect | |
+| Keyframe ▸ Add opacity/x/y/scale/rotation keyframe at playhead…, Clear keyframes | Clear needs a keyframe | Keyframes are clip-relative. |
+| Look ▸ Opacity…, Blend mode…, Position / scale…, Picture-in-picture… | always | |
+| Timing ▸ Source in/out…, Duration on timeline…, Playback speed…, Go to clip start | Source in/out and speed need a video clip | |
+| Extract audio | a video clip | Puts its audio on the audio lane. |
+| Copy clip / Duplicate clip | always | Copy keeps the clip's serialized form (global, so it pastes into another project); Duplicate inserts a copy right after it. |
+| Properties… | always | A buffer with the clip's track, position, frames and full serialized form. |
+| *Audio #N* ▸ Volume…, Remove audio… | on an audio segment | Remove asks first (~cmacs-vidstudio-confirm-destructive~). |
+| *Track N (active) · K clip(s)* | never (header) | On a track row, and with any clip (its track). |
+| Make active track | not already active | |
+| Add to this track ▸ Import clip…, Solid colour…, Title…, Animated text…, Gradient…, Rectangle…, Captions (SRT)…, Loop video…, Freeze frame… | always | Makes the clicked track active first, so the clip lands there. |
+| Add audio file… | always | |
+| Paste clip here | a clip has been copied | |
+| Clear track… | the track has clips | Removes every clip (asking first).  The model has no track mute/solo and cannot delete a track, so neither is offered. |
+| Add ▸ (the add entries), Video overlay / PiP…, New track | always | On the active track. |
+| Paste clip | a clip has been copied (shown when no track was clicked) | |
+| Render frame ▸ Refresh preview, Export this frame as an image… | the timeline is not empty | |
+| Transport ▸ Play/Pause, Step forward, Step back, Go to start, Go to end, Go to frame… | Play needs frames; steps/seeks need somewhere to go | Label follows the play state. |
+| Audio ▸ Add audio file…, Set volume…, Export audio… | Set volume needs audio; Export needs frames | |
+| Project ▸ Save, Save as…, Open… | always | |
+| Export ▸ Video…, Animated GIF…, Still frame…, Audio…, Quality (CRF)… | the timeline is not empty | |
+| View ▸ Clip list panel | always | |
+| AI ▸ Suggest cuts from a recording…, Build a highlight reel…, Captions from a transcript… | shown when ~cmacs-ai-supported-p~; the model-backed ones need the AI library | Registered by =cmacs-vidstudio-ai.el= through the hook.  The reel opens in a new editor; captions use the recording's sidecar =.srt=. |
+
+** Display paths
+
+Exactly as for imgedit (see the imgedit chapter's /Display paths/): a GTK
+menu under pgtk; the in-engine ~lrg-popup-menu~ under =emacs --lrg=, where
+~x-popup-menu~ does nothing; built through ~context-menu-map~ and the
+buffer-local ~context-menu-functions~ when =context-menu-mode= is on (the
+global Emacs-buffer entries are left out unless
+~cmacs-media-menu-include-global-context-items~); popped from a 0-delay timer
+for a live-viewport right-click; ~<menu>~ / ~S-<f10>~ from the keyboard.  The
+timeline, preview and clip-list panel carry a =keymap= text property and the
+mode map is an Evil intercept map, so the menu works in Evil normal/motion
+state.
+
+** Adding items
+
+#+begin_src emacs-lisp
+(add-hook 'cmacs-vidstudio-context-menu-functions
+          (lambda (ctx)
+            (when (plist-get ctx :clip)
+              `((:in effects :label "Add glitch"          ; into Effects ▸
+                 :action ,(lambda (c) (my-glitch (plist-get c :clip)))))))
+          50)
+#+end_src
+
+Items are the plists documented in =lisp/cmacs/cmacs-media-menu.el= (shared
+with imgedit).  Submenu ids: =move-to-track= =transition-in=
+=transition-out= =effects= =keyframes= =add-to-track= =add= =render=
+=transport= =audio= =project= =export= =view= =ai=.  An item marked
+~:track-scoped t~ makes the clicked track active before it runs.
 
 * Model API (the ~cmacs-vidstudio-*~ primitives)
 
@@ -225,8 +326,8 @@ A flat *audio lane* mixes into the video export and can be exported on its own
 - ~(cmacs-vidstudio-add-audio-file HANDLE PATH FROM-FRAME VOLUME TRIM-START TRIM-END)~
   — add a wav/ogg/mp3/flac file (key ~A~ prompts for file/start/volume).
 - ~(cmacs-vidstudio-add-audio-from-clip HANDLE CLIP-ID FROM-FRAME VOLUME)~ —
-  extract a video clip's own audio (via ffmpeg) onto the lane (right-click →
-  *Audio → Extract from clip…*).
+  extract a video clip's own audio (via ffmpeg) onto the lane (right-click the clip →
+  *Extract audio*).
 - ~(cmacs-vidstudio-set-audio-volume HANDLE ID V)~ (key ~V~),
   ~(cmacs-vidstudio-set-audio-fade HANDLE ID (IN . OUT))~ (linear fades in
   seconds — applied by pre-scaling samples for clip-extracted audio),
@@ -251,7 +352,11 @@ A flat *audio lane* mixes into the video export and can be exported on its own
 - ~(cmacs-vidstudio-set-clip-duration HANDLE CLIP-ID FRAMES)~.
 - ~(cmacs-vidstudio-split-clip HANDLE CLIP-ID AT-FRAME)~ → new tail id.
 - ~(cmacs-vidstudio-move-clip HANDLE CLIP-ID NEW-TRACK NEW-INDEX)~.
-- ~(cmacs-vidstudio-remove-clip HANDLE CLIP-ID &optional RIPPLE)~.
+- ~(cmacs-vidstudio-remove-clip HANDLE CLIP-ID &optional RIPPLE)~.  Without
+  RIPPLE the clip becomes a transparent gap of the same length, and saves as
+  one (it used to keep the old clip's descriptor, so a reload brought it
+  back).  Moving a clip keeps its keyframes and asset (it used to free them,
+  crashing the next save or render of a moved keyframed clip).
 - Queries: ~clip-at~, ~clip-duration~, ~clip-start-frame~.
 
 ** Preview / export
@@ -301,8 +406,10 @@ headless — an agent can cut a video end-to-end.
 | Project / timeline model (tracks → LrgReelTransitionSeries) | =cmacs/vidstudio/cmacs-vidstudio-proj.{c,h}= (the only TU including =<libregnum.h>=) |
 | DEFUNs + handle registry | =cmacs/vidstudio/cmacs-vidstudio-defuns.c= |
 | Init / sym registration | =cmacs/vidstudio/cmacs-vidstudio-init.c= |
-| Major mode + commands | =lisp/cmacs/cmacs-vidstudio.el= |
-| Tests (headless; export gated on ffmpeg) | =test/cmacs/cmacs-vidstudio-tests.el= |
+| Major mode + commands + right-click menu | =lisp/cmacs/cmacs-vidstudio.el= |
+| Context-menu builder (shared with imgedit) | =lisp/cmacs/cmacs-media-menu.el= |
+| AI menu entries | =lisp/cmacs/cmacs-vidstudio-ai.el= |
+| Tests (headless; export gated on ffmpeg) | =test/cmacs/cmacs-vidstudio-tests.el=, =test/cmacs/cmacs-vidstudio-menu-tests.el= |
 | Reel composition + ffmpeg export | =deps/libregnum/src/reel/= |
 | Real-time decode backend (smooth scrub) | =deps/libregnum/src/video/lrg-video-player.c= (=FFMPEG=1=) |
 

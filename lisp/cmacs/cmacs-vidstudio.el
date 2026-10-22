@@ -12,13 +12,16 @@
 ;; `cmacs-vidstudio-mode' shows the composited preview frame as a native Emacs
 ;; image, with a textual timeline, a playhead, transport, and editing commands.
 ;; The model is also fully scriptable / MCP-driveable via the `cmacs-vidstudio-*'
-;; primitives.  An in-engine libregnum timeline strip + right-click menus are a
-;; planned follow-on layer.
+;; primitives.  Right-click (or the menu key) opens a menu built from what is
+;; under the pointer -- a clip, an audio segment, a timeline row, the preview
+;; -- see `cmacs-vidstudio-context-menu-functions'.  An in-engine libregnum
+;; timeline strip for the native path is a planned follow-on layer.
 
 ;;; Code:
 
 (require 'cl-lib)
-(require 'cmacs-libregnum)  ; for cmacs-libregnum-popup-menu (GTK vs --lrg routing)
+(require 'cmacs-libregnum)  ; live viewport hooks (image-* hook variables)
+(require 'cmacs-media-menu) ; context-built right-click menus (GTK + --lrg)
 (require 'cmacs-evil)       ; Evil/Doom keymap precedence
 (require 'transient)        ; `?' -> keybinding cheat-sheet menu
 
@@ -105,7 +108,13 @@ Every playback frame is a distinct image, so without an explicit
 ;; --------------------------------------------------------------------------
 
 (defun cmacs-vidstudio--timeline-string ()
-  "A one-line-per-track textual view of the timeline."
+  "A one-line-per-track textual view of the timeline.
+
+Each line carries a `cmacs-vidstudio-track' text property (its track),
+each clip cell a `cmacs-vidstudio-clip' property (its id), and the audio
+line's cells `cmacs-vidstudio-audio', so a right-click knows exactly
+what it landed on.  The separating newlines carry the track property
+too: a click past the end of a row is still on that row."
   (let ((n (cmacs-vidstudio-n-tracks cmacs-vidstudio--handle))
         (lines '()))
     (dotimes (tr n)
@@ -118,20 +127,56 @@ Every playback frame is a distinct image, so without an explicit
                  (decoding (and (fboundp 'cmacs-vidstudio-clip-ready-p)
                                 (not (cmacs-vidstudio-clip-ready-p
                                       cmacs-vidstudio--handle id)))))
-            (push (format "[#%d %d+%d%s]" id start dur
-                          (if decoding " decoding…" ""))
+            (push (propertize (format "[#%d %d+%d%s]" id start dur
+                                      (if decoding " decoding…" ""))
+                              'cmacs-vidstudio-clip id
+                              'mouse-face 'highlight
+                              'help-echo (format "Clip #%d -- mouse-3: clip menu"
+                                                 id))
                   cells)))
-        (push (format "%s track %d: %s"
-                      (if (= tr cmacs-vidstudio--active-track) "*" " ")
-                      tr (string-join (nreverse cells) " "))
+        (push (propertize (format "%s track %d: %s"
+                                  (if (= tr cmacs-vidstudio--active-track) "*" " ")
+                                  tr (string-join (nreverse cells) " "))
+                          'cmacs-vidstudio-track tr)
               lines)))
-    (string-join (nreverse lines) "\n")))
+    (let ((audio (cmacs-vidstudio--audio-cells)))
+      (when audio (push audio lines)))
+    (let ((out "") (first t))
+      (dolist (line (nreverse lines))
+        (setq out (concat out
+                          (if first ""
+                            (propertize "\n" 'cmacs-vidstudio-track
+                                        (get-text-property 0 'cmacs-vidstudio-track
+                                                           (substring out -1))))
+                          line)
+              first nil))
+      out)))
+
+(defun cmacs-vidstudio--audio-cells ()
+  "The audio-lane line of the textual timeline, or nil when it is empty."
+  (when (and (fboundp 'cmacs-vidstudio-audio-count)
+             (> (cmacs-vidstudio-audio-count cmacs-vidstudio--handle) 0))
+    (let ((cells nil))
+      (dotimes (ai (cmacs-vidstudio-audio-count cmacs-vidstudio--handle))
+        (let ((info (cmacs-vidstudio-audio-at cmacs-vidstudio--handle ai)))
+          (when info
+            (push (propertize (format "[a#%d %d+%d]" (nth 0 info) (nth 1 info)
+                                      (nth 2 info))
+                              'cmacs-vidstudio-audio (nth 0 info)
+                              'mouse-face 'highlight
+                              'help-echo (format "Audio #%d -- mouse-3: audio menu"
+                                                 (nth 0 info)))
+                  cells))))
+      (concat "   audio: " (string-join (nreverse cells) " ")))))
 
 ;; --------------------------------------------------------------------------
 ;; Clip-list side window (like imgedit's layers panel)
 ;; --------------------------------------------------------------------------
 (defvar-local cmacs-vidstudio--clips-panel nil
   "The clip-list side-window buffer for this project, or nil.")
+(defvar-local cmacs-vidstudio--project-buffer nil
+  "In the clips side panel: the project buffer it lists.")
+(defvar cmacs-vidstudio--panel-row-map)   ; defined with the context menu
 
 (defun cmacs-vidstudio--build-clips-panel (project-buf)
   "Fill the current buffer with PROJECT-BUF's clip list (one line per clip).
@@ -148,7 +193,8 @@ Each clip is a button that selects it (highlighting it on the timeline)."
       (dotimes (tr (cmacs-vidstudio-n-tracks handle))
         (insert (propertize (format " Track %d%s\n" tr
                                     (if (= tr active) "  (active)" ""))
-                            'face 'font-lock-keyword-face))
+                            'face 'font-lock-keyword-face
+                            'cmacs-vidstudio-track tr))
         (let ((nclips (cmacs-vidstudio-track-clip-count handle tr)))
           (if (zerop nclips)
               (insert "   (empty)\n")
@@ -168,7 +214,9 @@ Each clip is a button that selects it (highlighting it on the timeline)."
                              (decoding 'shadow)
                              (t 'default))
                  'follow-link t
-                 'help-echo "Select this clip"
+                 'help-echo "mouse-1: select this clip  mouse-3: clip menu"
+                 'keymap cmacs-vidstudio--panel-row-map
+                 'cmacs-vidstudio-clip id
                  'action (let ((cid id) (pb project-buf))
                            (lambda (_)
                              (when (buffer-live-p pb)
@@ -184,11 +232,15 @@ Each clip is a button that selects it (highlighting it on the timeline)."
           (let ((info (cmacs-vidstudio-audio-at handle ai)))
             (when info
               (insert
-               (format "  #%-3d %5d-%-5d %4dfr%s\n"
-                       (nth 0 info) (nth 1 info)
-                       (+ (nth 1 info) (nth 2 info)) (nth 2 info)
-                       (if (nth 3 info) " (from video)" "")))))))
-      (goto-char (point-min)))))
+               (propertize
+                (format "  #%-3d %5d-%-5d %4dfr%s\n"
+                        (nth 0 info) (nth 1 info)
+                        (+ (nth 1 info) (nth 2 info)) (nth 2 info)
+                        (if (nth 3 info) " (from video)" ""))
+                'cmacs-vidstudio-audio (nth 0 info))))))))
+    (setq-local cmacs-vidstudio--project-buffer project-buf)
+    (cmacs-vidstudio--claim-panel-mouse-3)
+    (goto-char (point-min))))
 
 (defun cmacs-vidstudio--refresh-clips-panel ()
   "Rebuild the clips side panel from the current project, if it is shown."
@@ -208,6 +260,8 @@ Each clip is a button that selects it (highlighting it on the timeline)."
     (with-current-buffer buf
       (unless (derived-mode-p 'special-mode) (special-mode))
       (setq-local cursor-type nil)
+      (cmacs-media-menu-install-context-function
+       #'cmacs-vidstudio--context-menu-function)
       (cmacs-vidstudio--build-clips-panel pb))
     (display-buffer-in-side-window
      buf '((side . right) (window-width . 30) (slot . 0)))))
@@ -434,6 +488,8 @@ churn processes); do a final non-quiet seek on release.  Then re-render."
                         'png t :scale cmacs-vidstudio--preview-scale
                         :ascent 'center))))
                 (insert-image image)
+                (put-text-property (1- (point)) (point)
+                                   'cmacs-vidstudio-preview t)
                 (when cmacs-vidstudio--last-image
                   (image-flush cmacs-vidstudio--last-image))
                 (setq cmacs-vidstudio--last-image image))
@@ -596,9 +652,8 @@ clip the user right-clicked on the timeline strip.")
 (defun cmacs-vidstudio-set-effect-parameter (clip name value)
   "Set effect parameter NAME on CLIP to VALUE."
   (interactive
-   (let* ((k (completing-read "Effect param: "
-                              cmacs-vidstudio--effect-param-alist nil t))
-          (e (cdr (assoc k cmacs-vidstudio--effect-param-alist))))
+   (let ((k (completing-read "Effect param: "
+                             cmacs-vidstudio--effect-param-alist nil t)))
      (list (cmacs-vidstudio--read-clip) k
            (read-number (format "%s value: " k) 1.0))))
   (let ((e (cdr (assoc name cmacs-vidstudio--effect-param-alist))))
@@ -635,7 +690,7 @@ clip the user right-clicked on the timeline strip.")
   (cadr (assq key (cdr data))))
 
 (defun cmacs-vidstudio--replay-clip (handle track clip)
-  "Rebuild one CLIP sexp onto TRACK of HANDLE."
+  "Rebuild one CLIP sexp onto TRACK of HANDLE; return the new clip id."
   (let* ((kind (cmacs-vidstudio--sx 'kind clip))
          (dur (cmacs-vidstudio--sx 'dur clip))
          (asset (cmacs-vidstudio--sx 'asset clip))
@@ -687,7 +742,10 @@ clip the user right-clicked on the timeline strip.")
       (dolist (k (cdr (assq 'keyframes (cdr clip))))
         ;; k = (PARAM EIDX FRAME VALUE EASING [PROP])
         (cmacs-vidstudio-add-keyframe handle id (nth 0 k) (nth 2 k) (nth 3 k)
-                                      (nth 4 k) (nth 1 k) (nth 5 k))))))
+                                      (nth 4 k) (nth 1 k) (nth 5 k))))
+    ;; The new clip's id (nil when the kind is unknown), so paste and
+    ;; duplicate can select and place the copy.
+    id))
 
 (defun cmacs-vidstudio--build-from-sexp (data)
   "Create a project HANDLE from parsed DATA; unknown keys are ignored."
@@ -749,29 +807,9 @@ clip the user right-clicked on the timeline strip.")
                  (goto-char (point-min))
                  (read (current-buffer))))
          (handle (cmacs-vidstudio--build-from-sexp data))
-         (buffer (generate-new-buffer
-                  (format "*vidstudio %s*" (file-name-nondirectory file)))))
-    (with-current-buffer buffer
-      (cmacs-vidstudio-mode)
-      (setq cmacs-vidstudio--handle handle
-            cmacs-vidstudio--file file
-            cmacs-vidstudio--playhead 0
-            cmacs-vidstudio--active-track 0)
-      (setq header-line-format
-            '(:eval (format " vidstudio %dx%d @%.0ffps  frame %d/%d  track %d"
-                            (cmacs-vidstudio-width cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-height cmacs-vidstudio--handle)
-                            (cmacs-vidstudio-fps cmacs-vidstudio--handle)
-                            cmacs-vidstudio--playhead
-                            (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)
-                            cmacs-vidstudio--active-track)))
-      (cmacs-vidstudio--render))
-    (switch-to-buffer buffer)
-    ;; Auto-open the clip-list side window (like imgedit's panels) BEFORE the
-    ;; viewport attaches, so the FBO sizes to the reduced main window.
-    (with-current-buffer buffer (cmacs-vidstudio--open-clips-panel))
-    (cmacs-vidstudio--maybe-attach-viewport buffer)
-    (with-current-buffer buffer (cmacs-vidstudio--render))
+         (buffer (cmacs-vidstudio--open-handle
+                  handle (format "*vidstudio %s*" (file-name-nondirectory file))
+                  file)))
     (message "Opened %s" file)
     buffer))
 
@@ -1045,7 +1083,8 @@ slice; OUT-SEC of 0 means the source end."
 (defun cmacs-vidstudio-set-clip-duration-cmd (clip seconds)
   "Set CLIP's on-timeline length to SECONDS (how long it occupies the
 timeline).  For a video this holds the last frame when extended past its
-source slice; to change which part of the source plays use \[cmacs-vidstudio-set-clip-trim-cmd]."
+source slice; to change which part of the source plays use
+\[cmacs-vidstudio-set-clip-trim-cmd]."
   (interactive
    (let ((clip (cmacs-vidstudio--read-clip)))
      (list clip
@@ -1073,7 +1112,7 @@ source slice; to change which part of the source plays use \[cmacs-vidstudio-set
 (defun cmacs-vidstudio-add-effect-cmd (clip-id type)
   "Append effect TYPE to CLIP-ID."
   (interactive
-   (list (read-number "Clip id: ")
+   (list (cmacs-vidstudio--read-clip)
          (cdr (assoc (completing-read "Effect: "
                                       cmacs-vidstudio-effect-alist nil t)
                      cmacs-vidstudio-effect-alist))))
@@ -1082,7 +1121,7 @@ source slice; to change which part of the source plays use \[cmacs-vidstudio-set
 
 (defun cmacs-vidstudio-split-at-playhead (clip-id)
   "Split CLIP-ID at the current playhead (relative to its start)."
-  (interactive (list (read-number "Clip id: ")))
+  (interactive (list (cmacs-vidstudio--read-clip)))
   (let* ((start (cmacs-vidstudio-clip-start-frame cmacs-vidstudio--handle clip-id))
          (at (- cmacs-vidstudio--playhead start)))
     (if (cmacs-vidstudio-split-clip cmacs-vidstudio--handle clip-id at)
@@ -1301,7 +1340,7 @@ default `veryfast' is much quicker than ffmpeg's slow `medium' default."
    path "(cmacs-vidstudio-export-gif h out)" "GIF"))
 
 ;; --------------------------------------------------------------------------
-;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
+;; More clip kinds (shapes, captions, loops, freeze frames, rich text)
 ;; --------------------------------------------------------------------------
 
 (defun cmacs-vidstudio-add-rectangle (x y w h color seconds)
@@ -1370,73 +1409,745 @@ default `veryfast' is much quicker than ffmpeg's slow `medium' default."
                                  font-size (or effect 0))
   (cmacs-vidstudio--render))
 
-(defun cmacs-vidstudio--menu ()
-  "Return the video-editor context-menu alist (shared native + viewport)."
-  '("Video editor"
-            ("Add"
-             ("Import clip…" . cmacs-vidstudio-import)
-             ("Solid colour…" . cmacs-vidstudio-add-color)
-             ("Title…" . cmacs-vidstudio-add-title)
-             ("Animated text…" . cmacs-vidstudio-add-animated-text)
-             ("Gradient…" . cmacs-vidstudio-add-gradient)
-             ("Rectangle…" . cmacs-vidstudio-add-rectangle)
-             ("Captions (SRT)…" . cmacs-vidstudio-add-captions)
-             ("Loop video…" . cmacs-vidstudio-add-loop)
-             ("Freeze frame…" . cmacs-vidstudio-add-freeze)
-             ("Video overlay / PiP…" . cmacs-vidstudio-add-video-overlay)
-             ("New track" . cmacs-vidstudio-add-track-cmd))
-            ("Clip"
-             ("Transition…" . cmacs-vidstudio-add-transition-cmd)
-             ("Effect…" . cmacs-vidstudio-add-effect-cmd)
-             ("Effect parameter…" . cmacs-vidstudio-set-effect-parameter)
-             ("Opacity…" . cmacs-vidstudio-set-clip-opacity)
-             ("Blend mode…" . cmacs-vidstudio-set-clip-blend)
-             ("Transform (pos/scale)…" . cmacs-vidstudio-set-clip-transform)
-             ("Make PiP overlay…" . cmacs-vidstudio-set-clip-box-cmd)
-             ("Playback speed…" . cmacs-vidstudio-set-clip-speed)
-             ("Add keyframe…" . cmacs-vidstudio-add-keyframe-cmd)
-             ("Clear keyframes…" . cmacs-vidstudio-clear-keyframes-cmd)
-             ("Trim in/out (source slice)…" . cmacs-vidstudio-set-clip-trim-cmd)
-             ("Set on-timeline duration…" . cmacs-vidstudio-set-clip-duration-cmd)
-             ("Split at playhead…" . cmacs-vidstudio-split-at-playhead)
-             ("Active track…" . cmacs-vidstudio-set-active-track))
-            ("Transport"
-             ("Play/pause" . cmacs-vidstudio-play)
-             ("Step forward" . cmacs-vidstudio-step-forward)
-             ("Step back" . cmacs-vidstudio-step-back)
-             ("Go to frame…" . cmacs-vidstudio-set-playhead-cmd))
-            ("Project"
-             ("Save" . cmacs-vidstudio-save)
-             ("Save as…" . cmacs-vidstudio-save-as)
-             ("Open…" . cmacs-vidstudio-open))
-            ("Audio"
-             ("Add audio file…" . cmacs-vidstudio-add-audio)
-             ("Extract from clip…" . cmacs-vidstudio-extract-audio)
-             ("Set volume…" . cmacs-vidstudio-set-audio-gain)
-             ("Export audio…" . cmacs-vidstudio-export-audio-cmd))
-            ("Export"
-             ("Video (MP4)…" . cmacs-vidstudio-export-video-cmd)
-             ("Animated GIF…" . cmacs-vidstudio-export-gif-cmd)
-             ("Still frame…" . cmacs-vidstudio-export-still-cmd)
-             ("Quality (CRF)…" . cmacs-vidstudio-set-export-quality-cmd))))
+;; --------------------------------------------------------------------------
+;; Clip operations the menu needs beyond the commands above
+;; --------------------------------------------------------------------------
 
-(defun cmacs-vidstudio-context-menu (event)
-  "Pop the video-editor context menu for mouse EVENT (native path).
-Routes through `cmacs-libregnum-popup-menu' (native GTK under pgtk,
-in-engine libregnum menu under --lrg)."
-  (interactive "e")
-  ;; A mouse command runs with the SELECTED window's buffer current, which
-  ;; may not be the clicked editor buffer — select the event's window so the
-  ;; menu commands see this buffer's project handle.
+(defcustom cmacs-vidstudio-confirm-destructive t
+  "Ask before the right-click menu clears a track or removes audio.
+The project model has no undo, so those cannot be taken back."
+  :type 'boolean)
+
+(defcustom cmacs-vidstudio-menu-transition-seconds 1.0
+  "Overlap, in seconds, of a transition picked straight from the menu.
+The \"Custom…\" entry prompts for the overlap and easing instead."
+  :type 'number)
+
+(defvar cmacs-vidstudio--clip-clipboard nil
+  "The last clip copied from a vidstudio menu: its project sexp, or nil.
+Global, so a clip can be pasted into another project.")
+
+(defun cmacs-vidstudio--project-sexp ()
+  "The current project, parsed from `cmacs-vidstudio-serialize'."
+  (ignore-errors (car (read-from-string
+                       (cmacs-vidstudio-serialize cmacs-vidstudio--handle)))))
+
+(defun cmacs-vidstudio--clip-sexp (id &optional data)
+  "The serialized (clip ...) form of clip ID, from DATA or the project."
+  (let ((data (or data (cmacs-vidstudio--project-sexp))))
+    (catch 'found
+      (dolist (tr (cdr (assq 'tracks (cdr data))))
+        (dolist (clip (cdr-safe tr))
+          (when (and (eq (car-safe clip) 'clip)
+                     (eql (cmacs-vidstudio--sx 'id clip) id))
+            (throw 'found clip))))
+      nil)))
+
+(defun cmacs-vidstudio--clip-track (id)
+  "(TRACK . INDEX) of clip ID, or nil when no track holds it."
+  (let ((h cmacs-vidstudio--handle))
+    (catch 'found
+      (dotimes (tr (cmacs-vidstudio-n-tracks h))
+        (dotimes (i (cmacs-vidstudio-track-clip-count h tr))
+          (when (eql (cmacs-vidstudio-clip-at h tr i) id)
+            (throw 'found (cons tr i)))))
+      nil)))
+
+(defun cmacs-vidstudio--audio-ids ()
+  "The ids of every audio segment on the lane."
+  (let ((h cmacs-vidstudio--handle) (ids nil))
+    (when (fboundp 'cmacs-vidstudio-audio-count)
+      (dotimes (i (cmacs-vidstudio-audio-count h))
+        (let ((info (cmacs-vidstudio-audio-at h i)))
+          (when info (push (nth 0 info) ids)))))
+    (nreverse ids)))
+
+(defun cmacs-vidstudio-copy-clip (clip)
+  "Copy CLIP (its kind, asset, look, effects and keyframes) for pasting."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (let ((sx (cmacs-vidstudio--clip-sexp clip)))
+    (unless sx (user-error "vidstudio: no clip #%s" clip))
+    (setq cmacs-vidstudio--clip-clipboard sx)
+    (message "Copied clip #%d" clip)))
+
+(defun cmacs-vidstudio-paste-clip (&optional track)
+  "Append the copied clip to TRACK (default: the active track).
+Returns the new clip's id."
+  (interactive)
+  (unless cmacs-vidstudio--clip-clipboard
+    (user-error "vidstudio: no clip has been copied"))
+  (let* ((tr (or track cmacs-vidstudio--active-track))
+         (id (cmacs-vidstudio--replay-clip cmacs-vidstudio--handle tr
+                                           cmacs-vidstudio--clip-clipboard)))
+    (unless (and id (>= id 0))
+      (user-error "vidstudio: could not paste that clip"))
+    (setq cmacs-vidstudio--selected-clip id)
+    (cmacs-vidstudio--render)
+    (message "Pasted clip #%d onto track %d" id tr)
+    id))
+
+(defun cmacs-vidstudio-duplicate-clip (clip)
+  "Insert a copy of CLIP right after it on its track; return the copy's id."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (let ((sx (cmacs-vidstudio--clip-sexp clip))
+        (where (cmacs-vidstudio--clip-track clip)))
+    (unless (and sx where) (user-error "vidstudio: no clip #%s" clip))
+    (let ((id (cmacs-vidstudio--replay-clip cmacs-vidstudio--handle
+                                            (car where) sx)))
+      (unless (and id (>= id 0))
+        (user-error "vidstudio: could not duplicate clip #%s" clip))
+      (cmacs-vidstudio-move-clip cmacs-vidstudio--handle id (car where)
+                                 (1+ (cdr where)))
+      (setq cmacs-vidstudio--selected-clip id)
+      (cmacs-vidstudio--render)
+      (message "Duplicated clip #%d as #%d" clip id)
+      id)))
+
+(defun cmacs-vidstudio-delete-clip (clip &optional ripple)
+  "Remove CLIP.  With RIPPLE, later clips on its track close the gap;
+otherwise a transparent gap of the same length is left in its place."
+  (interactive (list (cmacs-vidstudio--read-clip) current-prefix-arg))
+  (unless (cmacs-vidstudio-remove-clip cmacs-vidstudio--handle clip
+                                       (and ripple t))
+    (user-error "vidstudio: no clip #%s" clip))
+  (when (eql cmacs-vidstudio--selected-clip clip)
+    (setq cmacs-vidstudio--selected-clip nil))
+  (cmacs-vidstudio--render)
+  (message "%s clip #%d" (if ripple "Ripple-deleted" "Deleted") clip))
+
+(defun cmacs-vidstudio-move-clip-to-track (clip track)
+  "Move CLIP to the end of TRACK (a new track when TRACK is nil)."
+  (interactive (list (cmacs-vidstudio--read-clip)
+                     (read-number "To track: " 0)))
+  (let ((tr (or track (cmacs-vidstudio-add-track cmacs-vidstudio--handle))))
+    (unless (cmacs-vidstudio-move-clip
+             cmacs-vidstudio--handle clip tr
+             (cmacs-vidstudio-track-clip-count cmacs-vidstudio--handle tr))
+      (user-error "vidstudio: cannot move clip #%s to track %s" clip tr))
+    (cmacs-vidstudio--render)
+    (message "Moved clip #%d to track %d" clip tr)))
+
+(defun cmacs-vidstudio-shift-clip (clip delta)
+  "Move CLIP DELTA places along its own track (-1 earlier, 1 later)."
+  (interactive (list (cmacs-vidstudio--read-clip) 1))
+  (let ((where (cmacs-vidstudio--clip-track clip)))
+    (unless where (user-error "vidstudio: no clip #%s" clip))
+    (cmacs-vidstudio-move-clip cmacs-vidstudio--handle clip (car where)
+                               (max 0 (+ (cdr where) delta)))
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio--offset-in-clip (clip)
+  "Frames from CLIP's start to the playhead, when the playhead is
+strictly inside CLIP (so that a cut there leaves two non-empty parts);
+nil otherwise."
+  (let* ((h cmacs-vidstudio--handle)
+         (start (cmacs-vidstudio-clip-start-frame h clip))
+         (dur (cmacs-vidstudio-clip-duration h clip))
+         (off (- cmacs-vidstudio--playhead start)))
+    (and (> off 0) (< off dur) off)))
+
+(defun cmacs-vidstudio-trim-in-to-playhead (clip)
+  "Cut the part of CLIP before the playhead.
+
+A ripple edit: CLIP gets shorter and the clips after it on its track
+move up.  A video clip moves its source in-point, so the frame under
+the playhead stays the one that plays; any other clip just loses the
+frames before the playhead.  Keyframes are clip-relative, so they shift
+with the new start."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (let* ((h cmacs-vidstudio--handle)
+         (off (or (cmacs-vidstudio--offset-in-clip clip)
+                  (user-error "vidstudio: the playhead is not inside clip #%s"
+                              clip)))
+         (sl (cmacs-vidstudio-clip-slice h clip))
+         (start (cmacs-vidstudio-clip-start-frame h clip)))
+    (if sl
+        (cmacs-vidstudio-set-clip-trim
+         h clip (+ (nth 0 sl) (cmacs-vidstudio--frames-to-secs off))
+         (nth 1 sl))
+      (cmacs-vidstudio-set-clip-duration
+       h clip (- (cmacs-vidstudio-clip-duration h clip) off)))
+    (setq cmacs-vidstudio--playhead start)
+    (cmacs-vidstudio--render)
+    (message "Trimmed the head of clip #%d by %d frames" clip off)))
+
+(defun cmacs-vidstudio-trim-out-to-playhead (clip)
+  "Cut the part of CLIP from the playhead on (a ripple edit).
+A video clip moves its source out-point; any other clip gets shorter."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (let* ((h cmacs-vidstudio--handle)
+         (off (or (cmacs-vidstudio--offset-in-clip clip)
+                  (user-error "vidstudio: the playhead is not inside clip #%s"
+                              clip)))
+         (sl (cmacs-vidstudio-clip-slice h clip)))
+    (if sl
+        (cmacs-vidstudio-set-clip-trim
+         h clip (nth 0 sl)
+         (+ (nth 0 sl) (cmacs-vidstudio--frames-to-secs off)))
+      (cmacs-vidstudio-set-clip-duration h clip off))
+    (cmacs-vidstudio--render)
+    (message "Trimmed clip #%d to %d frames" clip off)))
+
+(defun cmacs-vidstudio--next-clip (clip)
+  "The clip after CLIP on its track, or nil."
+  (let ((where (cmacs-vidstudio--clip-track clip)))
+    (when (and where
+               (< (1+ (cdr where))
+                  (cmacs-vidstudio-track-clip-count cmacs-vidstudio--handle
+                                                    (car where))))
+      (cmacs-vidstudio-clip-at cmacs-vidstudio--handle (car where)
+                               (1+ (cdr where))))))
+
+(defun cmacs-vidstudio-set-clip-transition (clip type)
+  "Give CLIP a leading transition of TYPE (-1 removes it).
+Uses `cmacs-vidstudio-menu-transition-seconds' and linear easing."
+  (cmacs-vidstudio-set-transition
+   cmacs-vidstudio--handle clip type
+   (if (< type 0) 0
+     (cmacs-vidstudio--secs-to-frames cmacs-vidstudio-menu-transition-seconds))
+   0)
+  (cmacs-vidstudio--render))
+
+(defun cmacs-vidstudio-clear-track (track)
+  "Remove every clip on TRACK (asking first; see
+`cmacs-vidstudio-confirm-destructive').  The track itself stays: the
+project model cannot delete tracks."
+  (interactive (list (read-number "Clear track: "
+                                  cmacs-vidstudio--active-track)))
+  (let* ((h cmacs-vidstudio--handle)
+         (n (cmacs-vidstudio-track-clip-count h track)))
+    (when (and (> n 0)
+               (or (not cmacs-vidstudio-confirm-destructive)
+                   (yes-or-no-p (format "Remove all %d clip(s) on track %d? "
+                                        n track))))
+      (let ((ids (mapcar (lambda (i) (cmacs-vidstudio-clip-at h track i))
+                         (number-sequence 0 (1- n)))))
+        (dolist (id ids) (cmacs-vidstudio-remove-clip h id t)))
+      (setq cmacs-vidstudio--selected-clip nil)
+      (cmacs-vidstudio--render)
+      (message "Cleared track %d" track))))
+
+(defun cmacs-vidstudio-remove-audio-cmd (id)
+  "Remove audio segment ID (asking first)."
+  (interactive (list (read-number "Audio clip id: " 0)))
+  (when (or (not cmacs-vidstudio-confirm-destructive)
+            (yes-or-no-p (format "Remove audio #%d? " id)))
+    (cmacs-vidstudio-remove-audio cmacs-vidstudio--handle id)
+    (cmacs-vidstudio--render)))
+
+(defun cmacs-vidstudio-clip-properties (clip)
+  "Show everything the project records about CLIP."
+  (interactive (list (cmacs-vidstudio--read-clip)))
+  (let* ((h cmacs-vidstudio--handle)
+         (sx (cmacs-vidstudio--clip-sexp clip))
+         (where (cmacs-vidstudio--clip-track clip))
+         (start (cmacs-vidstudio-clip-start-frame h clip))
+         (dur (cmacs-vidstudio-clip-duration h clip)))
+    (unless sx (user-error "vidstudio: no clip #%s" clip))
+    (with-current-buffer (get-buffer-create
+                          (format "*vidstudio clip #%d*" clip))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Clip #%d   track %d, position %d\n" clip
+                        (car where) (cdr where))
+                (format "Frames    %d .. %d  (%d frames, %.2fs)\n"
+                        start (+ start dur) dur
+                        (/ dur (max 1.0 (cmacs-vidstudio-fps h))))
+                (format "Keyframes %d\n\n" (cmacs-vidstudio-keyframe-count
+                                            h clip)))
+        (pp sx (current-buffer))
+        (lisp-data-mode)
+        (read-only-mode 1)
+        (goto-char (point-min)))
+      (display-buffer (current-buffer)))))
+
+(defun cmacs-vidstudio-seek-start ()
+  "Move the playhead to the first frame."
+  (interactive)
+  (cmacs-vidstudio--seek 0))
+
+(defun cmacs-vidstudio-seek-end ()
+  "Move the playhead to the last frame."
+  (interactive)
+  (cmacs-vidstudio--seek
+   (max 0 (1- (cmacs-vidstudio-total-frames cmacs-vidstudio--handle)))))
+
+;; --------------------------------------------------------------------------
+;; Right-click context menu (GTK under pgtk, in-engine under --lrg)
+;; --------------------------------------------------------------------------
+;;
+;; Built by cmacs-media-menu.el from the click context.  Every section is
+;; an ordinary member of `cmacs-vidstudio-context-menu-functions'; the AI
+;; layer (cmacs-vidstudio-ai.el) and user code add items the same way.
+
+(defvar cmacs-vidstudio-context-menu-functions
+  '(cmacs-vidstudio-menu-clip-items
+    cmacs-vidstudio-menu-audio-items
+    cmacs-vidstudio-menu-track-items
+    cmacs-vidstudio-menu-project-items)
+  "Functions that contribute items to the vidstudio right-click menu.
+
+Each is called with the click CONTEXT, a plist:
+
+  :editor  the symbol `vidstudio'
+  :buffer  the project buffer       :handle  its project handle
+  :area    what was clicked: `clip', `audio', `track', `preview',
+           `empty' (nothing), or `keyboard'
+  :clip    the clip id under the pointer, or nil
+  :track   that clip's track, or the timeline row clicked, or nil
+  :audio   the audio segment id under the pointer, or nil
+  :frame   the playhead            :total   the timeline length
+  :data    the clip's serialized (clip ...) form, when :clip is set
+  :source  `timeline', `viewport', `clips-panel' or `keyboard'
+
+and returns a list of menu items in the shape `cmacs-media-menu.el'
+documents.  Items show in hook order; use `add-hook' with a depth to
+place new ones, and `:in' with one of these submenu ids to extend an
+existing submenu:
+
+  move-to-track  transition-in  transition-out  effects  keyframes
+  add-to-track  add  render  transport  audio  project  export  view
+
+The model has no track mute/solo and cannot delete a track, so the
+track section offers \"Clear track\" instead.")
+
+(defun cmacs-vidstudio-menu-context (&rest props)
+  "Build a click context for the current project from PROPS.
+PROPS may give :clip, :track, :audio, :area and :source; the rest is
+filled in.  See `cmacs-vidstudio-context-menu-functions'."
+  (let* ((h cmacs-vidstudio--handle)
+         (clip (plist-get props :clip))
+         (audio (plist-get props :audio))
+         (where (and clip (cmacs-vidstudio--clip-track clip)))
+         (track (or (car where) (plist-get props :track))))
+    (list :editor 'vidstudio
+          :buffer (current-buffer)
+          :handle h
+          :clip clip
+          :track track
+          :audio audio
+          :area (or (plist-get props :area)
+                    (cond (clip 'clip) (audio 'audio) (track 'track)
+                          (t 'empty)))
+          :frame cmacs-vidstudio--playhead
+          :total (cmacs-vidstudio-total-frames h)
+          :data (and clip (cmacs-vidstudio--clip-sexp clip))
+          :source (or (plist-get props :source) 'timeline))))
+
+(defun cmacs-vidstudio--menu-invoke (item ctx)
+  "Run ITEM for CTX with the clicked clip and track in scope.
+Commands that would prompt for a clip id take CTX's clip instead (via
+`cmacs-vidstudio--context-clip'); items marked `:track-scoped' make
+CTX's track the active one first, so \"add\" commands land on the track
+that was clicked."
+  (let ((buffer (plist-get ctx :buffer)))
+    (with-current-buffer (if (buffer-live-p buffer) buffer (current-buffer))
+      (let ((cmacs-vidstudio--context-clip (plist-get ctx :clip)))
+        (when (and (plist-get item :track-scoped) (plist-get ctx :track))
+          (setq cmacs-vidstudio--active-track (plist-get ctx :track)))
+        (cmacs-media-menu-invoke item ctx)))))
+
+(defun cmacs-vidstudio--transition-items (target current)
+  "Items setting TARGET clip's leading transition; CURRENT is its type."
+  (append
+   (mapcar (lambda (tr)
+             (list :label (if (eql (cdr tr) (or current -1))
+                              (format "%s (current)" (capitalize (car tr)))
+                            (capitalize (car tr)))
+                   :action (lambda (_c)
+                             (cmacs-vidstudio-set-clip-transition
+                              target (cdr tr)))))
+           cmacs-vidstudio-transition-alist)
+   (list '(:sep)
+         (list :label "Custom…"
+               :action (lambda (_c)
+                         (let ((cmacs-vidstudio--context-clip target))
+                           (call-interactively
+                            #'cmacs-vidstudio-add-transition-cmd)))))))
+
+(defun cmacs-vidstudio--transition-of (data)
+  "The transition type recorded in clip sexp DATA, or nil."
+  (nth 1 (assq 'transition (cdr data))))
+
+(defun cmacs-vidstudio-menu-clip-items (ctx)
+  "Menu section for the clip under the pointer."
+  (let ((clip (plist-get ctx :clip)))
+    (when clip
+      (let* ((h (plist-get ctx :handle))
+             (data (plist-get ctx :data))
+             (track (plist-get ctx :track))
+             (where (cmacs-vidstudio--clip-track clip))
+             (start (cmacs-vidstudio-clip-start-frame h clip))
+             (dur (cmacs-vidstudio-clip-duration h clip))
+             (inside (and (cmacs-vidstudio--offset-in-clip clip) t))
+             (video (and (cmacs-vidstudio-clip-slice h clip) t))
+             (next (cmacs-vidstudio--next-clip clip))
+             (ntracks (cmacs-vidstudio-n-tracks h))
+             (kind (pcase (cmacs-vidstudio--sx 'kind data)
+                     (0 "solid") (1 "image") (2 "video") (3 "text")
+                     (_ "clip"))))
+        `((:label ,(format "Clip #%d · %s · frames %d–%d" clip kind
+                           start (+ start dur))
+           :enable nil)
+          (:label "Split at playhead" :enable ,inside
+           :action ,(lambda (_c) (cmacs-vidstudio-split-at-playhead clip)))
+          (:label "Trim in to playhead" :enable ,inside
+           :action ,(lambda (_c) (cmacs-vidstudio-trim-in-to-playhead clip)))
+          (:label "Trim out to playhead" :enable ,inside
+           :action ,(lambda (_c) (cmacs-vidstudio-trim-out-to-playhead clip)))
+          (:label "Ripple delete"
+           :action ,(lambda (_c) (cmacs-vidstudio-delete-clip clip t)))
+          (:label "Delete (leave gap)"
+           :action ,(lambda (_c) (cmacs-vidstudio-delete-clip clip nil)))
+          (:sep)
+          (:id move-to-track :label "Move to track"
+           :items
+           (,@(delq nil
+                    (mapcar (lambda (tr)
+                              (unless (eql tr track)
+                                (list :label (format "Track %d" tr)
+                                      :action
+                                      (lambda (_c)
+                                        (cmacs-vidstudio-move-clip-to-track
+                                         clip tr)))))
+                            (number-sequence 0 (1- ntracks))))
+            (:label "New track"
+             :action ,(lambda (_c)
+                        (cmacs-vidstudio-move-clip-to-track clip nil)))))
+          (:label "Move earlier" :enable ,(and where (> (cdr where) 0))
+           :action ,(lambda (_c) (cmacs-vidstudio-shift-clip clip -1)))
+          (:label "Move later"
+           :enable ,(and where
+                         (< (1+ (cdr where))
+                            (cmacs-vidstudio-track-clip-count h (car where))))
+           :action ,(lambda (_c) (cmacs-vidstudio-shift-clip clip 1)))
+          (:sep)
+          (:id transition-in :label "Transition in"
+           :items ,(cmacs-vidstudio--transition-items
+                    clip (cmacs-vidstudio--transition-of data)))
+          (:id transition-out :label "Transition out" :enable ,(and next t)
+           :items ,(and next
+                        (cmacs-vidstudio--transition-items
+                         next (cmacs-vidstudio--transition-of
+                               (cmacs-vidstudio--clip-sexp next)))))
+          (:id effects :label "Effects"
+           :items
+           (,@(mapcar (lambda (fx)
+                        (list :label (format "Add %s" (car fx))
+                              :action (lambda (_c)
+                                        (cmacs-vidstudio-add-effect-cmd
+                                         clip (cdr fx)))))
+                      cmacs-vidstudio-effect-alist)
+            (:sep)
+            (:label "Effect parameter…"
+             :command cmacs-vidstudio-set-effect-parameter)
+            (:label "Clear effects"
+             :enable ,(and (assq 'effects (cdr data)) t)
+             :action ,(lambda (_c)
+                        (cmacs-vidstudio-clear-effects h clip)
+                        (cmacs-vidstudio--render)))))
+          (:id keyframes :label "Keyframe"
+           :items
+           (,@(mapcar (lambda (p)
+                        (list :label (format "Add %s keyframe at playhead…"
+                                             (car p))
+                              :action
+                              (lambda (_c)
+                                (cmacs-vidstudio-add-keyframe-cmd
+                                 clip (cdr p)
+                                 (read-number (format "%s value: " (car p))
+                                              (if (equal (car p) "scale")
+                                                  1.0 0.0))))))
+                      cmacs-vidstudio--kf-param-alist)
+            (:sep)
+            (:label "Clear keyframes"
+             :enable ,(> (cmacs-vidstudio-keyframe-count h clip) 0)
+             :command cmacs-vidstudio-clear-keyframes-cmd)))
+          (:label "Look"
+           :items
+           ((:label "Opacity…" :command cmacs-vidstudio-set-clip-opacity)
+            (:label "Blend mode…" :command cmacs-vidstudio-set-clip-blend)
+            (:label "Position / scale…"
+             :command cmacs-vidstudio-set-clip-transform)
+            (:label "Picture-in-picture…"
+             :command cmacs-vidstudio-set-clip-box-cmd)))
+          (:label "Timing"
+           :items
+           ((:label "Source in/out…" :enable ,video
+             :command cmacs-vidstudio-set-clip-trim-cmd)
+            (:label "Duration on timeline…"
+             :command cmacs-vidstudio-set-clip-duration-cmd)
+            (:label "Playback speed…" :enable ,video
+             :command cmacs-vidstudio-set-clip-speed)
+            (:label "Go to clip start"
+             :action ,(lambda (_c) (cmacs-vidstudio--seek start)))))
+          (:label "Extract audio" :enable ,video
+           :command cmacs-vidstudio-extract-audio)
+          (:sep)
+          (:label "Copy clip"
+           :action ,(lambda (_c) (cmacs-vidstudio-copy-clip clip)))
+          (:label "Duplicate clip"
+           :action ,(lambda (_c) (cmacs-vidstudio-duplicate-clip clip)))
+          (:label "Properties…"
+           :action ,(lambda (_c) (cmacs-vidstudio-clip-properties clip)))
+          (:sep))))))
+
+(defun cmacs-vidstudio-menu-audio-items (ctx)
+  "Menu section for the audio segment under the pointer."
+  (let ((id (plist-get ctx :audio)))
+    (when id
+      `((:label ,(format "Audio #%d" id) :enable nil)
+        (:label "Volume…"
+         :action ,(lambda (_c)
+                    (cmacs-vidstudio-set-audio-gain
+                     id (read-number "Volume (0..1): " 1.0))))
+        (:label "Remove audio…"
+         :action ,(lambda (_c) (cmacs-vidstudio-remove-audio-cmd id)))
+        (:sep)))))
+
+(defconst cmacs-vidstudio--add-items
+  '((:label "Import clip…" :command cmacs-vidstudio-import)
+    (:label "Solid colour…" :command cmacs-vidstudio-add-color)
+    (:label "Title…" :command cmacs-vidstudio-add-title)
+    (:label "Animated text…" :command cmacs-vidstudio-add-animated-text)
+    (:label "Gradient…" :command cmacs-vidstudio-add-gradient)
+    (:label "Rectangle…" :command cmacs-vidstudio-add-rectangle)
+    (:label "Captions (SRT)…" :command cmacs-vidstudio-add-captions)
+    (:label "Loop video…" :command cmacs-vidstudio-add-loop)
+    (:label "Freeze frame…" :command cmacs-vidstudio-add-freeze))
+  "The \"add a clip\" items, shared by the track and project sections.")
+
+(defun cmacs-vidstudio-menu-track-items (ctx)
+  "Menu section for the timeline row under the pointer."
+  (let ((track (plist-get ctx :track)))
+    (when track
+      (let* ((h (plist-get ctx :handle))
+             (n (cmacs-vidstudio-track-clip-count h track))
+             (active (eql track cmacs-vidstudio--active-track)))
+        `((:label ,(format "Track %d%s · %d clip(s)" track
+                           (if active " (active)" "") n)
+           :enable nil)
+          (:label "Make active track" :enable ,(not active)
+           :action ,(lambda (_c) (cmacs-vidstudio-set-active-track track)))
+          (:id add-to-track :label "Add to this track"
+           :items ,(mapcar (lambda (it) (append it '(:track-scoped t)))
+                           cmacs-vidstudio--add-items))
+          (:label "Add audio file…" :command cmacs-vidstudio-add-audio)
+          (:label "Paste clip here" :enable ,(and cmacs-vidstudio--clip-clipboard t)
+           :action ,(lambda (_c) (cmacs-vidstudio-paste-clip track)))
+          (:label "Clear track…" :enable ,(> n 0)
+           :action ,(lambda (_c) (cmacs-vidstudio-clear-track track)))
+          (:sep))))))
+
+(defun cmacs-vidstudio-menu-project-items (ctx)
+  "Menu section that is always there: add, paste, render, transport,
+audio, project, export, view."
+  (let* ((total (plist-get ctx :total))
+         (frame (plist-get ctx :frame))
+         (some (> total 0)))
+    `((:id add :label "Add"
+       :items (,@cmacs-vidstudio--add-items
+               (:sep)
+               (:label "Video overlay / PiP…"
+                :command cmacs-vidstudio-add-video-overlay)
+               (:label "New track" :command cmacs-vidstudio-add-track-cmd)))
+      ,@(unless (plist-get ctx :track)
+          `((:label "Paste clip" :enable ,(and cmacs-vidstudio--clip-clipboard t)
+             :command cmacs-vidstudio-paste-clip)))
+      (:id render :label "Render frame"
+       :items
+       ((:label "Refresh preview" :enable ,some
+         :action ,(lambda (_c) (cmacs-vidstudio--render)))
+        (:label "Export this frame as an image…" :enable ,some
+         :command cmacs-vidstudio-export-still-cmd)))
+      (:id transport :label "Transport"
+       :items
+       ((:label ,(if cmacs-vidstudio--play-timer "Pause" "Play")
+         :enable ,some :command cmacs-vidstudio-play :keys "p")
+        (:label "Step forward" :enable ,(< (1+ frame) total)
+         :command cmacs-vidstudio-step-forward)
+        (:label "Step back" :enable ,(> frame 0)
+         :command cmacs-vidstudio-step-back)
+        (:label "Go to start" :enable ,(> frame 0)
+         :command cmacs-vidstudio-seek-start)
+        (:label "Go to end" :enable ,(< (1+ frame) total)
+         :command cmacs-vidstudio-seek-end)
+        (:label "Go to frame…" :enable ,some
+         :command cmacs-vidstudio-set-playhead-cmd :keys ".")))
+      (:id audio :label "Audio"
+       :items
+       ((:label "Add audio file…" :command cmacs-vidstudio-add-audio)
+        (:label "Set volume…" :enable ,(and (cmacs-vidstudio--audio-ids) t)
+         :command cmacs-vidstudio-set-audio-gain)
+        (:label "Export audio…" :enable ,some
+         :command cmacs-vidstudio-export-audio-cmd)))
+      (:sep)
+      (:id project :label "Project"
+       :items
+       ((:label "Save" :command cmacs-vidstudio-save)
+        (:label "Save as…" :command cmacs-vidstudio-save-as)
+        (:label "Open…" :command cmacs-vidstudio-open)))
+      (:id export :label "Export" :enable ,some
+       :items
+       ((:label "Video…" :command cmacs-vidstudio-export-video-cmd)
+        (:label "Animated GIF…" :command cmacs-vidstudio-export-gif-cmd)
+        (:label "Still frame…" :command cmacs-vidstudio-export-still-cmd)
+        (:label "Audio…" :command cmacs-vidstudio-export-audio-cmd)
+        (:label "Quality (CRF)…"
+         :command cmacs-vidstudio-set-export-quality-cmd)))
+      (:id view :label "View"
+       :items
+       ((:label "Clip list panel"
+         :command cmacs-vidstudio-toggle-clips-panel))))))
+
+(defun cmacs-vidstudio-context-menu-keymap (ctx)
+  "The vidstudio right-click menu for click context CTX, as a menu keymap.
+Collects every function on `cmacs-vidstudio-context-menu-functions'."
+  (with-current-buffer (plist-get ctx :buffer)
+    (cmacs-media-menu-keymap
+     "Video editor"
+     (cmacs-media-menu-collect 'cmacs-vidstudio-context-menu-functions ctx)
+     ctx #'cmacs-vidstudio--menu-invoke)))
+
+(defun cmacs-vidstudio--click-context (event)
+  "The click context for mouse EVENT, with the project buffer current.
+
+EVENT may land on the project buffer -- the preview image, a clip cell
+or a row of the textual timeline -- or on the clips side panel (a clip
+row, a track heading or an audio row).  Returns nil when it is neither."
+  (let* ((posn (event-start event))
+         (win (posn-window posn))
+         (buf (and (windowp win) (window-buffer win)))
+         (pos (posn-point posn))
+         (prop (lambda (name)
+                 (and (integer-or-marker-p pos)
+                      (get-text-property pos name)))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (let ((clip (funcall prop 'cmacs-vidstudio-clip))
+              (track (funcall prop 'cmacs-vidstudio-track))
+              (audio (funcall prop 'cmacs-vidstudio-audio))
+              (preview (funcall prop 'cmacs-vidstudio-preview)))
+          (cond
+           (cmacs-vidstudio--handle
+            (cmacs-vidstudio-menu-context
+             :clip clip :track track :audio audio
+             :area (and preview (not clip) (not track) 'preview)
+             :source 'timeline))
+           ((buffer-live-p cmacs-vidstudio--project-buffer)
+            (with-current-buffer cmacs-vidstudio--project-buffer
+              (and cmacs-vidstudio--handle
+                   (cmacs-vidstudio-menu-context
+                    :clip clip :track track :audio audio
+                    :source 'clips-panel))))))))))
+
+(defun cmacs-vidstudio--context-menu-function (menu click)
+  "`context-menu-functions' entry: add the vidstudio items for CLICK."
+  (let ((ctx (cmacs-media-menu-context-for 'vidstudio click
+                                           #'cmacs-vidstudio--click-context)))
+    (if ctx
+        (cmacs-media-menu-fill-context-menu
+         menu (cmacs-vidstudio-context-menu-keymap ctx))
+      menu)))
+
+(defun cmacs-vidstudio--select-event-window (event)
+  "Select the window EVENT happened in, with its buffer current.
+A mouse command runs with the SELECTED window's buffer current, which may
+not be the clicked one; menu commands need the project buffer's state."
   (let ((win (posn-window (event-start event))))
     (when (and (windowp win) (window-live-p win))
       (select-window win)
-      (set-buffer (window-buffer win))))
-  (unless cmacs-vidstudio--handle
-    (user-error "vidstudio: this click did not land on an editor buffer"))
-  (let ((choice (cmacs-libregnum-popup-menu event (cmacs-vidstudio--menu))))
-    (when (commandp choice)
-      (call-interactively choice))))
+      (set-buffer (window-buffer win)))))
+
+(defun cmacs-vidstudio-context-menu (event)
+  "Pop the video-editor menu for mouse EVENT, built from what was clicked.
+A clip, an audio segment, a timeline row, the preview and empty space
+each get their own items.  GTK under pgtk, in-engine under --lrg, and
+through `context-menu-map' when `context-menu-mode' is on."
+  (interactive "e")
+  (cmacs-vidstudio--select-event-window event)
+  (let ((ctx (cmacs-vidstudio--click-context event)))
+    (unless ctx
+      (user-error "vidstudio: this click did not land on an editor buffer"))
+    (when (plist-get ctx :clip)
+      (with-current-buffer (plist-get ctx :buffer)
+        (setq cmacs-vidstudio--selected-clip (plist-get ctx :clip))))
+    (cmacs-media-menu-show ctx #'cmacs-vidstudio-context-menu-keymap event)))
+
+(defun cmacs-vidstudio-context-menu-at-point ()
+  "Open the video-editor menu from the keyboard.
+It is about the selected clip, or else the clip under the playhead on
+the active track."
+  (interactive)
+  (let ((buf (if cmacs-vidstudio--handle (current-buffer)
+               cmacs-vidstudio--project-buffer)))
+    (unless (and (buffer-live-p buf)
+                 (buffer-local-value 'cmacs-vidstudio--handle buf))
+      (user-error "vidstudio: not in a video editor"))
+    (let ((pos (cmacs-media-menu-position)))
+      (with-current-buffer buf
+        (let ((clip (or (and cmacs-vidstudio--selected-clip
+                             (cmacs-vidstudio--clip-track
+                              cmacs-vidstudio--selected-clip)
+                             cmacs-vidstudio--selected-clip)
+                        (cmacs-vidstudio--clip-at-playhead))))
+          (cmacs-media-menu-show
+           (cmacs-vidstudio-menu-context :clip clip :source 'keyboard
+                                         :track cmacs-vidstudio--active-track
+                                         :area (if clip 'clip 'keyboard))
+           #'cmacs-vidstudio-context-menu-keymap pos))))))
+
+(defun cmacs-vidstudio--vp-context-menu (buffer _dx _dy fx fy &optional clip-id)
+  "Pop the video-editor menu for a live-viewport right-click at (FX FY).
+CLIP-ID is the timeline-strip block under the cursor (-1/nil = none).
+The strip draws clips and audio segments as blocks and reports only an
+id, so it is resolved as a clip first, then as an audio segment."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (when cmacs-vidstudio--handle
+           (let* ((id (and (integerp clip-id) (>= clip-id 0) clip-id))
+                  (clip (and id (cmacs-vidstudio--clip-track id) id))
+                  (audio (and id (not clip)
+                              (memql id (cmacs-vidstudio--audio-ids)) id))
+                  (win (get-buffer-window buffer t)))
+             (when clip
+               (setq cmacs-vidstudio--selected-clip clip)
+               (cmacs-vidstudio--render))
+             (cmacs-media-menu-show
+              (cmacs-vidstudio-menu-context
+               :clip clip :audio audio :source 'viewport
+               :area (unless (or clip audio) 'preview))
+              #'cmacs-vidstudio-context-menu-keymap
+              (list (list fx fy)
+                    (if win (window-frame win) (selected-frame)))))))))))
+
+(defvar cmacs-vidstudio--panel-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [down-mouse-3] #'cmacs-vidstudio-context-menu)
+    (define-key map [mouse-3] #'ignore)
+    map)
+  "Keymap over the parts of the clips panel that are not buttons.")
+
+(defvar cmacs-vidstudio--panel-row-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map [down-mouse-3] #'cmacs-vidstudio-context-menu)
+    (define-key map [mouse-3] #'ignore)
+    map)
+  "Keymap of a clips-panel row: a button that also takes mouse-3.")
+
+(defun cmacs-vidstudio--claim-panel-mouse-3 ()
+  "Give mouse-3 to the editor menu everywhere in the current panel.
+Buttons keep their own keymap; the gaps get `cmacs-vidstudio--panel-map'."
+  (let ((inhibit-read-only t) (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change pos 'keymap nil (point-max))))
+        (unless (get-text-property pos 'keymap)
+          (put-text-property pos next 'keymap cmacs-vidstudio--panel-map))
+        (setq pos next)))))
 
 ;; --------------------------------------------------------------------------
 ;; Mode
@@ -1506,7 +2217,11 @@ Press a key to run its command, or q / C-g to dismiss."
     (define-key map (kbd "X") #'cmacs-vidstudio-export-gif-cmd)
     (define-key map (kbd "L") #'cmacs-vidstudio-toggle-clips-panel)
     (define-key map (kbd "?") #'cmacs-vidstudio-help)
-    (define-key map (kbd "<mouse-3>") #'cmacs-vidstudio-context-menu))
+    (define-key map (kbd "<down-mouse-3>") #'cmacs-vidstudio-context-menu)
+    (define-key map (kbd "<mouse-3>") #'ignore)
+    ;; The same menu from the keyboard (the menu key, and GTK's S-F10).
+    (define-key map (kbd "<menu>") #'cmacs-vidstudio-context-menu-at-point)
+    (define-key map (kbd "S-<f10>") #'cmacs-vidstudio-context-menu-at-point))
 
 (defun cmacs-vidstudio--viewport-available-p ()
   "Non-nil when a live libregnum GL viewport can be used for the preview."
@@ -1514,26 +2229,6 @@ Press a key to run its command, or q / C-g to dismiss."
        (fboundp 'cmacs-libregnum-supported-p)
        (cmacs-libregnum-supported-p)
        (or (display-graphic-p) (eq (framep-on-display) 'lrg))))
-
-(defun cmacs-vidstudio--vp-context-menu (buffer _dx _dy fx fy &optional clip-id)
-  "Pop the video-editor context menu for a viewport right-click at (FX FY).
-CLIP-ID is the timeline clip under the cursor (-1/nil = none); when set, menu
-commands act on it without prompting for a clip id."
-  (let ((cid (and (integerp clip-id) (>= clip-id 0) clip-id)))
-    (when cid
-      (with-current-buffer buffer
-        (setq cmacs-vidstudio--selected-clip cid)
-        (cmacs-vidstudio--render)))
-    (run-at-time
-     0 nil
-     (lambda ()
-       (when (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (let ((cmacs-vidstudio--context-clip cid)
-                 (choice (cmacs-libregnum-popup-menu
-                          (list (list fx fy) (selected-window))
-                          (cmacs-vidstudio--menu))))
-             (when (commandp choice) (call-interactively choice)))))))))
 
 (defalias 'cmacs-vidstudio--label-font-file
   #'cmacs-libregnum-default-font-file
@@ -1658,6 +2353,8 @@ playhead after a scrub."
   "Major mode for the Reel-based video editor."
   (setq-local cursor-type nil)
   (buffer-disable-undo)
+  (cmacs-media-menu-install-context-function
+   #'cmacs-vidstudio--context-menu-function)
   (add-hook 'kill-buffer-hook #'cmacs-vidstudio--cleanup nil t))
 
 ;;;###autoload
@@ -1669,11 +2366,19 @@ playhead after a scrub."
   (unless (and (fboundp 'cmacs-vidstudio-supported-p)
                (cmacs-vidstudio-supported-p))
     (user-error "cmacs was not built with --with-cmacs-vidstudio"))
-  (let ((handle (cmacs-vidstudio-new width height fps))
-        (buffer (generate-new-buffer "*vidstudio*")))
+  (cmacs-vidstudio--open-handle (cmacs-vidstudio-new width height fps)
+                                "*vidstudio*"))
+
+(defun cmacs-vidstudio--open-handle (handle name &optional file)
+  "Show project HANDLE in a new editor buffer called NAME; return it.
+FILE is the .vstudio file it came from, if any.  Used by the entry
+points and by anything that builds a project in code (the AI reel
+builder) and then wants it on screen."
+  (let ((buffer (generate-new-buffer name)))
     (with-current-buffer buffer
       (cmacs-vidstudio-mode)
       (setq cmacs-vidstudio--handle handle
+            cmacs-vidstudio--file file
             cmacs-vidstudio--playhead 0
             cmacs-vidstudio--active-track 0)
       (setq header-line-format
