@@ -84,6 +84,45 @@ An addressed segment goes straight to the final model.  An unaddressed one is tr
 
 Set ~cmacs-voice-loop-wake-phrase~ to nil for an open mic: every utterance is sent.
 
+** Routes: several names, several destinations
+
+~cmacs-voice-loop-wake-phrase~ may be a list, and ~cmacs-voice-loop-routes~ maps each phrase to where its utterances go.  The string form is unchanged: ~"jarvis"~, with no routes, means one phrase, to the chat.
+
+| Target | Goes to |
+|--------+---------|
+| ~chat~ | the loop's cmacs-ai chat (~cmacs-voice-loop-send-function~); the default |
+| ~commands~ | the voice-command registry — desktop, macros, tools, Emacs commands — with no model in between ([[file:cmacs-voice-commands.org][cmacs-voice-commands.org]]) |
+| ~(agent NAME)~ | a brigade task for agent NAME, appended to the voice plan and adopted |
+| a function | called with the text |
+
+A phrase with no route goes to ~cmacs-voice-loop-default-route~ (~chat~), as does an open mic.  The route is decided per utterance by the phrase that addressed it (the first one heard — in a partial, by the wake model or in the final transcript), and it sticks: a bare phrase followed by the request, and the follow-up window after a reply, continue on the same route.  So "computer" … "workspace three" … "monocle" all go to the commands, and a destructive command's "yes" needs no phrase.
+
+#+begin_src emacs-lisp
+;; Three names: one to talk to, one to command, one to delegate to.
+(setq cmacs-voice-loop-wake-phrase '("jarvis" "computer" "friday")
+      cmacs-voice-loop-routes
+      '(("computer" . commands)
+        ("friday"   . (agent researcher))))
+;; "Jarvis, what changed in the build?"       -> the chat
+;; "Computer, workspace three"                 -> gowl, directly
+;; "Friday, survey the notes on VR headsets"   -> a task for `researcher'
+
+;; Your own name for it, everything to the chat:
+(setq cmacs-voice-loop-wake-phrase "athena")
+
+;; A hands-free command console with no chat at all:
+(setq cmacs-voice-loop-wake-phrase "computer"
+      cmacs-voice-loop-default-route 'commands)
+
+;; Anything else is a function:
+(setq cmacs-voice-loop-routes
+      '(("note" . (lambda (text)
+                    (with-current-buffer (find-file-noselect "~/Documents/notes/00_inbox/voice.org")
+                      (goto-char (point-max)) (insert "* " text "\n") (save-buffer))))))
+#+end_src
+
+Choosing a name: two or three syllables with a hard consonant, not an everyday word, and one whisper spells consistently ("jarvis", "friday", "computer", "athena").  One-syllable names ("max", "tars") are misheard and over-triggered; a common word ("assistant", "okay") fires on ordinary speech.  If the small model mangles yours, check what it hears with partials on, add the misspelling as another phrase routed the same way, or lower ~cmacs-voice-loop-wake-threshold~.
+
 ** Partial transcripts
 
 While you speak, every ~cmacs-voice-loop-partial-interval~ (0.8 s) the last ~cmacs-voice-loop-partial-window-seconds~ (10 s) of the segment is re-transcribed with the wake model — the sliding-window scheme of whisper.cpp's ~stream~ example.  Only one partial is in flight at a time and a partial for a segment that has ended is discarded.  Partials double as early wake detection: the first one containing the phrase marks the segment addressed.  Partials of unaddressed speech are never displayed.
@@ -151,7 +190,9 @@ The config uses ~monitor.mode = true~, so the canceller takes the default sink's
 
 | Variable                                     | Default                  | Purpose                                              |
 |----------------------------------------------+--------------------------+------------------------------------------------------|
-| ~cmacs-voice-loop-wake-phrase~               | ~"jarvis"~               | Phrase that addresses the loop; nil = open mic       |
+| ~cmacs-voice-loop-wake-phrase~               | ~"jarvis"~               | Phrase or list of phrases; nil (no routes) = open mic |
+| ~cmacs-voice-loop-routes~                    | nil                      | (PHRASE . TARGET): chat, commands, (agent N), fn     |
+| ~cmacs-voice-loop-default-route~             | ~chat~                   | Target of unrouted phrases and an open mic           |
 | ~cmacs-voice-loop-wake-threshold~            | 0.75                     | Word similarity needed to match                      |
 | ~cmacs-voice-loop-wake-model~                | ~"ggml-tiny.en.bin"~     | Model for the wake phrase and partials               |
 | ~cmacs-voice-loop-model~                     | nil (default model)      | Model for the final transcript                       |

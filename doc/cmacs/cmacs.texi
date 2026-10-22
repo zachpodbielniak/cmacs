@@ -8602,6 +8602,27 @@ loop thinks or speaks stops piper, cancels the streaming reply, and is
 taken as the next request.
 @end table
 
+@subsection Wake phrases as routes
+
+@code{cmacs-voice-loop-wake-phrase} may be a list, and
+@code{cmacs-voice-loop-routes} maps each phrase to a target:
+@code{chat} (the default), @code{commands} (the voice-command registry,
+no model), @code{(agent @var{name})} (a brigade task) or a function of
+the text.  Unrouted phrases go to @code{cmacs-voice-loop-default-route}.
+A bare phrase and the follow-up window keep the route that started
+them.  The string form is unchanged.
+
+@lisp
+(setq cmacs-voice-loop-wake-phrase '("jarvis" "computer" "friday")
+      cmacs-voice-loop-routes
+      '(("computer" . commands)
+        ("friday"   . (agent researcher))))
+@end lisp
+
+Choose two- or three-syllable names with a hard consonant that are not
+everyday words; add a common mishearing as another phrase on the same
+route.
+
 @subsection Self-echo and echo cancellation
 
 Through speakers the microphone hears the reply.

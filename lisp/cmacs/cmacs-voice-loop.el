@@ -19,6 +19,11 @@
 ;;     for `cmacs-voice-loop-follow-up-seconds' after a reply, no
 ;;     wake word is needed
 ;;
+;; Several wake phrases can route to different places
+;; (`cmacs-voice-loop-routes'): "jarvis" to the chat, "computer" to the
+;; voice commands (cmacs-voice-commands.el: workspaces, windows,
+;; macros, tools -- no model), "friday" to a brigade agent.
+;;
 ;; Voice activity detection is whisper.cpp's Silero VAD
 ;; (`cmacs-whisper-vad-feed', on a worker thread).  Without the VAD
 ;; model it falls back to an adaptive energy detector
@@ -89,6 +94,10 @@
 (declare-function cmacs-ai-chat-open "cmacs-ai-chat" (&optional provider model directory))
 (declare-function cmacs-ai-chat-send-compose "cmacs-ai-chat")
 (declare-function cmacs-ai-chat-cancel-stream "cmacs-ai-chat")
+(declare-function cmacs-voice-command-run "cmacs-voice-commands" (text &rest keys))
+(declare-function cmacs-voice-confirm-answer "cmacs-voice-commands" (text))
+(declare-function cmacs-brigade-voice--queue "cmacs-brigade-voice" (text agent))
+(defvar cmacs-voice-confirm-seconds)
 (defvar cmacs-audio-capture-source)
 (defvar cmacs-audio-default-device)
 (defvar cmacs-whisper-language)
@@ -104,10 +113,52 @@
   :prefix "cmacs-voice-loop-")
 
 (defcustom cmacs-voice-loop-wake-phrase "jarvis"
-  "Phrase that addresses the loop, matched fuzzily anywhere in a segment.
-May be several words (\"hey computer\").  nil means no wake word:
-every utterance is sent (an open mic -- mind what it hears)."
-  :type '(choice (const :tag "No wake word" nil) string))
+  "Phrase, or list of phrases, that address the loop.
+Each is matched fuzzily anywhere in a segment and may be several words
+\(\"hey computer\").  Which one was heard picks the target in
+`cmacs-voice-loop-routes'.  Phrases named only in the routes count too.
+nil, with no routes, means no wake word: every utterance is sent (an
+open mic -- mind what it hears).
+
+Pick names that are not everyday words and that whisper spells
+consistently: two or three syllables, a hard consonant
+\(\"jarvis\", \"friday\", \"computer\", \"tars\" is too short)."
+  :type '(choice (const :tag "No wake word" nil)
+                 string
+                 (repeat :tag "Several phrases" string)))
+
+(defcustom cmacs-voice-loop-routes nil
+  "Where an utterance goes, by the wake phrase that addressed it.
+An alist of (PHRASE . TARGET).  TARGET is one of:
+  `chat'           the loop's cmacs-ai chat (`cmacs-voice-loop-send-function')
+  `commands'       the voice-command registry: desktop, macros, tools,
+                   Emacs commands, without a chat model
+                   (`cmacs-voice-command-run')
+  (agent NAME)     a brigade task for agent NAME, appended to the voice
+                   plan and adopted
+  FUNCTION         called with the text
+A phrase not listed goes to `cmacs-voice-loop-default-route'.  The
+follow-up window after a reply, and a bare phrase followed by the
+request, keep the route of the phrase that started it.
+
+  (setq cmacs-voice-loop-wake-phrase \='(\"jarvis\" \"computer\" \"friday\")
+        cmacs-voice-loop-routes
+        \='((\"computer\" . commands)
+          (\"friday\" . (agent researcher))))
+
+\"Jarvis, what changed in the build?\" goes to the chat, \"computer,
+workspace three\" switches workspace, and \"Friday, survey the notes
+on VR\" queues a task for the researcher agent."
+  :type '(alist :key-type string
+                :value-type (choice (const chat) (const commands)
+                                    (list (const agent) symbol)
+                                    function)))
+
+(defcustom cmacs-voice-loop-default-route 'chat
+  "Target for a phrase with no entry in `cmacs-voice-loop-routes'.
+Also the target of an open mic.  Same forms as the routes' targets."
+  :type '(choice (const chat) (const commands)
+                 (list (const agent) symbol) function))
 
 (defcustom cmacs-voice-loop-wake-threshold 0.75
   "Similarity (0..1) a heard word needs to count as the wake phrase.
@@ -308,16 +359,29 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 (defalias 'cmacs-voice-loop--clean #'cmacs-voice-clean)
 (defalias 'cmacs-voice-loop--tokens #'cmacs-voice-tokens)
 
+(defun cmacs-voice-loop--phrases ()
+  "Every wake phrase: `cmacs-voice-loop-wake-phrase' and the routes' phrases."
+  (delete-dups
+   (append (ensure-list cmacs-voice-loop-wake-phrase)
+           (mapcar #'car cmacs-voice-loop-routes))))
+
 (defun cmacs-voice-loop-wake-match (text &optional phrase threshold)
-  "Find the wake PHRASE in TEXT; return (START END SCORE PHRASE) or nil.
+  "Find a wake phrase in TEXT; return (START END SCORE PHRASE) or nil.
 START and END index the words of TEXT (END exclusive) covered by the
-match.  PHRASE defaults to `cmacs-voice-loop-wake-phrase' and THRESHOLD
-to `cmacs-voice-loop-wake-threshold'.  A heard word matches when 1 minus
+match.  PHRASE defaults to every phrase (`cmacs-voice-loop--phrases'),
+the earliest in TEXT winning; THRESHOLD to
+`cmacs-voice-loop-wake-threshold'.  A heard word matches when 1 minus
 its Levenshtein distance over the longer length reaches THRESHOLD; a
 run of one word more glued together is tried too, so \"jar vis\" still
 matches \"jarvis\".  The earliest match wins."
-  (cmacs-voice-phrase-match text (or phrase cmacs-voice-loop-wake-phrase)
-                            (or threshold cmacs-voice-loop-wake-threshold)))
+  (let ((threshold (or threshold cmacs-voice-loop-wake-threshold))
+        (best nil))
+    (dolist (p (if phrase (list phrase) (cmacs-voice-loop--phrases)))
+      (when-let* ((m (cmacs-voice-phrase-match text p threshold)))
+        (when (or (null best) (< (car m) (car best))
+                  (and (= (car m) (car best)) (> (nth 2 m) (nth 2 best))))
+          (setq best m))))
+    best))
 
 (defalias 'cmacs-voice-loop--after #'cmacs-voice-words-after)
 
@@ -327,7 +391,7 @@ When the phrase is not found in TEXT and FALLBACK-WORDS is a number,
 that many leading words are dropped instead (the wake model heard the
 phrase; the final model spelled it differently).  Otherwise TEXT is
 returned whole."
-  (let* ((m (and cmacs-voice-loop-wake-phrase
+  (let* ((m (and (cmacs-voice-loop--phrases)
                  (cmacs-voice-loop-wake-match text)))
          (rest (cond (m (cmacs-voice-loop--after text (nth 1 m)))
                      (fallback-words (cmacs-voice-loop--after text fallback-words))
@@ -352,14 +416,14 @@ or `paused'."
 
 (defun cmacs-voice-loop--armed-p ()
   "Non-nil while speech needs no wake phrase."
-  (or (null cmacs-voice-loop-wake-phrase)
+  (or (null (cmacs-voice-loop--phrases))
       (< (float-time) cmacs-voice-loop--armed-until)))
 
 (defun cmacs-voice-loop--lighter ()
   "Mode-line string for the current state."
   (let ((s (or (alist-get cmacs-voice-loop--state cmacs-voice-loop-lighters) "")))
     (when (and (eq cmacs-voice-loop--state 'listening)
-               cmacs-voice-loop-wake-phrase
+               (cmacs-voice-loop--phrases)
                (cmacs-voice-loop--armed-p))
       (setq s (concat s "+")))
     (if (memq cmacs-voice-loop--state '(hearing thinking speaking))
@@ -549,6 +613,7 @@ call, which a callback wrapped at send time would miss."
          (or (cmacs-voice-loop-strip-wake text) text))
       (when-let* ((m (cmacs-voice-loop-wake-match text)))
         (setq cmacs-voice-loop--addressed t)
+        (cmacs-voice-loop--note-phrase m cmacs-voice-loop--seg-id)
         (let ((rest (cmacs-voice-loop--after text (nth 1 m))))
           (cmacs-voice-loop--show-partial
            (if (string-empty-p rest) "..." rest)))))))
@@ -598,18 +663,77 @@ PCM is wiped once whisper has its copy."
      pcm (expand-file-name (format-time-string "voice-%Y%m%d-%H%M%S.wav")
                            cmacs-voice-loop-save-directory))))
 
+(defvar cmacs-voice-loop--heard-phrases nil
+  "Alist of (SEGMENT-ID . PHRASE): which wake phrase addressed a segment.
+Per segment, because a segment's final transcript can arrive after the
+next segment has started.")
+(defvar cmacs-voice-loop--last-target nil
+  "The route target the follow-up window / an armed request continues.")
+
+(defun cmacs-voice-loop--note-phrase (match seg)
+  "Remember that segment SEG was addressed with wake MATCH's phrase.
+The first phrase noted for a segment stays."
+  (when (and match (not (assq seg cmacs-voice-loop--heard-phrases)))
+    (push (cons seg (nth 3 match)) cmacs-voice-loop--heard-phrases)
+    ;; Only the last few segments can still be in flight.
+    (when (> (length cmacs-voice-loop--heard-phrases) 8)
+      (setcdr (nthcdr 7 cmacs-voice-loop--heard-phrases) nil))))
+
+(defun cmacs-voice-loop--take-phrase (seg)
+  "The phrase noted for segment SEG, forgetting it."
+  (let ((cell (assq seg cmacs-voice-loop--heard-phrases)))
+    (setq cmacs-voice-loop--heard-phrases
+          (delq cell cmacs-voice-loop--heard-phrases))
+    (cdr cell)))
+
+(defun cmacs-voice-loop-route-target (&optional phrase)
+  "The target an utterance addressed with PHRASE goes to.
+nil PHRASE: the route the conversation is already on, else the default."
+  (let ((entry (and phrase (assoc-string phrase cmacs-voice-loop-routes t))))
+    (cond (entry (cdr entry))
+          ((and (null phrase) cmacs-voice-loop--last-target))
+          (t cmacs-voice-loop-default-route))))
+
+(defun cmacs-voice-loop--deliver (target text)
+  "Hand TEXT to route TARGET.  Returns non-nil when a reply is coming."
+  (pcase target
+    ('chat (funcall cmacs-voice-loop-send-function text) t)
+    ('commands
+     (require 'cmacs-voice-commands)
+     ;; From the command loop: a command may select windows or read the
+     ;; minibuffer, which a whisper callback is no place for.
+     (cmacs-voice-run-later
+      (lambda ()
+        (when (eq (cmacs-voice-command-run text) 'pending)
+          ;; Waiting for yes/no: no wake phrase needed to answer.
+          (cmacs-voice-loop--arm cmacs-voice-confirm-seconds))))
+     nil)
+    (`(agent ,agent)
+     (unless (fboundp 'cmacs-brigade-voice--queue) (require 'cmacs-brigade-voice))
+     (cmacs-brigade-voice--queue text agent)
+     nil)
+    ((pred functionp) (funcall target text) nil)
+    (_ (message "Voice: unknown route %S" target) nil)))
+
 (defun cmacs-voice-loop--dispatch (text seg)
-  "Send final TEXT of segment SEG on, unless a newer one already went."
+  "Send final TEXT of segment SEG along its route, unless a newer one went.
+A pending confirmation takes the text first, as its answer."
   (when (> seg cmacs-voice-loop--last-sent-seg)
     (setq cmacs-voice-loop--last-sent-seg seg)
     (cmacs-voice-loop--clear-partial)
     (message "%s" (propertize text 'face 'cmacs-voice-loop-heard))
-    (run-hook-with-args 'cmacs-voice-loop-utterance-functions text)
-    (cmacs-voice-loop--set-state 'thinking)
-    (setq cmacs-voice-loop--armed-until 0.0)
-    (condition-case err
-        (funcall cmacs-voice-loop-send-function text)
-      (error (message "Voice: %s" (error-message-string err))))))
+    (let ((target (cmacs-voice-loop-route-target
+                   (cmacs-voice-loop--take-phrase seg))))
+      (setq cmacs-voice-loop--last-target target
+            cmacs-voice-loop--armed-until 0.0)
+      (if (and (fboundp 'cmacs-voice-confirm-answer)
+               (cmacs-voice-confirm-answer text))
+          nil
+        (run-hook-with-args 'cmacs-voice-loop-utterance-functions text)
+        (cmacs-voice-loop--set-state 'thinking)
+        (condition-case err
+            (cmacs-voice-loop--deliver target text)
+          (error (message "Voice: %s" (error-message-string err))))))))
 
 (defun cmacs-voice-loop--arm (seconds)
   "Need no wake phrase for the next SECONDS."
@@ -630,9 +754,11 @@ WAKE-WORDS is the word count up to the end of the wake phrase as the
 wake model heard it, or nil when the segment needed no phrase."
   (let* ((err (cdr (assq :error result)))
          (text (cmacs-voice-loop--clean (cdr (assq :text result))))
+         (_ (unless err
+              (cmacs-voice-loop--note-phrase (cmacs-voice-loop-wake-match text) seg)))
          (rest (cond ((or err (string-empty-p text)) nil)
                      (wake-words (cmacs-voice-loop-strip-wake text wake-words))
-                     ((and cmacs-voice-loop-wake-phrase
+                     ((and (cmacs-voice-loop--phrases)
                            (cmacs-voice-loop-wake-match text))
                       (cmacs-voice-loop-strip-wake text))
                      (t text))))
@@ -643,8 +769,10 @@ wake model heard it, or nil when the segment needed no phrase."
       ;; Heard nothing after all (a breath, a click).
       (cmacs-voice-loop--clear-partial))
      ((null rest)
-      ;; Only the phrase: wait for the request.
+      ;; Only the phrase: wait for the request, on that phrase's route.
       (cmacs-voice-loop--clear-partial)
+      (setq cmacs-voice-loop--last-target
+            (cmacs-voice-loop-route-target (cmacs-voice-loop--take-phrase seg)))
       (cmacs-voice-loop--arm cmacs-voice-loop-armed-seconds)
       (when cmacs-voice-loop-wake-acknowledgement
         (cmacs-voice-loop-speak cmacs-voice-loop-wake-acknowledgement))
@@ -682,6 +810,7 @@ wake model heard it, or nil when the segment needed no phrase."
               (let* ((text (cmacs-voice-loop--clean (cdr (assq :text r))))
                      (m (and (not (assq :error r))
                              (cmacs-voice-loop-wake-match text))))
+                (cmacs-voice-loop--note-phrase m seg)
                 (cond
                  ((null m)
                   (when keep (fillarray keep 0))
@@ -851,7 +980,7 @@ through here with synthetic audio."
     (cmacs-voice-loop--arm cmacs-voice-loop-follow-up-seconds)
     (cmacs-voice-loop--set-state 'listening))
   (when (and (eq cmacs-voice-loop--state 'listening)
-             cmacs-voice-loop-wake-phrase
+             (cmacs-voice-loop--phrases)
              (> cmacs-voice-loop--armed-until 0)
              (>= (float-time) cmacs-voice-loop--armed-until))
     (setq cmacs-voice-loop--armed-until 0.0)
@@ -945,8 +1074,9 @@ phrase is needed right now), hearing, thinking, speaking, paused
           (progn (cmacs-voice-loop--check)
                  (cmacs-voice-loop--open)
                  (message "Voice loop on%s"
-                          (if cmacs-voice-loop-wake-phrase
-                              (format " -- say \"%s\"" cmacs-voice-loop-wake-phrase)
+                          (if (cmacs-voice-loop--phrases)
+                              (format " -- say \"%s\""
+                                      (string-join (cmacs-voice-loop--phrases) "\" / \""))
                             "")))
         (error
          (setq cmacs-voice-loop-mode nil)
@@ -983,8 +1113,8 @@ Stops any reply being spoken.  Starts the loop if it is off."
   (message "Voice loop: %s; detector %s; wake %s; final %s; chat %s"
            cmacs-voice-loop--state
            (if (eq (cmacs-voice-detector-kind) 'vad) "Silero VAD" "energy")
-           (if cmacs-voice-loop-wake-phrase
-               (format "\"%s\" (%s)" cmacs-voice-loop-wake-phrase
+           (if (cmacs-voice-loop--phrases)
+               (format "\"%s\" (%s)" (string-join (cmacs-voice-loop--phrases) "\", \"")
                        (file-name-nondirectory (cmacs-voice-loop--model-path 'wake)))
              "off")
            (file-name-nondirectory (cmacs-voice-loop--model-path 'final))
