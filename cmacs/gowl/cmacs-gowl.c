@@ -2956,13 +2956,14 @@ take.  TAGS is 0 for a window on no tag: a hidden overlay, such as a
 window in the rolled-away scratchpad. */)
   (Lisp_Object client)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
   gint x, y, w, h;
 
   c = gowl_resolve_client (client);
   gowl_client_get_geometry (c, &x, &y, &w, &h);
 
-  return CALLN (Flist,
+  return unbind_to (count, CALLN (Flist,
     Fcons (intern_c_string ("id"),
            make_fixnum ((EMACS_INT) gowl_client_get_id (c))),
     Fcons (intern_c_string ("title"),
@@ -2977,7 +2978,7 @@ window in the rolled-away scratchpad. */)
            gowl_client_get_embedded (c) ? Qt : Qnil),
     Fcons (intern_c_string ("geometry"),
            list4 (make_fixnum (x), make_fixnum (y),
-                  make_fixnum (w), make_fixnum (h))));
+                  make_fixnum (w), make_fixnum (h)))));
 }
 
 DEFUN ("gowl-move-client", Fgowl_move_client, Sgowl_move_client,
@@ -3229,10 +3230,11 @@ DEFUN ("gowl-set-tags", Fgowl_set_tags, Sgowl_set_tags, 2, 2, 0,
        doc: /* Set TAGS bitmask on CLIENT. */)
   (Lisp_Object client, Lisp_Object tags)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   CHECK_FIXNAT (tags);
   gowl_client_set_tags (gowl_resolve_client (client),
                         (guint32)XFIXNAT (tags));
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-toggle-client-floating", Fgowl_toggle_client_floating,
@@ -3285,9 +3287,10 @@ side.  Same behaviour as the `toggle_fullscreen' keybind, which is
 Super+f by default.  */)
   (Lisp_Object client)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c = gowl_resolve_client (client);
   gowl_client_set_fullscreen (c, !gowl_client_get_fullscreen (c));
-  return gowl_client_get_fullscreen (c) ? Qt : Qnil;
+  return unbind_to (count, gowl_client_get_fullscreen (c) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-set-client-urgent", Fgowl_set_client_urgent,
@@ -3295,8 +3298,9 @@ DEFUN ("gowl-set-client-urgent", Fgowl_set_client_urgent,
        doc: /* Set URGENT flag on CLIENT. */)
   (Lisp_Object client, Lisp_Object urgent)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   gowl_client_set_urgent (gowl_resolve_client (client), !NILP (urgent));
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-move-client-to-monitor", Fgowl_move_client_to_monitor,
@@ -3304,19 +3308,21 @@ DEFUN ("gowl-move-client-to-monitor", Fgowl_move_client_to_monitor,
        doc: /* Move CLIENT to MONITOR. */)
   (Lisp_Object client, Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c = gowl_resolve_client (client);
   GowlMonitor *mon = gowl_resolve_monitor (monitor);
   if (mon != NULL)
     gowl_client_set_monitor (c, mon);
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-client-pid", Fgowl_client_pid, Sgowl_client_pid, 1, 1, 0,
        doc: /* Return the PID of CLIENT's process. */)
   (Lisp_Object client)
 {
-  return make_fixnum ((EMACS_INT)gowl_client_get_pid (
-    gowl_resolve_client (client)));
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
+  return unbind_to (count, make_fixnum ((EMACS_INT)gowl_client_get_pid (
+    gowl_resolve_client (client))));
 }
 
 DEFUN ("gowl-find-client", Fgowl_find_client, Sgowl_find_client,
@@ -3455,8 +3461,9 @@ DEFUN ("gowl-client-border-width",
        doc: /* Return CLIENT border width in pixels. */)
   (Lisp_Object client)
 {
-  return make_fixnum (
-    (EMACS_INT) gowl_client_get_border_width (gowl_resolve_client (client)));
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
+  return unbind_to (count, make_fixnum (
+    (EMACS_INT) gowl_client_get_border_width (gowl_resolve_client (client))));
 }
 
 DEFUN ("gowl-set-client-border-width",
@@ -3587,9 +3594,10 @@ Embedded clients are excluded from the tiling arrange pass.
 The embedder controls their position, visibility, and scene layer. */)
   (Lisp_Object client, Lisp_Object embedded)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   gowl_client_set_embedded (gowl_resolve_client (client),
                             !NILP (embedded));
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-emacs-client", Fgowl_emacs_client, Sgowl_emacs_client,
@@ -4209,16 +4217,17 @@ DEFUN ("gowl-monitor-position", Fgowl_monitor_position,
 MONITOR defaults to focused. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
   gint x, y;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   gowl_monitor_get_position (mon, &x, &y);
-  return Fcons (make_fixnum (x), make_fixnum (y));
+  return unbind_to (count, Fcons (make_fixnum (x), make_fixnum (y)));
 }
 
 DEFUN ("gowl-set-monitor-position", Fgowl_set_monitor_position,
@@ -4462,6 +4471,7 @@ DEFUN ("gowl-toggle-tag-view", Fgowl_toggle_tag_view,
 TAG is a 0-based tag index.  MONITOR defaults to focused. */)
   (Lisp_Object tag, Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   CHECK_FIXNAT (tag);
@@ -4471,7 +4481,7 @@ TAG is a 0-based tag index.  MONITOR defaults to focused. */)
   if (mon != NULL)
     gowl_monitor_toggle_tag (mon, (guint32)XFIXNAT (tag));
 
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-toggle-client-tag", Fgowl_toggle_client_tag,
@@ -4480,6 +4490,7 @@ DEFUN ("gowl-toggle-client-tag", Fgowl_toggle_client_tag,
 TAG is a 0-based index. */)
   (Lisp_Object client, Lisp_Object tag)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
   guint32 tags, bit;
 
@@ -4490,7 +4501,7 @@ TAG is a 0-based index. */)
   tags = gowl_client_get_tags (c);
   gowl_client_set_tags (c, tags ^ bit);
 
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-tag-info", Fgowl_tag_info, Sgowl_tag_info, 0, 1, 0,
@@ -4526,6 +4537,7 @@ DEFUN ("gowl-set-mfact", Fgowl_set_mfact, Sgowl_set_mfact, 1, 2, 0,
 MFACT is a float between 0.05 and 0.95. */)
   (Lisp_Object mfact, Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
   double val;
 
@@ -4540,21 +4552,22 @@ MFACT is a float between 0.05 and 0.95. */)
   if (mon != NULL)
     gowl_monitor_set_mfact (mon, val);
 
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-get-mfact", Fgowl_get_mfact, Sgowl_get_mfact, 0, 1, 0,
        doc: /* Return the master area factor for MONITOR. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
-  return make_float (gowl_monitor_get_mfact (mon));
+  return unbind_to (count, make_float (gowl_monitor_get_mfact (mon)));
 }
 
 DEFUN ("gowl-set-nmaster", Fgowl_set_nmaster, Sgowl_set_nmaster,
@@ -4562,6 +4575,7 @@ DEFUN ("gowl-set-nmaster", Fgowl_set_nmaster, Sgowl_set_nmaster,
        doc: /* Set number of master windows to N on MONITOR. */)
   (Lisp_Object n, Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   CHECK_FIXNUM (n);
@@ -4571,7 +4585,7 @@ DEFUN ("gowl-set-nmaster", Fgowl_set_nmaster, Sgowl_set_nmaster,
   if (mon != NULL)
     gowl_monitor_set_nmaster (mon, (gint)XFIXNUM (n));
 
-  return Qnil;
+  return unbind_to (count, Qnil);
 }
 
 DEFUN ("gowl-get-nmaster", Fgowl_get_nmaster, Sgowl_get_nmaster,
@@ -4579,14 +4593,15 @@ DEFUN ("gowl-get-nmaster", Fgowl_get_nmaster, Sgowl_get_nmaster,
        doc: /* Return the number of master windows for MONITOR. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
-  return make_fixnum (gowl_monitor_get_nmaster (mon));
+  return unbind_to (count, make_fixnum (gowl_monitor_get_nmaster (mon)));
 }
 
 DEFUN ("gowl-set-vsplit", Fgowl_set_vsplit, Sgowl_set_vsplit, 1, 2, 0,
@@ -4614,30 +4629,32 @@ DEFUN ("gowl-get-vsplit", Fgowl_get_vsplit, Sgowl_get_vsplit, 0, 1, 0,
        doc: /* Return non-nil if MONITOR uses the vsplit tile orientation. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
-  return gowl_monitor_get_vsplit (mon) ? Qt : Qnil;
+  return unbind_to (count, gowl_monitor_get_vsplit (mon) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-get-layout", Fgowl_get_layout, Sgowl_get_layout, 0, 1, 0,
        doc: /* Return the current layout symbol string for MONITOR. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
   const gchar *sym;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   sym = gowl_monitor_get_layout_symbol (mon);
-  return sym ? build_string (sym) : Qnil;
+  return unbind_to (count, sym ? build_string (sym) : Qnil);
 }
 
 DEFUN ("gowl-set-layout", Fgowl_set_layout, Sgowl_set_layout, 1, 2, 0,
@@ -7454,16 +7471,19 @@ installed on rather than an error: the Lisp menu falls back to its own
 tree.  */)
   (void)
 {
-  return gowl_menu_n_entries (gowl_menu_get_default ()) > 0 ? Qt : Qnil;
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
+  return unbind_to (count, (gowl_menu_n_entries (gowl_menu_get_default ()) > 0
+                           ? Qt : Qnil));
 }
 
 DEFUN ("gowl-menu-source", Fgowl_menu_source, Sgowl_menu_source, 0, 0, 0,
        doc: /* Return the file or files the menu tree was read from.  */)
   (void)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   const gchar *source = gowl_menu_get_source (gowl_menu_get_default ());
 
-  return source != NULL ? build_string (source) : Qnil;
+  return unbind_to (count, source != NULL ? build_string (source) : Qnil);
 }
 
 DEFUN ("gowl-menu-reload", Fgowl_menu_reload, Sgowl_menu_reload, 0, 0, 0,
@@ -7473,6 +7493,7 @@ Returns the number of entries now in the tree, or signals when neither
 file could be read.  */)
   (void)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GError *error = NULL;
 
   if (!gowl_menu_load (gowl_menu_get_default (), &error))
@@ -7483,7 +7504,8 @@ file could be read.  */)
       g_clear_error (&error);
       xsignal1 (Qerror, message);
     }
-  return make_fixnum (gowl_menu_n_entries (gowl_menu_get_default ()));
+  return unbind_to (count, make_fixnum (gowl_menu_n_entries (
+                             gowl_menu_get_default ())));
 }
 
 DEFUN ("gowl-menu-resolve", Fgowl_menu_resolve, Sgowl_menu_resolve, 1, 1, 0,
@@ -7494,6 +7516,7 @@ string comes back unchanged, so a caller can report what was asked for
 rather than silently opening the top of the menu.  */)
   (Lisp_Object route)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   gchar      *resolved;
   Lisp_Object result;
 
@@ -7501,13 +7524,14 @@ rather than silently opening the top of the menu.  */)
   resolved = gowl_menu_resolve (gowl_menu_get_default (), SSDATA (route));
   result = build_string (resolved != NULL ? resolved : "root");
   g_free (resolved);
-  return result;
+  return unbind_to (count, result);
 }
 
 DEFUN ("gowl-menu-title", Fgowl_menu_title, Sgowl_menu_title, 0, 1, 0,
        doc: /* Return the header text for ROUTE, or for the top of the menu.  */)
   (Lisp_Object route)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   gchar      *title;
   Lisp_Object result;
 
@@ -7515,7 +7539,7 @@ DEFUN ("gowl-menu-title", Fgowl_menu_title, Sgowl_menu_title, 0, 1, 0,
                                NILP (route) ? NULL : SSDATA (route));
   result = build_string (title != NULL ? title : "Menu");
   g_free (title);
-  return result;
+  return unbind_to (count, result);
 }
 
 DEFUN ("gowl-menu-items", Fgowl_menu_items, Sgowl_menu_items, 0, 2, 0,
@@ -7651,6 +7675,7 @@ DEFUN ("gowl-menu-parent", Fgowl_menu_parent, Sgowl_menu_parent, 1, 1, 0,
        doc: /* Return the route one level above ROUTE, or nil at the top.  */)
   (Lisp_Object route)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   gchar      *up;
   Lisp_Object result;
 
@@ -7658,7 +7683,7 @@ DEFUN ("gowl-menu-parent", Fgowl_menu_parent, Sgowl_menu_parent, 1, 1, 0,
   up = gowl_menu_get_parent (gowl_menu_get_default (), SSDATA (route));
   result = up != NULL ? build_string (up) : Qnil;
   g_free (up);
-  return result;
+  return unbind_to (count, result);
 }
 
 DEFUN ("gowl-crt-p", Fgowl_crt_p, Sgowl_crt_p, 0, 0, 0,
@@ -8339,6 +8364,7 @@ after MAX-SECONDS, and `gowl-stop-recording' with no argument, or
 Super+Shift+Escape, stops it at any time. */)
   (Lisp_Object max_seconds, Lisp_Object max_events)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlInputRecorder *rec;
   g_autoptr (GError) err = NULL;
   g_autofree gchar *token = NULL;
@@ -8367,7 +8393,7 @@ Super+Shift+Escape, stops it at any time. */)
     xsignal1 (Qgowl_error, build_string (err->message));
 
   status = gowl_input_recorder_status (rec);
-  return build_string (status ? : "{}");
+  return unbind_to (count, build_string (status ? : "{}"));
 }
 
 DEFUN ("gowl-drain-recording", Fgowl_drain_recording,
@@ -8379,6 +8405,7 @@ running.  The reply carries `dropped' (since the last drain) and
 rather than passed off as complete, plus `active' and `stop_reason'. */)
   (Lisp_Object token)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlInputRecorder *rec;
   g_autoptr (GError) err = NULL;
   g_autofree gchar *json = NULL;
@@ -8390,7 +8417,7 @@ rather than passed off as complete, plus `active' and `stop_reason'. */)
   if (json == NULL)
     xsignal1 (Qgowl_error, build_string (err->message));
 
-  return build_string (json);
+  return unbind_to (count, build_string (json));
 }
 
 DEFUN ("gowl-stop-recording", Fgowl_stop_recording,
@@ -8405,6 +8432,7 @@ it.  Buffered events are kept, so whoever did start it can still drain
 them; the stop ends the capture, not the read. */)
   (Lisp_Object token)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlInputRecorder *rec;
   g_autoptr (GError) err = NULL;
   g_autofree gchar *json = NULL;
@@ -8414,7 +8442,7 @@ them; the stop ends the capture, not the read. */)
   if (NILP (token))
     {
       gowl_input_recorder_force_stop (rec, "stopped from cmacs");
-      return Qt;
+      return unbind_to (count, Qt);
     }
 
   CHECK_STRING (token);
@@ -8422,7 +8450,7 @@ them; the stop ends the capture, not the read. */)
   if (json == NULL)
     xsignal1 (Qgowl_error, build_string (err->message));
 
-  return build_string (json);
+  return unbind_to (count, build_string (json));
 }
 
 DEFUN ("gowl-recording-status", Fgowl_recording_status,
@@ -8434,13 +8462,14 @@ standing note about what the compositor's secret suppression can and
 cannot see. */)
   (void)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlInputRecorder *rec;
   g_autofree gchar *json = NULL;
 
   rec = cmacs_gowl_recorder ();
   json = gowl_input_recorder_status (rec);
 
-  return build_string (json ? : "{}");
+  return unbind_to (count, build_string (json ? : "{}"));
 }
 
 DEFUN ("gowl-recording-active-p", Fgowl_recording_active_p,
@@ -8448,10 +8477,11 @@ DEFUN ("gowl-recording-active-p", Fgowl_recording_active_p,
        doc: /* Return t if an input recording is running, else nil. */)
   (void)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlInputRecorder *rec;
 
   rec = cmacs_gowl_recorder ();
-  return gowl_input_recorder_is_active (rec) ? Qt : Qnil;
+  return unbind_to (count, gowl_input_recorder_is_active (rec) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-config-get", Fgowl_config_get, Sgowl_config_get, 1, 1, 0,
@@ -9108,6 +9138,7 @@ DEFUN ("gowl-set-client-alpha", Fgowl_set_client_alpha,
 Immediately walks the client's scene tree and applies the opacity. */)
   (Lisp_Object client, Lisp_Object alpha)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
   double val;
 
@@ -9116,7 +9147,7 @@ Immediately walks the client's scene tree and applies the opacity. */)
   CHECK_NUMBER (alpha);
   val = XFLOATINT (alpha);
   gowl_client_set_alpha (c, (gfloat) val);
-  return Qt;
+  return unbind_to (count, Qt);
 }
 
 DEFUN ("gowl-set-all-alpha", Fgowl_set_all_alpha,
@@ -9701,17 +9732,18 @@ DEFUN ("gowl-usable-area", Fgowl_usable_area, Sgowl_usable_area,
 Shows (x y width height) after bar and layer-shell subtraction. */)
   (void)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
   gint x, y, w, h;
 
   GOWL_CHECK_RUNNING ();
   mon = gowl_get_focused_monitor ();
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   gowl_monitor_get_window_area (mon, &x, &y, &w, &h);
-  return list4 (make_fixnum (x), make_fixnum (y),
-                make_fixnum (w), make_fixnum (h));
+  return unbind_to (count, list4 (make_fixnum (x), make_fixnum (y),
+                make_fixnum (w), make_fixnum (h)));
 }
 
 DEFUN ("gowl-bar-enable", Fgowl_bar_enable, Sgowl_bar_enable,
@@ -11574,6 +11606,7 @@ DEFUN ("gowl-list-layer-surfaces", Fgowl_list_layer_surfaces,
 MONITOR is a GowlMonitor object or nil for the focused monitor. */)
   (Lisp_Object monitor)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlMonitor *mon;
   GList *surfaces, *l;
   Lisp_Object result;
@@ -11581,7 +11614,7 @@ MONITOR is a GowlMonitor object or nil for the focused monitor. */)
   GOWL_CHECK_RUNNING ();
   mon = gowl_resolve_monitor (monitor);
   if (mon == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   surfaces = gowl_monitor_get_layer_surfaces (mon);
   result = Qnil;
@@ -11590,7 +11623,7 @@ MONITOR is a GowlMonitor object or nil for the focused monitor. */)
       GowlLayerSurface *ls = GOWL_LAYER_SURFACE (l->data);
       result = Fcons (cmacs_gobject_wrap (G_OBJECT (ls)), result);
     }
-  return Fnreverse (result);
+  return unbind_to (count, Fnreverse (result));
 }
 
 DEFUN ("gowl-layer-surface-info", Fgowl_layer_surface_info,
@@ -11599,6 +11632,7 @@ DEFUN ("gowl-layer-surface-info", Fgowl_layer_surface_info,
 Keys: layer, mapped. */)
   (Lisp_Object layer_surface)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GObject *obj;
   GowlLayerSurface *ls;
 
@@ -11607,11 +11641,11 @@ Keys: layer, mapped. */)
     error ("Not a GowlLayerSurface");
   ls = GOWL_LAYER_SURFACE (obj);
 
-  return list2 (
+  return unbind_to (count, list2 (
     Fcons (intern_c_string ("layer"),
            make_fixnum (gowl_layer_surface_get_layer (ls))),
     Fcons (intern_c_string ("mapped"),
-           gowl_layer_surface_is_mapped (ls) ? Qt : Qnil));
+           gowl_layer_surface_is_mapped (ls) ? Qt : Qnil)));
 }
 
 
@@ -11626,6 +11660,7 @@ Keys: pid, comm, cmdline, cwd.  Values are strings or integers.
 Returns nil if the PID is unavailable. */)
   (Lisp_Object client)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
   GowlProcessInfo *info;
   Lisp_Object result;
@@ -11634,7 +11669,7 @@ Returns nil if the PID is unavailable. */)
   c = gowl_resolve_client (client);
   info = gowl_client_get_process_info (c);
   if (info == NULL)
-    return Qnil;
+    return unbind_to (count, Qnil);
 
   result = list4 (
     Fcons (intern_c_string ("pid"),
@@ -11647,7 +11682,7 @@ Returns nil if the PID is unavailable. */)
            info->cwd ? build_string (info->cwd) : Qnil));
 
   gowl_process_info_free (info);
-  return result;
+  return unbind_to (count, result);
 }
 
 
@@ -12384,9 +12419,10 @@ DEFUN ("gowl-client-sticky-p", Fgowl_client_sticky_p, Sgowl_client_sticky_p,
        doc: /* Return t if CLIENT is pinned to every tag of its monitor. */)
   (Lisp_Object client)
 {
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c = gowl_resolve_client (client);
 
-  return gowl_client_get_sticky (c) ? Qt : Qnil;
+  return unbind_to (count, gowl_client_get_sticky (c) ? Qt : Qnil);
 }
 
 DEFUN ("gowl-set-client-sticky", Fgowl_set_client_sticky,

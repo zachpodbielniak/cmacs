@@ -4074,8 +4074,21 @@ Every DEFUN that reaches the compositor -- its client lists, the seat,
 the scene, the modules -- does so under =cmacs_gowl_lock_scoped()=, the
 same lock the dispatch thread holds across every
 =wl_event_loop_dispatch=; =cmacs-gowl-test-compositor-defuns-take-the-lock=
-refuses a new one that does not.  The exception is =gowl-stop=, which
-joins the thread.  =gowl-clipboard-get= locks the ask and not the wait:
+refuses a new one that does not.  That guard only looked at bodies
+naming =cmacs_gowl_compositor=, so a DEFUN handed a client or monitor
+-- =gowl-set-tags=, =gowl-toggle-client-fullscreen=,
+=gowl-set-client-alpha=, =gowl-set-mfact= and some thirty more -- ran
+unlocked.  Any scene-node change recomputes =visible= on every node it
+overlaps and frees the old pixman region.  Racing
+=wlr_scene_output_build_state=, that killed the session with SIGSEGV
+in =pixman_region32_copy= (cmacs#2).
+=cmacs-gowl-test-gowl-object-defuns-take-the-lock= now refuses any
+DEFUN that calls a =gowl_= function without the lock.  The exceptions
+are the tray and gabbrev families, which have their own locks, plus
+the short list in =cmacs-gowl-tests--lock-free-gowl-calls=.
+=cmacs-gowl-test-locked-defuns-headless= runs them against a rendering
+headless compositor.  The exception is =gowl-stop=, which joins the
+thread.  =gowl-clipboard-get= locks the ask and not the wait:
 the owning client can only answer while the dispatch thread is free.
 
 Without those checks the launcher loses the keyboard within

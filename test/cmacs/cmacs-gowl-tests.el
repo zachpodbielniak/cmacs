@@ -152,6 +152,65 @@ would outlive the test, and nothing would fail on a critical."
      (princ "cmacs-gowl-failed-start: ok\n"))
   "What `cmacs-gowl-test-failed-start-headless' runs in the second cmacs.")
 
+(defconst cmacs-gowl-tests--locked-defuns-form
+  '(progn
+     (unless (gowl-start)
+       (error "`gowl-start' failed"))
+     ;; The headless output renders while these run, so the dispatch
+     ;; thread holds the lock in `wlr_scene_output_build_state' as
+     ;; Emacs's thread asks for it.
+     (dotimes (i 300)
+       (gowl-set-mfact (if (zerop (% i 2)) 0.4 0.6))
+       (gowl-set-nmaster (1+ (% i 3)))
+       (gowl-toggle-tag-view 1)
+       (gowl-get-mfact)
+       (gowl-get-nmaster)
+       (gowl-get-vsplit)
+       (gowl-get-layout)
+       (gowl-monitor-position)
+       (gowl-usable-area)
+       (gowl-list-layer-surfaces)
+       (gowl-menu-available-p)
+       (gowl-menu-title nil)
+       (condition-case nil
+           (gowl-recording-active-p)
+         (error nil)))
+     ;; Signal from inside the lock.  The specpdl has to release it,
+     ;; or the dispatch thread wedges and `gowl-stop' below hangs on
+     ;; the join until the parent's timeout kills us.
+     (dotimes (_ 5)
+       (condition-case nil
+           (progn (gowl-set-mfact 2.0)
+                  (error "`gowl-set-mfact' accepted 2.0"))
+         (error nil))
+       (condition-case nil
+           (progn (gowl-set-tags 'not-a-client 1)
+                  (error "`gowl-set-tags' accepted a symbol"))
+         (wrong-type-argument nil)
+         (error nil)))
+     (gowl-stop)
+     (when (gowl-running-p)
+       (error "The compositor is still running after `gowl-stop'"))
+     (princ "cmacs-gowl-locked-defuns: ok\n"))
+  "What `cmacs-gowl-test-locked-defuns-headless' runs in the second cmacs.")
+
+(ert-deftest cmacs-gowl-test-locked-defuns-headless ()
+  "The DEFUNs cmacs#2 put under the gowl lock work on a live compositor.
+They now take the lock that the dispatch thread holds while it renders
+a frame.  This runs them against a rendering headless output, then
+signals from inside the lock and stops the compositor.  If a signal
+leaked the lock, the dispatch thread would block on it and the join in
+`gowl-stop' would hang until the timeout."
+  (skip-unless (fboundp 'gowl-start))
+  (skip-unless (cmacs-gowl-tests--runtime-parent))
+  (let* ((result (cmacs-gowl-tests--run-headless
+                  cmacs-gowl-tests--locked-defuns-form))
+         (status (car result))
+         (output (cdr result)))
+    (ert-info (output :prefix "child output: ")
+      (should (eql status 0))
+      (should (string-search "cmacs-gowl-locked-defuns: ok" output)))))
+
 (defun cmacs-gowl-tests--wayland-client ()
   "A program that maps a Wayland window, or nil.
 The off-thread signal test needs something to map and set a title; any
@@ -2059,6 +2118,77 @@ there is nobody to race."
       ;; Sanity: the walk found the DEFUNs.  A zero here would make
       ;; the assertion above vacuously true.
       (should (> checked 100)))))
+
+(defconst cmacs-gowl-tests--lock-free-gowl-calls
+  '(;; Unwraps a Lisp object; touches no compositor state.
+    "gowl_resolve_client"
+    ;; Takes the gowl lock itself, around the only shared part.
+    "gowl_embed_view_free"
+    ;; A static list of names compiled into gowl.
+    "gowl_palette_builtin_names"
+    ;; Encodes caller-owned pixels to a file.  Holding the lock across
+    ;; a PNG encode would stall every frame for nothing.
+    "gowl_compositor_save_png")
+  "gowl calls a DEFUN may make without holding the gowl lock.
+The tray and gabbrev objects are also exempt, by prefix, because each
+has its own lock: see `cmacs-gowl-test-gowl-object-defuns-take-the-lock'.")
+
+(ert-deftest cmacs-gowl-test-gowl-object-defuns-take-the-lock ()
+  "Every DEFUN that calls into gowl holds the gowl lock (cmacs#2).
+
+`cmacs-gowl-test-compositor-defuns-take-the-lock' only checks bodies
+that name `cmacs_gowl_compositor'.  A DEFUN that takes a client or
+monitor as an argument never needs to name it, and that is how
+`gowl-set-tags', `gowl-toggle-client-fullscreen',
+`gowl-set-client-alpha', `gowl-set-mfact' and others ran unlocked.
+Each one changes the scene graph from Emacs's thread.  Changing any
+scene node recomputes `visible' on every node it overlaps, which frees
+the old pixman region data.  When this raced the dispatch thread's
+`wlr_scene_output_build_state', the dispatch thread copied a region
+that had just been freed, and the whole `--gowl' session died with
+SIGSEGV in `pixman_region32_copy'.
+
+So the trigger here is any call to a `gowl_' function, apart from the
+short list in `cmacs-gowl-tests--lock-free-gowl-calls' and the tray
+and gabbrev families, which have their own locks.  The menu tree and
+the input recorder are not exempt: the dispatch thread reads the menu
+and writes the recorder's ring."
+  (let ((source (cmacs-gowl-tests--source-file "cmacs/gowl/cmacs-gowl.c"))
+        (pointer (cmacs-gowl-tests--source-file
+                  "cmacs/gowl/cmacs-gowl-pointer.c"))
+        (case-fold-search nil)
+        (checked 0)
+        (unlocked nil))
+    (skip-unless source)
+    (dolist (chunk (append (cmacs-gowl-tests--defun-chunks source)
+                           (and pointer
+                                (cmacs-gowl-tests--defun-chunks pointer))))
+      (let ((name (car chunk))
+            (text (cdr chunk))
+            (pos 0)
+            (reaches nil))
+        (while (and (not reaches)
+                    (string-match "\\_<\\(gowl_[a-z0-9_]+\\)[[:space:]]*("
+                                  text pos))
+          (let ((fn (match-string 1 text)))
+            (setq pos (match-end 0))
+            (unless (or (member fn cmacs-gowl-tests--lock-free-gowl-calls)
+                        (string-prefix-p "gowl_tray_" fn)
+                        (string-prefix-p "gowl_gabbrev_" fn))
+              (setq reaches fn))))
+        ;; `gowl-stop' joins the dispatch thread; see the test above.
+        (when (and reaches (not (equal name "gowl-stop")))
+          (setq checked (1+ checked))
+          (unless (string-match-p
+                   (rx (or "cmacs_gowl_lock_scoped ()"
+                           "cmacs_gowl_lock ()"
+                           "pthread_mutex_lock (&cmacs_gowl_mutex)"))
+                   text)
+            (push (format "%s (calls %s)" name reaches) unlocked)))))
+    ;; Report every offender at once, not just the first.
+    (should (equal (nreverse unlocked) nil))
+    ;; Sanity: the walk found the DEFUNs.
+    (should (> checked 150))))
 
 (ert-deftest cmacs-gowl-test-clipboard-read-is-not-under-the-lock ()
   "`gowl-clipboard-get' locks the ask and not the wait.

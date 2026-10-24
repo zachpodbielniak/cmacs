@@ -2938,6 +2938,16 @@ locked they signal, except a release.  Each holds the gowl lock; the C
 functions behind them serve the camera hand cursor (@pxref{CMacs
 Camera}).
 
+Every @code{gowl-} primitive that touches compositor state holds the
+same lock the dispatch thread keeps while it renders a frame.  That
+includes primitives that take a client or monitor as an argument, such
+as @code{gowl-set-tags}, @code{gowl-set-client-alpha} and
+@code{gowl-set-mfact}.  These used to change the scene graph unlocked,
+and that crashed the session with a SIGSEGV in
+@code{wlr_scene_output_build_state}.  The guard test
+@code{cmacs-gowl-test-gowl-object-defuns-take-the-lock} refuses a new
+primitive that skips the lock.
+
 @section Per-device Input Remapping
 @cindex input remapping
 @cindex foot pedal
