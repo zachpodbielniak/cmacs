@@ -48,6 +48,13 @@
 (defvar cmacs-gowl-input-remap-rules)
 (declare-function cmacs-gowl-macro--on-start "cmacs-gowl-macro" ())
 (declare-function cmacs-gowl-broadcast--on-start "cmacs-gowl-broadcast" ())
+(declare-function cmacs-gowl-hotkey--on-start "cmacs-gowl-hotkey" ())
+(defvar cmacs-gowl-hotkey-enable)
+(defvar cmacs-gowl-hotkey-definitions)
+(defvar cmacs-gowl-hotkey-remaps)
+(defvar cmacs-gowl-hotkey-hotstrings)
+(defvar cmacs-gowl-hotkey-section)
+(defvar cmacs-gowl-hotkey-scripts)
 (declare-function cmacs-gowl-floatdesk--on-start "cmacs-gowl-floatdesk" ())
 (declare-function cmacs-gowl-gabbrev--on-start "cmacs-gowl-gabbrev" ())
 (defvar cmacs-gowl-broadcast-enable)
@@ -2059,6 +2066,19 @@ thread is running and applies configuration."
     (require 'cmacs-gowl-broadcast))
   (when (fboundp 'cmacs-gowl-broadcast--on-start)
     (cmacs-gowl-broadcast--on-start))
+  ;; Hotkeys, AutoHotkey-style (cmacs-gowl-hotkey.el).  Opt-in the same
+  ;; way: the module is loaded only when `cmacs-gowl-hotkey-enable' is
+  ;; set or a hotkey, remap, hotstring, section or script is configured,
+  ;; and otherwise on the first use of a cmacs-gowl-hotkey- function.
+  (when (or (bound-and-true-p cmacs-gowl-hotkey-enable)
+            (bound-and-true-p cmacs-gowl-hotkey-definitions)
+            (bound-and-true-p cmacs-gowl-hotkey-remaps)
+            (bound-and-true-p cmacs-gowl-hotkey-hotstrings)
+            (bound-and-true-p cmacs-gowl-hotkey-section)
+            (bound-and-true-p cmacs-gowl-hotkey-scripts))
+    (require 'cmacs-gowl-hotkey))
+  (when (fboundp 'cmacs-gowl-hotkey--on-start)
+    (cmacs-gowl-hotkey--on-start))
   ;; The floating desktop (cmacs-gowl-floatdesk.el).  Its module is in
   ;; the default set, so this only pushes the `cmacs-gowl-floatdesk-*'
   ;; options and starts the lighter; nothing floats until a workspace is

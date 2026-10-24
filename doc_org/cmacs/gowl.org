@@ -1337,6 +1337,403 @@ The same from the shell: =emacsctl compositor macro sort-windows reverse=.  With
 
 The macro API, lookup order, both run modes, every setting and the shipped examples are in =deps/gowl/docs/macros.org=.
 
+** Hotkeys (AutoHotkey)
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys
+:END:
+
+gowl's =hotkey= module is AutoHotkey done in the compositor: hotkeys on keys, mouse buttons and wheel notches --- in AutoHotkey's notation (="#!t"=, ="~LButton"=, ="CapsLock & j"=, ="^a UP"=) or gowl's (="Super+Alt+t"=) --- running lists of actions, with remaps, contexts (=#HotIf=), modes, double taps, long presses, hotstrings, timers and event hooks around them.  The module decides every key before any keybind and before a fullscreen game's keyboard-shortcuts-inhibit, so a hotkey works where nothing else does.  =lisp/cmacs/cmacs-gowl-hotkey.el= is its Elisp surface, and it adds what only cmacs can: *Elisp functions as hotkeys*, *Elisp contexts*, and *Elisp functions* the module's YAML and C scripts can call.
+
+*Nothing is loaded by default.*  The module is loaded at compositor start when =cmacs-gowl-hotkey-enable= is set or something is configured (=cmacs-gowl-hotkey-definitions=, =-remaps=, =-hotstrings=, =-section=, =-scripts=), and otherwise the first time a =cmacs-gowl-hotkey-= function is used.
+
+The module itself --- the whole key notation, how a key is decided, every action, Send syntax, hotstrings, timers, hooks, the C API, the IPC, a YAML cookbook and a table from AutoHotkey --- is documented in =deps/gowl/docs/hotkey.org= (mirrored here as =doc_org/cmacs/deps/gowl/hotkey.org=).  This section is the Elisp side.
+
+*** Quick start
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-quick-start
+:END:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-hotkey-enable t)
+
+;; Super+Alt+c anywhere: org-capture
+(cmacs-gowl-hotkey-define "#!c" #'org-capture)
+
+;; Caps Lock held with e: the notes inbox
+(cmacs-gowl-hotkey-define "CapsLock & e"
+  (lambda () (find-file "~/Documents/notes/00_inbox/00_index.org")))
+
+;; F9: gowl actions only -- no Elisp
+(cmacs-gowl-hotkey-define "F9" nil
+  :do '((:shell "grim ~/shot.png") (:notify "saved")))
+
+;; Caps Lock is Control everywhere else, and a hotstring
+(setq cmacs-gowl-hotkey-remaps '(("CapsLock" . "Control_L"))
+      cmacs-gowl-hotkey-hotstrings '("::btw::by the way"))
+#+end_src
+
+=M-x cmacs-gowl-hotkey-show= lists every hotkey in force (=f= fires the one at point, =t= switches it, =h= shows the key history, =P= what the module could not use); =M-x cmacs-gowl-hotkey-problems= lists configuration mistakes, one line each --- a mistake costs only the entry it is in.
+
+*** How an Elisp hotkey runs
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-threads
+:END:
+
+The compositor decides a key on its own thread, where Lisp must never run (two threads winding one =specpdl= is a crash).  So an Elisp hotkey's action is a gowl =custom= action whose form is =(cmacs-gowl-hotkey--call ID TRIGGER)=; cmacs's custom-action handler queues that form to Emacs's main loop, exactly as it does for a custom keybind.  The key is swallowed at once and the function runs a moment later, on the main thread, with =cmacs-gowl-hotkey-current= bound to the hotkey's id and =cmacs-gowl-hotkey-trigger= to what fired it (="hotkey"=, ="timer"=, ...).  A command is called interactively, anything else with no arguments.  An error is caught, shown, and passed to =cmacs-gowl-hotkey-fault-functions= --- never to the compositor.
+
+=:do= actions run first, on the compositor's side, and the Elisp after them: =:do '((:send "^c") (:sleep 150))= copies the selection in whatever window has it, waits for the copy to land, and then hands over to Lisp.
+
+*** Defining hotkeys
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-define
+:END:
+
+=(cmacs-gowl-hotkey-define KEY FUNCTION &rest PLIST)= returns the hotkey's id.  FUNCTION may be nil when =:do= says what to do.  Defining the same id again replaces it; =cmacs-gowl-hotkey-undefine= takes it back.  Defined before the compositor runs, a hotkey is kept and installed when it starts.
+
+| Key               | Value                                                    |
+|-------------------+----------------------------------------------------------|
+| =:id=             | the id (default: KEY)                                    |
+| =:do=             | gowl actions before FUNCTION: a plist, a list of them, or a command line |
+| =:context=        | only where a context holds                               |
+| =:when=           | only when the focused window matches: filter text, or a form like =(app-id "librewolf")= |
+| =:over=           | only when the window under the pointer matches           |
+| =:exists=, =:absent= | only while some / no window matches                   |
+| =:mode=           | only in a key mode (="*"= for every mode)                |
+| =:double=         | fire on a double tap (=t= = 300 ms, or a number)         |
+| =:hold=           | fire on a long press (=t= = 500 ms, or a number)         |
+| =:priority=       | higher wins among hotkeys matching one press             |
+| =:level=          | the input level (AutoHotkey's =#InputLevel=)             |
+| =:suspend-exempt= | keep firing while hotkeys are suspended                  |
+| =:max-running=    | runs at once (default 1, 0 = no limit)                   |
+| =:enabled=        | nil defines it switched off                              |
+| =:description=    | shown by =cmacs-gowl-hotkey-show=                        |
+
+Filter forms are the ones macro triggers and broadcast rules take: =(and FORM...)=, =(or ...)=, =(not FORM)=, =(FIELD VALUE)= for a glob and =(FIELD OP VALUE)= with =OP= one of === =!== =~= =!~= =<= =<== =>= =>==; the fields are =app-id= =title= =exec= =pid= =id= =xwayland= =floating= =fullscreen= =monitor= =layout= =tags= =tag= =time= =hour= =weekday= =mode=.
+
+*Actions* in =:do= are the module's (every one is in =deps/gowl/docs/hotkey.org=), written as plists: =(:action "spawn" :arg "gst")=, =(:command "view 4")=, =(:shell "...")=, =(:run ["librewolf" "--new-window"])=, =(:send "^c{Enter}")=, =(:send-text "...")=, =(:window "float")=, =(:mouse "click" :button "right")=, =(:macro "pip-corner")=, =(:c "gowl_hotkey_send(comp, \"^c\");")=, =(:call "name")=, =(:mode "resize")=, =(:notify "...")=, =(:custom "(any-elisp)")=, ...  A string is a gowl command line.
+
+*** Functions
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-functions
+:END:
+
+=(cmacs-gowl-hotkey-define-function NAME FUNCTION)= makes FUNCTION reachable as NAME from a YAML hotkey's ={call: NAME, args: [...]}=, a C script's =gowl_hotkey_call_function()=, =gowl-msg hotkey-call NAME ARGS= and =cmacs-gowl-hotkey-call=.  FUNCTION gets the arguments as strings, on the main thread.  This is how a timer or a mode written as YAML runs Elisp --- the /log where the time goes/ recipe below does it.
+
+*** Contexts written in Elisp
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-contexts
+:END:
+
+=(cmacs-gowl-hotkey-define-context NAME PREDICATE)= makes a context hotkeys can name with =:context NAME= (in Elisp, YAML or C alike).  PREDICATE gets the focused window's =gowl-client-info= alist (or nil).
+
+*It is never asked while a key is being decided.*  A key cannot wait for Lisp --- the compositor holds the key on its thread, and the main thread may be busy for seconds --- so cmacs asks every Elisp predicate when the focus moves or a title changes (=cmacs-gowl-focus-changed-functions=, =cmacs-gowl-client-title-changed-functions=, coalesced to one pass), and pushes only answers that changed with =hotkey-context-set=.  The module reads a cached boolean.  A predicate may therefore be as slow as it likes, but it can depend only on the focused window unless something calls =cmacs-gowl-hotkey-refresh-contexts=.  One that signals is false, and a fault.  For a condition on the window itself, a =:when= filter is simpler and is decided in the compositor at the key.
+
+*** Sections, remaps and hotstrings
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-sections
+:END:
+
+Anything the module's YAML takes --- modes, timers, event hooks, groups, functions --- can be installed from Elisp with =(cmacs-gowl-hotkey-add-section ID DATA)=, DATA being YAML text or Lisp data: plists and alists become mappings, lists and vectors sequences, =t= and =nil= booleans (=cmacs-gowl-hotkey-yaml= shows the result).  Adding under the same ID replaces the section; =cmacs-gowl-hotkey-remove-section= takes it back.  =cmacs-gowl-hotkey-section= is one installed at every start.
+
+=cmacs-gowl-hotkey-remaps= (an alist of =(FROM . TO)=) and =cmacs-gowl-hotkey-hotstrings= (AutoHotkey's =":OPTIONS:ABBR::TEXT"= strings, or =(ABBR . TEXT)=) are installed together as the section =cmacs-options=.  Hotstrings are typed by the gabbrev module, which cmacs always loads.
+
+=cmacs-gowl-hotkey-scripts= names crispy hotkey scripts --- C files the module builds, loads, and rebuilds when they are saved; =deps/gowl/data/example-hotkey-script.c= is one to start from.
+
+*** Modes, suspending, and the mode line
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-modes
+:END:
+
+=cmacs-gowl-hotkey-suspend= toggles every hotkey off and on (with a prefix argument, positive suspends); =cmacs-gowl-hotkey-suspend-key= (=Super+Shift+Pause=) does it from anywhere and is the one hotkey that never suspends.  =cmacs-gowl-hotkey-mode-enter= enters a key mode (="default"= leaves).  While hotkeys are suspended the mode line shows =HK:off=, while a mode is entered =HK:NAME= (=cmacs-gowl-hotkey-lighter=).
+
+The other commands: =cmacs-gowl-hotkey-send= (keys in Send syntax), =-send-text=, =-fire=, =-set-enabled=, =-call=, =-input= (an input hook; its end runs =cmacs-gowl-hotkey-input-functions=), =-history=, =-status=, =-list=, =-reload=, =-start=, =-stop=.
+
+*** Hooks
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-hooks
+:END:
+
+| Hook                                  | Called with                                          |
+|---------------------------------------+------------------------------------------------------|
+| =cmacs-gowl-hotkey-fired-functions=   | the id of every hotkey that fires, whatever it runs   |
+| =cmacs-gowl-hotkey-fault-functions=   | ID (nil for one the module reported) and what failed |
+| =cmacs-gowl-hotkey-changed-functions= | =suspended= and t/nil, or =mode= and its name         |
+| =cmacs-gowl-hotkey-input-functions=   | an input hook's NAME, REASON and TEXT                 |
+
+They are driven by the module's announcements (the compositor's =module-event= signal, =cmacs-gowl-module-event-functions=), so they fire however the change happened: a key, these commands, =gowl-msg=, D-Bus, MCP.
+
+*** D-Bus, =emacsctl= and MCP
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-rpc
+:END:
+
+=Hotkey (s verb, s args) -> s= on =org.cmacs.Editor1.Compositor= runs one of the module's commands --- =status=, =list=, =problems=, =add=, =remove=, =enable=, =disable=, =toggle=, =fire=, =suspend=, =mode=, =send=, =send-text=, =call=, =history=, =keystate=, =capslock=, =numlock=, =timers=, =functions=, =contexts=, =reload=, =cancel=, =help= --- through =cmacs-gowl-hotkey-rpc=, which loads the module and never signals.  The verb is checked against that list in C before any Lisp is built, and the arguments are escaped and must be one line.
+
+#+begin_src sh
+emacsctl compositor hotkey status
+emacsctl compositor hotkey suspend toggle
+emacsctl compositor hotkey add '{key: F9, do: {notify: hi}}'
+emacsctl compositor hotkey send '^a{Delete}'
+gdbus call --session -d org.cmacs.Editor1 -o /org/cmacs/Editor1 \
+    -m org.cmacs.Editor1.Compositor.Hotkey list ''
+#+end_src
+
+MCP has =gowl_hotkey_status=, =gowl_hotkey_list=, =gowl_hotkey_history=, =gowl_hotkey_add= (a hotkey object or one line of YAML, optionally under an =id=), =gowl_hotkey_remove=, =gowl_hotkey_set= (one hotkey on or off, suspend, or the mode), =gowl_hotkey_send= and =gowl_hotkey_fire=.  The module's own text commands and JSON-RPC methods (=hotkey.list=, =hotkey.set=, ...) work on cmacs's gowl IPC socket as they do standalone, and its events reach =gowl-msg -s=.
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-options
+:END:
+
+| Option                               | Default               | Meaning                                       |
+|--------------------------------------+-----------------------+-----------------------------------------------|
+| =cmacs-gowl-hotkey-enable=           | nil                   | Load the module at every compositor start     |
+| =cmacs-gowl-hotkey-suspend-key=      | ="Super+Shift+Pause"= | Suspends and resumes every hotkey             |
+| =cmacs-gowl-hotkey-send-mode=        | =input=               | =event= paces sent keys                       |
+| =cmacs-gowl-hotkey-key-delay=        | 0                     | ms between sent keys                          |
+| =cmacs-gowl-hotkey-accept-synthetic= | nil                   | Let a KVM's injected keys fire hotkeys        |
+| =cmacs-gowl-hotkey-c-timeout=        | 2000                  | ms a C action or context may run              |
+| =cmacs-gowl-hotkey-toast=            | t                     | Toasts on suspend, modes, =notify=            |
+| =cmacs-gowl-hotkey-log=              | nil                   | Every decision to the journal                 |
+| =cmacs-gowl-hotkey-scripts=          | nil                   | Crispy hotkey scripts                         |
+| =cmacs-gowl-hotkey-definitions=      | nil                   | =(KEY FUNCTION . PLIST)= installed at start   |
+| =cmacs-gowl-hotkey-remaps=           | nil                   | =(FROM . TO)= remaps                          |
+| =cmacs-gowl-hotkey-hotstrings=       | nil                   | Hotstrings, typed by gabbrev                  |
+| =cmacs-gowl-hotkey-section=          | nil                   | A whole section, YAML or Lisp data            |
+| =cmacs-gowl-hotkey-lighter=          | =" HK"=               | Mode line while suspended or in a mode        |
+
+*** Cookbook
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-cookbook
+:END:
+
+Every recipe is in =etc/cmacs/examples/gowl-hotkey-examples.el=, which =test/cmacs/cmacs-gowl-hotkey-tests.el= loads against a fake compositor, checking what each tells the module --- and checking that the blocks below are that file's text.  Copy what you want into your init.
+
+**** Capture the selection from any window
+
+#+name: hotkey-example-capture-the-selection-from-any-window
+#+begin_src emacs-lisp
+;; Super+Alt+c in any application: copy what is selected there (the
+;; module types Ctrl+c into it, waits for the copy to land), then
+;; org-capture it in Emacs with the text as the initial content.
+(cmacs-gowl-hotkey-define "#!c"
+  (lambda ()
+    (let ((org-capture-initial (gowl-clipboard-get)))
+      (org-capture)))
+  :do '((:send "^c") (:sleep 150))
+  :description "Capture the selection")
+#+end_src
+
+**** Jump to an application, or start it
+
+#+name: hotkey-example-jump-to-an-application-or-start-it
+#+begin_src emacs-lisp
+;; Super+Alt+b: focus the browser if it is open anywhere, on whatever
+;; workspace, else start it.  AutoHotkey's WinExist / WinActivate / Run.
+(defun my-hotkey-browser ()
+  "Focus librewolf, or start it."
+  (let ((c (gowl-find-client "librewolf")))
+    (if c (gowl-focus-client c) (gowl-spawn "librewolf"))))
+
+(cmacs-gowl-hotkey-define "#!b" #'my-hotkey-browser
+  :description "Browser: focus or start")
+#+end_src
+
+**** A hotkey for one application, decided in Elisp
+
+#+name: hotkey-example-a-hotkey-for-one-application-decided-in-elisp
+#+begin_src emacs-lisp
+;; Ctrl+Shift+o, but only in a browser: copy the page's address and open
+;; it in an Emacs gsurf buffer.  The context is an Elisp predicate over
+;; the focused window, asked when the focus or a title changes -- never
+;; while a key is being decided.
+(cmacs-gowl-hotkey-define-context "browser"
+  (lambda (window)
+    (member (alist-get 'app-id window) '("librewolf" "firefox"))))
+
+(cmacs-gowl-hotkey-define "^+o"
+  (lambda () (cmacs-gsurf-open-url (gowl-clipboard-get)))
+  :context "browser"
+  :do '((:send "^l^c{Esc}") (:sleep 150))
+  :description "Page into gsurf")
+#+end_src
+
+**** The scratchpad and a note, together
+
+#+name: hotkey-example-the-scratchpad-and-a-note-together
+#+begin_src emacs-lisp
+;; Super+Alt+n: drop the scratchpad down (a gowl command) and open the
+;; inbox in Emacs -- gowl actions and Elisp in one hotkey, in order.
+(cmacs-gowl-hotkey-define "#!n"
+  (lambda () (find-file "~/Documents/notes/00_inbox/00_index.org"))
+  :do "scratchpad-toggle"
+  :description "Scratchpad + inbox")
+#+end_src
+
+**** Push to talk into dictation
+
+#+name: hotkey-example-push-to-talk-into-dictation
+#+begin_src emacs-lisp
+;; Hold F13 (a foot pedal, a macro-pad key) to dictate, release to stop:
+;; one hotkey on the press and one on the release, both toggling.
+(cmacs-gowl-hotkey-define "F13" #'cmacs-whisper-dictate
+  :id "dictate-down")
+(cmacs-gowl-hotkey-define "F13 UP" #'cmacs-whisper-dictate
+  :id "dictate-up")
+#+end_src
+
+**** Ask the AI about the selection, anywhere
+
+#+name: hotkey-example-ask-the-ai-about-the-selection-anywhere
+#+begin_src emacs-lisp
+;; Super+Alt+a in any window: copy the selection, and stream an
+;; explanation of it into an Emacs output window (C-c C-c there asks a
+;; follow-up).
+(cmacs-gowl-hotkey-define "#!a"
+  (lambda ()
+    (cmacs-ai-textops-stream "Explain" "the selection"
+                             "Explain the text briefly and plainly."
+                             (gowl-clipboard-get)))
+  :do '((:send "^c") (:sleep 150))
+  :description "Explain the selection")
+#+end_src
+
+**** Double-tap right Control for a chat
+
+#+name: hotkey-example-double-tap-right-control-for-a-chat
+#+begin_src emacs-lisp
+;; Right Control tapped twice quickly opens an AI chat; once, or held
+;; with another key, it is just Control.
+(cmacs-gowl-hotkey-define "RCtrl" #'cmacs-ai-chat
+  :double 300
+  :description "AI chat")
+#+end_src
+
+**** Log where the time goes
+
+#+name: hotkey-example-log-where-the-time-goes
+#+begin_src emacs-lisp
+;; Every minute, append the focused window to an org file.  The timer
+;; is YAML-shaped Lisp data; the function it calls is Elisp.
+(defvar my-hotkey-focus-log "~/Documents/notes/00_inbox/focus-log.org"
+  "Where `my-hotkey-log-focus' writes.")
+
+(defun my-hotkey-log-focus (&rest _)
+  "Append the focused window's app id and title to `my-hotkey-focus-log'."
+  (let ((w (cmacs-gowl-hotkey-focused-window)))
+    (when w
+      (with-temp-buffer
+        (insert (format "- %s %s :: %s\n"
+                        (format-time-string "[%Y-%m-%d %a %H:%M]")
+                        (alist-get 'app-id w) (alist-get 'title w)))
+        (append-to-file (point-min) (point-max)
+                        (expand-file-name my-hotkey-focus-log))))))
+
+(cmacs-gowl-hotkey-define-function "log-focus" #'my-hotkey-log-focus)
+
+(cmacs-gowl-hotkey-add-section "focus-log"
+  '(:timers [(:id "focus-log" :every "1m" :do (:call "log-focus"))]))
+#+end_src
+
+**** A mode of single keys
+
+#+name: hotkey-example-a-mode-of-single-keys
+#+begin_src emacs-lisp
+;; Super+Alt+space enters `launch': one key starts a program and leaves
+;; the mode, Escape leaves it, and nothing else typed meanwhile reaches
+;; a window.  The mode line shows " HK:launch" while it is entered.
+(cmacs-gowl-hotkey-add-section "launch-mode"
+  '(:modes
+    (:launch
+     (:oneshot t :swallow t :timeout "3s" :label "Launch: t e b"
+      :hotkeys [(:key "t" :do (:action "spawn" :arg "gst"))
+                (:key "e" :do (:custom "(find-file \"~/Documents/notes/\")"))
+                (:key "b" :do (:call "browser"))
+                (:key "Esc" :do (:mode "default"))]))
+    :hotkeys [(:key "#!Space" :do (:mode "launch"))]))
+
+(cmacs-gowl-hotkey-define-function "browser"
+  (lambda (&rest _) (my-hotkey-browser)))
+#+end_src
+
+**** Remaps and hotstrings from options
+
+#+name: hotkey-example-remaps-and-hotstrings-from-options
+#+begin_src emacs-lisp
+;; Caps Lock is Control, the back mouse button is a middle click, and
+;; two hotstrings -- set in custom.el or init, installed at start.
+(setq cmacs-gowl-hotkey-remaps
+      '(("CapsLock" . "Control_L") ("XButton1" . "MButton"))
+      cmacs-gowl-hotkey-hotstrings
+      '("::btw::by the way" (";sig" . "-- \nZach")))
+#+end_src
+
+**** Game keys that stand down in EverQuest
+
+#+name: hotkey-example-game-keys-that-stand-down-in-everquest
+#+begin_src emacs-lisp
+;; F1-F3 are workspace keys everywhere except EverQuest, where they are
+;; the game's own (target self and group).  :when is a gowl filter over
+;; the focused window; the same keys reach the game as typed.
+(dolist (n '(1 2 3))
+  (cmacs-gowl-hotkey-define (format "F%d" n) nil
+    :id (format "view-%d" n)
+    :when '(not (app-id "eqgame.exe"))
+    :do (list :command (format "view %d" n))))
+#+end_src
+
+**** Hear every hotkey
+
+#+name: hotkey-example-hear-every-hotkey
+#+begin_src emacs-lisp
+;; Log each hotkey that fires, and say so when one fails.
+(add-hook 'cmacs-gowl-hotkey-fired-functions
+          (lambda (id) (message "hotkey %s" id)))
+(add-hook 'cmacs-gowl-hotkey-fault-functions
+          (lambda (id what) (message "hotkey %s failed: %s" (or id "-") what)))
+#+end_src
+
+*** One recipe three ways
+:PROPERTIES:
+:CUSTOM_ID: gowl-hotkeys-three-ways
+:END:
+
+Super+Alt+t opens a terminal.  In gowl's YAML (=~/.config/gowl/config.yaml=, or =cmacs-gowl-hotkey-section=):
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}
+#+end_src
+
+In Elisp, as a gowl action, or as Lisp:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-hotkey-define "#!t" nil :do '(:action "spawn" :arg "gst"))
+(cmacs-gowl-hotkey-define "#!t" (lambda () (gowl-spawn "gst")))
+#+end_src
+
+In a crispy hotkey script (named in =cmacs-gowl-hotkey-scripts=):
+
+#+begin_src c
+#include <gowl/gowl.h>
+
+static void
+terminal(GowlHotkeyCall *call, gpointer data)
+{
+	g_free(gowl_hotkey_command(gowl_hotkey_call_get_compositor(call),
+	                           "action spawn gst"));
+}
+
+G_MODULE_EXPORT gboolean
+gowl_hotkey_script_init(void)
+{
+	return gowl_hotkey_define("terminal", "#!t", terminal, NULL, NULL, NULL);
+}
+#+end_src
+
+The YAML form needs nothing from Emacs and survives an Emacs that is busy; the Elisp one can do anything Emacs can; the script runs in the compositor, under its fault guard, and needs no Lisp at all.
+
 ** Floating desktop
 :PROPERTIES:
 :CUSTOM_ID: gowl-floatdesk
@@ -4949,7 +5346,7 @@ The keys are interactive; =lisp/cmacs/cmacs-gowl-grab.el= is the half where you 
 
 Coordinates are layout coordinates (=gowl-list-monitors=, a client's geometry).  Neither touches the clipboard unless asked.  OCR runs the screenshot module's own =ocr-command= and =ocr-language=, asked for with =screenshot-ocr-config=, on a 0600 PNG in =$XDG_RUNTIME_DIR= that is deleted afterwards; tesseract runs synchronously on Emacs's thread (=cmacs-gowl-grab-ocr-timeout=, 60 s), which pauses Emacs and not the compositor.
 
-** MCP tools for macros, the screen and the clipboard
+** MCP tools for macros, hotkeys, the screen and the clipboard
 :PROPERTIES:
 :CUSTOM_ID: gowl-mcp-tools
 :END:
@@ -4970,6 +5367,14 @@ On cmacs's MCP server, each a thin call into the Elisp above or in =cmacs-gowl-m
 | =gowl_clipboard_list=      | --                                          | The history, newest first                                  |
 | =gowl_clipboard_entry=     | =id=                                        | The path of one entry's stored bytes                       |
 | =gowl_clipboard_copy=      | =id=                                        | Put an entry back on the clipboard                         |
+| =gowl_hotkey_status=       | --                                          | Hotkeys: suspended?, mode, counts, last error (JSON)       |
+| =gowl_hotkey_list=         | --                                          | Every hotkey and remap in force (JSON)                     |
+| =gowl_hotkey_history=      | --                                          | The last 64 inputs and what each fired (JSON)              |
+| =gowl_hotkey_add=          | =hotkey= (object) or =yaml=, =id=           | Add a hotkey or a section for this session                 |
+| =gowl_hotkey_remove=       | =id=                                        | Remove one added at run time                               |
+| =gowl_hotkey_set=          | =id= + =enabled=, or =suspended=, or =mode= | Switch one, suspend all, or enter a mode                   |
+| =gowl_hotkey_send=         | =keys= (Send syntax) or =text=              | Type into the focused window                               |
+| =gowl_hotkey_fire=         | =id=                                        | Run a hotkey's actions as if pressed                       |
 
 Three rules shape them.  *Recording needs consent from here*: Super+Alt+r needs none because you pressed it, but =gowl_macro_record start= passes =--require-consent= and is refused until =input-recording: true=.  *Nothing turns the microphone on*: =gowl_macro_voice_match= takes the sentence instead.  *Reading the screen leaves the clipboard alone*.  For the brigade, =gowl_macro_record=, =gowl_macro_run=, =gowl_macro_voice_match= and the three clipboard tools are /privileged/ --- named in an allowlist they work, =*= does not sweep them in --- because they watch your input, run code in the compositor, or read everything you copied.
 

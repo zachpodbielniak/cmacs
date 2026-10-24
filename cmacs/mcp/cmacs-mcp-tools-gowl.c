@@ -896,6 +896,204 @@ handle_gowl_broadcast_focus_slot (McpServer *s, const gchar *n,
   return gowl_broadcast_line (line);
 }
 
+/* ── Hotkeys (AutoHotkey for gowl) ─────────────────────────────────
+ *
+ * Each tool is one `hotkey-' module command run through
+ * `cmacs-gowl-hotkey-command' (cmacs-gowl-hotkey.el), which loads the
+ * opt-in module and never signals: an error comes back as "ERROR ..."
+ * text, turned into an MCP error here.  Ids, modes and names go on the
+ * command line, so they are checked to be one word; free text (keys,
+ * YAML) must be one line, since the command framing is a line. */
+
+static McpToolResult *
+gowl_hotkey_line (const gchar *line)
+{
+  g_autofree gchar *el = cmacs_dispatch_lisp_escape (line);
+  g_autofree gchar *expr = g_strdup_printf (
+    "(progn (require 'cmacs-gowl-hotkey) "
+    "(cmacs-gowl-hotkey-command \"%s\"))", el);
+  GError *error = NULL;
+  gchar *str = cmacs_dispatch_eval_string (expr, &error);
+  McpToolResult *r;
+
+  if (str != NULL && g_str_has_prefix (str, "ERROR"))
+    {
+      r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, str + (str[5] == ' ' ? 6 : 5));
+      g_free (str);
+      return r;
+    }
+  r = gowl_result (str, error);
+  g_clear_error (&error);
+  return r;
+}
+
+/* Free text for the command line: present, and one line. */
+static gboolean
+gowl_hotkey_one_line (const gchar *t)
+{
+  return t != NULL && *t != '\0' && strpbrk (t, "\n\r") == NULL;
+}
+
+static McpToolResult *
+handle_gowl_hotkey_status (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_hotkey_line ("hotkey-status");
+}
+
+static McpToolResult *
+handle_gowl_hotkey_list (McpServer *s, const gchar *n,
+                         JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_hotkey_line ("hotkey-list");
+}
+
+static McpToolResult *
+handle_gowl_hotkey_history (McpServer *s, const gchar *n,
+                            JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return gowl_hotkey_line ("hotkey-history");
+}
+
+/* hotkey-add from an object (a hotkey entry, or a section) or one line
+   of flow YAML; `id' names it so it can be replaced and removed. */
+static McpToolResult *
+handle_gowl_hotkey_add (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  g_autofree gchar *text = NULL;
+  g_autofree gchar *line = NULL;
+  const gchar *yaml, *id;
+  (void) s; (void) n; (void) u;
+
+  if (a != NULL && json_object_has_member (a, "hotkey"))
+    {
+      JsonNode *node = json_object_get_member (a, "hotkey");
+      g_autoptr (JsonGenerator) gen = json_generator_new ();
+
+      if (!JSON_NODE_HOLDS_OBJECT (node))
+        return gowl_missing ("hotkey (an object)");
+      json_generator_set_root (gen, node);
+      text = json_generator_to_data (gen, NULL);
+    }
+  else
+    {
+      yaml = json_object_get_string_member_with_default (a, "yaml", NULL);
+      if (!gowl_hotkey_one_line (yaml))
+        return gowl_missing ("a hotkey object, or yaml (one line of "
+                             "flow YAML)");
+      text = g_strdup (yaml);
+    }
+  id = json_object_get_string_member_with_default (a, "id", NULL);
+  if (id != NULL && !gowl_broadcast_word (id))
+    return gowl_missing ("id (one word)");
+  line = id != NULL ? g_strdup_printf ("hotkey-add --id=%s %s", id, text)
+                    : g_strdup_printf ("hotkey-add %s", text);
+  return gowl_hotkey_line (line);
+}
+
+static McpToolResult *
+handle_gowl_hotkey_remove (McpServer *s, const gchar *n,
+                           JsonObject *a, gpointer u)
+{
+  const gchar *id;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  id = json_object_get_string_member_with_default (a, "id", NULL);
+  if (!gowl_broadcast_word (id))
+    return gowl_missing ("id");
+  line = g_strdup_printf ("hotkey-remove %s", id);
+  return gowl_hotkey_line (line);
+}
+
+/* One of: a hotkey switched (id + enabled), suspending, or the mode. */
+static McpToolResult *
+handle_gowl_hotkey_set (McpServer *s, const gchar *n,
+                        JsonObject *a, gpointer u)
+{
+  static const gchar * const toggles[] = { "on", "off", "toggle", NULL };
+  const gchar *id, *enabled, *suspended, *mode;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  id = json_object_get_string_member_with_default (a, "id", NULL);
+  enabled = json_object_get_string_member_with_default (a, "enabled", NULL);
+  suspended = json_object_get_string_member_with_default (a, "suspended",
+                                                          NULL);
+  mode = json_object_get_string_member_with_default (a, "mode", NULL);
+  if (enabled != NULL)
+    {
+      if (!g_strv_contains (toggles, enabled))
+        return gowl_missing ("enabled (on, off or toggle)");
+      if (!gowl_broadcast_word (id))
+        return gowl_missing ("id, with enabled");
+      line = g_strdup_printf ("hotkey-%s %s",
+                              g_strcmp0 (enabled, "on") == 0 ? "enable"
+                              : g_strcmp0 (enabled, "off") == 0 ? "disable"
+                              : "toggle", id);
+    }
+  else if (suspended != NULL)
+    {
+      if (!g_strv_contains (toggles, suspended))
+        return gowl_missing ("suspended (on, off or toggle)");
+      line = g_strdup_printf ("hotkey-suspend %s", suspended);
+    }
+  else if (mode != NULL)
+    {
+      if (!gowl_broadcast_word (mode))
+        return gowl_missing ("mode (one word)");
+      line = g_strdup_printf ("hotkey-mode %s", mode);
+    }
+  else
+    return gowl_missing ("enabled (with id), suspended or mode");
+  return gowl_hotkey_line (line);
+}
+
+static McpToolResult *
+handle_gowl_hotkey_send (McpServer *s, const gchar *n,
+                         JsonObject *a, gpointer u)
+{
+  const gchar *keys, *text;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  keys = json_object_get_string_member_with_default (a, "keys", NULL);
+  text = json_object_get_string_member_with_default (a, "text", NULL);
+  if (keys != NULL)
+    {
+      if (!gowl_hotkey_one_line (keys))
+        return gowl_missing ("keys (one line; {Enter} for a newline)");
+      line = g_strdup_printf ("hotkey-send %s", keys);
+    }
+  else
+    {
+      if (!gowl_hotkey_one_line (text))
+        return gowl_missing ("keys or text (one line)");
+      line = g_strdup_printf ("hotkey-send-text %s", text);
+    }
+  return gowl_hotkey_line (line);
+}
+
+static McpToolResult *
+handle_gowl_hotkey_fire (McpServer *s, const gchar *n,
+                         JsonObject *a, gpointer u)
+{
+  const gchar *id;
+  g_autofree gchar *line = NULL;
+  (void) s; (void) n; (void) u;
+
+  id = json_object_get_string_member_with_default (a, "id", NULL);
+  if (!gowl_broadcast_word (id))
+    return gowl_missing ("id");
+  line = g_strdup_printf ("hotkey-fire %s", id);
+  return gowl_hotkey_line (line);
+}
+
 static gboolean
 gowl_int_member (JsonObject *a, const gchar *name, gint64 *out)
 {
@@ -1380,6 +1578,71 @@ cmacs_mcp_tools_gowl_register (McpServer *server)
         "\"required\":[\"slot\"]}",
         handle_gowl_broadcast_focus_slot,
         "Focus the window in a broadcast team's slot, viewing its tag." },
+      { "gowl_hotkey_status", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_hotkey_status,
+        "Hotkeys (AutoHotkey for gowl): whether they are suspended, the "
+        "key mode, counts of hotkeys, remaps, timers and hotstrings, the "
+        "lock keys, the last hotkey fired and the last error (JSON). The "
+        "module is opt-in; this loads it." },
+      { "gowl_hotkey_list", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_hotkey_list,
+        "Every hotkey and remap in force (JSON): id, key as written and "
+        "canonical, context, mode, enabled, origin, description." },
+      { "gowl_hotkey_history", TRUE,
+        "{\"type\":\"object\",\"properties\":{}}",
+        handle_gowl_hotkey_history,
+        "The last 64 inputs the hotkey module saw (JSON): keycode, keysym, "
+        "pressed, injected, swallowed and the hotkey each fired. The "
+        "first thing to look at when a hotkey does not fire." },
+      { "gowl_hotkey_add", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"hotkey\":{\"type\":\"object\",\"description\":\"A hotkey "
+        "entry {id, key, do, context, when, mode, double, hold, ...} -- "
+        "key in AutoHotkey notation (#!t, CapsLock & j, ~LButton) or gowl's "
+        "(Super+Alt+t); do is a list of actions such as {shell: CMD}, "
+        "{send: KEYS}, {action: spawn, arg: PROGRAM} -- or a whole section "
+        "{hotkeys: [...], remaps: {...}, modes: {...}}\"},"
+        "\"yaml\":{\"type\":\"string\",\"description\":\"The same as "
+        "one line of flow YAML\"},"
+        "\"id\":{\"type\":\"string\",\"description\":\"Name it, so "
+        "adding again replaces it and gowl_hotkey_remove takes it back\"}}}",
+        handle_gowl_hotkey_add,
+        "Add a hotkey (or a section of them) for this session; refused "
+        "whole, with the reason, on any problem." },
+      { "gowl_hotkey_remove", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+        handle_gowl_hotkey_remove,
+        "Remove a hotkey added at run time (one from the configuration is "
+        "disabled instead)." },
+      { "gowl_hotkey_set", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"id\":{\"type\":\"string\"},"
+        "\"enabled\":{\"type\":\"string\",\"enum\":[\"on\",\"off\","
+        "\"toggle\"]},"
+        "\"suspended\":{\"type\":\"string\",\"enum\":[\"on\",\"off\","
+        "\"toggle\"]},"
+        "\"mode\":{\"type\":\"string\",\"description\":\"A key mode; "
+        "default leaves every mode\"}}}",
+        handle_gowl_hotkey_set,
+        "Switch one hotkey on or off (id + enabled), suspend every hotkey, "
+        "or enter a key mode." },
+      { "gowl_hotkey_send", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"keys\":{\"type\":\"string\",\"description\":\"AutoHotkey "
+        "Send syntax: ^c, {Enter}, {Tab 3}, {Shift down}\"},"
+        "\"text\":{\"type\":\"string\",\"description\":\"Literal "
+        "text instead\"}}}",
+        handle_gowl_hotkey_send,
+        "Type keys or text into the focused window through the hotkey "
+        "module." },
+      { "gowl_hotkey_fire", FALSE,
+        "{\"type\":\"object\",\"properties\":{"
+        "\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+        handle_gowl_hotkey_fire,
+        "Run a hotkey's actions as if it had been pressed." },
       { "gowl_macro_status", TRUE, "{\"type\":\"object\",\"properties\":{}}",
         handle_gowl_macro_status,
         "Running macros, held-back ones and why, the fault count, the "

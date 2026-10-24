@@ -177,6 +177,7 @@ resolve at all.
 | =RunMacro=                 | =(sas) -> (s)=  | Run a gowl macro by name with arguments        |
 | =Broadcast=                | =(s) -> (s)=    | Input broadcasting: =status=, =list=, =on=, =off=, =toggle=, =panic=.  Signal =ModuleEvent= =(ss)= (module, text) on every module announcement, e.g. =broadcast= / =on eq= |
 | =Floatdesk=                | =(ss) -> (s)=   | The floating desktop: verb (=toggle=, =on=, =off=, =default=, =status=, =minimize=, =restore=, =maximize=, =snap=, =dock-position=, =dock-autohide=, =dock-pin=, =dock-unpin=, =dock-launch=, =dock-activate=, =dock-apps=, =dock-status=) and its one-line arguments.  Announcements arrive as =ModuleEvent= with module =floatdesk= (=mode 3 floating=, =default tiled=, =dock position left=) |
+| =Hotkey=                   | =(ss) -> (s)=   | Hotkeys (AutoHotkey for gowl): verb (=status=, =list=, =problems=, =add=, =remove=, =enable=, =disable=, =toggle=, =fire=, =suspend=, =mode=, =send=, =send-text=, =call=, =history=, =keystate=, =capslock=, =numlock=, =timers=, =functions=, =contexts=, =reload=, =cancel=, =help=) and its one-line arguments.  Announcements arrive as =ModuleEvent= with module =hotkey= (=fired ID=, =mode NAME=, =suspended on key=, =fault ...=) |
 | =Lock= / =Unlock=          | =() -> (s)=     | Toggle the session lock                        |
 | =PointerConfine=           | =(s) -> (s)=    | Keep the pointer in the focused window: =on=, =off=, =toggle=, or =state= / =""= to only ask; answers =on= or =off=.  Signal =PointerConfineChanged= =(bss)= (active, app-id, reason) on every change |
 | =Screenshot=               | =(ssss) -> (s)= | mode, client, by, file                         |
@@ -216,6 +217,18 @@ reply is the module's line, =OK ...= or =ERROR ...=; =status= answers
 =key=value= words.  From the shell: =emacsctl compositor floatdesk
 toggle=, =emacsctl compositor floatdesk snap "left 12"=.  See the
 Floating desktop section of the gowl chapter.
+
+=Hotkey= drives the hotkey module (AutoHotkey for gowl): VERB is the
+module's command word without its =hotkey-= prefix and ARGS its
+arguments on one line (an id, =on=/=off=/=toggle=, keys in Send syntax,
+a hotkey as flow YAML).  The verb is checked against a fixed list in C
+before anything is built, ARGS is escaped into a string literal, and the
+call goes through Elisp (=cmacs-gowl-hotkey-rpc=), which loads the
+opt-in module if it is not.  The reply is the module's line, =OK ...= or
+=ERROR ...=; =status=, =list= and =history= answer JSON.  From the
+shell: =emacsctl compositor hotkey suspend toggle=, =emacsctl compositor
+hotkey add '{key: F9, do: {notify: hi}}'=.  See the Hotkeys
+(AutoHotkey) section of the gowl chapter.
 
 =Broadcast= drives input broadcasting (multiboxing): =status= and
 =list= answer JSON, =on=, =off= and =toggle= switch it (with a toast),

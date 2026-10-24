@@ -224,6 +224,14 @@ gchar *cmacs_dispatch_gowl_broadcast (const gchar *verb, GError **error);
 gchar *cmacs_dispatch_gowl_floatdesk (const gchar *verb, const gchar *args,
                                       GError **error);
 
+/* Hotkeys (AutoHotkey for gowl): VERB is one of the hotkey module's
+   command words without the `hotkey-' prefix, ARGS (nullable) its
+   arguments on one line.  Through Elisp (`cmacs-gowl-hotkey-rpc'),
+   which loads the module if needed.  Returns the module's reply or
+   "ERROR ...". */
+gchar *cmacs_dispatch_gowl_hotkey (const gchar *verb, const gchar *args,
+                                   GError **error);
+
 /* Add a window rule. */
 gchar *cmacs_dispatch_gowl_add_rule (const gchar *app_id,
                                       const gchar *title,

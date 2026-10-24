@@ -61,6 +61,12 @@ static const CtlMethodSpec gowl_specs[] = {
     "'left|right|max [ID]', dock-position/-autohide/-pin/-unpin/"
     "-launch/-apps (several words of ARGS go in one quoted argument)",
     CTL_IFACE_COMPOSITOR, "Floatdesk", "s:verb s?:args", CTL_REPLY_STRING },
+  { "compositor hotkey", "Hotkeys (AutoHotkey): status, list, "
+    "problems, add YAML, remove/enable/disable/toggle/fire ID, suspend "
+    "[on|off|toggle], mode [NAME], send KEYS, send-text TEXT, call NAME "
+    "ARGS, history, keystate KEY, timers, reload (loads the opt-in hotkey "
+    "module; several words of ARGS go in one quoted argument)",
+    CTL_IFACE_COMPOSITOR, "Hotkey", "s:verb s?:args", CTL_REPLY_STRING },
   { "compositor mfact", "Set the master area factor",
     CTL_IFACE_COMPOSITOR, "SetMfact", "d:mfact", CTL_REPLY_STRING },
   { "compositor nmaster", "Set the number of master windows",

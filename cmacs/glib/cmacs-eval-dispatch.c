@@ -1199,6 +1199,48 @@ cmacs_dispatch_gowl_floatdesk (const gchar *verb, const gchar *args,
   return cmacs_dispatch_eval_string (form, error);
 }
 
+/* Hotkeys, through Elisp like floatdesk (above): no gowl call from
+   here, so no lock -- `gowl-run-command' on the Lisp side takes it.
+   VERB is checked against the whitelist before anything is built (the
+   same list as `cmacs-gowl-hotkey--rpc-verbs'); ARGS is spliced only
+   escaped (cmacs_dispatch_lisp_escape) and must be one line, since the
+   module's command framing is a line. */
+gchar *
+cmacs_dispatch_gowl_hotkey (const gchar *verb, const gchar *args,
+                            GError **error)
+{
+  static const gchar * const verbs[] = {
+    "status", "list", "problems", "add", "remove", "enable", "disable",
+    "toggle", "fire", "suspend", "mode", "send", "send-text", "call",
+    "history", "keystate", "capslock", "numlock", "timers", "functions",
+    "contexts", "reload", "cancel", "help", NULL
+  };
+  g_autofree gchar *form = NULL;
+  g_autofree gchar *escaped = NULL;
+
+  GOWL_DISPATCH_CHECK ();
+  if (verb == NULL || !g_strv_contains (verbs, verb))
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Hotkey takes status, list, problems, add, remove, "
+                   "enable, disable, toggle, fire, suspend, mode, send, "
+                   "send-text, call, history, keystate, capslock, numlock, "
+                   "timers, functions, contexts, reload, cancel or help");
+      return NULL;
+    }
+  if (args != NULL && strpbrk (args, "\n\r") != NULL)
+    {
+      g_set_error (error, CMACS_DISPATCH_ERROR_DOMAIN, 1,
+                   "Hotkey arguments must be one line");
+      return NULL;
+    }
+  escaped = cmacs_dispatch_lisp_escape (args);
+  form = g_strdup_printf ("(progn (require 'cmacs-gowl-hotkey)"
+                          " (cmacs-gowl-hotkey-rpc \"%s\" \"%s\"))",
+                          verb, escaped);
+  return cmacs_dispatch_eval_string (form, error);
+}
+
 gchar *
 cmacs_dispatch_gowl_list_keybinds (GError **error)
 {

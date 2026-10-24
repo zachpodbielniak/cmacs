@@ -70,6 +70,14 @@ static const gchar *iface_xml =
   "    <arg type='s' name='verb' direction='in'/>"
   "    <arg type='s' name='args' direction='in'/>"
   "    <arg type='s' name='result' direction='out'/></method>"
+  /* Hotkeys (AutoHotkey): VERB is the hotkey module's command without
+     its prefix (status, list, add, remove, enable, disable, toggle,
+     fire, suspend, mode, send, send-text, call, ...); ARGS its one-line
+     arguments.  Loads the opt-in hotkey module on first use. */
+  "  <method name='Hotkey'>"
+  "    <arg type='s' name='verb' direction='in'/>"
+  "    <arg type='s' name='args' direction='in'/>"
+  "    <arg type='s' name='result' direction='out'/></method>"
   "  <method name='AddRule'>"
   "    <arg type='s' name='app_id' direction='in'/>"
   "    <arg type='s' name='title' direction='in'/>"
@@ -295,6 +303,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       const gchar *verb, *args;
       g_variant_get (p, "(&s&s)", &verb, &args);
       RETURN_STR (cmacs_dispatch_gowl_floatdesk (verb, args, &err));
+    }
+  else if (g_strcmp0 (m, "Hotkey") == 0)
+    {
+      const gchar *verb, *args;
+      g_variant_get (p, "(&s&s)", &verb, &args);
+      RETURN_STR (cmacs_dispatch_gowl_hotkey (verb, args, &err));
     }
   else if (g_strcmp0 (m, "AddRule") == 0)
     {
