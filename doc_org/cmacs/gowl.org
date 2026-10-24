@@ -4087,7 +4087,12 @@ DEFUN that calls a =gowl_= function without the lock.  The exceptions
 are the tray and gabbrev families, which have their own locks, plus
 the short list in =cmacs-gowl-tests--lock-free-gowl-calls=.
 =cmacs-gowl-test-locked-defuns-headless= runs them against a rendering
-headless compositor.  The exception is =gowl-stop=, which joins the
+headless compositor.  The other direction is gowl's own deferred work: it never goes on
+GLib's default context, which under cmacs is pgtk's loop on Emacs's
+thread, where a callback runs without the lock.  The output frame
+backoff and the clipboard history read did, until 2026-10; both now
+use the compositor's =wl_event_loop=, and
+=deps/gowl/tests/test-glib-context-guard.sh= refuses the GLib forms.  The exception is =gowl-stop=, which joins the
 thread.  =gowl-clipboard-get= locks the ask and not the wait:
 the owning client can only answer while the dispatch thread is free.
 
