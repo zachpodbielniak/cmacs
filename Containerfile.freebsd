@@ -1,0 +1,59 @@
+# Containerfile.freebsd - cmacs for FreeBSD (./build-container freebsd-15.1)
+#
+# The FreeBSD counterpart of Containerfile: a builder stage on FreeBSD's
+# pkgbase runtime image that runs admin/cmacs-build-freebsd.sh, and a scratch
+# stage holding only the staged tree (/usr/local), which a FreeBSD machine
+# or image unpacks the same way the Linux images are unpacked.
+#
+# FreeBSD containers need a FreeBSD kernel: build it on a FreeBSD 15.x host
+# with podman/buildah and ocijail (pkg install podman-suite ocijail).
+# buildah on FreeBSD has no RUN bind mounts, so the tree is COPY'd in.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ARG BASE_IMAGE=ghcr.io/freebsd/freebsd-runtime:15.1
+FROM ${BASE_IMAGE} AS builder
+ARG CMACS_JOBS=
+ARG WHISPER_MODEL_NAME=ggml-base.en.bin
+ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+ARG PIPER_VOICE_NAME=en_US-amy-low.onnx
+ARG PIPER_VOICE_DIR=en/en_US/amy/low
+ARG PIPER_VOICE_BASE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main
+
+# The runtime image is minimal: enable the pkgbase repository (the layout
+# of FreeBSD 15's own FreeBSD-base entry) and install the base system and
+# its development set (headers, libraries, toolchain), then bash, which
+# the build script runs under.
+RUN mkdir -p /usr/local/etc/pkg/repos \
+ && printf '%s\n' \
+      'FreeBSD-base: {' \
+      '  url: "pkg+https://pkg.FreeBSD.org/${ABI}/base_release_${VERSION_MINOR}",' \
+      '  mirror_type: "srv",' \
+      '  signature_type: "fingerprints",' \
+      '  fingerprints: "/usr/share/keys/pkgbase-${VERSION_MAJOR}",' \
+      '  enabled: yes' \
+      '}' > /usr/local/etc/pkg/repos/FreeBSD-base.conf \
+ && env ASSUME_ALWAYS_YES=yes pkg bootstrap -f \
+ && pkg update -f \
+ && pkg install -y FreeBSD-set-base FreeBSD-set-devel bash
+
+COPY . /build/cmacs
+WORKDIR /build/cmacs
+
+RUN /build/cmacs/admin/cmacs-build-freebsd.sh packages
+RUN /build/cmacs/admin/cmacs-build-freebsd.sh ${CMACS_JOBS:+--jobs ${CMACS_JOBS}} deps configure build
+RUN /build/cmacs/admin/cmacs-build-freebsd.sh ${CMACS_JOBS:+--jobs ${CMACS_JOBS}} --stage /build/stage install
+
+# Bundled speech models, as in Containerfile.
+RUN install -d -m 0755 \
+        /build/stage/usr/local/share/cmacs/whisper-models \
+        /build/stage/usr/local/share/cmacs/piper-voices \
+ && curl -fsSL -o "/build/stage/usr/local/share/cmacs/whisper-models/${WHISPER_MODEL_NAME}" \
+        "${WHISPER_MODEL_URL}" \
+ && curl -fsSL -o "/build/stage/usr/local/share/cmacs/piper-voices/${PIPER_VOICE_NAME}" \
+        "${PIPER_VOICE_BASE_URL}/${PIPER_VOICE_DIR}/${PIPER_VOICE_NAME}" \
+ && curl -fsSL -o "/build/stage/usr/local/share/cmacs/piper-voices/${PIPER_VOICE_NAME}.json" \
+        "${PIPER_VOICE_BASE_URL}/${PIPER_VOICE_DIR}/${PIPER_VOICE_NAME}.json"
+
+FROM scratch
+COPY --from=builder /build/stage /

@@ -9,11 +9,14 @@
 #   ./build-container 24.04 --push   # Ubuntu 24.04, build and push
 #   ./build-container 26.04 --push   # Ubuntu 26.04
 #   ./build-container arch --push    # Arch Linux
+#   ./build-container freebsd-15.1   # FreeBSD 15.1 (on a FreeBSD host)
 #
 # The target is inferred from its shape, so there is one positional
 # argument and no --distro flag to forget:
 #
 #   arch, archlinux   ->  docker.io/library/archlinux:latest
+#   freebsd-NN.N      ->  ghcr.io/freebsd/freebsd-runtime:NN.N, built from
+#                         Containerfile.freebsd (admin/cmacs-build-freebsd.sh)
 #   NN.NN  (24.04)    ->  docker.io/library/ubuntu:24.04
 #   NN     (44)       ->  registry.fedoraproject.org/fedora:44
 #
@@ -76,7 +79,9 @@ usage () {
 Usage: ./build-container [TARGET] [--push] [--only-push] [-- BUILDAH ARGS]
 
   TARGET       fedora version (44), ubuntu version (24.04, 26.04),
-               or `arch'.  Default: 44
+               `arch', or `freebsd-15.1'.  Default: 44
+               A FreeBSD image needs a FreeBSD host (podman-suite,
+               ocijail): FreeBSD containers run on FreeBSD's kernel.
   --push       Build then push to the registry
   --jobs N     Cap build parallelism (default: every core).  Lower it
                when building several images at once, or on a small
@@ -90,6 +95,7 @@ Examples:
   ./build-container 24.04 --push    # Ubuntu 24.04 -> :24.04
   ./build-container 26.04 --push    # Ubuntu 26.04 -> :26.04
   ./build-container arch --push     # Arch Linux   -> :arch
+  ./build-container freebsd-15.1    # FreeBSD 15.1 -> :freebsd-15.1
 
 Anything after `--' is passed straight to buildah, e.g.
   ./build-container arch -- --build-arg WLROOTS_VERSION=0.20
@@ -123,6 +129,12 @@ resolve_target () {
 		BASE_IMAGE="docker.io/library/archlinux:latest"
 		DISTRO="arch"
 		RELEASE="rolling"
+	elif [[ "${target}" =~ ^freebsd-([0-9]+\.[0-9]+)$ ]]
+	then
+		BASE_IMAGE="ghcr.io/freebsd/freebsd-runtime:${BASH_REMATCH[1]}"
+		DISTRO="freebsd"
+		RELEASE="${BASH_REMATCH[1]}"
+		CONTAINERFILE="./Containerfile.freebsd"
 	elif [[ "${target}" =~ ^[0-9]+\.[0-9]+$ ]]
 	then
 		BASE_IMAGE="docker.io/library/ubuntu:${target}"
@@ -136,7 +148,7 @@ resolve_target () {
 	else
 		echo "Unrecognised target: ${target}" >&2
 		echo "Expected a Fedora version (44), an Ubuntu version" \
-		     "(24.04), or 'arch'." >&2
+		     "(24.04), 'arch', or 'freebsd-15.1'." >&2
 		exit 1
 	fi
 }
@@ -155,7 +167,14 @@ do
 	shift
 done
 
+CONTAINERFILE="./Containerfile"
 resolve_target "${VERSION}"
+if [[ "${DISTRO}" == "freebsd" ]] && [[ "${DO_BUILD}" -eq 1 ]] && [[ "$(uname -s)" != "FreeBSD" ]]
+then
+	echo "${VERSION}: FreeBSD images build on a FreeBSD host" \
+	     "(pkg install podman-suite ocijail); this is $(uname -s)." >&2
+	exit 1
+fi
 
 IMAGE="${REGISTRY}:${VERSION}"
 
@@ -210,7 +229,7 @@ then
 		--build-arg=PIPER_VOICE_BASE_URL="${PIPER_VOICE_BASE_URL}" \
 		${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
 		-t "${IMAGE}" \
-		-f ./Containerfile .
+		-f "${CONTAINERFILE}" .
 	echo "Built ${IMAGE}"
 fi
 
