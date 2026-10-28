@@ -1417,9 +1417,15 @@ endif
 ## made the old `make deps' step necessary.
 ifneq ($(CMACS_SCREENSAVER_OBJ),)
 SCREENSAVER_MODULES_SO = $(srcdir)/../deps/screensavers/build/$(CMACS_DEP_BUILDTYPE)/blackhole.so
+## LIBREGNUM_STATIC: hand screensavers the archive cmacs just built.  Its own
+## default is libregnum's build/release archive, which a debug cmacs build
+## never makes, so it ran libregnum's make itself -- inheriting DEBUG=1 but
+## not CAD=1 -- and could re-archive cmacs's build/debug liblibregnum.a
+## without the CAD objects, failing the temacs link (lrg_cad_* undefined).
 $(SCREENSAVER_MODULES_SO): $(CMACS_LIBREGNUM_STATIC_LIB)
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/screensavers modules \
 	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum) \
+	    LIBREGNUM_STATIC=$(abspath $(CMACS_LIBREGNUM_STATIC_LIB)) \
 	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
 	    YAMLGLIB_DIR=$(CMACS_CANON_YAML_GLIB) \
 	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \

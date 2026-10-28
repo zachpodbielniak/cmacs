@@ -57,8 +57,17 @@ struct kernel_input_event
   unsigned short code;
   int value;
 };
+#if defined (__FreeBSD__)
+/* FreeBSD's evdev (dev/evdev/input.h) keeps Linux's numbers but encodes
+   them with its own ioctl macros, and EVIOCGRAB takes its int by value.
+   (The event record above has the same layout: struct timeval is two
+   longs on 64-bit FreeBSD too.)  */
+#define KBD_EVIOCGBIT(ev, len) _IOC (IOC_OUT, 'E', 0x20 + (ev), (len))
+#define KBD_EVIOCGRAB          _IOWINT ('E', 0x90)
+#else
 #define KBD_EVIOCGBIT(ev, len) _IOC (_IOC_READ, 'E', 0x20 + (ev), (len))
 #define KBD_EVIOCGRAB          _IOW ('E', 0x90, int)
+#endif
 
 #define KBD_MAX         16
 #define KBD_RESCAN_US   (2 * G_USEC_PER_SEC)

@@ -571,9 +571,20 @@ mode without an attached frame."
   (interactive)
   (cmacs-print-stop-watcher)
   (let ((dir (cmacs-print--ensure-spool-dir)))
+    ;; A watch that cannot be added (no file-notify backend for this
+    ;; filesystem) leaves the poll timer below as the delivery path
+    ;; rather than failing the load.
     (setq cmacs-print--watch-descriptor
-          (file-notify-add-watch
-           dir '(change) #'cmacs-print--handle-spool-event))
+          (condition-case err
+              (file-notify-add-watch
+               dir '(change) #'cmacs-print--handle-spool-event)
+            (file-notify-error
+             (display-warning
+              'cmacs-print
+              (format "cannot watch %s (%s); polling every %ss instead"
+                      dir (error-message-string err)
+                      cmacs-print-poll-interval))
+             nil)))
     (when (and cmacs-print-poll-interval
                (> cmacs-print-poll-interval 0))
       (setq cmacs-print--poll-timer
@@ -597,8 +608,11 @@ mode without an attached frame."
 
 ;; Auto-start on load when configured.  Wrapped in `with-eval-after-load'
 ;; to defer until the daemon is past `--daemon' init (where file-notify
-;; backends may not yet be available on some setups).
-(when cmacs-print-watch-spool
+;; backends may not yet be available on some setups).  Never in batch
+;; mode: compiling a file that requires this one (the build does) must not
+;; create a spool directory or attach a watch -- on FreeBSD that load-time
+;; watch failed and aborted the byte-compile.  A daemon is not batch.
+(when (and cmacs-print-watch-spool (not noninteractive))
   (if after-init-time
       (cmacs-print-start-watcher)
     (add-hook 'after-init-hook #'cmacs-print-start-watcher)))

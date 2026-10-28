@@ -10,7 +10,7 @@
  * passed in CMACS_SCREENSAVER_IPC_FD. */
 
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE   /* prctl */
+#define _GNU_SOURCE   /* prctl on Linux */
 #endif
 
 #include "ssr-renderer.h"
@@ -19,7 +19,11 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#if defined (__linux__)
 #include <sys/prctl.h>
+#elif defined (__FreeBSD__)
+#include <sys/procctl.h>
+#endif
 
 int
 main (int argc, char **argv)
@@ -48,10 +52,19 @@ main (int argc, char **argv)
   /* A dead socket must never raise SIGPIPE; we detect EOF on the GSource. */
   signal (SIGPIPE, SIG_IGN);
 
-  /* Die if Emacs dies (fires on parent death for any reason, incl. SIGKILL).
+  /* Die if Emacs dies (fires on parent death for any reason, incl. SIGKILL):
+   * prctl(2) on Linux, procctl(2) PROC_PDEATHSIG_CTL on FreeBSD.
    * Re-check getppid() to close the fork/exec race where the parent already
-   * exited before prctl ran. */
+   * exited before the request was made. */
+#if defined (__linux__)
   prctl (PR_SET_PDEATHSIG, SIGTERM);
+#elif defined (__FreeBSD__)
+  {
+    int sig = SIGTERM;
+
+    procctl (P_PID, 0, PROC_PDEATHSIG_CTL, &sig);
+  }
+#endif
   if (getppid () == 1)
     return 0;
 

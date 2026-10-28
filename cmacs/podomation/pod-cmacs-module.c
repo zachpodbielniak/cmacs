@@ -26,6 +26,7 @@
 #include "cmacs-eval-dispatch.h"
 
 #include <unistd.h>
+#include <sys/wait.h>	/* WIFEXITED, WEXITSTATUS: POSIX puts them here; glibc also has them in stdlib.h */
 
 /* ── Instance struct ───────────────────────────────────────────────── */
 

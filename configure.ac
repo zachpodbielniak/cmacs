@@ -4052,10 +4052,14 @@ fi
 
 # Note that Solaris has sys/sysinfo.h which defines struct
 # sysinfo as well.  To make sure that we're using GNU/Linux
-# sysinfo, we explicitly set one of its fields.
+# sysinfo, we explicitly set one of its fields.  The test links, not just
+# compiles: FreeBSD's libsysinfo package (pulled in by WebKitGTK) installs
+# a Linux-compatible <sys/sysinfo.h> whose function lives in a library
+# nothing links, so a compile-only test said yes and temacs then failed
+# with "undefined reference to symbol 'sysinfo'".
 if test "$ac_cv_header_sys_sysinfo_h" = yes; then
   AC_CACHE_CHECK([if Linux sysinfo may be used], [emacs_cv_linux_sysinfo],
-  [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <sys/sysinfo.h>]],
+  [AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <sys/sysinfo.h>]],
                                      [[struct sysinfo si;
                                        si.totalram = 0;
                                        sysinfo (&si)]])],
