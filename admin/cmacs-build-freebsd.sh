@@ -206,6 +206,14 @@ step_install () {
 	gmake -C tools/cmacs-mcp clean all PREFIX="${PREFIX}"
 	gmake -C tools/cmacs-mcp install PREFIX="${PREFIX}" DESTDIR="${STAGE}"
 
+	# libcmacs-api.so and friends live in ${LIBDIR}/cmacs. Emacs finds
+	# them through its rpath, but modules other programs load (bacon's
+	# cmacs_gi, ...) need the loader to know the directory. Linux gets
+	# /etc/ld.so.conf.d/cmacs.conf (Containerfile); FreeBSD's rc.d/ldconfig
+	# reads one directory per line from /usr/local/libdata/ldconfig/.
+	mkdir -p "${STAGE}${PREFIX}/libdata/ldconfig"
+	echo "${LIBDIR}/cmacs" > "${STAGE}${PREFIX}/libdata/ldconfig/cmacs"
+
 	mkdir -p "${STAGE}${PREFIX}/share/cmacs"
 	{
 		echo "distro=freebsd"
