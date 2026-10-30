@@ -214,6 +214,13 @@ step_install () {
 	mkdir -p "${STAGE}${PREFIX}/libdata/ldconfig"
 	echo "${LIBDIR}/cmacs" > "${STAGE}${PREFIX}/libdata/ldconfig/cmacs"
 
+	# The Wayland session file, as the Containerfile installs it on Linux,
+	# where display managers on FreeBSD look (${PREFIX}/share) and with
+	# FreeBSD's bash. Without it no display manager offered "CMacs".
+	./install-wm PREFIX="${PREFIX}" \
+		SESSION_DIR="${PREFIX}/share/wayland-sessions" \
+		BASH="${PREFIX}/bin/bash" DESTDIR="${STAGE}"
+
 	mkdir -p "${STAGE}${PREFIX}/share/cmacs"
 	{
 		echo "distro=freebsd"

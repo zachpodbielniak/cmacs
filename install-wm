@@ -5,6 +5,12 @@
 #   sudo ./install-wm              # auto-detect binary path
 #   sudo ./install-wm PREFIX=/usr/local  # use installed binary
 #   ./install-wm --dry-run         # show what would be written
+#   ./install-wm PREFIX=/usr/local SESSION_DIR=/usr/local/share/wayland-sessions \
+#       DESTDIR=/build/stage BASH=/usr/local/bin/bash  # stage it (no root)
+#
+# SESSION_DIR defaults to /usr/share/wayland-sessions; on FreeBSD display
+# managers read ${LOCALBASE}/share/wayland-sessions, and bash is
+# /usr/local/bin/bash rather than the default /bin/bash.
 #
 # Copyright (C) 2026 Zach Podbielniak
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -12,26 +18,23 @@
 set -euo pipefail
 
 SESSION_DIR="/usr/share/wayland-sessions"
-SESSION_FILE="${SESSION_DIR}/cmacs.desktop"
+DESTDIR=""
+BASH_BIN="/bin/bash"
 DRY_RUN=0
+REMOVE=0
 PREFIX=""
 EMACS_BIN=""
 
 for arg in "$@"; do
     case "$arg" in
         --dry-run)  DRY_RUN=1 ;;
-        --remove)
-            if [ -f "$SESSION_FILE" ]; then
-                rm -v "$SESSION_FILE"
-                echo "CMacs session removed."
-            else
-                echo "No CMacs session file found."
-            fi
-            exit 0
-            ;;
+        --remove)   REMOVE=1 ;;
         PREFIX=*)   PREFIX="${arg#PREFIX=}" ;;
+        SESSION_DIR=*) SESSION_DIR="${arg#SESSION_DIR=}" ;;
+        DESTDIR=*)  DESTDIR="${arg#DESTDIR=}" ;;
+        BASH=*)     BASH_BIN="${arg#BASH=}" ;;
         --help|-h)
-            echo "Usage: sudo $0 [PREFIX=/usr/local] [--dry-run] [--remove]"
+            echo "Usage: sudo $0 [PREFIX=/usr/local] [SESSION_DIR=dir] [DESTDIR=dir] [BASH=path] [--dry-run] [--remove]"
             exit 0
             ;;
         *)
@@ -40,6 +43,21 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+SESSION_FILE="${DESTDIR}${SESSION_DIR}/cmacs.desktop"
+
+if [ "$REMOVE" -eq 1 ]; then
+    if [ -f "$SESSION_FILE" ]; then
+        rm -v "$SESSION_FILE"
+        echo "CMacs session removed."
+    else
+        echo "No CMacs session file found."
+    fi
+    exit 0
+fi
+
+# The launcher shell, by absolute path: /bin/bash on Linux; a FreeBSD build
+# passes BASH=/usr/local/bin/bash.
 
 # Detect emacs binary path
 if [ -n "$PREFIX" ]; then
@@ -103,7 +121,7 @@ fi
 DESKTOP_ENTRY="[Desktop Entry]
 Name=CMacs
 Comment=CMacs — Emacs as a Wayland Compositor
-Exec=/bin/bash -lc '${EMACS_BIN} --gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
+Exec=${BASH_BIN} -lc '${EMACS_BIN} --gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
 Type=Application
 DesktopNames=CMacs:gowl:GNOME"
 
@@ -116,13 +134,13 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-# Must be root to write to /usr/share
-if [ "$(id -u)" -ne 0 ]; then
+# Must be root to write to /usr/share (not when staging into DESTDIR)
+if [ -z "$DESTDIR" ] && [ "$(id -u)" -ne 0 ]; then
     echo "Error: Must run as root (use sudo)." >&2
     exit 1
 fi
 
-mkdir -p "$SESSION_DIR"
+mkdir -p "$(dirname "$SESSION_FILE")"
 echo "$DESKTOP_ENTRY" > "$SESSION_FILE"
 echo "Installed CMacs Wayland session:"
 echo "  Session file: $SESSION_FILE"
