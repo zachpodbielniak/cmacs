@@ -216,8 +216,9 @@ step_install () {
 
 	# The Wayland session file, as the Containerfile installs it on Linux,
 	# where display managers on FreeBSD look (${PREFIX}/share) and with
-	# FreeBSD's bash. Without it no display manager offered "CMacs".
-	./install-wm PREFIX="${PREFIX}" \
+	# FreeBSD's bash (run through it: install-wm's #!/bin/bash does not exist
+	# on FreeBSD). Without it no display manager offered "CMacs".
+	bash ./install-wm PREFIX="${PREFIX}" \
 		SESSION_DIR="${PREFIX}/share/wayland-sessions" \
 		BASH="${PREFIX}/bin/bash" DESTDIR="${STAGE}"
 
