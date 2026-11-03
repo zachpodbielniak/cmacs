@@ -80,6 +80,8 @@ java/org/gnu/emacs/*.class
 /build/upstream-apk-cache/
 # `just distrobox`: per-box sources-only build trees + their locks.
 /build/distrobox/
+# `just perf-*`: cmacs-perf benchmark sessions (admin/cmacs-perf.sh).
+/build/perf/
 /build-aux/android-doom-bundle/
 
 # Built by `aapt'.

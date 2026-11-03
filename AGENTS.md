@@ -395,6 +395,17 @@ belongs in its class table (`vf_register_classes` in
 `test/cmacs/cmacs-verify-fresh-tests.el`. Details: *Before trusting a result*
 in `doc_org/cmacs/build.org`.
 
+**Performance claims go through `just perf-compare`, not a stopwatch.**
+`admin/cmacs-perf.sh` (workloads in `admin/cmacs-perf/`, ported from
+neomacs-perf) runs 43 deterministic workloads in batch or a real `-nw`
+frame, keeps a sample only when the workload proves its result, and
+counts instructions/cycles with `perf stat` over the timed window only.
+Gate on cycles, read instructions beside them; wall time on this host
+measures whatever image build is running next door. The baseline must
+be its own build tree (a worktree), never an old `src/emacs-32.0.50.N`.
+A new workload removes anything global in `:teardown` and checks
+`cmacs-perf-compiled-p` for Lisp loops. Details: `doc_org/cmacs/perf.org`.
+
 **Gate tests on the primitive, not on a feature name that does not exist.**
 `cmacs-feature-p` (cmacs.el) knows the configure-time names from
 `cmacs_feature_names[]`; `gobject` is not one (the bridge ships with `glib`), so

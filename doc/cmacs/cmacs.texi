@@ -14442,6 +14442,140 @@ against the newest one predating the merge:
     --seccomp=lib-src/seccomp-filter.bpf --eval '(message "Hi")'
 @end example
 
+@section Performance Workloads: @code{cmacs-perf}
+
+@file{admin/cmacs-perf.sh} replays fixed, deterministic workloads
+inside a real cmacs and measures them with hardware counters scoped to
+the workload's own timed window.  A profiler says where time goes; this
+says whether a change made real editor work faster without changing
+what the editor did.  Every workload proves its result before its
+numbers are kept, so a run that skipped work, crashed or fell back to
+the interpreter never improves a comparison.  The method and most of
+the workloads are ported from neomacs-perf, the harness of NEO Emacs
+(@code{eval-exec/neomacs}).
+
+@example
+just perf-list                                  # 43 workloads
+just perf-run lexical-loop scrolling            # one sample each
+just perf-compare bytecode-call-loop --baseline ../cmacs-base/src/emacs
+just perf-suite --baseline ../cmacs-base/src/emacs --samples 9 --cpu 3
+just perf-profile scrolling --iterations 50
+@end example
+
+Output goes to @file{build/perf/<stamp>-<command>-<pid>/}:
+@file{samples.csv} (one row per sample), @file{summary.yaml}
+(editor identities and SHA-256s, host, medians, MADs, verdicts) and one
+directory per sample holding @file{result.json}, the raw
+@file{counters.csv}, the editor's stderr and, for TUI runs, the raw
+terminal byte stream.  Requires @command{perf} (without it, clocks
+only), @command{yq}, @command{awk}, @command{column} and
+@command{timeout}; Fedora packages @code{perf}, @code{yq}, @code{gawk},
+@code{util-linux}, @code{coreutils}.
+
+@subsection The workloads
+
+@table @asis
+@item Lisp VM (batch)
+@code{bytecode-call-loop}; @code{lexical-loop} and the dynamic-binding,
+dynamic-read, rebinding, alias-read and buffer-local-read loops; seven
+@code{builtin-call-*} loops, each calling one C primitive through an
+alias so the byte compiler cannot inline it into an opcode.
+@item Search (batch)
+@code{search-@{literal,regexp,posix@}-@{forward,backward@}} over
+multibyte text, and the @code{bounded-search-*} family, which asks
+whether a bounded search pays for the size of the buffer.
+@item Editing
+@code{editing-simulation} (thirteen timed phases), @code{org-editing},
+@code{org-editing-heavy}, @code{large-file-editing},
+@code{indentation}, @code{regex-search}, @code{process-output},
+@code{file-open} and @code{lsp-json-rpc} in batch; @code{startup},
+@code{sustained-editing} with four visible variants, and
+@code{input-latency} (p50/p95/p99) on the TUI.
+@item Display (TUI)
+@code{scrolling} over a face- and overlay-rich buffer;
+@code{mx-tab-completion} and @code{mx-tab-completion-steady}, a real
+@kbd{M-x @key{TAB}} lifecycle over 1,024 commands driven by
+@code{execute-kbd-macro}, so the whole lifecycle finishes inside the
+timed body.
+@end table
+
+The editing workloads edit a copy of @file{lisp/simple.el} made once
+per session (@option{--source} picks another file).  Not ported: the
+neomacs workloads that need MELPA or ELPA packages
+(@code{rust-lsp-typing}, @code{magit-status}, @code{org-journal-open},
+@code{elisp-benchmarks}), its JIT tier test @code{first-hot-loop}, and
+its native video path.
+
+@subsection How a sample works
+
+A workload is a registration:
+
+@lisp
+(cmacs-perf-define
+ "lexical-loop"
+ :frontend 'batch :iterations 10000000 :budget 8
+ :setup (lambda (n) ...)               ; untimed, returns STATE
+ :body (lambda (state n) ...)          ; timed, returns metrics
+ :check (lambda (state metrics) ...)   ; failures, nil = ok
+ :teardown (lambda (state) ...)        ; always runs
+ :primary 'some_metric)                ; optional
+@end lisp
+
+The runtime runs setup, a full @code{garbage-collect}, opens the gate,
+runs the body, closes the gate, checks, tears down, writes one JSON
+result and exits 0 (ok), 3 (mismatch) or 2 (error).  The driver keeps a
+sample only when the result says @code{ok}, the exit status is 0, and
+the schema, workload, frontend and compilation kind match what it
+launched; an uncounted perf event is a failed sample, never a zero.
+
+The gate is perf's control interface: @code{perf stat -D -1 --control
+fifo:CTL,ACK} starts disabled and toggles on @code{enable} and
+@code{disable}.  perf terminates its @code{ack} with a NUL, so the
+runtime matches it as a substring.  Events are @code{instructions:u},
+@code{cycles:u}, @code{branch-misses:u} and @code{task-clock}, which
+the default @code{perf_event_paranoid} of 2 allows; @code{profile}
+passes @option{--user-callchains}, without which that setting refuses
+any callchain.
+
+Each sample runs under @code{env -i} with a private @env{HOME},
+@code{C.UTF-8}, @code{TZ=UTC}, no display and no session bus, with
+@option{-Q} and native JIT compilation off (an async compile would be a
+counted child).  The workloads are compiled by each editor, warnings as
+errors; @option{--native} native-compiles them too.
+
+TUI workloads run in @file{admin/cmacs-perf/cmacs-perf-pty.el}, a batch
+Emacs acting as a 40x120 terminal: it sizes the pty with @command{stty}
+from inside before the @code{exec} (from outside it races the child's
+startup), uses @code{TERM=screen-256color} (xterm's startup queries
+would wait for answers a headless pty never gives), and keeps the
+master side drained.
+
+@subsection Reading the numbers
+
+Gate on cycles and read instructions beside them: instructions are
+deterministic but blind to stalls, and a change can execute more
+instructions in fewer cycles.  @code{compare} alternates which editor
+goes first in every pair, so the baseline is a control: if only the
+candidate moved, the effect is real; if both sides inflated and both
+MADs blew out, the machine was busy and the run should be discarded.
+@code{load1} is recorded per sample.  Never compare across merge-bases.
+
+A workload declaring @code{:primary} is gated on that metric instead:
+the sustained-editing rows on @code{edit_phase_us} (their window also
+snapshots and restores the whole buffer every iteration),
+@code{input-latency} on its p99, the @kbd{M-x @key{TAB}} rows on time
+per completion.  @code{suite} compares each workload's gated metric with
+its budget (5% for @code{bytecode-call-loop}, 15% for
+@code{input-latency}, 8% otherwise; @option{--budget} overrides).
+
+The baseline must be a complete build tree of its own, such as a git
+worktree at the older commit, not one of the @file{src/emacs-32.0.50.N}
+binaries: those would load this tree's Lisp and native code.
+
+@file{doc_org/cmacs/perf.org} has the long form, including how to write
+a workload.  The driver, runtime and pty helper are AGPL-3.0-or-later;
+the workload files remain GPL-3.0-or-later, as ported.
+
 @c ===================================================================
 @node Upstream Changes
 @chapter Upstream Changes

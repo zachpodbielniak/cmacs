@@ -1,0 +1,373 @@
+#+TITLE: cmacs-perf: Whole-Editor Performance Workloads
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=admin/cmacs-perf.sh= replays fixed, deterministic workloads inside a
+real cmacs and measures them with hardware counters scoped to the
+workload's own timed window.  A profiler tells you where time goes;
+this tells you whether a change made real editor work faster /without
+changing what the editor did/.  Every workload proves its result before
+its numbers are kept, so a run that skipped work, crashed half way or
+fell back to the interpreter never improves a comparison.
+
+The method and most of the workloads are ported from neomacs-perf, the
+harness of NEO Emacs (=eval-exec/neomacs=, =crates/neomacs-perf=).  Their
+README carries the lesson this harness is built around: in one day of
+campaign work, timing runs produced three confident wrong conclusions
+that instruction counts would have settled at once.  On this machine,
+which builds OS images next to cmacs, the point is sharper: wall time
+measures the neighbours.
+
+Four parts:
+
+| Part                               | What it is                                        |
+|------------------------------------+---------------------------------------------------|
+| =admin/cmacs-perf.sh=               | The driver: build, run, compare, suite, profile    |
+| =admin/cmacs-perf/cmacs-perf.el=    | In-editor runtime: registry, gate, verdicts, JSON |
+| =admin/cmacs-perf/cmacs-perf-*.el=  | The workloads (vm, search, editing, display)       |
+| =admin/cmacs-perf/cmacs-perf-pty.el= | The TUI frontend: a sized, drained pseudo-terminal |
+
+* Quick start
+
+#+begin_example
+just perf-list                                  # 43 workloads
+just perf-run lexical-loop scrolling            # one sample each
+just perf-compare bytecode-call-loop --baseline ../cmacs-base/src/emacs
+just perf-suite --baseline ../cmacs-base/src/emacs --samples 9 --cpu 3
+just perf-profile scrolling --iterations 50     # perf record, timed window only
+#+end_example
+
+Every recipe passes its arguments straight to =admin/cmacs-perf.sh=;
+=admin/cmacs-perf.sh --help= has the full option list with examples.
+Output goes to =build/perf/<stamp>-<command>-<pid>/= (git-ignored).
+
+Requirements: =perf= (for counters and profiles; without it runs fall
+back to clocks with a warning), =yq=, =awk=, =column=, =timeout=,
+=sha256sum=, =taskset= for =--cpu=.  Fedora packages: =perf=, =yq=,
+=gawk=, =util-linux= (=column=, =taskset=), =coreutils=.  No
+=util-linux-script=: the TUI frontend is Emacs itself.
+
+* Commands
+
+| Command              | Does                                                                  |
+|----------------------+-----------------------------------------------------------------------|
+| =list=               | Compile the workloads with =--editor= and print the catalogue          |
+| =run WORKLOAD...=    | One sample of each with =--editor=; a table and =summary.yaml=         |
+| =compare WORKLOAD...= | =--samples= interleaved samples per editor; medians, MADs, change     |
+| =suite [WORKLOAD]...= | =compare= every workload (or those named); fail past a budget         |
+| =profile WORKLOAD=   | =perf record= over the timed window only; self-time report            |
+
+Exit status: 0 success; 1 an invalid sample (mismatch or infrastructure
+failure) or a suite regression past budget; 2 a usage error.
+
+* The workloads
+
+=cmacs-perf.sh list= is authoritative; this is the shape of it.
+
+** Lisp VM (=cmacs-perf-vm.el=, batch)
+
+| Workload                       | Measures                                         |
+|--------------------------------+--------------------------------------------------|
+| =bytecode-call-loop=           | Bytecode calling bytecode, 20M calls (budget 5%) |
+| =lexical-loop=                 | A counted loop over lexical variables            |
+| =dynamic-binding-loop=         | The same inside one dynamic binding              |
+| =dynamic-variable-read-loop=   | Reading a dynamically bound variable per step    |
+| =dynamic-rebinding-loop=       | specbind + unbind per step                       |
+| =dynamic-alias-read-loop=      | Reading through a =defvaralias= per step         |
+| =buffer-local-read-loop=       | Reading a buffer-local variable per step         |
+| =builtin-call-*= (seven)       | Bytecode calling one C primitive per step        |
+
+The =builtin-call= loops call each primitive through an alias, which
+keeps the byte compiler from turning the call into a dedicated opcode;
+the check confirms the alias is still in the constant vector.
+
+** Search (=cmacs-perf-search.el=, batch)
+
+| Workload                     | Measures                                              |
+|------------------------------+-------------------------------------------------------|
+| =search-{literal,regexp,posix}-{forward,backward}= | One warmed search over multibyte text, its answer, point and match data checked |
+| =bounded-search-edit-small=  | Bounded search after distant edits, 1 KiB buffer       |
+| =bounded-search-edit-large=  | The same in an 8 MiB multibyte buffer                  |
+| =bounded-search-edit-only=   | The distant edit alone (control)                       |
+| =bounded-search-no-edit=     | The bounded search alone (control)                     |
+
+The bounded-search family asks whether search cost depends on buffer
+size when the search is bounded -- it should not.
+
+** Editing (=cmacs-perf-editing.el=)
+
+| Workload                              | Frontend | Primary metric   |
+|---------------------------------------+----------+------------------|
+| =editing-simulation= (13 timed phases) | batch    |                  |
+| =org-editing=, =org-editing-heavy=    | batch    |                  |
+| =large-file-editing=                  | batch    |                  |
+| =indentation=, =regex-search=          | batch    |                  |
+| =process-output=, =file-open=          | batch    |                  |
+| =lsp-json-rpc=                        | batch    |                  |
+| =startup=                             | tui      |                  |
+| =sustained-editing= (+4 visible variants) | tui  | =edit_phase_us=  |
+| =input-latency= (p50/p95/p99)          | tui      | =latency_p99_us= |
+
+The source-based workloads edit =data/source.el=, a copy of
+=lisp/simple.el= made once per session (=--source= picks another file);
+both editors in a comparison read the same copy.
+
+** Display (=cmacs-perf-display.el=, tui)
+
+| Workload                   | Measures                                                 | Primary metric          |
+|----------------------------+----------------------------------------------------------+-------------------------|
+| =scrolling=                | C-v / M-v over a face- and overlay-rich 2,400-line buffer | -                       |
+| =mx-tab-completion=        | =M-x TAB= over 1,024 commands, cold                      | =per_completion_cpu_us= |
+| =mx-tab-completion-steady= | The same after an untimed warm-up pass                   | =per_completion_cpu_us= |
+
+=mx-tab-completion= drives the real command loop with
+=execute-kbd-macro=: the macro runs its own command loop, the
+minibuffer's recursive edit reads from it, and the whole lifecycle --
+completion window, selection, minibuffer exit -- finishes inside the
+timed body.  =unread-command-events= would be read only after the
+workload returned, outside the gate.  Display workloads refuse batch
+mode, where =redisplay= does nothing.
+
+** Not ported
+
+| neomacs workload          | Why not                                                         |
+|---------------------------+-----------------------------------------------------------------|
+| =rust-lsp-typing=         | Needs MELPA =lsp-mode= and a pinned Tree-sitter grammar         |
+| =magit-status=            | Needs MELPA Magit                                               |
+| =org-journal-open=        | Needs MELPA =org-journal=, =org-superstar=, =git-gutter=        |
+| =elisp-benchmarks=        | Needs the GNU ELPA package                                      |
+| =first-hot-loop=          | Measures neomacs's JIT tier switch; GNU Emacs has no tiers       |
+| =sustained-native-video=  | neomacs's wgpu/GStreamer video path                             |
+| =gui-input-latency=       | Became =input-latency= on the TUI (no headless Weston session)  |
+
+The package-backed ones are a natural follow-up: a pinned package lock
+and a cache under =build/perf/packages/= would be enough.
+
+* How a sample works
+
+Each workload is a registration, not a file:
+
+#+begin_src emacs-lisp
+(cmacs-perf-define
+ "lexical-loop"
+ :doc "counted loop over lexical variables"
+ :frontend 'batch            ; or 'tui
+ :iterations 10000000        ; default; --iterations overrides
+ :budget 8                   ; suite: largest accepted regression, %
+ :setup (lambda (n) ...)     ; untimed; returns STATE
+ :body (lambda (state n) ...) ; timed; returns an alist of metrics
+ :check (lambda (state metrics) ...) ; list of failures, nil = ok
+ :teardown (lambda (state) ...)      ; always runs
+ :primary 'some_metric)      ; optional; see Reading the numbers
+#+end_src
+
+The runtime (=cmacs-perf-main=) runs one, always in this order:
+
+1. *Setup*, untimed: buffers, commands, warm-up calls.
+2. A full =garbage-collect=, so the window does not start by paying for
+   setup's garbage.
+3. *Enable*: open the perf gate, start the CPU and wall clocks.
+4. *Body*: the timed work.
+5. *Disable*: stop the clocks, close the gate.
+6. *Check*: the invariants.  Any failure turns the sample into a
+   =mismatch=.
+7. *Teardown*, whatever happened above (advice, hooks, timers).
+8. *Result*: one JSON object at =CMACS_PERF_RESULT=, then
+   =kill-emacs= with 0 (ok), 3 (mismatch) or 2 (error).
+
+The result carries the workload's metrics, CPU and wall time, the GC
+count and time inside the window, the primary metric when declared,
+the frontend, the Emacs version, and how the harness itself was loaded
+(=compiled=: native, bytecode or interpreted).
+
+The driver keeps a sample only when the result says =ok=, the exit
+status is 0, and the schema, workload name, frontend and compilation
+kind all match what it launched.  An uncounted perf event is a failed
+sample, never a zero.
+
+** The perf gate
+
+perf has a control interface built for exactly this:
+=perf stat -D -1 --control fifo:CTL,ACK= starts with every event
+disabled and toggles on =enable= / =disable= written to the control
+FIFO, acknowledging each on the second.  The runtime writes the command
+with =write-region= and reads acknowledgements through a =cat= child
+started /before/ the window opens.  Three details matter:
+
+- perf terminates its =ack\n= with a NUL, so the reply is matched as a
+  substring; an exact match waits forever.
+- perf counts children, so the =cat= reader is inside the count; it is
+  blocked in =read(2)= for nearly all of it, and both editors in a
+  comparison pay the same.
+- Native compilation is switched off for the run
+  (=native-comp-jit-compilation nil=): an async compile would be a
+  counted child that differs between editors.
+
+Events are =instructions:u=, =cycles:u=, =branch-misses:u= and
+=task-clock= -- user space only, so the default =perf_event_paranoid=
+of 2 is enough and kernel noise stays out.  =perf record= at that
+setting refuses any callchain that might include kernel frames, even
+for a =:u= event, hence =--user-callchains= in =profile=.
+
+** Isolation
+
+Each sample runs under =env -i= with a private =HOME= inside its sample
+directory, =LANG=/=LC_ALL= =C.UTF-8=, =TZ=UTC=, and no =DISPLAY=,
+=WAYLAND_DISPLAY= or session bus, so nothing reaches the live desktop
+and no user configuration loads (=-Q= as well).  The workloads are
+compiled per editor, by that editor (=build-<label>/=), with
+=byte-compile-error-on-warn=: bytecode from another build is not that
+build's bytecode, and a warning in a workload means its loop may not be
+what it says.  =--native= also native-compiles them into
+=build-<label>/eln/= and puts that first on =native-comp-eln-load-path=.
+
+** The TUI frontend
+
+TUI workloads need a real =emacs -nw= frame, and the driver is
+headless.  =cmacs-perf-pty.el= is a batch Emacs acting as the terminal:
+it starts the command on a fresh pseudo-terminal, keeps the master side
+drained (an undrained pty blocks redisplay inside =write(2)=), keeps
+the raw byte stream as =tty.log=, and exits with the child's status.
+
+- *Size*: =40x120=, set by =stty= /inside/ the pty before the =exec=.
+  Setting it from outside races the child's startup; =emacs -nw= came
+  up at 32x65 that way.
+- *Terminal type*: =screen-256color=.  Emacs's xterm support sends
+  device-attribute queries at startup and waits up to two seconds for
+  answers a headless pty never gives; the screen setup sends none.
+- *=--= before the command*: without it the driver Emacs parses the
+  child's options (=-Q=, =-nw=, the =-u= of =env -u=) as its own.
+
+The TUI workload starts from =emacs-startup-hook= through a zero-delay
+timer, so the first frame exists and has been displayed.
+
+* Reading the numbers
+
+- *Gate on cycles; read instructions beside them.*  Instructions are
+  deterministic (two runs of the same binary differ in the fourth
+  significant digit or later) but blind to memory stalls.  A change can
+  execute more instructions in fewer cycles -- neomacs's interpreter
+  frame stack did, +8.4% instructions and -10.4% cycles -- and that is
+  a win.
+- *The baseline is a control.*  =compare= alternates which editor goes
+  first in each pair.  If the baseline stays in its usual band with a
+  tight MAD and only the candidate moved, the effect is real.  If both
+  sides inflated and both MADs blew out, the machine was busy: discard
+  the run.  =load1= is recorded for every sample in =samples.csv=.
+- *Same merge-base.*  Never compare against a number taken before a
+  rebase or merge; re-establish the baseline first.
+- *Primary metrics.*  Some windows contain harness work the workload
+  does not want judged.  The sustained-editing rows snapshot and
+  restore the whole buffer every iteration (neomacs's design, reported
+  as =bookkeeping_us=), which dwarfs the edit itself; =input-latency=
+  is about its p99, not its total.  A workload that declares
+  =:primary= is gated on that metric; the counters are still reported.
+- *Medians and MADs are descriptive*, not a significance test.  Use
+  more than the default five samples for anything you will act on, and
+  =--cpu N= on an otherwise idle core.
+
+Observed while bringing the harness up: =lexical-loop= instructions
+agree to 0.00% between two runs of one binary while its cycles moved
+5% at a load average of 4.6 -- the case for counters in one line.  TUI
+workloads (=mx-tab-completion= especially) show instruction-count
+spread of several percent between samples of the same binary, which the
+batch ones do not; something time-dependent runs inside the window
+under =-nw=.  The MAD shows it, and the interleaving keeps it from
+biasing either side, but pinning down the source would tighten those
+rows.
+
+* Comparing builds
+
+The baseline must be a complete build tree of its own -- typically a
+git worktree at the older commit (see /Parallel work/ in =AGENTS.md=
+for the incremental-copy recipe) -- not one of the
+=src/emacs-32.0.50.N= binaries the build keeps: that binary would load
+this tree's Lisp and native code, which belongs to the newer build.
+
+#+begin_example
+git worktree add ../cmacs-base HEAD~1
+# ...build it (copy artifacts first: AGENTS.md, Parallel work)...
+just perf-compare bytecode-call-loop scrolling \
+    --baseline ../cmacs-base/src/emacs --samples 9 --cpu 3
+#+end_example
+
+=compare= needs at least three samples per editor and refuses to report
+statistics for a workload with any invalid sample.  The summary records
+each editor's path, SHA-256 and version, the host (kernel, CPU model,
+pinned CPU, governor, =perf_event_paranoid=), and the source file's
+SHA-256.
+
+* Suites and budgets
+
+=suite= runs =compare= over every workload (or those named) and
+compares each one's change in its gated metric -- the declared primary
+metric, else cycles, else CPU time when perf cannot count -- against
+its budget: 5% for =bytecode-call-loop=, 15% for =input-latency=, 8%
+for the rest.  =--budget PCT= applies one budget to all.  A workload
+fails the suite as =regression= past its budget or =invalid= on any bad
+sample.
+
+* Output layout
+
+#+begin_example
+build/perf/20261103T055220Z-compare-3886928/
+  build-baseline/  build-candidate/   workloads compiled by each editor
+  data/source.el                      the shared editing input
+  samples.csv                         one row per sample
+  summary.yaml                        identities, host, medians, verdicts
+  table.tsv  verdicts.tsv             what was printed
+  lexical-loop/baseline-1/
+    result.json  counters.csv  stderr.log  stdout.log  home/
+  scrolling/candidate-2/
+    result.json  counters.csv  tty.log  stderr.log  home/
+#+end_example
+
+=samples.csv= columns: =workload, label, sample, status, load1, cpu_us,
+wall_us, cpu_ns_per_op, gcs_done, gc_us, primary, instructions, cycles,
+branch_misses, task_clock_ms, dir=.
+
+* Writing a workload
+
+Add a =cmacs-perf-define= to the file of its family, or a new
+=admin/cmacs-perf/cmacs-perf-<family>.el= (the driver loads every
+=cmacs-perf-*.el= there except the pty helper).  Rules that keep the
+numbers honest:
+
+- Put everything that is not the thing being measured in =:setup=,
+  including warm-up calls.
+- Make =:check= prove the work: an exact operation count, a buffer
+  checksum restored, point restored, the major mode, the answer.  For
+  a Lisp loop, check =cmacs-perf-compiled-p= -- an interpreted loop is
+  ten times slower and measures a different engine.
+- Anything installed globally (advice, hooks, timers) is removed in
+  =:teardown=, which runs even when the body signalled.
+- A workload whose cost is redisplay is =:frontend 'tui= and refuses
+  batch in setup.
+- Declare =:primary= when the window holds work you do not want gated.
+
+Helpers in =cmacs-perf.el=: =cmacs-perf-time= and =cmacs-perf-wall-time=
+(microseconds of a thunk), =cmacs-perf-checksum=, =cmacs-perf-expect=
+(accumulate a failure), =cmacs-perf-percentile=, =cmacs-perf-data-file=,
+=cmacs-perf-compiled-p=.
+
+* Tests
+
+=test/cmacs/cmacs-perf-tests.el= pins the properties the numbers depend
+on: mismatch exits 3 and error exits 2, teardown runs after an error, a
+missing primary metric voids the sample, every workload file compiles
+warning-free, batch and TUI workloads both reach =ok= through the real
+driver, and the gate excludes startup (1,000 iterations of
+=lexical-loop= count under 20M instructions while startup alone is
+about a billion; 1,000,000 iterations count over a hundred times more).
+=cmacs-perf-test-every-workload-runs= runs the whole catalogue at one
+iteration and is tagged =:expensive-test=.
+
+* Licensing
+
+The driver, the runtime and the pty helper are AGPL-3.0-or-later.  The
+workload files are ported from neomacs-perf (Copyright (C) 2026 Eval
+Exec and the neomacs contributors) and stay under GPL-3.0-or-later,
+which section 13 of both licences allows to be combined with the
+AGPL-3.0 parts.

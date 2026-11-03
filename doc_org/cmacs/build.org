@@ -1039,6 +1039,7 @@ Test files in =test/cmacs/=:
 | =cmacs-config-tests.el=      | Config loading    |
 | =cmacs-office-tests.el=      | Office packages (round-trip gate) |
 | =cmacs-verify-fresh-tests.el= | The stale-artifact guard below |
+| =cmacs-perf-tests.el=         | The perf harness (below)       |
 
 ** Before trusting a result: =just verify-fresh=
 
@@ -1179,6 +1180,27 @@ built by a Makefile is usually three lines.  Add a case to
 - =.eln= files directly.  They need no check of their own: Emacs looks
   one up only while loading the =.elc=, under a name carrying the md5 of
   the current source, so a stale =.elc= is the whole failure.
+
+** Performance: =just perf-*=
+
+Tests say whether the editor is right; =admin/cmacs-perf.sh= says
+whether a change made it faster or slower /while still right/.  It
+replays 43 deterministic workloads (Lisp VM, search, editing,
+scrolling, =M-x TAB=, input latency) in batch or in a real =emacs -nw=
+frame, refuses any sample whose workload did not prove its result, and
+counts instructions and cycles with =perf stat= over the timed window
+only.
+
+#+begin_example
+just perf-list
+just perf-run lexical-loop scrolling
+just perf-compare bytecode-call-loop --baseline ../cmacs-base/src/emacs
+just perf-suite --baseline ../cmacs-base/src/emacs --samples 9 --cpu 3
+#+end_example
+
+Gate on cycles, read instructions beside them, and treat wall time as a
+hint.  The full story -- the gate, the workloads, reading a comparison,
+writing a workload -- is in [[file:perf.org][perf.org]].
 
 ** Expected failure: =emacs-tests/seccomp/allows-stdout=
 

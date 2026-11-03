@@ -602,6 +602,36 @@ check-defuns:
 verify-fresh *ARGS:
     admin/cmacs-verify-fresh.sh {{ ARGS }}
 
+# Whole-editor performance workloads (admin/cmacs-perf.sh): fixed
+# workloads in a real cmacs, kept only when they prove their result,
+# counted by `perf stat' over the timed window only.  Output under
+# build/perf/.  ARGS go to the driver: --iterations N, --samples N,
+# --cpu N, --native, --no-counters (see --help, doc_org/cmacs/perf.org).
+# List the performance workloads.
+[group('perf')]
+perf-list *ARGS:
+    admin/cmacs-perf.sh list {{ ARGS }}
+
+# One sample of each named workload with the tree's editor.
+[group('perf')]
+perf-run *ARGS:
+    admin/cmacs-perf.sh run {{ ARGS }}
+
+# Interleaved A/B of workloads: needs --baseline PATH (a worktree build).
+[group('perf')]
+perf-compare *ARGS:
+    admin/cmacs-perf.sh compare {{ ARGS }}
+
+# Compare every workload against its regression budget (needs --baseline).
+[group('perf')]
+perf-suite *ARGS:
+    admin/cmacs-perf.sh suite {{ ARGS }}
+
+# perf record over one workload's timed window; prints the self-time report.
+[group('perf')]
+perf-profile *ARGS:
+    admin/cmacs-perf.sh profile {{ ARGS }}
+
 # `check-cmacs' runs `verify-fresh --gate' first (test/Makefile.in), so
 # a stale tree fails fast with the report; CMACS_SKIP_FRESH_CHECK=1
 # runs it anyway.
