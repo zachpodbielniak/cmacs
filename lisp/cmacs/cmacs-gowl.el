@@ -56,6 +56,9 @@
 (defvar cmacs-gowl-hotkey-section)
 (defvar cmacs-gowl-hotkey-scripts)
 (declare-function cmacs-gowl-floatdesk--on-start "cmacs-gowl-floatdesk" ())
+(declare-function cmacs-gowl-power--on-start "cmacs-gowl-power" ())
+(declare-function cmacs-gowl-power--on-stop "cmacs-gowl-power" ())
+(declare-function cmacs-gowl-power-apply "cmacs-gowl-power" (backdrop crt))
 (declare-function cmacs-gowl-gabbrev--on-start "cmacs-gowl-gabbrev" ())
 (defvar cmacs-gowl-broadcast-enable)
 (defvar cmacs-gowl-broadcast-teams)
@@ -2093,6 +2096,10 @@ thread is running and applies configuration."
     (cmacs-gowl-gabbrev--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
+  ;; Whether power saver is holding the effects off.  Before the
+  ;; backdrop, so a session that starts in power saver never draws one.
+  (when (require 'cmacs-gowl-power nil t)
+    (cmacs-gowl-power--on-start))
   ;; What shows through a translucent window: glass, blur, or nothing.
   (cmacs-gowl--apply-backdrop)
   (cmacs-gowl--apply-hdr)
@@ -2155,6 +2162,8 @@ thread is running and applies configuration."
   (remove-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
   (cmacs-gowl-focus-teardown)
   (cmacs-gowl--pointer-confine-indicator nil)
+  (when (fboundp 'cmacs-gowl-power--on-stop)
+    (cmacs-gowl-power--on-stop))
   (cmacs-gowl--remove-hook-bridges)
   (when (and (gowl-running-p)
              (fboundp 'gowl-uninstall-workspace-provider))
@@ -4132,27 +4141,36 @@ it does have."
   ;; window mapping in the same tick as the switch is already excluded.
   (when (fboundp 'gowl-set-no-fx-apps)
     (ignore-errors (gowl-set-no-fx-apps (or cmacs-gowl-no-fx-apps ""))))
-  (when (fboundp 'gowl-set-backdrop)
-    (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop)))
-  ;; What a tag switch looks like.  Quiet when it is already in force,
-  ;; so a session start does not toast it.
-  (when (fboundp 'gowl-set-tag-transition)
-    (ignore-errors (gowl-set-tag-transition cmacs-gowl-tag-transition)))
-  ;; AFTER the backdrop, and reading both variables.
-  ;;
-  ;; `crt' is the last stop on the backdrop tour as well as a switch of
-  ;; its own, so setting the backdrop can move the tube: landing on
-  ;; `crt' switches it on and leaving switches it off.  Pushing the
-  ;; switch first would let the backdrop push undo it.
-  ;;
-  ;; And the two variables can be set to contradict each other --
-  ;; backdrop `crt' with `cmacs-gowl-crt' nil -- so the backdrop wins
-  ;; there: somebody who chose the tube as their look gets the tube.
-  (when (fboundp 'gowl-set-crt)
-    (ignore-errors
-      (gowl-set-crt (and (or cmacs-gowl-crt
-                             (eq cmacs-gowl-backdrop 'crt))
-                         t)))))
+  ;; Power saver holds the effects off (cmacs-gowl-power.el): then the
+  ;; choice below is remembered for later instead of drawn, so a session
+  ;; that starts in power saver never renders a frame of rain.
+  (let ((held (and (fboundp 'cmacs-gowl-power-apply)
+                   (cmacs-gowl-power-apply cmacs-gowl-backdrop
+                                           (or cmacs-gowl-crt
+                                               (eq cmacs-gowl-backdrop 'crt))))))
+    (unless held
+      (when (fboundp 'gowl-set-backdrop)
+        (ignore-errors (gowl-set-backdrop cmacs-gowl-backdrop))))
+    ;; What a tag switch looks like.  Quiet when it is already in force,
+    ;; so a session start does not toast it.
+    (when (fboundp 'gowl-set-tag-transition)
+      (ignore-errors (gowl-set-tag-transition cmacs-gowl-tag-transition)))
+    ;; AFTER the backdrop, and reading both variables.
+    ;;
+    ;; `crt' is the last stop on the backdrop tour as well as a switch of
+    ;; its own, so setting the backdrop can move the tube: landing on
+    ;; `crt' switches it on and leaving switches it off.  Pushing the
+    ;; switch first would let the backdrop push undo it.
+    ;;
+    ;; And the two variables can be set to contradict each other --
+    ;; backdrop `crt' with `cmacs-gowl-crt' nil -- so the backdrop wins
+    ;; there: somebody who chose the tube as their look gets the tube.
+    ;; Unless power saver is holding the effects off.
+    (when (and (fboundp 'gowl-set-crt) (not held))
+      (ignore-errors
+        (gowl-set-crt (and (or cmacs-gowl-crt
+                               (eq cmacs-gowl-backdrop 'crt))
+                           t))))))
 
 ;;;###autoload
 (defun cmacs-gowl-set-water (preset)

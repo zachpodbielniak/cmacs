@@ -2701,7 +2701,7 @@ reload, no module load --- because both modules read the one setting and
 every window is re-placed when it moves.
 
 #+begin_src emacs-lisp
-(setq cmacs-gowl-backdrop 'glass)   ;; the default
+(setq cmacs-gowl-backdrop 'glass)   ;; the default is rain
 #+end_src
 
 *They are alternatives, not layers.* Each module puts a node in the same
@@ -2715,6 +2715,35 @@ window is --- =cmacs-gowl-focused-alpha=, a window rule, or the client's
 own background alpha (Emacs's own frames use =alpha-background=). An
 opaque window shows no backdrop of any kind, and neither module is at
 fault for that.
+
+*** Power saver turns them off
+:PROPERTIES:
+:CUSTOM_ID: power-saver-effects
+:END:
+
+The animated backdrops never settle: while a translucent window is on a screen, that screen renders at the backdrop's frame rate, and the CRT pass is one more render of the whole scene per frame. On a laptop that is most of the battery --- a Framework 13 that lasts about twenty hours with no backdrop lasted six or seven with the default rain.
+
+So by default the effects follow the system power profile. =cmacs-gowl-power-saver-mode= (=lisp/cmacs/cmacs-gowl-power.el=) watches power-profiles-daemon --- or tuned-ppd, which serves the same =net.hadess.PowerProfiles= interface --- over the system bus, and while the profile is =power-saver= it holds the effects off: the backdrop goes to =none=, the tube off, and a bar toast says so. When the profile changes to =balanced= or =performance=, exactly what was showing comes back, with a toast saying that too.
+
+- *Both ways in are the same signal.* A profile already set to power saver when the session starts --- at the GDM greeter, or left over from last time --- holds from the first frame: the backdrop is never pushed at all, so not one frame of rain is drawn. One changed later from the bar's power panel, =powerprofilesctl= or GNOME settings arrives as =PropertiesChanged= on the daemon and is handled the same way.
+- *Your choice is never written.* =cmacs-gowl-backdrop= and =cmacs-gowl-crt= keep saying what you want; the hold is applied on top of them and remembers the live state, so a backdrop picked with Super+" earlier in the session is the one that comes back.
+- *A choice made during power saver wins.* Pressing Super+" while the hold is on is an explicit request for an effect; leaving power saver does not take it away again.
+- *A dark desktop stays quiet.* With the backdrop already =none= and no tube, there is nothing to switch off and no toast.
+
+#+begin_src emacs-lisp
+;; Keep the effects on in every profile.  Read when cmacs-gowl-mode starts.
+(setq cmacs-gowl-power-saver-effects nil)
+
+;; Also hold them off in balanced: effects only in performance.
+(setq cmacs-gowl-power-saver-profiles '("power-saver" "balanced"))
+
+;; Switch them without saying so.
+(setq cmacs-gowl-power-saver-toast nil)
+#+end_src
+
+*The effects themselves cost less outside power saver too.* An animated backdrop used to answer "still animating" on every vblank, so a 30 fps rain on a 120 Hz panel committed the unchanged scene 120 times a second and the panel could never drop into self-refresh; now it names the frame it next draws and the output sleeps until then (=gowl_fx_throttle_live()=, measured in =deps/gowl/tests/test-idle-output.c=: 63 commits a second became 10 for a 10 fps effect at 60 Hz). And a translucent window on a hidden tag, minimized, stowed in the scratchpad or on a powered-off output no longer keeps its output rendering. Neither changes a pixel that reaches the screen.
+
+=M-x cmacs-gowl-power-saver-mode= toggles it at runtime; turning it off while it holds puts the effects back. =(cmacs-gowl-power-holding-p)= says whether it is holding now. The tests are =test/cmacs/cmacs-gowl-power-tests.el=, against a fake compositor and a fake daemon.
 
 *** Windows that get none of it
 :PROPERTIES:

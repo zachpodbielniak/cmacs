@@ -4482,6 +4482,27 @@ eased, because a curve on a direct manipulation reads as lag.
 get their three-finger swipes back --- a gesture the cube claims never
 reaches the focused client.
 
+@cindex power saver, window effects
+@vindex cmacs-gowl-power-saver-effects
+@findex cmacs-gowl-power-saver-mode
+The animated backdrops never settle --- a screen showing one renders at
+its frame rate --- and the CRT pass renders the whole scene again every
+frame, which on a laptop costs most of the battery.  So by default
+@code{cmacs-gowl-power-saver-mode} (@file{cmacs-gowl-power.el}) watches
+the system power profile over D-Bus (power-profiles-daemon, or
+tuned-ppd's @code{net.hadess.PowerProfiles}) and, while it is
+@code{power-saver}, sets the backdrop to @code{none} and the tube off
+with a toast on the bar; leaving power saver restores exactly what was
+showing.  A profile already in power saver at login holds from the
+first frame, and one changed later from the bar's power panel or
+@command{powerprofilesctl} is handled the same way.  The user's
+@code{cmacs-gowl-backdrop} and @code{cmacs-gowl-crt} are never written,
+and an effect chosen by hand during power saver is not taken away when
+it ends.  @code{(setq cmacs-gowl-power-saver-effects nil)} keeps the
+effects in every profile; @code{cmacs-gowl-power-saver-profiles} lists
+the profiles that hold them off, and @code{cmacs-gowl-power-saver-toast}
+silences the toast.
+
 @code{wallpaper} remains the picture every tag uses;
 @code{wallpaper-tags} overrides it for individual tags, keyed by the
 1-based tag numbers in the bar, and @code{wallpaper-fade} cross-fades
