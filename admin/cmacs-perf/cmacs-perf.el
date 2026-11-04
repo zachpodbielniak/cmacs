@@ -42,6 +42,8 @@
 ;;   CMACS_PERF_CTL         perf control FIFO (optional)
 ;;   CMACS_PERF_ACK         perf acknowledgement FIFO (optional)
 ;;   CMACS_PERF_DATA        directory of read-only workload inputs
+;;   CMACS_PERF_PRIME       set: a priming run -- wait for native
+;;                          compilation to drain before exiting
 ;;
 ;; Exit status: 0 ok, 3 correctness mismatch, 2 infrastructure error.
 
@@ -128,6 +130,39 @@ outlive the measurement."
 (defun cmacs-perf-checksum ()
   "Return the SHA-256 of the current buffer's text."
   (secure-hash 'sha256 (current-buffer)))
+
+(defun cmacs-perf-frontend-name ()
+  "Return the frontend this Emacs is running as, as a string.
+\"batch\" with no display, \"tui\" on a terminal frame, and otherwise
+the window system's name -- \"lrg\" for the libregnum backend
+\(`emacs --lrg'), \"pgtk\" for GTK.  The driver checks this against
+the frontend it launched."
+  (cond (noninteractive "batch")
+        ((display-graphic-p) (symbol-name window-system))
+        (t "tui")))
+
+(defun cmacs-perf-native-compiling-p ()
+  "Return non-nil while an asynchronous native compilation is queued or running.
+Those compilations are child processes, so perf counts them, and they
+compete for the CPU besides.  A run during which one is active did not
+measure the workload alone."
+  (and (featurep 'native-compile)
+       (or (bound-and-true-p comp-files-queue)
+           (and (fboundp 'comp--async-runnings)
+                (> (comp--async-runnings) 0)))))
+
+(defun cmacs-perf--wait-for-native-compilation (timeout)
+  "Wait until no native compilation has been active for two seconds.
+Give up after TIMEOUT seconds.  Used by priming runs, which exist to
+fill the eln-cache that the measured runs then load from."
+  (let ((deadline (+ (float-time) timeout))
+        (quiet-since nil))
+    (while (and (< (float-time) deadline)
+                (not (and quiet-since (> (- (float-time) quiet-since) 2.0))))
+      (if (cmacs-perf-native-compiling-p)
+          (setq quiet-since nil)
+        (setq quiet-since (or quiet-since (float-time))))
+      (accept-process-output nil 0.2))))
 
 (defun cmacs-perf-compiled-p (&rest symbols)
   "Return non-nil when every function in SYMBOLS is byte- or native-compiled.
@@ -250,6 +285,11 @@ non-pairs become vectors."
                 (gc-start gc-elapsed)
                 (cpu-start nil)
                 (wall-start nil))
+            ;; A native compilation running in the window is a child
+            ;; process the counters include: refuse the run outright.
+            (when (and (not (getenv "CMACS_PERF_PRIME"))
+                         (cmacs-perf-native-compiling-p))
+              (error "Native compilation is running as the window opens"))
             (cmacs-perf--gate "enable")
             (setq gate-open t)
             (unwind-protect
@@ -266,6 +306,9 @@ non-pairs become vectors."
                 (cmacs-perf--gate "disable")))
             (setq gcs (- gcs-done gcs-start)
                   gc-us (round (* 1000000 (- gc-elapsed gc-start)))))
+          (when (and (not (getenv "CMACS_PERF_PRIME"))
+                       (cmacs-perf-native-compiling-p))
+            (error "Native compilation started inside the window"))
           ;; 6. Correctness: a fast wrong answer is not a sample.
           (when (plist-get spec :check)
             (setq failures (funcall (plist-get spec :check) state metrics)))
@@ -297,7 +340,7 @@ non-pairs become vectors."
       `((schema . ,cmacs-perf-schema-version)
         (workload . ,name)
         (status . ,status)
-        (frontend . ,(if noninteractive "batch" "tui"))
+        (frontend . ,(cmacs-perf-frontend-name))
         (iterations . ,iterations)
         (operations . ,operations)
         (cpu_us . ,cpu-us)
@@ -326,7 +369,15 @@ non-pairs become vectors."
         (native_comp . ,(and (fboundp 'native-comp-available-p)
                              (native-comp-available-p)
                              t))
-        (window_system . ,(and window-system (symbol-name window-system)))))))
+        (window_system . ,(and window-system (symbol-name window-system)))
+        ;; The grid the workload ran in: frontends compared against each
+        ;; other must agree on it, or they did different amounts of work.
+        (frame . ,(unless noninteractive
+                    `((columns . ,(frame-width))
+                      (lines . ,(frame-height))
+                      (pixel_width . ,(frame-pixel-width))
+                      (pixel_height . ,(frame-pixel-height))
+                      (font . ,(face-attribute 'default :family)))))))))
 
 (defun cmacs-perf-main ()
   "Run the workload named by CMACS_PERF_WORKLOAD and exit.
@@ -346,7 +397,39 @@ frame exists and has been displayed before setup starts."
       (error (message "cmacs-perf: cannot write result: %s"
                       (error-message-string err))
              (setq status "error")))
+    ;; A priming run only fills the eln-cache: let every compilation it
+    ;; started finish, or the measured runs would compile it again.
+    (when (getenv "CMACS_PERF_PRIME")
+      (cmacs-perf--wait-for-native-compilation 600))
     (kill-emacs (pcase status ("ok" 0) ("mismatch" 3) (_ 2)))))
+
+(defvar cmacs-perf--settle-state nil
+  "Polling state of `cmacs-perf-main-when-settled': (DEADLINE SIZE STABLE).")
+
+(defun cmacs-perf-main-when-settled ()
+  "Run `cmacs-perf-main' once the selected frame has settled.
+A terminal frame is ready when startup ends, but a window-system frame
+is still being mapped and resized by the compositor for a while after,
+and a workload that starts then measures the window manager -- or
+fails, finding point outside a window that has not reached its size.
+So on a graphical frame this polls every 50 ms until the frame is
+visible and its pixel size has held for five polls in a row (a quarter
+second), giving up after ten seconds and running anyway; the
+workload's own checks then decide whether the result is usable."
+  (if (not (display-graphic-p))
+      (cmacs-perf-main)
+    (redisplay t)
+    (let* ((state (or cmacs-perf--settle-state
+                      (list (+ (float-time) 10.0) nil 0)))
+           (size (list (frame-pixel-width) (frame-pixel-height)))
+           (stable (if (and (eq (frame-visible-p (selected-frame)) t)
+                            (equal size (nth 1 state)))
+                       (1+ (nth 2 state))
+                     0)))
+      (setq cmacs-perf--settle-state (list (nth 0 state) size stable))
+      (if (or (>= stable 5) (> (float-time) (nth 0 state)))
+          (cmacs-perf-main)
+        (run-at-time 0.05 nil #'cmacs-perf-main-when-settled)))))
 
 (defun cmacs-perf-list ()
   "Print every registered workload as one tab-separated line and exit.

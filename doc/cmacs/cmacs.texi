@@ -14543,12 +14543,60 @@ Each sample runs under @code{env -i} with a private @env{HOME},
 counted child).  The workloads are compiled by each editor, warnings as
 errors; @option{--native} native-compiles them too.
 
+Lisp outside the dump with no ahead-of-time @file{.eln} is
+native-compiled when it first loads, in a counted child process, and
+that happens during startup, before @option{--eval} can stop it.  With
+a fresh @env{HOME} per sample it happened in every sample.  So each
+sample's @file{.emacs.d/eln-cache} links to one cache per editor per
+session, a priming run per editor, frontend and workload fills it
+(untimed, JIT on, waiting until compilation drains), and the measured
+run refuses itself if a compilation is queued or running when its
+window opens or closes.
+
 TUI workloads run in @file{admin/cmacs-perf/cmacs-perf-pty.el}, a batch
-Emacs acting as a 40x120 terminal: it sizes the pty with @command{stty}
+Emacs acting as a 140x40 terminal: it sizes the pty with @command{stty}
 from inside before the @code{exec} (from outside it races the child's
 startup), uses @code{TERM=screen-256color} (xterm's startup queries
 would wait for answers a headless pty never gives), and keeps the
 master side drained.
+
+@subsection The lrg frontend
+
+@option{--frontend lrg} runs a workload in @code{emacs --lrg=2d} (the
+libregnum display backend); @option{--lrg-spec} picks another SPEC, and
+@option{--frontend pgtk} runs the stock GTK frame.  By default
+(@option{--display headless}) their windows never reach your screen:
+the driver starts a private gowl with the headless wlroots backend and
+@code{WLR_RENDERER=gles2}, so rendering still uses the GPU, and hands
+the samples only its @env{WAYLAND_DISPLAY}.  @option{--display
+session} uses the current session instead.  Both graphical frontends
+use @code{DejaVu Sans Mono-11} with menu, tool and scroll bars off and
+get the same window, a 140x39 frame, the same grid as the 140x40 TUI;
+every result records its frame size and font.  lrg
+repaints the whole frame and swaps synchronously at the end of every
+redisplay on the main thread, so the paint is inside the counted
+window; Mesa's threads are counted, GPU time is not.
+@option{--env vblank_mode=0} disables vsync on Mesa.
+
+@option{--baseline-frontend} and @option{--candidate-frontend} run the
+two sides of a comparison on different frontends; with no
+@option{--baseline} both use the candidate editor:
+
+@example
+just perf-compare scrolling input-latency \
+    --baseline-frontend tui --candidate-frontend lrg
+@end example
+
+That compares whole frontends, not equal work: on a graphical frame
+@code{scrolling} renders its font families for real, and lrg repaints
+the full frame where a terminal sends only changed cells.
+@option{--frontend pgtk} (the stock GTK frame, same grid) is the
+control for lrg: the two share the whole font stack and differ only in
+how glyphs reach the screen.  On both, the runtime waits until the
+frame is visible and its size has held for a quarter second before
+setup begins.  Across frontends read CPU time rather than
+@code{cycles:u}: the events are user-space only, and a graphical
+frontend spends real time in the kernel.
 
 @subsection Reading the numbers
 

@@ -223,6 +223,41 @@ build's bytecode, and a warning in a workload means its loop may not be
 what it says.  =--native= also native-compiles them into
 =build-<label>/eln/= and puts that first on =native-comp-eln-load-path=.
 
+** Native compilation: a primed, shared eln-cache
+
+Lisp that is neither in the dump nor covered by an ahead-of-time
+=.eln= is native-compiled the first time it loads -- in a child Emacs,
+which perf counts.  With a fresh =HOME= per sample, that happened in
+/every/ sample: the first =pgtk=/=lrg= comparison compiled a dozen
+=cmacs-ai-*= files, =cmacs-scratchpad= and =cmacs-piper-context-menu=
+in each one, and the TUI ones compiled =xterm.el= and an
+=x-create-frame= trampoline; a profile put 20% of the window in
+libgccjit and another 18% in the dynamic linker of the compiling child.
+Turning JIT off from =--eval= is too late -- those files load during
+startup, before =--eval= runs -- and this tree has no environment
+switch for it.
+
+So the eln-cache is shared and primed:
+
+- Each sample still has a private =HOME=, but its
+  =.emacs.d/eln-cache= is a link to one directory per editor per
+  session (=eln-<label>/=).  =.eln= files belong to the build that
+  compiled them, so the two editors of a comparison never share one.
+- Before measuring a workload, =pf_prime= runs it once per editor and
+  frontend, untimed and uncounted, with JIT compilation *on* (the
+  workload files themselves on the deny-list, so they stay the
+  bytecode being measured), and waits until no compilation has been
+  active for two seconds.  That is a user's warm cache.
+- The measured run turns JIT off, and the runtime refuses the sample
+  outright if a native compilation is queued or running when the
+  window opens or when it closes.
+
+The cause in the tree, worth fixing on its own: the in-tree
+=src/emacs= puts =~/source/projects/native-lisp/= (which does not
+exist) on =native-comp-eln-load-path= instead of the tree's
+=native-lisp/=, whose current ABI directory holds only 20 =.eln=
+among 91 stale version directories.
+
 ** The TUI frontend
 
 TUI workloads need a real =emacs -nw= frame, and the driver is
@@ -231,7 +266,7 @@ it starts the command on a fresh pseudo-terminal, keeps the master side
 drained (an undrained pty blocks redisplay inside =write(2)=), keeps
 the raw byte stream as =tty.log=, and exits with the child's status.
 
-- *Size*: =40x120=, set by =stty= /inside/ the pty before the =exec=.
+- *Size*: =40x140= (a 140x39 frame), set by =stty= /inside/ the pty before the =exec=.
   Setting it from outside races the child's startup; =emacs -nw= came
   up at 32x65 that way.
 - *Terminal type*: =screen-256color=.  Emacs's xterm support sends
@@ -242,6 +277,76 @@ the raw byte stream as =tty.log=, and exits with the child's status.
 
 The TUI workload starts from =emacs-startup-hook= through a zero-delay
 timer, so the first frame exists and has been displayed.
+
+** The lrg frontend
+
+=--frontend lrg= runs a workload in =emacs --lrg=2d= (the libregnum
+display backend, [[file:cmacs-lrgterm.org][cmacs-lrgterm.org]]); =--lrg-spec= picks another SPEC.
+=--frontend pgtk= runs the stock GTK frame.  Both need a window, and by
+default (=--display headless=) they never get one on your screen: the
+driver starts a private gowl from this tree with the headless wlroots
+backend and =WLR_RENDERER=gles2=, one rule floating every window, and
+hands the samples only its =WAYLAND_DISPLAY= and runtime directory (no
+=DISPLAY=).  Rendering still goes through the GPU's render node, so lrg
+is measured on hardware GL -- an Xvfb would have given it llvmpipe.  The
+compositor is stopped by its PID when the driver exits.  The runtime
+directory is a short one under =$XDG_RUNTIME_DIR=: under the scratch
+directory the socket path exceeded the 108-byte limit.
+=--display session= uses the current graphical session instead, and
+then every sample opens a window on it -- dozens per comparison.
+
+The grid is pinned so the frontends do the same layout work: both
+graphical frontends use =DejaVu Sans Mono-11= (left to themselves they
+pick different defaults, 126 against 138 columns in the same pixels),
+with menu, tool and scroll bars off (pgtk has them, lrg does not), and
+the headless compositor gives both the same window, 1276x716: a 140x39
+frame.  The TUI's pty is 140x40, which is also a 140x39 frame.  Every
+result records =frame.columns=, =lines=, =pixel_width=, =pixel_height=
+and =font=.
+
+lrg repaints the whole frame from the glyph matrix and swaps buffers
+synchronously in =unblock_buffer_flips=, on the main thread, so a
+=(redisplay t)= inside the window includes the paint and the swap.
+=perf stat= counts every thread of the editor, so Mesa's own threads
+are in the counts; GPU execution time is not.  Whether the swap waits
+for vblank is the driver's default (raylib is not asked for vsync);
+=--env vblank_mode=0= turns it off on Mesa.
+
+=--frontend pgtk= is the stock GTK frame at the same grid, with the
+same display variables.  It is the control for lrg: both share Emacs's
+whole font stack (fontconfig, cairo, FreeType, HarfBuzz, the face and
+fontset machinery) and differ only in how glyphs reach the screen, so
+pgtk against lrg isolates the renderer.  A terminal never does font
+fallback, so TUI against lrg measures "graphical text" and "the lrg
+renderer" together.
+
+A window-system frame is still being mapped and resized by the
+compositor after startup, so on lrg and pgtk the runtime waits
+(=cmacs-perf-main-when-settled=) until the frame is visible and its
+pixel size has held for a quarter second, at most ten seconds, before
+setup begins.
+
+To put two display backends side by side, run each side of a
+comparison on its own frontend.  With no =--baseline=, both sides use
+the candidate editor:
+
+#+begin_example
+just perf-compare scrolling input-latency sustained-editing \
+    --baseline-frontend pgtk --candidate-frontend lrg
+#+end_example
+
+The comparison is of whole frontends, not of equal work: on a
+graphical frame =scrolling= renders its three font families for real
+(a terminal ignores families and only varies face attributes), and
+lrg repaints the full frame on every redisplay where the terminal
+sends only the changed cells.
+
+*Read CPU time, not =cycles:u=, across frontends.*  The counted events
+are user-space only, and a graphical frontend spends real time in the
+kernel (DRM ioctls, buffer waits, the Wayland socket).  pgtk against
+lrg on =sustained-editing= (headless, 2026-11-03): +0.4% cycles but
++51% CPU time -- the difference was kernel-side.  Within one frontend,
+comparing two builds, =cycles:u= stays the right gate.
 
 * Reading the numbers
 

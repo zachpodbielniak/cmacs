@@ -241,6 +241,35 @@ any workload file fails this test."
     (should (= 2 (car (cmacs-perf-tests--driver
                        out "--no-counters" "run" "no-such-workload"))))))
 
+(ert-deftest cmacs-perf-test-frontend-names-are-checked ()
+  "The driver accepts batch, tui, lrg and pgtk and refuses other frontends."
+  (skip-unless (cmacs-perf-tests--tools-p))
+  (cmacs-perf-tests--with-temp-dir out
+    (should (= 2 (car (cmacs-perf-tests--driver
+                       out "--no-counters" "--frontend" "wayland"
+                       "run" "lexical-loop"))))
+    (should (= 2 (car (cmacs-perf-tests--driver
+                       out "--no-counters" "--candidate-frontend" "x11"
+                       "compare" "lexical-loop"))))
+    (should (= 2 (car (cmacs-perf-tests--driver
+                       out "--no-counters" "--env" "not an assignment"
+                       "run" "lexical-loop"))))))
+
+(ert-deftest cmacs-perf-test-lrg-frontend ()
+  "A display workload runs to ok on the libregnum backend.
+Needs a graphical session (the lrg frontend opens a window) and a build
+with lrgterm."
+  (skip-unless (and (cmacs-perf-tests--tools-p)
+                    (or (getenv "WAYLAND_DISPLAY") (getenv "DISPLAY"))
+                    (boundp 'IS-CMACS-LRGTERM) (symbol-value 'IS-CMACS-LRGTERM)))
+  (cmacs-perf-tests--with-temp-dir out
+    (pcase-let ((`(,exit . ,_)
+                 (cmacs-perf-tests--driver
+                  out "--no-counters" "--frontend" "lrg" "--iterations" "3"
+                  "run" "sustained-editing")))
+      (should (= exit 0))
+      (should (equal (nth 3 (car (cmacs-perf-tests--samples out))) "ok")))))
+
 (ert-deftest cmacs-perf-test-gate-excludes-startup ()
   "Gated counts cover the body, not startup, setup or result writing.
 Startup alone executes on the order of a billion instructions.  With

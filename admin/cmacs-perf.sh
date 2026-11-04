@@ -55,10 +55,19 @@ PF_EVENTS="instructions:u,cycles:u,branch-misses:u,task-clock"
 # The terminal a TUI workload gets.  screen-256color, not xterm: Emacs's
 # xterm support sends device-attribute queries at startup and waits up
 # to two seconds for answers a headless pty never gives; the screen
-# setup sends none.  The size matches neomacs-perf's TUI default.
+# setup sends none.  140x40 gives a 140x39 frame, the grid the headless
+# compositor's default floating window (1276x716) holds at PF_GUI_FONT,
+# so all three display frontends lay out the same lines and columns.
 PF_TERM="screen-256color"
 PF_ROWS=40
-PF_COLS=120
+PF_COLS=140
+
+# Graphical frontends (lrg, pgtk) get one font, pinned because the two
+# backends otherwise pick different defaults (126 vs 138 columns in the
+# same pixels).  The window size is the compositor's: the headless one
+# floats every window at the same default size, which the result
+# records (frame.columns/lines/pixel_*) so a mismatch is visible.
+PF_GUI_FONT="DejaVu Sans Mono-11"
 
 # Options.
 pf_editor=""
@@ -67,6 +76,16 @@ pf_candidate=""
 pf_iterations=""
 pf_samples=5
 pf_frontend=""
+pf_baseline_frontend=""
+pf_candidate_frontend=""
+pf_lrg_spec="2d"
+pf_extra_env=()
+pf_priming=0
+pf_display="headless"
+pf_headless_pid=""
+pf_headless_runtime=""
+pf_headless_socket=""
+declare -A PF_PRIMED=()
 pf_counters="auto"
 pf_native=0
 pf_cpu=""
@@ -108,7 +127,23 @@ Options:
   -n, --iterations N     override every workload's iteration count
   -s, --samples N        samples per editor for compare/suite (default 5,
                          at least 3)
-  -f, --frontend NAME    force batch or tui instead of each workload's own
+  -f, --frontend NAME    force batch, tui, lrg or pgtk instead of each
+                         workload's own.  lrg is \`emacs --lrg' (the
+                         libregnum backend), pgtk the stock GTK frame --
+                         the control for lrg (same font stack, own
+                         renderer).  All three display frontends lay out
+                         the same 140x39 grid
+      --baseline-frontend NAME, --candidate-frontend NAME
+                         run each side of compare/suite on its own
+                         frontend; with no --baseline, both sides use the
+                         candidate editor (compare two display backends)
+      --display WHERE    where lrg and pgtk windows go: headless (default;
+                         a private, invisible gowl compositor rendering
+                         on the GPU -- nothing appears on screen) or
+                         session (the current graphical session)
+      --lrg-spec SPEC    the --lrg SPEC for the lrg frontend (default 2d)
+      --env VAR=VALUE    add VAR to every sample's environment
+                         (repeatable), e.g. --env vblank_mode=0
       --counters         require perf counters (fail if perf cannot count)
       --no-counters      clocks only: no perf, nothing gated
       --native           native-compile the workloads instead of
@@ -152,6 +187,10 @@ Examples:
 
   # Everything, against budgets, through the Justfile:
   just perf-suite --baseline ../cmacs-base/src/emacs
+
+  # The terminal frontend against the libregnum one, same build:
+  ${PF_SELF} compare scrolling input-latency \\
+      --baseline-frontend tui --candidate-frontend lrg
 
   # Where does the time go in scrolling?
   ${PF_SELF} profile scrolling --iterations 50
@@ -402,34 +441,282 @@ pf_editor_command () {
 	local build="${3}"
 	local feature
 	# Native compilation in the background would be counted (perf counts
-	# children) and would differ between editors, so it is off; with
-	# --native the workloads' own .eln are put first on the load path.
+	# children) and would differ between editors, so it is off -- except
+	# in a priming run, whose job is to compile what the measured runs
+	# will load (see pf_prime).  With --native the workloads' own .eln
+	# are put first on the load path.
 	local prelude="(setq native-comp-jit-compilation nil)"
+
+	if [[ ${pf_priming} -eq 1 ]]
+	then
+		# Everything but the workloads themselves: they are measured as
+		# the bytecode pf_build made (or the .eln --native made).
+		prelude="(when (featurep (quote native-compile)) (require (quote comp-run)) (setq native-comp-jit-compilation t) (push (regexp-quote \"${build}/\") native-comp-jit-compilation-deny-list))"
+	fi
 
 	if [[ ${pf_native} -eq 1 ]]
 	then
 		prelude="(progn ${prelude} (push \"${build}/eln/\" native-comp-eln-load-path))"
 	fi
 
-	if [[ ${frontend} == tui ]]
-	then
-		printf '%s\0' "${editor}" -Q -nw
-	else
-		printf '%s\0' "${editor}" -Q --batch
-	fi
+	case "${frontend}" in
+		tui)
+			printf '%s\0' "${editor}" -Q -nw
+			;;
+		lrg)
+			# The libregnum backend, at the TUI's text grid so the two
+			# frontends lay out the same number of lines and columns.
+			printf '%s\0' "${editor}" -Q "--lrg=${pf_lrg_spec}" \
+				-fn "${PF_GUI_FONT}" -geometry "${PF_COLS}x${PF_ROWS}"
+			;;
+		pgtk)
+			# The stock GTK backend: the control for lrg, since both share
+			# Emacs's font stack (fontconfig, cairo, FreeType, HarfBuzz)
+			# and differ only in how glyphs reach the screen.
+			printf '%s\0' "${editor}" -Q -fn "${PF_GUI_FONT}" \
+				-geometry "${PF_COLS}x${PF_ROWS}"
+			;;
+		*)
+			printf '%s\0' "${editor}" -Q --batch
+			;;
+	esac
 	printf '%s\0' -L "${build}" --eval "${prelude}"
+	if [[ ${frontend} == lrg || ${frontend} == pgtk ]]
+	then
+		# No menu, tool or scroll bars: pgtk has them and lrg does not,
+		# and they would take lines from one side only.
+		printf '%s\0' --eval \
+			"(progn (menu-bar-mode -1) (tool-bar-mode -1) (scroll-bar-mode -1))"
+	fi
 	while IFS= read -r feature
 	do
 		printf '%s\0' -l "${feature}"
 	done < <(pf_features)
+	if [[ ${frontend} == batch ]]
+	then
+		printf '%s\0' -f cmacs-perf-main
+	else
+		# After startup, once the first frame exists, has been drawn and (on
+		# a window system) has stopped being mapped and resized.
+		printf '%s\0' --eval \
+			"(add-hook 'emacs-startup-hook (lambda () (run-at-time 0 nil #'cmacs-perf-main-when-settled)))"
+	fi
+}
+
+# pf_child_env FRONTEND DIR WORKLOAD -- print, NUL-separated, the
+# environment a sample runs with (for `env -i').
+#
+# Clean and reproducible: no user configuration, a fixed locale and
+# zone, a private HOME.  batch and tui get no display and no session
+# bus, so nothing reaches the live desktop.  lrg and pgtk need a window,
+# so they alone are handed the display variables and open one on the
+# current session.  --env entries come last and win.
+pf_child_env () {
+	if [[ $# -ne 3 ]]
+	then
+		pf_die 'pf_child_env() requires 3 positional arguments: pf_child_env <frontend> <dir> <workload>'
+	fi
+
+	local frontend="${1}"
+	local dir="${2}"
+	local workload="${3}"
+	local name entry
+
+	printf '%s\0' "HOME=${dir}/home" "PATH=${PATH}" "LANG=C.UTF-8" \
+		"LC_ALL=C.UTF-8" "TZ=UTC" \
+		"CMACS_PERF_WORKLOAD=${workload}" \
+		"CMACS_PERF_RESULT=${dir}/result.json" \
+		"CMACS_PERF_DATA=${pf_session}/data" \
+		"CMACS_PERF_ITERATIONS=$( [[ ${pf_priming} -eq 1 ]] && printf 1 || printf '%s' "${pf_iterations}")"
+	if [[ ${pf_priming} -eq 1 ]]
+	then
+		printf '%s\0' "CMACS_PERF_PRIME=1"
+	fi
+	case "${frontend}" in
+		tui) printf '%s\0' "TERM=${PF_TERM}" ;;
+		*) printf '%s\0' "TERM=dumb" ;;
+	esac
+	if [[ ${frontend} == lrg || ${frontend} == pgtk ]]
+	then
+		if [[ ${pf_display} == headless ]]
+		then
+			printf '%s\0' "XDG_RUNTIME_DIR=${pf_headless_runtime}" \
+				"WAYLAND_DISPLAY=${pf_headless_socket}" \
+				"XDG_SESSION_TYPE=wayland"
+		else
+			for name in WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR XAUTHORITY \
+				XDG_SESSION_TYPE
+			do
+				if [[ -n ${!name:-} ]]
+				then
+					printf '%s\0' "${name}=${!name}"
+				fi
+			done
+		fi
+	fi
+	for entry in "${pf_extra_env[@]}"
+	do
+		printf '%s\0' "${entry}"
+	done
+}
+
+# pf_launch FRONTEND EDITOR DIR COMMAND... -- run COMMAND (perf and the
+# editor beneath it) the way FRONTEND needs: in a sized pseudo-terminal
+# for tui, directly under timeout(1) otherwise.  Returns its status.
+pf_launch () {
+	if [[ $# -lt 4 ]]
+	then
+		pf_die 'pf_launch() requires at least 4 positional arguments: pf_launch <frontend> <editor> <dir> <command>...'
+	fi
+
+	local frontend="${1}"
+	local editor="${2}"
+	local dir="${3}"
+
+	shift 3
 	if [[ ${frontend} == tui ]]
 	then
-		# After startup, once the first frame exists and has been drawn.
-		printf '%s\0' --eval \
-			"(add-hook 'emacs-startup-hook (lambda () (run-at-time 0 nil #'cmacs-perf-main)))"
+		"${editor}" -Q --batch -l "${PF_LIB}/cmacs-perf-pty.el" -- \
+			"${PF_ROWS}" "${PF_COLS}" "${dir}/tty.log" "${pf_timeout}" \
+			"$@" 2>"${dir}/stderr.log"
 	else
-		printf '%s\0' -f cmacs-perf-main
+		timeout --kill-after=10 "${pf_timeout}" "$@" \
+			</dev/null >"${dir}/stdout.log" 2>"${dir}/stderr.log"
 	fi
+}
+
+# ---------------------------------------------------------------------
+# The headless display
+# ---------------------------------------------------------------------
+
+# pf_headless_start -- start a private, invisible Wayland compositor for
+# the graphical frontends (lrg, pgtk) and remember its socket.
+#
+# A graphical sample needs a window, and windows on the user's own
+# session pop up over whatever they are doing -- dozens per comparison.
+# So by default the samples get a compositor of their own: gowl from
+# this tree with the headless wlroots backend.  Nothing reaches a screen,
+# but rendering still goes through the GPU (WLR_RENDERER=gles2 on the
+# render node), so lrg is measured on real hardware GL rather than
+# llvmpipe, which is what an Xvfb would give it.  One rule floats every
+# window, so the two backends get the same default size (tiling would
+# size them by how many windows are open).  The runtime directory is short and lives in
+# $XDG_RUNTIME_DIR: a socket path must fit in 108 bytes.
+pf_headless_start () {
+	local gowl="${CMACS_PERF_GOWL:-${PF_ROOT}/deps/gowl/build/release/gowl}"
+	local base="${XDG_RUNTIME_DIR:-/tmp}"
+	local i
+
+	[[ -n ${pf_headless_pid} ]] && return 0
+	[[ -x ${gowl} ]] \
+		|| pf_die "no gowl at ${gowl} for the headless display (build deps/gowl, set CMACS_PERF_GOWL, or use --display session)"
+	pf_headless_runtime="$(mktemp -d -p "${base}" cmacs-perf-XXXXXX)" \
+		|| pf_die "cannot create a runtime directory under ${base}"
+	chmod 700 -- "${pf_headless_runtime}"
+	printf 'rules:\n  - app_id: "*"\n    floating: true\n    no-anim: true\nautostart: []\n' \
+		>"${pf_headless_runtime}/gowl.yaml"
+
+	env -i "HOME=${pf_headless_runtime}" "PATH=${PATH}" \
+		"XDG_RUNTIME_DIR=${pf_headless_runtime}" GOWL_DISABLE_SYSTEMD=1 \
+		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=gles2 \
+		"LD_LIBRARY_PATH=${gowl%/*}" \
+		"${gowl}" --no-c-config --config "${pf_headless_runtime}/gowl.yaml" \
+		>"${pf_headless_runtime}/compositor.log" 2>&1 &
+	pf_headless_pid=$!
+
+	# Wait for the socket rather than sleeping a guess.
+	for (( i = 0; i < 100; i++ ))
+	do
+		pf_headless_socket="$(find "${pf_headless_runtime}" -maxdepth 1 \
+			-name 'wayland-[0-9]*' ! -name '*.lock' -printf '%f\n' | head -n1)"
+		[[ -n ${pf_headless_socket} ]] && break
+		kill -0 "${pf_headless_pid}" 2>/dev/null || break
+		sleep 0.1
+	done
+	if [[ -z ${pf_headless_socket} ]]
+	then
+		cat -- "${pf_headless_runtime}/compositor.log" >&2
+		pf_die "the headless compositor never opened a socket"
+	fi
+	pf_say "display: headless gowl (pid ${pf_headless_pid}, ${pf_headless_socket})"
+}
+
+# shellcheck disable=SC2329  # invoked by the EXIT trap
+# pf_headless_stop -- stop the compositor this run started (by its PID,
+# never by name) and remove its runtime directory.
+pf_headless_stop () {
+	if [[ -n ${pf_headless_pid} ]]
+	then
+		kill -TERM "${pf_headless_pid}" 2>/dev/null
+		wait "${pf_headless_pid}" 2>/dev/null
+		pf_headless_pid=""
+	fi
+	if [[ -n ${pf_headless_runtime} && -d ${pf_headless_runtime} ]]
+	then
+		rm -rf -- "${pf_headless_runtime}"
+	fi
+}
+
+# pf_home LABEL DIR -- create DIR/home with the session's eln-cache for
+# LABEL's editor linked in.
+#
+# Every sample gets a private HOME, but the eln-cache inside it is one
+# directory per editor per session.  Lisp that is not in the dump and
+# has no ahead-of-time .eln is native-compiled when first loaded; with a
+# fresh cache per sample that happened in EVERY sample, as child
+# processes inside the counted window (~20% of a profile, in libgccjit
+# and ld).  A shared cache filled by pf_prime is what a user's warm
+# cache looks like.  Each editor keeps its own: .eln files are tied to
+# the build that compiled them.
+pf_home () {
+	if [[ $# -ne 2 ]]
+	then
+		pf_die 'pf_home() requires 2 positional arguments: pf_home <label> <dir>'
+	fi
+
+	local label="${1}"
+	local dir="${2}"
+
+	mkdir -p -- "${dir}/home/.emacs.d" "${pf_session}/eln-${label}" || return 1
+	ln -sfn -- "${pf_session}/eln-${label}" "${dir}/home/.emacs.d/eln-cache"
+}
+
+# pf_prime LABEL EDITOR BUILD FRONTEND WORKLOAD
+#
+# Run WORKLOAD once, untimed and uncounted, with native compilation ON,
+# and let every compilation it starts finish before it exits, so the
+# measured runs that follow load native code from LABEL's eln-cache
+# instead of compiling it.  Once per (label, frontend, workload) per
+# session.  A failed priming run is reported but not fatal: the measured
+# run refuses itself if a compilation is still active in its window.
+pf_prime () {
+	if [[ $# -ne 5 ]]
+	then
+		pf_die 'pf_prime() requires 5 positional arguments: pf_prime <label> <editor> <build> <frontend> <workload>'
+	fi
+
+	local label="${1}"
+	local editor="${2}"
+	local build="${3}"
+	local frontend="${4}"
+	local workload="${5}"
+	local key="${label}/${frontend}/${workload}"
+	local dir="${pf_session}/prime/${label}-${frontend}-${workload}"
+	local -a argv=() env_args=()
+
+	[[ -z ${PF_PRIMED[${key}]:-} ]] || return 0
+	PF_PRIMED[${key}]=1
+	pf_home "${label}" "${dir}" || return 1
+	pf_priming=1
+	mapfile -d '' -t argv < <(pf_editor_command "${frontend}" "${editor}" "${build}")
+	mapfile -d '' -t env_args < <(pf_child_env "${frontend}" "${dir}" "${workload}")
+	pf_priming=0
+	pf_say "prime: ${workload} ${label} (${frontend})"
+	if ! pf_launch "${frontend}" "${editor}" "${dir}" env -i "${env_args[@]}" "${argv[@]}"
+	then
+		pf_warn "prime: ${workload} ${label} (${frontend}) did not finish cleanly; see ${dir}"
+	fi
+	return 0
 }
 
 # pf_sample WORKLOAD LABEL N EDITOR BUILD FRONTEND DIR
@@ -456,22 +743,11 @@ pf_sample () {
 	local reported exit_code load
 	local instructions="" cycles="" branch_misses="" task_clock=""
 
-	mkdir -p -- "${dir}/home" || return 1
+	pf_home "${label}" "${dir}" || return 1
 	mapfile -d '' -t argv < <(pf_editor_command "${frontend}" "${editor}" "${build}")
 
-	# A clean, reproducible environment: no display, no session bus, no
-	# user configuration, a fixed locale and zone.
-	env_args=(env -i
-		"HOME=${dir}/home"
-		"PATH=${PATH}"
-		"LANG=C.UTF-8"
-		"LC_ALL=C.UTF-8"
-		"TZ=UTC"
-		"TERM=$([[ ${frontend} == tui ]] && printf '%s' "${PF_TERM}" || printf dumb)"
-		"CMACS_PERF_WORKLOAD=${workload}"
-		"CMACS_PERF_RESULT=${dir}/result.json"
-		"CMACS_PERF_DATA=${pf_session}/data"
-		"CMACS_PERF_ITERATIONS=${pf_iterations}")
+	mapfile -d '' -t env_args < <(pf_child_env "${frontend}" "${dir}" "${workload}")
+	env_args=(env -i "${env_args[@]}")
 
 	if [[ -n ${pf_cpu} ]]
 	then
@@ -492,17 +768,8 @@ pf_sample () {
 	wrapped+=("${env_args[@]}" "${argv[@]}")
 
 	load="$(cut -d' ' -f1 /proc/loadavg)"
-	if [[ ${frontend} == tui ]]
-	then
-		"${editor}" -Q --batch -l "${PF_LIB}/cmacs-perf-pty.el" -- \
-			"${PF_ROWS}" "${PF_COLS}" "${dir}/tty.log" "${pf_timeout}" \
-			"${wrapped[@]}" 2>"${dir}/stderr.log"
-		exit_code=$?
-	else
-		timeout --kill-after=10 "${pf_timeout}" "${wrapped[@]}" \
-			</dev/null >"${dir}/stdout.log" 2>"${dir}/stderr.log"
-		exit_code=$?
-	fi
+	pf_launch "${frontend}" "${editor}" "${dir}" "${wrapped[@]}"
+	exit_code=$?
 
 	# The verdict comes from the result file, and must agree with the
 	# exit status: a result that says ok from a process that died is not
@@ -741,6 +1008,7 @@ pf_cmd_run () {
 	do
 		frontend="$(pf_frontend_for "${build}/catalog.tsv" "${workload}")"
 		dir="${pf_session}/${workload}/editor-1"
+		pf_prime editor "${pf_editor}" "${build}" "${frontend}" "${workload}"
 		pf_say "run: ${workload} (${frontend})"
 		if pf_sample "${workload}" editor 1 "${pf_editor}" "${build}" "${frontend}" "${dir}"
 		then
@@ -781,7 +1049,7 @@ pf_compare_workload () {
 
 	local workload="${1}"
 	local catalog="${2}"
-	local frontend i first second label editor
+	local frontend base_frontend cand_frontend i first second label editor
 	local valid=1
 	local primary metric declared
 	local -a metrics=(cpu_us wall_us cpu_ns_per_op gcs_done)
@@ -789,6 +1057,10 @@ pf_compare_workload () {
 	local primary_change="invalid"
 
 	frontend="$(pf_frontend_for "${catalog}" "${workload}")"
+	# Each side may run another frontend (--baseline-frontend tui
+	# --candidate-frontend lrg compares two display backends of one build).
+	base_frontend="${pf_baseline_frontend:-${frontend}}"
+	cand_frontend="${pf_candidate_frontend:-${frontend}}"
 	if [[ ${pf_counters} == on ]]
 	then
 		metrics=(cycles instructions branch_misses "${metrics[@]}")
@@ -805,6 +1077,11 @@ pf_compare_workload () {
 		primary="primary"
 	fi
 
+	pf_prime baseline "${pf_baseline}" "${pf_session}/build-baseline" \
+		"${base_frontend}" "${workload}"
+	pf_prime candidate "${pf_candidate}" "${pf_session}/build-candidate" \
+		"${cand_frontend}" "${workload}"
+
 	# Alternate which editor goes first, so slow drift (thermal, a
 	# background build ramping up) lands on both sides equally.
 	for (( i = 1; i <= pf_samples; i++ ))
@@ -819,9 +1096,9 @@ pf_compare_workload () {
 		do
 			if [[ ${label} == baseline ]]
 			then
-				editor="${pf_baseline}"
+				editor="${pf_baseline}" frontend="${base_frontend}"
 			else
-				editor="${pf_candidate}"
+				editor="${pf_candidate}" frontend="${cand_frontend}"
 			fi
 			pf_say "compare: ${workload} ${label} ${i}/${pf_samples} (${frontend})"
 			pf_sample "${workload}" "${label}" "${i}" "${editor}" \
@@ -832,7 +1109,7 @@ pf_compare_workload () {
 
 	{
 		printf '  - workload: %s\n' "${workload}"
-		printf '    frontend: %s\n' "${frontend}"
+		printf '    frontend: {baseline: %s, candidate: %s}\n' "${base_frontend}" "${cand_frontend}"
 		printf '    samples: %d\n' "${pf_samples}"
 		printf '    primary: %s\n' "$([[ ${primary} == primary ]] && printf '%s' "${declared}" || printf '%s' "${primary}")"
 	} >>"${pf_session}/summary.yaml"
@@ -875,6 +1152,11 @@ pf_compare_workload () {
 pf_compare_prepare () {
 	local command="${1}"
 
+	# Comparing two frontends of one build needs no second editor.
+	if [[ -z ${pf_baseline} && ( -n ${pf_baseline_frontend} || -n ${pf_candidate_frontend} ) ]]
+	then
+		pf_baseline="${pf_candidate}"
+	fi
 	[[ -n ${pf_baseline} ]] || pf_die "${command}: --baseline is required"
 	[[ ${pf_samples} -ge 3 ]] || pf_die "${command}: --samples must be at least 3"
 	pf_resolve_counters
@@ -962,16 +1244,14 @@ pf_cmd_profile () {
 	pf_catalog "${pf_editor}" "${build}" >/dev/null || exit 1
 	pf_check_workloads "${build}/catalog.tsv" "${workload}"
 	frontend="$(pf_frontend_for "${build}/catalog.tsv" "${workload}")"
+	pf_prime editor "${pf_editor}" "${build}" "${frontend}" "${workload}"
 	dir="${pf_session}/${workload}/profile"
-	mkdir -p -- "${dir}/home" || exit 1
+	pf_home editor "${dir}" || exit 1
 	mkfifo -- "${dir}/ctl" "${dir}/ack" || exit 1
 
 	mapfile -d '' -t argv < <(pf_editor_command "${frontend}" "${pf_editor}" "${build}")
-	env_args=(env -i "HOME=${dir}/home" "PATH=${PATH}" "LANG=C.UTF-8"
-		"LC_ALL=C.UTF-8" "TZ=UTC"
-		"TERM=$([[ ${frontend} == tui ]] && printf '%s' "${PF_TERM}" || printf dumb)"
-		"CMACS_PERF_WORKLOAD=${workload}" "CMACS_PERF_RESULT=${dir}/result.json"
-		"CMACS_PERF_DATA=${pf_session}/data" "CMACS_PERF_ITERATIONS=${pf_iterations}"
+	mapfile -d '' -t env_args < <(pf_child_env "${frontend}" "${dir}" "${workload}")
+	env_args=(env -i "${env_args[@]}"
 		"CMACS_PERF_CTL=${dir}/ctl" "CMACS_PERF_ACK=${dir}/ack")
 	if [[ -n ${pf_cpu} ]]
 	then
@@ -987,15 +1267,7 @@ pf_cmd_profile () {
 		"${env_args[@]}" "${argv[@]}")
 
 	pf_say "profile: ${workload} (${frontend})"
-	if [[ ${frontend} == tui ]]
-	then
-		"${pf_editor}" -Q --batch -l "${PF_LIB}/cmacs-perf-pty.el" -- \
-			"${PF_ROWS}" "${PF_COLS}" "${dir}/tty.log" "${pf_timeout}" \
-			"${wrapped[@]}" 2>"${dir}/stderr.log"
-	else
-		timeout --kill-after=10 "${pf_timeout}" "${wrapped[@]}" \
-			</dev/null >"${dir}/stdout.log" 2>"${dir}/stderr.log"
-	fi
+	pf_launch "${frontend}" "${pf_editor}" "${dir}" "${wrapped[@]}"
 	if [[ "$(yq -p json -o yaml -r '.status' "${dir}/result.json" 2>/dev/null)" != ok ]]
 	then
 		pf_warn "profile: the workload did not complete correctly; see ${dir}"
@@ -1013,7 +1285,7 @@ pf_cmd_profile () {
 # ---------------------------------------------------------------------
 
 pf_main () {
-	local command=""
+	local command="" frontend entry tool
 	local -a workloads=()
 
 	while [[ $# -gt 0 ]]
@@ -1024,7 +1296,12 @@ pf_main () {
 			-c|--candidate) pf_candidate="${2:?--candidate needs a path}"; shift 2 ;;
 			-n|--iterations) pf_iterations="${2:?--iterations needs a number}"; shift 2 ;;
 			-s|--samples) pf_samples="${2:?--samples needs a number}"; shift 2 ;;
-			-f|--frontend) pf_frontend="${2:?--frontend needs batch or tui}"; shift 2 ;;
+			-f|--frontend) pf_frontend="${2:?--frontend needs batch, tui, lrg or pgtk}"; shift 2 ;;
+			--baseline-frontend) pf_baseline_frontend="${2:?--baseline-frontend needs a frontend}"; shift 2 ;;
+			--candidate-frontend) pf_candidate_frontend="${2:?--candidate-frontend needs a frontend}"; shift 2 ;;
+			--display) pf_display="${2:?--display needs headless or session}"; shift 2 ;;
+			--lrg-spec) pf_lrg_spec="${2:?--lrg-spec needs a SPEC}"; shift 2 ;;
+			--env) pf_extra_env+=("${2:?--env needs VAR=VALUE}"); shift 2 ;;
 			--counters) pf_counters="on"; shift ;;
 			--no-counters) pf_counters="off"; shift ;;
 			--native) pf_native=1; shift ;;
@@ -1064,10 +1341,22 @@ pf_main () {
 	[[ ${pf_timeout} =~ ^[1-9][0-9]*$ ]] || pf_die "--timeout must be a positive integer"
 	[[ -z ${pf_cpu} || ${pf_cpu} =~ ^[0-9]+$ ]] || pf_die "--cpu must be a CPU number"
 	[[ -z ${pf_budget} || ${pf_budget} =~ ^[0-9]+([.][0-9]+)?$ ]] || pf_die "--budget must be a number"
-	case "${pf_frontend}" in
-		""|batch|tui) ;;
-		*) pf_die "--frontend must be batch or tui" ;;
+	for frontend in "${pf_frontend}" "${pf_baseline_frontend}" "${pf_candidate_frontend}"
+	do
+		case "${frontend}" in
+			""|batch|tui|lrg|pgtk) ;;
+			*) pf_die "a frontend must be batch, tui, lrg or pgtk, not '${frontend}'" ;;
+		esac
+	done
+	for entry in "${pf_extra_env[@]}"
+	do
+		[[ ${entry} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || pf_die "--env takes VAR=VALUE, not '${entry}'"
+	done
+	case "${pf_display}" in
+		headless|session) ;;
+		*) pf_die "--display must be headless or session" ;;
 	esac
+	[[ ${pf_lrg_spec} =~ ^[a-z0-9:_-]+$ ]] || pf_die "--lrg-spec '${pf_lrg_spec}' is not a --lrg SPEC"
 	for tool in yq awk column sha256sum timeout
 	do
 		command -v "${tool}" >/dev/null 2>&1 || pf_die "${tool} is required"
@@ -1081,6 +1370,18 @@ pf_main () {
 	pf_source="$(realpath -- "${pf_source}")" || pf_die "no source file at ${pf_source}"
 	mkdir -p -- "${pf_out}" || pf_die "cannot create ${pf_out}"
 	pf_out="$(realpath -- "${pf_out}")"
+
+	# A graphical frontend is only ever chosen explicitly, so this is the
+	# one place that knows a display is needed.  Started here, not in
+	# pf_child_env: that runs in a subshell and its compositor would
+	# outlive the variables that name it.
+	if [[ ${pf_display} == headless && ( ${pf_frontend} == lrg || ${pf_frontend} == pgtk
+		|| ${pf_baseline_frontend} == lrg || ${pf_baseline_frontend} == pgtk
+		|| ${pf_candidate_frontend} == lrg || ${pf_candidate_frontend} == pgtk ) ]]
+	then
+		trap pf_headless_stop EXIT
+		pf_headless_start
+	fi
 
 	case "${command}" in
 		list) pf_cmd_list ;;
