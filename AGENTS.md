@@ -95,7 +95,7 @@ The steps by hand:
             --with-cmacs-handtrack \
             --with-cmacs-ai-brigade \
             --enable-cmacs-cpatch \
-            --enable-cmacs-deps-debug  # in-house deps -O0 -g3 DWARF (gdb + cintrospect); full set: README.org
+            --enable-cmacs-deps-debug  # in-house deps -O0 -g3 DWARF (gdb + cintrospect), libregnum stays -O2 (CMACS_LIBREGNUM_BUILDTYPE); full set: README.org
 make -j$(nproc)           # builds deps + emacs
 just run                  # run it
 ```

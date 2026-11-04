@@ -13576,6 +13576,14 @@ fully-featured build matching Fedora defaults, use:
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example
 
+libregnum (with the graylib it builds) is the exception to
+@option{--enable-cmacs-deps-debug}: it is built @code{-O2} because it is
+the whole render path of the lrg display backend and nothing introspects
+it.  @code{CMACS_LIBREGNUM_BUILDTYPE=debug ./configure ...} builds it
+@code{-O0 -g3} again; after switching, clean graylib
+(@code{make -C deps/libregnum/deps/graylib clean}, whose @file{build/}
+is not split by type) and remove @file{liblibregnum.a}.
+
 @noindent
 To install somewhere other than @file{/usr/local}, pass
 @option{--prefix} at configure time.  For example, to install under

@@ -126,7 +126,18 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-spacemouse=    | SpaceMouse / 6DOF input via spacenavd (libspnav when found): orbit/pan/zoom libregnum scenes, the 3D lrg frame and the VR viewer; buttons as =<spacemouse-N>= (requires glib) |
 | =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
-| =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default |
+| =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default.  Not libregnum: see below |
+| =CMACS_LIBREGNUM_BUILDTYPE=   | libregnum + its graylib: =release= (default, -O2) or =debug= (-O0 -g3 -DLRG_DEBUG) |
+
+libregnum is built =-O2= even under =--enable-cmacs-deps-debug=: it is
+the whole render path of the lrg display backend (every glyph quad goes
+through it and graylib) and nothing introspects it.  Its sub-dep
+lookups (cad-glib, ai-glib, crispy) still follow the deps' build type,
+passed in as =DEP_BUILD_TYPE=.  =CMACS_LIBREGNUM_BUILDTYPE=debug
+./configure ...= puts it back at =-O0= for gdb.  graylib builds into one
+unsplit =build/= directory, so after switching either way clean it
+(=make -C deps/libregnum/deps/graylib clean=) and remove the
+libregnum archive, or the fat archive keeps the other build's objects.
 
 Example with explicit flags:
 

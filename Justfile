@@ -36,6 +36,11 @@ gowl_deps   := "YAMLGLIB_DIR=" + justfile_directory() + "/deps/yaml-glib CRISPY_
 # (release-deps) build.  graylib always builds to build/ (not split).
 dep_buildtype := "debug"
 
+# libregnum (and its graylib) is release even when the other deps are
+# debug: it is the lrg render path and nothing introspects it.  Keep in
+# step with CMACS_LIBREGNUM_BUILDTYPE (configure.ac).
+libregnum_buildtype := "release"
+
 # Local-build launch environment shared by every "run cmacs" recipe.
 # Points cmacs at the freshly-built bacon/gsurf/gowl modules (and the
 # libregnum/graylib typelibs) so local testing never loads a
@@ -53,7 +58,7 @@ local_env := \
     "GOWL_MENU_FILE=" + justfile_directory() + "/deps/gowl/data/menu.yaml " + \
     "CMACS_SCREENSAVER_MODULE_DIR=" + justfile_directory() + "/deps/screensavers/build/" + dep_buildtype + " " + \
     "CMACS_SCREENSAVER_RENDER_BIN=" + justfile_directory() + "/src/cmacs-screensaver-render " + \
-    "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/" + dep_buildtype + "/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+    "GI_TYPELIB_PATH=" + justfile_directory() + "/deps/libregnum/build/" + libregnum_buildtype + "/gir:" + justfile_directory() + "/deps/libregnum/deps/graylib/build/gir${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
 
 # Android build settings.  Override per-invocation:
 #   just android_image_tag=foo:dev android-build

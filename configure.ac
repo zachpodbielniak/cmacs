@@ -729,6 +729,24 @@ CMACS_DEP_BUILDTYPE=$cmacs_dep_buildtype
 AC_SUBST([CMACS_DEP_BUILDTYPE])
 AC_SUBST([CMACS_DEP_MAKEFLAGS])
 
+# CMACS: libregnum (and the graylib it builds) is release (-O2) even
+# under --enable-cmacs-deps-debug.  It is the whole render path of the
+# lrg display backend, nothing introspects it, and at -O0 with
+# LRG_DEBUG every glyph quad paid for it.  CMACS_LIBREGNUM_BUILDTYPE=debug
+# at configure time puts it back.  Its sub-dep lookups (cad-glib,
+# ai-glib, crispy) still follow the deps' build type through
+# DEP_BUILD_TYPE (see src/Makefile.in), so the two can differ.
+AC_ARG_VAR([CMACS_LIBREGNUM_BUILDTYPE],
+  [libregnum/graylib build type: release (default, -O2) or debug (-O0 -g3)])
+: ${CMACS_LIBREGNUM_BUILDTYPE:=release}
+case "$CMACS_LIBREGNUM_BUILDTYPE" in
+  release) CMACS_LIBREGNUM_MAKEFLAGS="DEBUG=0" ;;
+  debug)   CMACS_LIBREGNUM_MAKEFLAGS="DEBUG=1" ;;
+  *) AC_MSG_ERROR([CMACS_LIBREGNUM_BUILDTYPE must be release or debug, not '$CMACS_LIBREGNUM_BUILDTYPE']) ;;
+esac
+AC_SUBST([CMACS_LIBREGNUM_BUILDTYPE])
+AC_SUBST([CMACS_LIBREGNUM_MAKEFLAGS])
+
 # CMACS: pkg-config checks when enabled
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
@@ -1124,7 +1142,7 @@ if test "$with_cmacs_libregnum" != "no"; then
   PKG_CHECK_MODULES([CMACS_LIBREGNUM_DEPS],
     [glib-2.0 gobject-2.0 gio-2.0 cairo libdex-1 zlib libpq openssl sqlite3])
   CMACS_LIBREGNUM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
-    -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/$CMACS_LIBREGNUM_BUILDTYPE \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
     -I\$(abs_top_srcdir)/deps/yaml-glib/src \
@@ -1164,7 +1182,7 @@ if test "$with_cmacs_libregnum" != "no"; then
   # by a loaded module at runtime.
   CMACS_LIBREGNUM_LIBS="-Wl,--allow-multiple-definition \
     -Wl,--whole-archive \
-    \$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype/lib/liblibregnum.a \
+    \$(abs_top_srcdir)/deps/libregnum/build/$CMACS_LIBREGNUM_BUILDTYPE/lib/liblibregnum.a \
     -Wl,--no-whole-archive \
     -lGL -lm -lpthread -ldl -lrt -lX11 \
     $CMACS_LIBREGNUM_DEPS_LIBS"
@@ -1202,7 +1220,7 @@ if test "$with_cmacs_lrgterm" != "no"; then
   # define LIBREGNUM_COMPILATION.  raylib/graylib symbols come from the libregnum
   # archive already on the link line via CMACS_LIBREGNUM_LIBS.
   CMACS_LRGTERM_CFLAGS="-I\$(abs_top_srcdir)/deps/libregnum/src \
-    -I\$(abs_top_srcdir)/deps/libregnum/build/$cmacs_dep_buildtype \
+    -I\$(abs_top_srcdir)/deps/libregnum/build/$CMACS_LIBREGNUM_BUILDTYPE \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/src \
     -I\$(abs_top_srcdir)/deps/libregnum/deps/graylib/deps/raylib/src \
     $CMACS_LIBREGNUM_DEPS_CFLAGS"
