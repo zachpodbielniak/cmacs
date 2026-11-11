@@ -132,7 +132,10 @@ No longer used: the shared engine drains every
 (declare-function cmacs-piper-supported-p "cmacs-piper-defuns.c")
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c")
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
-(declare-function cmacs-voice-confirm "cmacs-voice-commands" (prompt action))
+;; An autoload, not a declare-function: the voice commands load on the
+;; first confirmation (the call site also requires them), and an autoload
+;; says so -- the function is bound from the moment this file loads.
+(autoload 'cmacs-voice-confirm "cmacs-voice-commands")
 (defvar cmacs-voice-confirm-destructive)
 (declare-function cmacs-brigade-plan-mode "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-append-task "cmacs-brigade-plan"
