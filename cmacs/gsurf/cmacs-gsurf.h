@@ -45,6 +45,14 @@ extern bool cmacs_gsurf_available_p (void);
 /* ── Per-buffer view registry + lifecycle (cmacs-gsurf-view.c) ──────── */
 
 extern CmacsGsurfView *cmacs_gsurf_view_new        (Lisp_Object buffer);
+/* Like cmacs_gsurf_view_new, recording OPENER (or NULL) as the view this
+   one was opened from, and requesting CONTAINER_ID (NULL, a container id,
+   "temporary" or "default") as its browsing container.  URI (or NULL) is
+   only a placement hint for the container resolver; it is not loaded. */
+extern CmacsGsurfView *cmacs_gsurf_view_new_full   (Lisp_Object buffer,
+                                                    CmacsGsurfView *opener,
+                                                    const char *container_id,
+                                                    const char *uri);
 extern void            cmacs_gsurf_view_destroy    (CmacsGsurfView *v);
 extern CmacsGsurfView *cmacs_gsurf_view_for_buffer (Lisp_Object buffer);
 extern Lisp_Object     cmacs_gsurf_view_buffer     (CmacsGsurfView *v);
@@ -93,6 +101,44 @@ extern void cmacs_gsurf_emacs_eval_async (const char *elisp);
    evaluated).  Defined in cmacs-gsurf-view.c. */
 extern void cmacs_gsurf_js_message (void *gsurf_view, const char *message);
 
+/* ── Synthetic page input (cmacs-gsurf-view.c) ──────────────────────── */
+
+/* Input kinds for cmacs_gsurf_view_send_input. */
+enum
+{
+  CMACS_GSURF_INPUT_KEY   = 0,  /* CODE = keysym, MODS = GsurfKeyMod flags */
+  CMACS_GSURF_INPUT_CLICK = 1,  /* X/Y = CSS px, CODE = button, MODS */
+  CMACS_GSURF_INPUT_TEXT  = 2   /* TEXT = UTF-8, typed key by key */
+};
+
+/* GsurfKeyMod flag values, mirrored so the GTK-free defun layer can build
+   a modifier mask without gsurf.h (checked against gsurf-enums.h by a
+   static assertion in cmacs-gsurf-control.c). */
+#define CMACS_GSURF_MOD_SHIFT (1u << 0)
+#define CMACS_GSURF_MOD_CTRL  (1u << 1)
+#define CMACS_GSURF_MOD_ALT   (1u << 2)
+#define CMACS_GSURF_MOD_SUPER (1u << 3)
+
+/* Deliver one key / click / text run to V's page as trusted native input
+   (GTK3), borrowing keyboard focus for the call and handing it back to
+   Emacs afterwards unless the user had focused the page.  Returns true on
+   delivery; on failure sets *ERR_OUT (if non-NULL) to a g_malloc'd
+   message, free with cmacs_gsurf_string_free. */
+extern bool cmacs_gsurf_view_send_input (CmacsGsurfView *v, int kind,
+                                         double x, double y,
+                                         unsigned int code, unsigned int mods,
+                                         const char *text, char **err_out);
+/* The keysym for a key NAME ("Enter", "Tab", "ArrowLeft", "a", ...), or 0
+   when NAME is not a key (gsurf_view_keyval_from_name). */
+extern unsigned int cmacs_gsurf_keyval_from_name (const char *name);
+
+/* ── Control surface (cmacs-gsurf-control.c) ────────────────────────── */
+
+/* Connect the module manager's process-wide signals (input-mode changes)
+   to Emacs.  Idempotent; called from cmacs_gsurf_runtime_ensure after the
+   modules are loaded. */
+extern void cmacs_gsurf_control_init (void);
+
 /* ── Downloads (cmacs-gsurf-downloads.c) ────────────────────────────── */
 
 /* Wire download tracking onto the process-global default WebKitWebContext
@@ -102,6 +148,12 @@ extern void cmacs_gsurf_js_message (void *gsurf_view, const char *message);
 extern void cmacs_gsurf_downloads_init   (void);
 /* Cancel the in-flight download with integer ID (no-op if unknown). */
 extern void cmacs_gsurf_download_cancel  (unsigned int id);
+/* Also track downloads on SESSION, a view's native session (a
+   WebKitWebContext, as void*; NULL means the default context, which
+   cmacs_gsurf_downloads_init already covers).  Views in a non-default
+   container browse in their own context, so each is connected once
+   (idempotent per context). */
+extern void cmacs_gsurf_downloads_track_session (void *session);
 
 /* ── Permissions (cmacs-gsurf-permissions.c) ────────────────────────── */
 

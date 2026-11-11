@@ -66,6 +66,13 @@ struct CmacsGsurfView
    * Elisp focus logic reliable. */
   gboolean     focused;
 
+  /* TRUE only while cmacs_gsurf_view_send_input is delivering synthetic
+   * (agent / command) input to the page.  on_view_key_press then lets the
+   * key straight through to WebKit: it is page input, not a command for
+   * the modal module, and it must not trip the "page grabbed focus behind
+   * our back" safety net or the Escape handoff. */
+  gboolean     injecting;
+
   /* libregnum (--lrg) backend: there is no GtkWidget; the page is rendered
    * to a GrlTexture and composited by lrgterm into the buffer's window rect.
    * `is_lrg' selects that path in place/hide/focus/etc.; lrg_w/lrg_h are the
@@ -265,12 +272,54 @@ on_create_view (GsurfView *view, const gchar *uri, gpointer user)
   if (uri && *uri)
     {
       char *lit  = el_string (uri);
-      char *form = g_strdup_printf ("(cmacs-gsurf--open-popup %s)", lit);
+      /* Pass the opener's gsurf view id so the popup buffer is created
+       * with this view as its opener (tab tree + the containers module's
+       * inherit_opener).  An id, not a buffer: the form runs later, from
+       * an idle, and the opener may be gone by then. */
+      char *form = g_strdup_printf ("(cmacs-gsurf--open-popup %s %" G_GUINT64_FORMAT ")",
+                                    lit, gsurf_view_get_id (v->view));
       cmacs_gsurf_emacs_eval_async (form);
       g_free (form);
       g_free (lit);
     }
   return NULL;
+}
+
+/* "Open Link in New Tab" from the page context menu (and any module that
+ * calls gsurf_view_request_new_view).  The standalone gsurf binary opens a
+ * child tab; cmacs opens a child *buffer*.  As with create-view, a buffer
+ * cannot be made synchronously inside the GLib-dispatched emission, so the
+ * request is deferred to an idle as an Elisp form carrying the URI, the
+ * BACKGROUND flag and the opener's view id.  Returning TRUE tells the
+ * (true-handled) accumulator that the request was taken. */
+static gboolean
+on_new_view_requested (GsurfView *view, const gchar *uri, gboolean background,
+                       gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) view;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer) || !uri || !*uri)
+    return FALSE;
+  char *lit  = el_string (uri);
+  char *form = g_strdup_printf ("(cmacs-gsurf--open-child %s %s %" G_GUINT64_FORMAT ")",
+                                lit, background ? "t" : "nil",
+                                gsurf_view_get_id (v->view));
+  cmacs_gsurf_emacs_eval_async (form);
+  g_free (form);
+  g_free (lit);
+  return TRUE;
+}
+
+/* GsurfView:editing changed: a DOM editable element gained or lost focus
+ * in the page.  Drives the per-buffer INSERT indicator in the mode line. */
+static void
+on_editing_notify (GObject *obj, GParamSpec *pspec, gpointer user)
+{
+  CmacsGsurfView *v = user;
+  (void) pspec;
+  if (!v || NILP (v->buffer) || !BUFFERP (v->buffer)) return;
+  run_hook2 ("cmacs-gsurf-editing-changed-functions", v->buffer,
+             gsurf_view_get_editing (GSURF_VIEW (obj)) ? Qt : Qnil);
 }
 
 /* ── Focus handoff ──────────────────────────────────────────────────────
@@ -353,6 +402,11 @@ on_view_key_press (GtkWidget *w, GdkEventKey *ev, gpointer user)
   gboolean is_escape = (ev->keyval == GDK_KEY_Escape);
   (void) w;
 
+  /* Synthetic input from cmacs_gsurf_view_send_input: hand it to WebKit
+   * untouched (no module dispatch, no Escape handoff, no safety net). */
+  if (v->injecting)
+    return FALSE;
+
   /* Escape ALWAYS hands control back to Emacs/evil -- it is the
    * universal "return to the editor" gesture and must never be swallowed
    * by a module.  We still dispatch it to the modules first so the modal
@@ -371,6 +425,13 @@ on_view_key_press (GtkWidget *w, GdkEventKey *ev, gpointer user)
       gsurf_module_manager_dispatch_key_event (
         mgr, v->view, ev->keyval, ev->hardware_keycode, mods,
         GSURF_MODE_NORMAL);
+      /* If a page field still has DOM focus (the modal module may already
+       * have blurred it), leave it the way gsurf's own Escape binding
+       * does: blur document.activeElement and clear the editing state at
+       * once, so the INSERT indicator drops with this key rather than one
+       * asynchronous focusout report later.  JS only -- no GTK focus. */
+      if (v->view && gsurf_view_get_editing (v->view))
+        gsurf_view_blur_editable (v->view);
       release_to_emacs (v);
       cmacs_gsurf_emacs_eval_async ("(cmacs-gsurf--on-escape)");
       return TRUE;
@@ -417,10 +478,29 @@ on_view_key_press (GtkWidget *w, GdkEventKey *ev, gpointer user)
 CmacsGsurfView *
 cmacs_gsurf_view_new (Lisp_Object buffer)
 {
+  return cmacs_gsurf_view_new_full (buffer, NULL, NULL, NULL);
+}
+
+/* Create BUFFER's view with gsurf's identity metadata: OPENER (the view it
+ * was opened from, or NULL) is recorded for the tab/buffer tree and lets
+ * the containers module keep a link in its opener's container;
+ * CONTAINER_ID (NULL, a container id, "temporary" or "default") requests
+ * the browsing container -- the registry's resolver has the final say;
+ * URI is only a placement hint for that resolver (it is not loaded).
+ * WebKit fixes a view's session at construction, so the container can
+ * never change afterwards. */
+CmacsGsurfView *
+cmacs_gsurf_view_new_full (Lisp_Object buffer, CmacsGsurfView *opener,
+                           const char *container_id, const char *uri)
+{
   CHECK_BUFFER (buffer);
   registry_init ();
 
-  GsurfView *gv = gsurf_view_new ();
+  GsurfView *gv = gsurf_view_new_full (opener ? opener->view : NULL,
+                                       (container_id && *container_id)
+                                       ? container_id : NULL,
+                                       (uri && *uri) ? uri : NULL,
+                                       FALSE);
   if (gv == NULL)
     return NULL;
 
@@ -468,6 +548,18 @@ cmacs_gsurf_view_new (Lisp_Object buffer)
                     G_CALLBACK (on_favicon_changed), v);
   g_signal_connect (gv, "create-view",
                     G_CALLBACK (on_create_view), v);
+  /* "Open Link in New Tab" -> a child buffer; DOM editing state -> the
+   * mode-line INSERT indicator.  Same data V, so the destroy-time
+   * disconnect_by_data (v->view, v) covers both. */
+  g_signal_connect (gv, "new-view-requested",
+                    G_CALLBACK (on_new_view_requested), v);
+  g_signal_connect (gv, "notify::editing",
+                    G_CALLBACK (on_editing_notify), v);
+
+  /* A view in a non-default container browses in its own WebKitWebContext,
+   * whose downloads never reach the default context's handler.  Track the
+   * view's session too (idempotent per session; NULL = the default one). */
+  cmacs_gsurf_downloads_track_session (gsurf_view_get_session (gv));
 
   /* GTK-backend-only widget wiring.  The LRG backend has no GtkWidget:
    * input is injected by lrgterm into the page (cmacs-gsurf-lrg.c), focus is
@@ -650,6 +742,25 @@ cmacs_gsurf_view_native_widget (CmacsGsurfView *v)
   return v ? (void *) v->widget : NULL;
 }
 
+/* The wrapped GsurfView (borrowed), for the gsurf-typed translation units
+ * (cmacs-gsurf-control.c, cmacs-gsurf-lrg.c). */
+GsurfView *
+cmacs_gsurf_view_gsurf (CmacsGsurfView *v)
+{
+  return v ? v->view : NULL;
+}
+
+/* Reverse lookup: the cmacs view wrapping GV, or NULL when GV belongs to
+ * no live gsurf buffer (killed mid-flight, or a view cmacs did not make).
+ * Async completions use it to re-validate before touching a view. */
+CmacsGsurfView *
+cmacs_gsurf_view_from_gsurf (GsurfView *gv)
+{
+  if (gv == NULL || !cmacs_gsurf__by_view)
+    return NULL;
+  return g_hash_table_lookup (cmacs_gsurf__by_view, gv);
+}
+
 #ifdef HAVE_CMACS_GSURF_LRG
 /* ── LRG-backend accessors (used by cmacs-gsurf-lrg.c) ───────────────── */
 
@@ -657,12 +768,6 @@ gboolean
 cmacs_gsurf_view_is_lrg (CmacsGsurfView *v)
 {
   return v != NULL && v->is_lrg;
-}
-
-GsurfView *
-cmacs_gsurf_view_gsurf (CmacsGsurfView *v)
-{
-  return v ? v->view : NULL;
 }
 
 gboolean
@@ -810,7 +915,10 @@ cmacs_gsurf_view_focus_page (CmacsGsurfView *v)
    * the page is allowed to take the keyboard.  WebKit then routes keys to
    * the focused DOM element and the modal module's hjkl/f/i apply. */
   set_webview_focusable (v, TRUE);
-  gtk_widget_grab_focus (v->widget);
+  /* gsurf_view_focus is the backend's own "focus the page" (on GTK3 it is
+   * exactly gtk_widget_grab_focus on the WebKitWebView); it only works
+   * because the subtree was just made focusable. */
+  gsurf_view_focus (v->view);
   v->focused = TRUE;
   unblock_input ();
 #endif
@@ -835,7 +943,7 @@ cmacs_gsurf_view_follow (CmacsGsurfView *v)
 #ifdef HAVE_PGTK
       block_input ();
       set_webview_focusable (v, TRUE);
-      gtk_widget_grab_focus (v->widget);
+      gsurf_view_focus (v->view);
       v->focused = TRUE;
       unblock_input ();
 #endif
@@ -1078,6 +1186,103 @@ cmacs_gsurf_view_add_user_script (CmacsGsurfView *v, const char *src,
 {
   if (v && v->view && src)
     gsurf_view_add_user_script (v->view, src, at_end);
+}
+
+/* ---- synthetic page input (gsurf 0.5.10 send_key/click/text) ------ *
+ *
+ * On GTK3 gsurf delivers these as GTK's own events, so the page sees them
+ * as trusted (isTrusted).  That collides with cmacs's focus model in two
+ * ways, both handled here:
+ *
+ *  1. GTK routes a key event to the toplevel's FOCUS widget.  A cmacs web
+ *     widget is non-focusable unless the user handed it the keyboard, so
+ *     an injected key would land in the Emacs edit widget -- typing into
+ *     Emacs, not the page.  We therefore BORROW focus for the duration of
+ *     the call: make the subtree focusable and focus it, deliver, then
+ *     hand focus straight back to Emacs (release_to_emacs) unless the user
+ *     had focused the page themselves.  WebKit forwards each event to the
+ *     web process before the unfocus notification, which arrives after
+ *     them in order, so every key is processed while the page is focused.
+ *
+ *  2. on_view_key_press would treat the injected keys as user keystrokes
+ *     (module dispatch, the Escape handoff, the "not focused" safety net).
+ *     `injecting' makes it pass them to WebKit untouched.
+ *
+ * The widget must be realized (shown at least once): gsurf reports
+ * G_IO_ERROR_NOT_INITIALIZED otherwise, and we surface that message.  The
+ * libregnum backend has no native input; gsurf falls back to untrusted
+ * DOM events from JavaScript there, and no focus juggling is needed. */
+
+bool
+cmacs_gsurf_view_send_input (CmacsGsurfView *v, int kind, double x, double y,
+                             unsigned int code, unsigned int mods,
+                             const char *text, char **err_out)
+{
+  GError *err = NULL;
+  gboolean ok = FALSE;
+  gboolean borrowed = FALSE;
+
+  if (err_out) *err_out = NULL;
+  if (v == NULL || v->view == NULL)
+    {
+      if (err_out) *err_out = g_strdup ("no gsurf view");
+      return false;
+    }
+
+#ifdef HAVE_PGTK
+  /* 1. Borrow keyboard focus for a GTK widget that does not hold it.  A
+   *    widget that is not realized is left alone: gsurf refuses it below
+   *    with a precise error. */
+  if (!v->is_lrg && v->widget != NULL && !v->focused
+      && gtk_widget_get_realized (v->widget))
+    {
+      block_input ();
+      set_webview_focusable (v, TRUE);
+      gsurf_view_focus (v->view);
+      unblock_input ();
+      borrowed = TRUE;
+    }
+#endif
+
+  /* 2. Deliver, with the key-press filter stood down. */
+  v->injecting = TRUE;
+  switch (kind)
+    {
+    case CMACS_GSURF_INPUT_KEY:
+      ok = gsurf_view_send_key (v->view, code, mods, &err);
+      break;
+    case CMACS_GSURF_INPUT_CLICK:
+      ok = gsurf_view_send_click (v->view, x, y, code ? code : 1, mods, &err);
+      break;
+    case CMACS_GSURF_INPUT_TEXT:
+      ok = gsurf_view_send_text (v->view, text ? text : "", &err);
+      break;
+    default:
+      g_set_error_literal (&err, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                           "unknown input kind");
+      break;
+    }
+  v->injecting = FALSE;
+
+  /* 3. Give the keyboard back to Emacs if it was only borrowed. */
+  if (borrowed && !v->focused)
+    {
+      block_input ();
+      release_to_emacs (v);
+      unblock_input ();
+    }
+
+  if (!ok && err_out)
+    *err_out = g_strdup (err ? err->message : "input not delivered");
+  g_clear_error (&err);
+  return ok;
+}
+
+/* gsurf_view_keyval_from_name, for the GTK-free defun layer. */
+unsigned int
+cmacs_gsurf_keyval_from_name (const char *name)
+{
+  return name ? gsurf_view_keyval_from_name (name) : 0;
 }
 
 void

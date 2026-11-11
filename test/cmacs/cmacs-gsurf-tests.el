@@ -398,5 +398,268 @@ attaching simply fails gracefully without a display/backend."
   (with-temp-buffer
     (should (progn (ignore-errors (cmacs-gsurf-hide)) t))))
 
+;;;; gsurf 0.5 control surface (cmacs-gsurf-control.{c,el}) ----------
+
+(ert-deftest cmacs-gsurf-control-defuns-present ()
+  "The toolkit-neutral control DEFUNs are defined."
+  (skip-unless (fboundp 'cmacs-gsurf-supported-p))
+  (dolist (fn '(cmacs-gsurf-keyval cmacs-gsurf-modifier-mask
+                cmacs-gsurf-send-key cmacs-gsurf-click cmacs-gsurf-type
+                cmacs-gsurf-locate-script cmacs-gsurf-click-element
+                cmacs-gsurf-add-cookie cmacs-gsurf-set-cookie-policy
+                cmacs-gsurf-set-proxy cmacs-gsurf-containers
+                cmacs-gsurf-containers-enabled-p cmacs-gsurf-container-define
+                cmacs-gsurf-container-new-temporary
+                cmacs-gsurf-container-set-network
+                cmacs-gsurf-attach-in-container cmacs-gsurf-container-id
+                cmacs-gsurf-view-id cmacs-gsurf-opener-id
+                cmacs-gsurf-buffer-for-view-id cmacs-gsurf-actions
+                cmacs-gsurf-dispatch-action cmacs-gsurf-input-modes
+                cmacs-gsurf-input-mode cmacs-gsurf-set-input-mode
+                cmacs-gsurf-editing-p cmacs-gsurf-typing-p
+                cmacs-gsurf-blur-editable cmacs-gsurf-keybinds))
+    (should (fboundp fn))))
+
+(ert-deftest cmacs-gsurf-control-keyval ()
+  "Key names resolve the way gsurf_view_keyval_from_name does."
+  (skip-unless (fboundp 'cmacs-gsurf-keyval))
+  (should (eql (cmacs-gsurf-keyval "Enter") #xff0d))
+  (should (eql (cmacs-gsurf-keyval "Return") #xff0d))
+  (should (eql (cmacs-gsurf-keyval "tab") #xff09))
+  (should (eql (cmacs-gsurf-keyval 'Escape) #xff1b))
+  (should (eql (cmacs-gsurf-keyval "a") ?a))
+  (should-not (cmacs-gsurf-keyval "NoSuchKeyName"))
+  (should-not (cmacs-gsurf-keyval nil)))
+
+(ert-deftest cmacs-gsurf-control-modifier-mask ()
+  "Modifier lists fold into GsurfKeyMod flags; unknown ones signal."
+  (skip-unless (fboundp 'cmacs-gsurf-modifier-mask))
+  (should (eql (cmacs-gsurf-modifier-mask nil) 0))
+  (should (eql (cmacs-gsurf-modifier-mask '(shift)) 1))
+  (should (eql (cmacs-gsurf-modifier-mask '(control shift)) 3))
+  (should (eql (cmacs-gsurf-modifier-mask '("ctrl" meta)) 6))
+  (should (eql (cmacs-gsurf-modifier-mask 'super) 8))
+  (should-error (cmacs-gsurf-modifier-mask '(hyper)) :type 'cmacs-gsurf-error))
+
+(ert-deftest cmacs-gsurf-control-arg-validation ()
+  "Control DEFUNs reject a non-buffer and a buffer with no view."
+  (skip-unless (fboundp 'cmacs-gsurf-send-key))
+  (should-error (cmacs-gsurf-send-key 42 "Enter") :type 'wrong-type-argument)
+  (with-temp-buffer
+    (let ((b (current-buffer)))
+      (should-error (cmacs-gsurf-send-key b "Enter") :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-click b 10 10) :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-type b "x") :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-click-element b "a") :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-add-cookie b '(:name "n" :value "v"
+                                               :domain "example.com"))
+                    :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-view-id b) :type 'cmacs-gsurf-error)
+      (should-error (cmacs-gsurf-dispatch-action b "reload")
+                    :type 'cmacs-gsurf-error)))
+  (should-not (cmacs-gsurf-buffer-for-view-id 987654321))
+  (should-not (cmacs-gsurf-buffer-for-view-id "not-an-id")))
+
+(ert-deftest cmacs-gsurf-control-locate-and-parse ()
+  "The locate script is gsurf's, and its [x, y] result parses."
+  (skip-unless (fboundp 'cmacs-gsurf-locate-script))
+  (let ((js (cmacs-gsurf-locate-script "#q")))
+    (should (stringp js))
+    (should (string-match-p "querySelector" js))
+    (should (string-match-p "getBoundingClientRect" js)))
+  (should (equal (cmacs-gsurf--parse-point "[12,30]") '(12.0 . 30.0)))
+  (should (equal (cmacs-gsurf--parse-point " [ 1.5 , -2 ] ") '(1.5 . -2.0)))
+  (should-not (cmacs-gsurf--parse-point "null"))
+  (should-not (cmacs-gsurf--parse-point "[1]"))
+  (should-not (cmacs-gsurf--parse-point "[1,2,3]"))
+  (should-not (cmacs-gsurf--parse-point "")))
+
+(ert-deftest cmacs-gsurf-control-actions-shape ()
+  "`cmacs-gsurf-actions' is an alist of (NAME . DESCRIPTION) strings."
+  (skip-unless (fboundp 'cmacs-gsurf-actions))
+  (let ((acts (cmacs-gsurf-actions)))
+    (should (> (length acts) 40))
+    (dolist (a acts)
+      (should (stringp (car a)))
+      (should (stringp (cdr a))))
+    (should-not (assoc "none" acts))
+    (dolist (n '("reload" "back" "dark-mode-toggle" "dark-mode-toggle-site"
+                 "form-autofill" "container-new-temp"))
+      (should (assoc n acts)))))
+
+(ert-deftest cmacs-gsurf-control-core-action-map ()
+  "Every core action cmacs maps is a real gsurf action and a command."
+  (skip-unless (and (fboundp 'cmacs-gsurf-actions)
+                    (boundp 'cmacs-gsurf--core-action-commands)))
+  (let ((acts (cmacs-gsurf-actions)))
+    (dolist (entry cmacs-gsurf--core-action-commands)
+      (should (assoc (car entry) acts))
+      (should (commandp (cdr entry))))))
+
+(ert-deftest cmacs-gsurf-control-input-modes ()
+  "Input modes are the five GsurfModePolicy labels, lower-cased."
+  (skip-unless (fboundp 'cmacs-gsurf-input-modes))
+  (should (equal (cmacs-gsurf-input-modes)
+                 '(normal insert follow find passthrough)))
+  (should (memq (cmacs-gsurf-input-mode) (cmacs-gsurf-input-modes))))
+
+(ert-deftest cmacs-gsurf-control-containers-display-free ()
+  "The container registry answers in batch; a bad id is refused."
+  (skip-unless (fboundp 'cmacs-gsurf-containers))
+  (should (listp (cmacs-gsurf-containers)))
+  (should (memq (cmacs-gsurf-containers-enabled-p) '(nil t)))
+  (should-error (cmacs-gsurf-container-define "bad id!")
+                :type 'cmacs-gsurf-error)
+  (should-error (cmacs-gsurf-container-define "temporary")
+                :type 'cmacs-gsurf-error))
+
+(ert-deftest cmacs-gsurf-control-keybinds-shape ()
+  "Keybinding help rows are plists with the documented keys."
+  (skip-unless (fboundp 'cmacs-gsurf-keybinds))
+  (let ((rows (cmacs-gsurf-keybinds)))
+    (should (listp rows))
+    (dolist (r rows)
+      (should (plist-member r :key))
+      (should (plist-member r :source))
+      (should (plist-member r :description)))))
+
+(ert-deftest cmacs-gsurf-control-elisp-surface ()
+  "Commands, hooks and key bindings of cmacs-gsurf-control.el exist."
+  (skip-unless (featurep 'cmacs-gsurf-control))
+  (dolist (cmd '(cmacs-gsurf-press-key cmacs-gsurf-type-text
+                 cmacs-gsurf-click-at cmacs-gsurf-click-selector
+                 cmacs-gsurf-focus-first-input cmacs-gsurf-cookie-add
+                 cmacs-gsurf-proxy cmacs-gsurf-open-in-container
+                 cmacs-gsurf-open-in-temporary-container
+                 cmacs-gsurf-reopen-in-container cmacs-gsurf-tree
+                 cmacs-gsurf-run-action cmacs-gsurf-dark-mode-toggle
+                 cmacs-gsurf-dark-mode-toggle-site cmacs-gsurf-form-autofill
+                 cmacs-gsurf-keybinds-help))
+    (should (commandp cmd)))
+  (should (boundp 'cmacs-gsurf-input-mode-changed-functions))
+  (should (boundp 'cmacs-gsurf-editing-changed-functions))
+  (should (eq (lookup-key cmacs-gsurf-mode-map "?") #'cmacs-gsurf-keybinds-help))
+  (should (eq (lookup-key cmacs-gsurf-mode-map "T") #'cmacs-gsurf-tree))
+  (should (eq (lookup-key cmacs-gsurf-mode-map (kbd "C-c C-x"))
+              #'cmacs-gsurf-run-action))
+  (should (eq (lookup-key cmacs-gsurf-mode-map (kbd "C-M-d"))
+              #'cmacs-gsurf-dark-mode-toggle))
+  ;; The C bridges call these by name.
+  (should (fboundp 'cmacs-gsurf--open-child))
+  (should (>= (cdr (func-arity 'cmacs-gsurf--open-popup)) 2)))
+
+(ert-deftest cmacs-gsurf-control-tree-order ()
+  "Buffers are ordered depth-first under their openers."
+  (skip-unless (fboundp 'cmacs-gsurf--tree-order))
+  (should (equal (cmacs-gsurf--tree-order
+                  '((a 1 nil) (b 2 1) (c 3 2) (d 4 1) (e 5 99)))
+                 '((a . 0) (b . 1) (c . 2) (d . 1) (e . 0))))
+  ;; A cycle (impossible in gsurf) is still listed, once each.
+  (should (equal (length (cmacs-gsurf--tree-order '((x 1 2) (y 2 1)))) 2))
+  (should-not (cmacs-gsurf--tree-order nil)))
+
+(ert-deftest cmacs-gsurf-control-event-to-key ()
+  "Emacs events translate to gsurf key names and modifiers."
+  (skip-unless (fboundp 'cmacs-gsurf--event-to-key))
+  (should (equal (cmacs-gsurf--event-to-key ?a) '("a")))
+  (should (equal (cmacs-gsurf--event-to-key ?A) '("A")))
+  (should (equal (cmacs-gsurf--event-to-key ?\C-a) '("a" control)))
+  (should (equal (cmacs-gsurf--event-to-key 'M-return) '("Return" meta)))
+  (should (equal (cmacs-gsurf--event-to-key 'f5) '("F5")))
+  (should (equal (cmacs-gsurf--event-to-key ?\s) '("space")))
+  (should (equal (cmacs-gsurf--event-to-key 'prior) '("Page_Up"))))
+
+(ert-deftest cmacs-gsurf-control-modifier-strings ()
+  "MCP/D-Bus modifier strings parse into modifier symbols."
+  (skip-unless (fboundp 'cmacs-gsurf--modifiers-from-string))
+  (should-not (cmacs-gsurf--modifiers-from-string nil))
+  (should-not (cmacs-gsurf--modifiers-from-string ""))
+  (should (equal (cmacs-gsurf--modifiers-from-string "ctrl+shift")
+                 '(control shift)))
+  (should (equal (cmacs-gsurf--modifiers-from-string "C-M-s")
+                 '(control meta super)))
+  (should (equal (cmacs-gsurf--modifiers-from-string "S") '(shift))))
+
+(ert-deftest cmacs-gsurf-control-mode-line-text ()
+  "The input-mode indicator shows only while the page has the keys."
+  (skip-unless (fboundp 'cmacs-gsurf--input-mode-text))
+  (should (equal (cmacs-gsurf--input-mode-text 'normal nil nil) ""))
+  (should (equal (cmacs-gsurf--input-mode-text 'insert t nil) ""))
+  (should (equal (cmacs-gsurf--input-mode-text 'normal nil t) "-- NORMAL --  "))
+  (should (equal (cmacs-gsurf--input-mode-text 'normal t t) "-- INSERT --  "))
+  (should (equal (cmacs-gsurf--input-mode-text 'follow t t) "-- FOLLOW --  "))
+  ;; In a buffer with no view the mode-line snippet is empty.
+  (with-temp-buffer
+    (should (equal (cmacs-gsurf--mode-line-input-mode) ""))))
+
+(ert-deftest cmacs-gsurf-control-module-knobs-yaml ()
+  "Module knobs merge into `cmacs-gsurf-modules' and render as YAML."
+  (skip-unless (fboundp 'cmacs-gsurf--effective-modules))
+  ;; All knobs at default: modules pass through untouched.
+  (let ((cmacs-gsurf-modules '(("modal" :enabled t))))
+    (should (equal (cmacs-gsurf--effective-modules) '(("modal" :enabled t)))))
+  (let ((cmacs-gsurf-modules '(("modal" :enabled t)
+                               ("dark_mode" :enabled nil :brightness 90)))
+        (cmacs-gsurf-dark-mode t)
+        (cmacs-gsurf-dark-mode-style 'native)
+        (cmacs-gsurf-dark-mode-sites '((:match "github" :mode native)))
+        (cmacs-gsurf-adblock t)
+        (cmacs-gsurf-adblock-filter-lists
+         '("~/a.txt" (:path "~/b.txt" :trusted t)))
+        (cmacs-gsurf-hardening 'off)
+        (cmacs-gsurf-languages '("en-US" "de")))
+    (let ((mods (cmacs-gsurf--effective-modules)))
+      ;; knob overrides the explicit entry's :enabled, keeps its options
+      (should (equal (plist-get (cdr (assoc "dark_mode" mods)) :enabled) t))
+      (should (equal (plist-get (cdr (assoc "dark_mode" mods)) :brightness) 90))
+      (should (eq (plist-get (cdr (assoc "hardening" mods)) :enabled) nil))
+      ;; the defcustom value itself is not mutated
+      (should (equal (cdr (assoc "dark_mode" cmacs-gsurf-modules))
+                     '(:enabled nil :brightness 90))))
+    (let ((y (cmacs-gsurf--config-to-yaml)))
+      (should (string-match-p "^browser:\n  languages: \\[\"en-US\", \"de\"\\]$" y))
+      (should (string-match-p "^    mode: \"native\"$" y))
+      (should (string-match-p "^    sites: \\[{match: \"github\", mode: \"native\"}\\]$" y))
+      (should (string-match-p
+               "^    filter_lists: \\[\"~/a.txt\", {path: \"~/b.txt\", trusted: true}\\]$"
+               y))
+      (should (string-match-p "^  hardening:\n    enabled: false$" y)))))
+
+(ert-deftest cmacs-gsurf-control-yaml-values ()
+  "YAML rendering of lists, vectors and plists."
+  (skip-unless (fboundp 'cmacs-gsurf--yaml-scalar))
+  (should (equal (cmacs-gsurf--yaml-scalar []) "[]"))
+  (should (equal (cmacs-gsurf--yaml-scalar '("a" 1 t)) "[\"a\", 1, true]"))
+  (should (equal (cmacs-gsurf--yaml-scalar '(:k "v" :n 2)) "{k: \"v\", n: 2}"))
+  (should (equal (cmacs-gsurf--yaml-scalar 'filter) "\"filter\"")))
+
+(ert-deftest cmacs-gsurf-control-mcp-helpers ()
+  "MCP/D-Bus helpers exist and the list helpers return JSON arrays."
+  (skip-unless (featurep 'cmacs-gsurf-control))
+  (dolist (fn '(cmacs-gsurf-mcp-click cmacs-gsurf-mcp-type-text
+                cmacs-gsurf-mcp-press-key cmacs-gsurf-mcp-click-element
+                cmacs-gsurf-mcp-set-cookie cmacs-gsurf-mcp-toggle-module
+                cmacs-gsurf-mcp-run-action cmacs-gsurf-mcp-list-actions
+                cmacs-gsurf-mcp-list-containers))
+    (should (fboundp fn)))
+  (when (fboundp 'cmacs-gsurf-actions)
+    (let ((arr (json-parse-string (cmacs-gsurf-mcp-list-actions)
+                                  :object-type 'alist)))
+      (should (vectorp arr))
+      (should (> (length arr) 40))
+      (let ((reload (seq-find (lambda (o) (equal (alist-get 'name o) "reload"))
+                              arr))
+            (dark (seq-find (lambda (o) (equal (alist-get 'name o)
+                                               "dark-mode-toggle"))
+                            arr)))
+        (should (equal (alist-get 'handler reload) "cmacs"))
+        (should (equal (alist-get 'handler dark) "module")))))
+  (when (fboundp 'cmacs-gsurf-containers)
+    (should (vectorp (json-parse-string (cmacs-gsurf-mcp-list-containers)))))
+  ;; No gsurf buffer: the buffer-targeting helpers refuse cleanly.
+  (when (fboundp 'cmacs-gsurf-type)
+    (let ((cmacs-gsurf--buffers nil))
+      (should-error (cmacs-gsurf-mcp-type-text "x") :type 'user-error))))
+
 (provide 'cmacs-gsurf-tests)
 ;;; cmacs-gsurf-tests.el ends here

@@ -11219,6 +11219,16 @@ Cancel the in-flight download with integer @var{id}.
 
 Downloads are process-wide and outlive the buffer that started them.
 
+A view in a non-default container (see @emph{Containers}
+below) browses in its own @code{WebKitWebContext}, whose downloads never
+reach the default context.  When such a view is created, cmacs connects
+the same download handler to its session (once per session), so
+container downloads use the same directory, hook and
+@code{*gsurf-downloads*} buffer, and stay cancellable.  gsurf 0.5's
+module-manager @code{download-started} signal is not used: it carries
+only the URI, suggested name and chosen path as strings, not the
+@code{WebKitDownload}, so it can drive neither progress nor cancellation.
+
 @section Permissions
 
 Permission requests (geolocation, notifications, camera/mic, clipboard,
@@ -11392,6 +11402,228 @@ click/submit gsurf-lite therefore re-extracts at each delay in
 lands, so the buffer updates to the post-login page even when no load
 event fires.  Lengthen the tail for very slow sign-in flows.
 
+@section Page input
+
+gsurf 0.5.10 delivers input as the toolkit's own events, so a page sees
+it as trusted (@code{isTrusted}), unlike @code{element.click()} from
+JavaScript.
+
+@deffn Command cmacs-gsurf-press-key event
+Read a key (@kbd{C-c C-k}) and press it in the page.
+@end deffn
+
+@deffn Command cmacs-gsurf-type-text text
+Type @var{text} into the focused element (@kbd{C-c C-y}); a newline
+presses Return.
+@end deffn
+
+@deffn Command cmacs-gsurf-click-selector selector &optional button
+Click the first element matching CSS @var{selector} (@kbd{C-c .}).  It is
+scrolled into view and focused, then clicked at its centre.
+@end deffn
+
+@deffn Command cmacs-gsurf-focus-first-input
+Click the page's first text field and hand the page the keyboard
+(evil @kbd{gi}, as in vimium).
+@end deffn
+
+@defun cmacs-gsurf-send-key buffer key &optional modifiers
+@defunx cmacs-gsurf-click buffer x y &optional button modifiers
+@defunx cmacs-gsurf-type buffer text
+@defunx cmacs-gsurf-click-element buffer selector &optional callback button
+The primitives.  @var{key} is a DOM name (@samp{Enter}, @samp{Tab},
+@samp{ArrowLeft}, @samp{PageDown}), an X name (@samp{Return},
+@samp{space}) or one character; @code{cmacs-gsurf-keyval} resolves it.
+@var{modifiers} is a list of @code{shift}, @code{control} (@code{ctrl}),
+@code{meta} (@code{alt}) and @code{super}.  @var{x} and @var{y} are CSS
+pixels as @code{getBoundingClientRect()} reports them; @var{button} is 1
+(default), 2 or 3.  @code{cmacs-gsurf-click-element} is asynchronous: it
+evaluates gsurf's locate script (@code{cmacs-gsurf-locate-script}) and
+calls @var{callback} with @code{t}, @code{nil} (no match) or an error
+string.
+@end defun
+
+@strong{Focus.}  On GTK3 a synthetic key goes to the toplevel's focus
+widget, and a cmacs web widget is non-focusable while Emacs has the
+keyboard (see @emph{Focus model} above); a naive injected key
+would be typed into Emacs.  cmacs therefore @emph{borrows} focus for the
+call (subtree focusable, @code{gsurf_view_focus}, deliver, hand back to
+Emacs) unless you had focused the page yourself, and the key-press
+filter stands down while it injects.  Agents and commands can type into
+a page while you keep @kbd{SPC}, @kbd{C-w} and @kbd{M-x}.  The page must
+have been on screen once (the widget realized), else
+@code{cmacs-gsurf-error} reports ``the view is not on screen yet''.
+Under @option{--lrg} gsurf falls back to untrusted DOM events.
+
+@section Cookies and proxy
+
+@defun cmacs-gsurf-add-cookie buffer cookie &optional callback
+Add @var{cookie} to the view's session --- its container's cookie jar
+for a view in a container.  @var{cookie} is a plist: @code{:name},
+@code{:value}, @code{:domain} (required; @samp{.example.com} covers
+subdomains), @code{:path} (default @samp{/}), @code{:expires} (Unix
+seconds; omitted for a session cookie), @code{:secure},
+@code{:http-only}, @code{:same-site} (@code{none}, @code{lax},
+@code{strict}).  Asynchronous: @var{callback} gets @code{t} or an error
+string.
+@end defun
+
+@defun cmacs-gsurf-set-cookie-policy buffer policy
+@defunx cmacs-gsurf-set-proxy buffer uri
+Cookie accept policy (@code{always}, @code{never},
+@code{no-third-party}) and proxy (@samp{socks5://127.0.0.1:9050};
+@code{nil} for the system default) of the view's session, so they apply
+to every view sharing it.
+@end defun
+
+Interactive: @kbd{M-x cmacs-gsurf-cookie-add} (the domain defaults to
+the current host) and @kbd{M-x cmacs-gsurf-proxy}.
+
+@section Containers
+
+A container is a separate browsing identity --- its own cookies, storage
+and cache, like Firefox containers.  Persistent containers keep their
+data in @file{$XDG_DATA_HOME/gsurf/containers/@var{id}}; temporary ones
+live in the runtime directory and are destroyed shortly after their last
+view closes.  WebKit fixes a view's session when the view is created, so
+the container is chosen then and never changes.
+
+@deffn Command cmacs-gsurf-open-in-container url container
+Open @var{url} in a new buffer in @var{container}: an id,
+@samp{temporary} or @samp{default} (@kbd{C-c C-n}, evil @kbd{gc}).
+@end deffn
+
+@deffn Command cmacs-gsurf-open-in-temporary-container url
+The same in a new temporary container (@kbd{C-c C-t}, evil @kbd{gC}).
+@end deffn
+
+@deffn Command cmacs-gsurf-reopen-in-container container
+Reopen the current page in @var{container}, replacing this buffer.
+@end deffn
+
+@defun cmacs-gsurf-containers
+@defunx cmacs-gsurf-containers-enabled-p
+@defunx cmacs-gsurf-container-define id &optional name color
+@defunx cmacs-gsurf-container-new-temporary &optional color
+@defunx cmacs-gsurf-container-set-network id proxy &optional proxy-ignore user-agent
+@defunx cmacs-gsurf-attach-in-container buffer container &optional opener uri
+@defunx cmacs-gsurf-container-id buffer
+List containers (plists with @code{:id}, @code{:name}, @code{:color},
+@code{:temporary}, @code{:views}, @code{:data-dir}, @code{:proxy},
+@code{:user-agent}); whether the @code{containers} module's placement
+policy is installed; define a persistent container; create a temporary
+one; give one its own proxy and user agent; create a buffer's view in a
+container (with an optional opener buffer and placement-hint URI); and
+report a view's container (@code{nil} for the default).
+@end defun
+
+The @code{containers} module (@code{cmacs-gsurf-containers}) adds host
+rules, keeps links in their opener's container, and sets the default for
+new buffers (@code{cmacs-gsurf-containers-new-tab}; the module's own
+default is a temporary container per buffer).
+
+@section New views and the buffer tree
+
+The page context menu's @emph{Open Link in New Tab} emits
+@code{GsurfView::new-view-requested}; cmacs opens a child gsurf buffer
+(from an idle: a buffer cannot be made inside the GLib emission).  A
+foreground request is shown with
+@code{cmacs-gsurf-new-view-display-function} (default
+@code{switch-to-buffer}); a background one is only created.  Popups take
+the same route.  Both record the requesting view as @dfn{opener}.
+
+@defun cmacs-gsurf-view-id buffer
+@defunx cmacs-gsurf-opener-id buffer
+@defunx cmacs-gsurf-buffer-for-view-id id
+gsurf's process-unique, never reused view id; the id of the view this
+one was opened from (@code{nil} when you opened it), which gsurf keeps
+after the opener closes; and the live buffer for an id.
+@end defun
+
+@deffn Command cmacs-gsurf-tree
+Show every gsurf buffer as the opener tree (@kbd{T}): children indented
+under their opener, the container in brackets.  @kbd{RET} visits,
+@kbd{o} other window, @kbd{k} kills, @kbd{g} refreshes.
+@end deffn
+
+@section Actions and input modes
+
+@defun cmacs-gsurf-actions
+@defunx cmacs-gsurf-dispatch-action buffer action
+Every @code{GsurfAction} as @code{(@var{name} . @var{description})}, and
+offer @var{action} to the loaded modules (@code{t} when one performed
+it, @code{nil} when none did).
+@end defun
+
+@deffn Command cmacs-gsurf-run-action action
+Run a gsurf action by name with completion (@kbd{C-c C-x}, evil
+@kbd{ga}).  Core actions --- navigation, scrolling, zoom, find,
+copy-url, ``tabs'' (gsurf buffers), show-keybinds, the container ones
+--- belong to the standalone gsurf window, so cmacs maps them onto its
+own commands (@code{cmacs-gsurf--core-action-commands}); every other
+action goes to the modules.
+@end deffn
+
+@deffn Command cmacs-gsurf-dark-mode-toggle
+@deffnx Command cmacs-gsurf-dark-mode-toggle-site
+@deffnx Command cmacs-gsurf-form-autofill
+The module actions: dark mode for every page (@kbd{C-M-d}, evil
+@kbd{gd}), for this site, remembered (@kbd{C-M-S-d}, evil @kbd{gD}), and
+form autofill (@kbd{C-M-f}, evil @kbd{gF}).  gsurf binds
+@kbd{Ctrl+Alt+d}, @kbd{Ctrl+Alt+Shift+d} and @kbd{Ctrl+Alt+f} inside a
+focused page too.
+@end deffn
+
+@defun cmacs-gsurf-input-mode
+@defunx cmacs-gsurf-set-input-mode mode
+@defunx cmacs-gsurf-input-modes
+@defunx cmacs-gsurf-editing-p buffer
+@defunx cmacs-gsurf-typing-p buffer
+@defunx cmacs-gsurf-blur-editable buffer
+The input mode the modal module published (@code{normal},
+@code{insert}, @code{follow}, @code{find}, @code{passthrough}); whether
+a page field has DOM focus; whether a bare key would be typed text; and
+leave the focused field.
+@end defun
+
+The module manager's @code{mode-changed} signal runs
+@code{cmacs-gsurf-input-mode-changed-functions} (@var{mode}) from an
+idle, and @code{GsurfView:editing} runs
+@code{cmacs-gsurf-editing-changed-functions} (@var{buffer}
+@var{editing}).  While the page holds the keyboard the mode line shows
+@samp{-- NORMAL --}, @samp{-- INSERT --} (also for a focused field) or
+@samp{-- FOLLOW --}; while Emacs has it nothing is shown
+(@code{cmacs-gsurf-show-input-mode}).  Escape in a focused page also
+blurs a field that still has DOM focus (@code{gsurf_view_blur_editable},
+as gsurf's own Escape binding does), so the indicator drops with that
+key; the focus handoff itself is unchanged.
+
+@section Keybinding help
+
+@deffn Command cmacs-gsurf-keybinds-help
+Show gsurf's help overlay as a help buffer (@kbd{?}): the
+@code{cmacs-gsurf-mode} bindings, each active module's bindings (active
+while the page holds the keyboard), and gsurf's core table for reference.
+@end deffn
+
+@defun cmacs-gsurf-keybinds
+The rows, from @code{gsurf_module_manager_collect_keybinds}: plists with
+@code{:key}, @code{:pretty}, @code{:description}, @code{:source} and
+@code{:action}, rebuilt on every call.
+@end defun
+
+@section Window-only gsurf features
+
+Some gsurf 0.5 features need a @code{GsurfWindow} and have no cmacs
+surface, by design: @code{wmux} panes are Emacs windows; the tab strip
+and @code{GsurfTabTreeProvider} sidebar are gsurf buffers and
+@code{cmacs-gsurf-tree}; the @command{gsurfctl} control socket is the
+D-Bus @code{org.cmacs.Editor1.Gsurf} interface, @command{emacsctl gsurf}
+and MCP; kiosk/PWA windows are a dedicated frame; the
+@option{--lrg=3d} tab space is cmacs's own @option{--lrg=3d}.  Actions
+only those implement (@code{pane-split-*}, @code{lrg-*},
+@code{tab-move-*}) are listed but do nothing in a buffer.
+
 @section Elisp API
 
 Primitives operate on a browser buffer: @code{cmacs-gsurf-load-uri},
@@ -11410,24 +11642,30 @@ The view's URI/title/load signals run the abnormal hooks
 @code{cmacs-gsurf-load-changed-functions} @code{(BUFFER EVENT)} where
 @var{event} is @code{started}, @code{committed} or @code{finished}.
 
+The gsurf 0.5 control primitives (page input, cookies, containers, view
+identity, actions, input modes, keybinding help) are described in the
+sections above; they live in @file{cmacs/gsurf/cmacs-gsurf-control.c}
+and @file{lisp/cmacs/cmacs-gsurf-control.el}.
+
 @section Configuration
 
 cmacs-gsurf does @emph{not} read gsurf's own
 @file{~/.config/gsurf/config.yaml} (or @file{config.c}) by default; it
-is configured from Emacs and tells gsurf to ignore YAML entirely
-(@code{cmacs-gsurf-ignore-yaml}, default @code{t}).  Because gsurf
-modules are disabled unless a config enables them, this is also how the
-vim @code{modal} module (@kbd{hjkl} scroll, @kbd{f} link hints) is
-turned on.
+is configured from Emacs.  Because gsurf modules are disabled unless a
+config enables them, this is also how the vim @code{modal} module
+(@kbd{hjkl} scroll, @kbd{f} link hints) is turned on.
 
 The primary knob is @code{cmacs-gsurf-modules}, an alist of
-@code{(MODULE-NAME . PLIST)} pushed onto the gsurf config through its
-programmatic C-config setters (@code{gsurf_config_set_module_enabled} /
-@code{_set_module_option}) before the modules load --- no YAML file.
-@code{:enabled BOOL} toggles a module (precedence over any YAML); any
-other @code{:KEY VALUE} is a module option.  The default enables the
-windowless essentials @code{modal}, @code{search_engines},
-@code{history}:
+@code{(MODULE-NAME . PLIST)}.  @code{:enabled BOOL} toggles a module;
+any other @code{:KEY VALUE} is a module option (lists and plists become
+YAML sequences and maps).  The gsurf 0.5 module knobs
+(@code{cmacs-gsurf-dark-mode}, @code{-adblock}, @code{-hardening},
+@code{-form-autofill}, @code{-containers}, @code{-languages}; see
+@emph{Modules}) are merged into it.  cmacs renders the result as a
+@code{modules:} YAML document and hands it to gsurf with
+@code{cmacs-gsurf-load-config-data} before the modules load.  The
+default enables the windowless essentials @code{modal},
+@code{search_engines}, @code{history}:
 
 @example
 (setq cmacs-gsurf-modules
@@ -11441,11 +11679,10 @@ To also read gsurf's own files set @code{cmacs-gsurf-load-user-config}
 to @code{t}; to load a specific file set @code{cmacs-gsurf-config-file}
 (YAML) or @code{cmacs-gsurf-config-c-file} (a crispy-compiled C config,
 e.g. @file{~/.config/cmacs/init.c}, whose @code{gsurf_config_init()} may
-call any @code{gsurf_config_*} setter).  Primitives:
-@code{cmacs-gsurf-config-set-module-enabled} / @code{-set-module-option}
-/ @code{-set-homepage} / @code{cmacs-gsurf-set-ignore-yaml}, and the
-loaders @code{cmacs-gsurf-load-config-data} / @code{-file} /
-@code{-c-file}; re-apply with @code{M-x cmacs-gsurf-reload-config}.
+call any @code{gsurf_config_*} setter).  Primitives: the loaders
+@code{cmacs-gsurf-load-config-data} / @code{-file} / @code{-c-file} and
+@code{cmacs-gsurf-reconfigure-modules}; re-apply everything with
+@code{M-x cmacs-gsurf-reload-config}.
 
 @section Modules
 
@@ -11458,6 +11695,68 @@ installed @file{$libdir/cmacs/gsurf/modules/}.  Which modules are
 @emph{enabled} comes from the config (see above), not the search path.
 Inspect and toggle at runtime with @code{cmacs-gsurf-modules-list} and
 @code{cmacs-gsurf-module-set-enabled}.
+
+@subsection gsurf 0.5 modules
+
+These work on a bare @code{GsurfView}, so they apply to cmacs buffers.
+Each has a knob merged into @code{cmacs-gsurf-modules} before it is
+applied (@code{cmacs-gsurf--effective-modules}): @code{nil} leaves the
+module to @code{cmacs-gsurf-modules} and its own defaults, @code{t}
+enables it, @code{off} disables it; its options override the same keys
+of an explicit entry.  List and plist option values become YAML flow
+sequences and mappings (use a vector for an empty list).
+
+@table @code
+@item cmacs-gsurf-containers
+The @code{containers} module: placement policy for new views.  Options
+@code{cmacs-gsurf-containers-new-tab} (@samp{temporary},
+@samp{default} or an id) and @code{cmacs-gsurf-container-definitions}
+(plists with @code{:name}, @code{:color}, @code{:hosts},
+@code{:proxy}, @code{:proxy_ignore}, @code{:user_agent}).
+
+@item cmacs-gsurf-hardening
+LibreWolf-style privacy: HTTPS-only, tracking-parameter stripping,
+cross-origin referer trimming, Global Privacy Control, no prefetch,
+third-party cookie blocking, WebKit tracking prevention, WebRTC off,
+per-host exemptions.  Options in @code{cmacs-gsurf-hardening-options}
+(@code{:https_only}, @code{:strip_params}, @code{:referer},
+@code{:third_party_cookies}, @code{:webrtc}, @code{:exempt}, @dots{}).
+
+@item cmacs-gsurf-form-autofill
+Fills address/contact forms from @file{~/.config/gsurf/autofill.yaml}
+(mode 0600) or @code{:profiles} in
+@code{cmacs-gsurf-form-autofill-options}; card data only from the
+private file and only on https.
+
+@item cmacs-gsurf-dark-mode
+Four styles in @code{cmacs-gsurf-dark-mode-style}: @code{off},
+@code{native} (the site's own dark theme), @code{filter} (CSS invert,
+default) and @code{dynamic} (Dark Reader-style).  Per-site rules in
+@code{cmacs-gsurf-dark-mode-sites} (@code{:match} host regexp, first
+match wins, plus @code{:mode}, @code{:brightness}, @code{:contrast},
+@code{:sepia}, @code{:grayscale}); sites toggled with
+@code{cmacs-gsurf-dark-mode-toggle-site} are saved in
+@file{$XDG_DATA_HOME/gsurf/dark_mode/sites.yaml}.  Key
+@kbd{Ctrl+Alt+d} in a page, @kbd{C-M-d} from Emacs.
+
+@item cmacs-gsurf-adblock
+uBlock Origin / Adblock Plus lists parsed natively (network rules,
+element hiding, procedural cosmetics, scriptlets, @code{$redirect},
+@code{$removeparam}).  @code{cmacs-gsurf-adblock-filter-lists} takes file
+names or @code{(:path @var{file} :trusted t)}; hosts-format lists go in
+@code{cmacs-gsurf-adblock-host-files}.  @command{make -C deps/gsurf
+adblock-lists} fetches EasyList and uBlock's lists into
+@file{~/.config/gsurf/adblock/}.
+
+@item cmacs-gsurf-languages
+@code{browser.languages}: BCP 47 tags pages see in
+@code{navigator.languages} and @code{Accept-Language}.
+@end table
+
+Gopher (including Gopher+) and Gemini need no module:
+@samp{gopher://} and @samp{gemini://} are built into the view (Gemini
+certificates are pinned on first use under
+@file{$XDG_DATA_HOME/gsurf/gemini/certificates/}).
 
 @section cmacsgi / introspection
 
@@ -11474,8 +11773,22 @@ With @option{--with-cmacs-mcp}, the tools @code{gsurf_open},
 @code{gsurf_get_title}, @code{gsurf_current}, @code{gsurf_list},
 @code{gsurf_eval_js}, @code{gsurf_set_zoom},
 @code{gsurf_modules_list}, @code{gsurf_lite_open} (offscreen render to a
-text buffer) and @code{gsurf_extract_text} (read a lite buffer's text)
-are exposed.  @code{^gsurf_} is in the default
+text buffer), @code{gsurf_extract_text} (read a lite buffer's text),
+@code{gsurf_download_list}, @code{gsurf_download_cancel},
+@code{gsurf_snapshot}, @code{gsurf_print_pdf},
+@code{gsurf_permission_policy}, and the gsurf 0.5 control tools
+@code{gsurf_click} (x, y, [button]), @code{gsurf_type_text},
+@code{gsurf_press_key} (key, [modifiers such as @samp{ctrl+shift}]),
+@code{gsurf_click_element} (CSS selector; asynchronous),
+@code{gsurf_set_cookie}, @code{gsurf_toggle_module},
+@code{gsurf_run_action}, @code{gsurf_list_actions} and
+@code{gsurf_list_containers} are exposed, each mirrored by a method of
+the D-Bus interface @code{org.cmacs.Editor1.Gsurf} and an
+@command{emacsctl gsurf} verb (@code{click}, @code{type}, @code{key},
+@code{click-element}, @code{cookie}, @code{module}, @code{action},
+@code{actions}, @code{containers}).  Strings are spliced into the Elisp
+call with @code{cmacs_dispatch_lisp_escape}, never @code{g_strescape}.
+The input tools borrow the page's keyboard focus only for the call.  @code{^gsurf_} is in the default
 @code{cmacs-ai-mcp-bridge-allowlist}, so cmacs-ai chat buffers can drive
 the browser out of the box.
 
@@ -11489,6 +11802,13 @@ because it merges crispy + yaml-glib objects it is run through the
 dedup machinery (@code{_gsurf_strip}), never @option{-z muldefs}.  It
 reuses the same WebKitGTK/GTK3 stack as @option{--with-xwidgets}, so no
 new system packages are needed.
+
+One exception since gsurf 0.5: the bundled @file{Gsurf-0.5} GIR includes
+@code{Json-1.0}, so @command{g-ir-scanner} needs json-glib's
+introspection data (@file{/usr/share/gir-1.0/Json-1.0.gir}), not just its
+headers.  On Fedora that is @code{json-glib-devel} (with
+@code{gobject-introspection-devel}); without it the typelib step fails
+with ``Couldn't find include 'Json-1.0.gir'''.
 
 @strong{Signal note.}  WebKit's JavaScriptCore pauses threads for GC
 using a POSIX signal that defaults to @code{SIGUSR1} (signal@tie{}10).

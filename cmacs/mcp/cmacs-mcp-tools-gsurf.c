@@ -42,22 +42,25 @@ gsurf_eval (const gchar *expr)
   return result;
 }
 
-/* Build an Elisp string literal from a C string (escaping \ and ").
-   Returns a newly-allocated string; never NULL. */
+/* Build an Elisp string literal from a C string.  The escaping is
+   cmacs_dispatch_lisp_escape's (backslash and double quote only; never
+   g_strescape, whose octal escapes the reader turns into raw bytes).
+   NULL becomes "".  Returns a newly-allocated string; never NULL. */
 static gchar *
 elisp_string (const gchar *s)
 {
-  if (s == NULL)
-    return g_strdup ("\"\"");
-  GString *out = g_string_new ("\"");
-  for (const gchar *p = s; *p; p++)
-    {
-      if (*p == '\\' || *p == '"')
-        g_string_append_c (out, '\\');
-      g_string_append_c (out, *p);
-    }
-  g_string_append_c (out, '"');
-  return g_string_free (out, FALSE);
+  g_autofree gchar *esc = cmacs_dispatch_lisp_escape (s);
+  return g_strdup_printf ("\"%s\"", esc);
+}
+
+/* Optional string member -> Elisp string literal, or "nil" when absent or
+   empty. */
+static gchar *
+opt_string_arg (JsonObject *a, const gchar *member)
+{
+  const gchar *v = a ? json_object_get_string_member_with_default (a, member, NULL)
+                     : NULL;
+  return (v && *v) ? elisp_string (v) : g_strdup ("nil");
 }
 
 /* Optional "buffer" arg -> an Elisp string literal or "nil". */
@@ -273,6 +276,142 @@ handle_gsurf_permission_policy (McpServer *s, const gchar *n, JsonObject *a,
   return gsurf_eval (expr);
 }
 
+/* ── gsurf 0.5 control surface (cmacs-gsurf-control.el helpers) ───── */
+
+static McpToolResult *
+handle_gsurf_click (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  if (!json_object_has_member (a, "x")) return missing_arg ("x");
+  if (!json_object_has_member (a, "y")) return missing_arg ("y");
+  gdouble x = json_object_get_double_member_with_default (a, "x", 0.0);
+  gdouble y = json_object_get_double_member_with_default (a, "y", 0.0);
+  gint64 button = json_object_get_int_member_with_default (a, "button", 1);
+  if (button < 1 || button > 3)
+    button = 1;
+  g_autofree gchar *buf = buffer_arg (a);
+  gchar xs[G_ASCII_DTOSTR_BUF_SIZE], ys[G_ASCII_DTOSTR_BUF_SIZE];
+  g_ascii_dtostr (xs, sizeof xs, x);
+  g_ascii_dtostr (ys, sizeof ys, y);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-click %s %s %lld %s)", xs, ys,
+                     (long long) button, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_type_text (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *text = json_object_get_string_member_with_default (a, "text", NULL);
+  if (text == NULL)
+    return missing_arg ("text");
+  g_autofree gchar *q = elisp_string (text);
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-type-text %s %s)", q, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_press_key (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *key = json_object_get_string_member_with_default (a, "key", NULL);
+  if (key == NULL || *key == '\0')
+    return missing_arg ("key");
+  g_autofree gchar *q = elisp_string (key);
+  g_autofree gchar *mods = opt_string_arg (a, "modifiers");
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-press-key %s %s %s)", q, mods, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_click_element (McpServer *s, const gchar *n, JsonObject *a,
+                            gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *sel = json_object_get_string_member_with_default (a, "selector", NULL);
+  if (sel == NULL || *sel == '\0')
+    return missing_arg ("selector");
+  g_autofree gchar *q = elisp_string (sel);
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-click-element %s %s)", q, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_set_cookie (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *name   = json_object_get_string_member_with_default (a, "name", NULL);
+  const gchar *value  = json_object_get_string_member_with_default (a, "value", NULL);
+  const gchar *domain = json_object_get_string_member_with_default (a, "domain", NULL);
+  if (name == NULL)   return missing_arg ("name");
+  if (value == NULL)  return missing_arg ("value");
+  if (domain == NULL) return missing_arg ("domain");
+  gboolean secure = json_object_get_boolean_member_with_default (a, "secure", FALSE);
+  gboolean http_only =
+    json_object_get_boolean_member_with_default (a, "http_only", FALSE);
+  gint64 expires = json_object_get_int_member_with_default (a, "expires", 0);
+  g_autofree gchar *qn = elisp_string (name);
+  g_autofree gchar *qv = elisp_string (value);
+  g_autofree gchar *qd = elisp_string (domain);
+  g_autofree gchar *qp = opt_string_arg (a, "path");
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-set-cookie %s %s %s %s %s %s %lld %s)",
+                     qn, qv, qd, qp, secure ? "t" : "nil",
+                     http_only ? "t" : "nil", (long long) expires, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_toggle_module (McpServer *s, const gchar *n, JsonObject *a,
+                            gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *name = json_object_get_string_member_with_default (a, "name", NULL);
+  if (name == NULL || *name == '\0')
+    return missing_arg ("name");
+  if (!json_object_has_member (a, "enabled"))
+    return missing_arg ("enabled");
+  gboolean enabled = json_object_get_boolean_member_with_default (a, "enabled", TRUE);
+  g_autofree gchar *q = elisp_string (name);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-toggle-module %s %s)", q,
+                     enabled ? "t" : "nil");
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_run_action (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) u;
+  const gchar *action = json_object_get_string_member_with_default (a, "action", NULL);
+  if (action == NULL || *action == '\0')
+    return missing_arg ("action");
+  g_autofree gchar *q = elisp_string (action);
+  g_autofree gchar *buf = buffer_arg (a);
+  g_autofree gchar *expr =
+    g_strdup_printf ("(cmacs-gsurf-mcp-run-action %s %s)", q, buf);
+  return gsurf_eval (expr);
+}
+
+static McpToolResult *
+handle_gsurf_list_actions (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{ (void) s; (void) n; (void) a; (void) u;
+  return gsurf_eval ("(cmacs-gsurf-mcp-list-actions)"); }
+
+static McpToolResult *
+handle_gsurf_list_containers (McpServer *s, const gchar *n, JsonObject *a,
+                              gpointer u)
+{ (void) s; (void) n; (void) a; (void) u;
+  return gsurf_eval ("(cmacs-gsurf-mcp-list-containers)"); }
+
 /* ── Registration ─────────────────────────────────────────────────── */
 
 static void
@@ -407,6 +546,84 @@ cmacs_mcp_tools_gsurf_register (McpServer *server)
     "\"verdict\":{\"type\":\"string\",\"description\":\"allow or deny\"}},"
     "\"required\":[\"origin\",\"type\",\"verdict\"]}",
     handle_gsurf_permission_policy);
+
+  /* gsurf 0.5 control surface.  Input is trusted (native GTK events) and
+     needs the page to have been on screen once; keyboard focus is
+     borrowed for the call and handed back to the editor. */
+  add_tool (server, "gsurf_click",
+    "Click at x,y (CSS pixels from the page's top-left, as "
+    "getBoundingClientRect reports) in a gsurf page with a trusted click.",
+    FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"x\":{\"type\":\"number\",\"description\":\"CSS px from the left\"},"
+    "\"y\":{\"type\":\"number\",\"description\":\"CSS px from the top\"},"
+    "\"button\":{\"type\":\"integer\",\"description\":\"1 left (default), 2 middle, 3 right\"},"
+    BUF_PROP "},\"required\":[\"x\",\"y\"]}", handle_gsurf_click);
+
+  add_tool (server, "gsurf_type_text",
+    "Type text into whatever has focus in a gsurf page, one trusted key "
+    "press per character (newline = Enter).  Focus a field first with "
+    "gsurf_click_element.", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"text\":{\"type\":\"string\",\"description\":\"UTF-8 text\"},"
+    BUF_PROP "},\"required\":[\"text\"]}", handle_gsurf_type_text);
+
+  add_tool (server, "gsurf_press_key",
+    "Press and release one key in a gsurf page (trusted).  key is a DOM "
+    "or X name (Enter, Tab, Escape, ArrowDown, PageDown, a, ...).", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"key\":{\"type\":\"string\",\"description\":\"key name or one character\"},"
+    "\"modifiers\":{\"type\":\"string\",\"description\":\"e.g. ctrl+shift (ctrl, shift, alt/meta, super)\"},"
+    BUF_PROP "},\"required\":[\"key\"]}", handle_gsurf_press_key);
+
+  add_tool (server, "gsurf_click_element",
+    "Click the first element matching a CSS selector in a gsurf page: it "
+    "is scrolled into view, focused and clicked at its centre.  "
+    "Asynchronous: returns at once; the outcome goes to the echo area.",
+    FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"selector\":{\"type\":\"string\",\"description\":\"CSS selector\"},"
+    BUF_PROP "},\"required\":[\"selector\"]}", handle_gsurf_click_element);
+
+  add_tool (server, "gsurf_set_cookie",
+    "Add a cookie to a gsurf view's session (its container's cookie jar "
+    "for a view in a container).", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"name\":{\"type\":\"string\"},"
+    "\"value\":{\"type\":\"string\"},"
+    "\"domain\":{\"type\":\"string\",\"description\":\"example.com, or .example.com for subdomains too\"},"
+    "\"path\":{\"type\":\"string\",\"description\":\"default /\"},"
+    "\"secure\":{\"type\":\"boolean\"},"
+    "\"http_only\":{\"type\":\"boolean\"},"
+    "\"expires\":{\"type\":\"integer\",\"description\":\"Unix seconds; 0 = session cookie\"},"
+    BUF_PROP "},\"required\":[\"name\",\"value\",\"domain\"]}",
+    handle_gsurf_set_cookie);
+
+  add_tool (server, "gsurf_toggle_module",
+    "Enable or disable a loaded gsurf module by name (adblock, dark_mode, "
+    "hardening, containers, form_autofill, modal, ...).", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"name\":{\"type\":\"string\",\"description\":\"module name\"},"
+    "\"enabled\":{\"type\":\"boolean\"}},"
+    "\"required\":[\"name\",\"enabled\"]}", handle_gsurf_toggle_module);
+
+  add_tool (server, "gsurf_run_action",
+    "Run a gsurf action by name on a gsurf buffer (see gsurf_list_actions): "
+    "core ones map to editor commands, the rest go to the modules "
+    "(dark-mode-toggle, dark-mode-toggle-site, form-autofill, ...).", FALSE,
+    "{\"type\":\"object\",\"properties\":{"
+    "\"action\":{\"type\":\"string\",\"description\":\"action name\"},"
+    BUF_PROP "},\"required\":[\"action\"]}", handle_gsurf_run_action);
+
+  add_tool (server, "gsurf_list_actions",
+    "Return a JSON array of every gsurf action: name, description and "
+    "handler (cmacs or module).", TRUE,
+    "{\"type\":\"object\",\"properties\":{}}", handle_gsurf_list_actions);
+
+  add_tool (server, "gsurf_list_containers",
+    "Return a JSON array of gsurf browsing containers (id, name, color, "
+    "temporary, views, proxy).", TRUE,
+    "{\"type\":\"object\",\"properties\":{}}", handle_gsurf_list_containers);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_GSURF */

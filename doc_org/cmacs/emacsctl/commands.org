@@ -100,7 +100,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =eshell=    | =eval=                                                      |
 | =ai=        | =providers=, =models=, =prompt=, =chat=                     |
 | =brigade=   | =spawn=, =status=, =result=, =cancel=, =list=, =agents=, =providers=, =models=, =send=, =inbox=, =drop=, =log=, =close= |
-| =gsurf=     | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =js=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =snapshot=, =pdf=, =permission= |
+| =gsurf=     | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =js=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =snapshot=, =pdf=, =permission=, =click=, =type=, =key=, =click-element=, =cookie=, =module=, =action=, =actions=, =containers= |
 | =gnuseye=   | =open=, =brief=, =layers=, =toggle=, =fly-to=, =refresh=, =query=, =geofence=, =cii= |
 | =pod=       | =status=, =pods=, =modules=, =stats=, =emit=, =eval=, =repl-eval=, =load=, =reload=, =set-context= |
 | =video=     | =list=, =snapshot=                                          |
@@ -111,6 +111,39 @@ missing subsystem maps to exit code 3 with a clear message.
 | =compositor=| =clients=, =focused=, =spawn=, =find=, =focus=, =close=, =geometry=, =layout=, =workspaces=, =workspace=, =screenshot=, =keybinds=, =run-keybind=, =mfact=, =nmaster=, =tags=, =lock=, =unlock=, =reload=, =config= |
 | =monitor=   | =list=, =info=, =modes=, =set-mode=, =position=, =set-position=, =enable=, =scale=, =transform= |
 | =sb=        | =ingest=, =jobs=, =status=, =cancel=, =tree=, =find=, =doctor=, =migrate=, =watch=, =open=, =layout=, =search=, =expand=, =node=, =stats=, =sources=, =refresh= (aliases =second-brain=, =secondbrain=) |
+
+* Driving a page: =gsurf click= / =type= / =key=
+
+The gsurf 0.5 control surface over D-Bus.  Input is delivered to the page
+as trusted native events while the editor keeps the keyboard (focus is
+borrowed only for the call), so a script can fill a form in a live
+browser buffer without stealing your keys.  Omitting =BUFFER= targets the
+most recent gsurf buffer.
+
+#+begin_src shell
+emacsctl gsurf click-element 'input[name=q]'      # async: focus + click the field
+emacsctl gsurf type 'gnu emacs'
+emacsctl gsurf key Enter
+emacsctl gsurf key a ctrl                          # Ctrl+A; modifiers ctrl+shift+alt+super
+emacsctl gsurf click 120 340 1                     # x y (CSS px) [button]
+emacsctl gsurf cookie session abc .example.com / true true 0
+emacsctl gsurf module dark_mode true
+emacsctl gsurf action dark-mode-toggle             # or reload, scroll-down, form-autofill ...
+emacsctl gsurf actions | yq -p json '.[] | select(.handler == "module") | .name'
+emacsctl gsurf containers
+#+end_src
+
+| Verb | Arguments | Method |
+|------+-----------+--------|
+| =click= | =X Y [BUTTON] [BUFFER]= | =Click= |
+| =type= | =TEXT [BUFFER]= | =TypeText= |
+| =key= | =KEY [MODIFIERS] [BUFFER]= | =PressKey= |
+| =click-element= | =SELECTOR [BUFFER]= | =ClickElement= |
+| =cookie= | =NAME VALUE DOMAIN [PATH] [SECURE] [HTTP_ONLY] [EXPIRES] [BUFFER]= | =SetCookie= |
+| =module= | =NAME ENABLED= (true or false) | =ToggleModule= |
+| =action= | =ACTION [BUFFER]= | =RunAction= |
+| =actions= | — | =ListActions= (JSON) |
+| =containers= | — | =ListContainers= (JSON) |
 
 * Agents: =brigade spawn= / =brigade send= / =brigade log=
 

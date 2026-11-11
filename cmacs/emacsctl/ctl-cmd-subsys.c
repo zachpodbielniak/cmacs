@@ -125,6 +125,36 @@ static const CtlMethodSpec subsys_specs[] = {
     "(origin type allow|deny|ask)",
     CTL_IFACE_GSURF, "PermissionPolicy", "s:origin s:type s:verdict",
     CTL_REPLY_STRING },
+  /* gsurf 0.5 control surface: trusted page input, cookies, modules,
+   actions and containers. */
+  { "gsurf click", "Click at X Y (CSS px) in the page "
+    "(button 1|2|3, default 1)",
+    CTL_IFACE_GSURF, "Click", "d:x d:y i?:button s?:buffer",
+    CTL_REPLY_STRING },
+  { "gsurf type", "Type text into the focused page element",
+    CTL_IFACE_GSURF, "TypeText", "s:text s?:buffer", CTL_REPLY_STRING },
+  { "gsurf key", "Press a key in the page "
+    "(e.g. Enter, Tab, ArrowDown; modifiers like ctrl+shift)",
+    CTL_IFACE_GSURF, "PressKey", "s:key s?:modifiers s?:buffer",
+    CTL_REPLY_STRING },
+  { "gsurf click-element", "Click the first element matching a CSS "
+    "selector (async)",
+    CTL_IFACE_GSURF, "ClickElement", "s:selector s?:buffer",
+    CTL_REPLY_STRING },
+  { "gsurf cookie", "Add a cookie to the view's session",
+    CTL_IFACE_GSURF, "SetCookie",
+    "s:name s:value s:domain s?:path b?:secure b?:http_only x?:expires "
+    "s?:buffer",
+    CTL_REPLY_STRING },
+  { "gsurf module", "Enable or disable a gsurf module (NAME true|false)",
+    CTL_IFACE_GSURF, "ToggleModule", "s:name b:enabled", CTL_REPLY_STRING },
+  { "gsurf action", "Run a gsurf action by name "
+    "(dark-mode-toggle, form-autofill, reload, ...)",
+    CTL_IFACE_GSURF, "RunAction", "s:action s?:buffer", CTL_REPLY_STRING },
+  { "gsurf actions", "List gsurf actions (JSON)",
+    CTL_IFACE_GSURF, "ListActions", NULL, CTL_REPLY_STRING },
+  { "gsurf containers", "List browsing containers (JSON)",
+    CTL_IFACE_GSURF, "ListContainers", NULL, CTL_REPLY_STRING },
 
   /* gnuseye */
   { "gnuseye open", "Open the GNU's Eye globe",

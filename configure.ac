@@ -1692,7 +1692,8 @@ if test "$with_cmacs_gsurf" != "no"; then
   CMACS_GSURF_OBJ="cmacs-gsurf-init.o cmacs-gsurf-defuns.o \
     cmacs-gsurf-view.o cmacs-gsurf-modules.o \
     cmacs-gsurf-downloads.o cmacs-gsurf-permissions.o \
-    cmacs-gsurf-snapshot.o cmacs-gsurf-print.o"
+    cmacs-gsurf-snapshot.o cmacs-gsurf-print.o \
+    cmacs-gsurf-control.o"
 
   # libregnum backend for emacs --lrg: when --with-cmacs-libregnum is on,
   # build gsurf's LRG backend (LRG_BACKEND=1 in src/Makefile.in) and the

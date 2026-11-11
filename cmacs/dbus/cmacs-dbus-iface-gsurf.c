@@ -115,22 +115,79 @@ static const gchar *iface_xml =
   "      <arg type='s' name='verdict' direction='in'/>"
   "      <arg type='s' name='result' direction='out'/>"
   "    </method>"
+  "    <method name='Click'>"
+  "      <arg type='d' name='x' direction='in'/>"
+  "      <arg type='d' name='y' direction='in'/>"
+  "      <arg type='i' name='button' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='TypeText'>"
+  "      <arg type='s' name='text' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='PressKey'>"
+  "      <arg type='s' name='key' direction='in'/>"
+  "      <arg type='s' name='modifiers' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='ClickElement'>"
+  "      <arg type='s' name='selector' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='SetCookie'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='s' name='value' direction='in'/>"
+  "      <arg type='s' name='domain' direction='in'/>"
+  "      <arg type='s' name='path' direction='in'/>"
+  "      <arg type='b' name='secure' direction='in'/>"
+  "      <arg type='b' name='http_only' direction='in'/>"
+  "      <arg type='x' name='expires' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='ToggleModule'>"
+  "      <arg type='s' name='name' direction='in'/>"
+  "      <arg type='b' name='enabled' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='RunAction'>"
+  "      <arg type='s' name='action' direction='in'/>"
+  "      <arg type='s' name='buffer' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='ListActions'>"
+  "      <arg type='s' name='actions' direction='out'/>"
+  "    </method>"
+  "    <method name='ListContainers'>"
+  "      <arg type='s' name='containers' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
 static GDBusNodeInfo *iface_info = NULL;
 
+/* Build an elisp string literal (always, even for ""), escaped with
+   cmacs_dispatch_lisp_escape -- never g_strescape. */
+static gchar *
+str_lit (const gchar *s)
+{
+  gchar *esc = cmacs_dispatch_lisp_escape (s);
+  gchar *out = g_strdup_printf ("\"%s\"", esc);
+  g_free (esc);
+  return out;
+}
+
 /* Build an elisp string literal, or "nil" when S is empty. */
 static gchar *
 str_or_nil (const gchar *s)
 {
-  gchar *esc, *out;
   if (s == NULL || *s == '\0')
     return g_strdup ("nil");
-  esc = cmacs_dbus_lisp_escape (s);
-  out = g_strdup_printf ("\"%s\"", esc);
-  g_free (esc);
-  return out;
+  return str_lit (s);
 }
 
 /* Eval EXPR (already fully built) and reply with the raw string. */
@@ -302,6 +359,105 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                          qo, qt, qv));
       g_free (qo); g_free (qt); g_free (qv);
     }
+  /* gsurf 0.5 control surface (helpers in lisp/cmacs/cmacs-gsurf-control.el) */
+  else if (g_strcmp0 (m, "Click") == 0)
+    {
+      gdouble x, y;
+      gint button;
+      const gchar *buffer;
+      gchar xs[G_ASCII_DTOSTR_BUF_SIZE], ys[G_ASCII_DTOSTR_BUF_SIZE];
+      gchar *buf;
+      g_variant_get (p, "(ddi&s)", &x, &y, &button, &buffer);
+      if (button < 1 || button > 3)
+        button = 1;
+      g_ascii_dtostr (xs, sizeof xs, x);
+      g_ascii_dtostr (ys, sizeof ys, y);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-click %s %s %d %s)",
+                         xs, ys, button, buf));
+      g_free (buf);
+    }
+  else if (g_strcmp0 (m, "TypeText") == 0)
+    {
+      const gchar *text, *buffer;
+      gchar *q, *buf;
+      g_variant_get (p, "(&s&s)", &text, &buffer);
+      q = str_lit (text);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-type-text %s %s)", q, buf));
+      g_free (q); g_free (buf);
+    }
+  else if (g_strcmp0 (m, "PressKey") == 0)
+    {
+      const gchar *key, *mods, *buffer;
+      gchar *qk, *qm, *buf;
+      g_variant_get (p, "(&s&s&s)", &key, &mods, &buffer);
+      qk = str_lit (key);
+      qm = str_or_nil (mods);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-press-key %s %s %s)", qk, qm, buf));
+      g_free (qk); g_free (qm); g_free (buf);
+    }
+  else if (g_strcmp0 (m, "ClickElement") == 0)
+    {
+      const gchar *sel, *buffer;
+      gchar *q, *buf;
+      g_variant_get (p, "(&s&s)", &sel, &buffer);
+      q = str_lit (sel);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-click-element %s %s)", q, buf));
+      g_free (q); g_free (buf);
+    }
+  else if (g_strcmp0 (m, "SetCookie") == 0)
+    {
+      const gchar *name, *value, *domain, *path, *buffer;
+      gboolean secure, http_only;
+      gint64 expires;
+      gchar *qn, *qv, *qd, *qp, *buf;
+      g_variant_get (p, "(&s&s&s&sbbx&s)", &name, &value, &domain, &path,
+                     &secure, &http_only, &expires, &buffer);
+      qn = str_lit (name);
+      qv = str_lit (value);
+      qd = str_lit (domain);
+      qp = str_or_nil (path);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-set-cookie %s %s %s %s %s %s %lld %s)",
+                         qn, qv, qd, qp, secure ? "t" : "nil",
+                         http_only ? "t" : "nil", (long long) expires, buf));
+      g_free (qn); g_free (qv); g_free (qd); g_free (qp); g_free (buf);
+    }
+  else if (g_strcmp0 (m, "ToggleModule") == 0)
+    {
+      const gchar *name;
+      gboolean enabled;
+      gchar *q;
+      g_variant_get (p, "(&sb)", &name, &enabled);
+      q = str_lit (name);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-toggle-module %s %s)", q,
+                         enabled ? "t" : "nil"));
+      g_free (q);
+    }
+  else if (g_strcmp0 (m, "RunAction") == 0)
+    {
+      const gchar *action, *buffer;
+      gchar *q, *buf;
+      g_variant_get (p, "(&s&s)", &action, &buffer);
+      q = str_lit (action);
+      buf = str_or_nil (buffer);
+      gsurf_reply (iv,
+        g_strdup_printf ("(cmacs-gsurf-mcp-run-action %s %s)", q, buf));
+      g_free (q); g_free (buf);
+    }
+  else if (g_strcmp0 (m, "ListActions") == 0)
+    gsurf_reply (iv, g_strdup ("(cmacs-gsurf-mcp-list-actions)"));
+  else if (g_strcmp0 (m, "ListContainers") == 0)
+    gsurf_reply (iv, g_strdup ("(cmacs-gsurf-mcp-list-containers)"));
 }
 
 static const GDBusInterfaceVTable vtable = {

@@ -156,7 +156,7 @@ on the matching =HAVE_CMACS_*= build flag:
 | =org.cmacs.Editor1.Debug=      | =cmacs-dbus-iface-debug.c=      | =backtrace=, =memory_info=, profiler, describe_* |
 | =org.cmacs.Editor1.Ai=         | =cmacs-dbus-iface-ai.c=         | =ai_*=                      |
 | =org.cmacs.Editor1.Brigade=    | =cmacs-dbus-iface-brigade.c=    | =agent_*= (spawn/status/result/cancel/list/agents/providers/models) and the mailbox =agent_send/inbox/drop/log/close= |
-| =org.cmacs.Editor1.Gsurf=      | =cmacs-dbus-iface-gsurf.c=      | =gsurf_*= (~20 tools)       |
+| =org.cmacs.Editor1.Gsurf=      | =cmacs-dbus-iface-gsurf.c=      | =gsurf_*= (29 tools; see below) |
 | =org.cmacs.Editor1.GnusEye=    | =cmacs-dbus-iface-gnuseye.c=    | =gnuseye_*=                 |
 | =org.cmacs.Editor1.Podomation= | =cmacs-dbus-iface-podomation.c= | =podomation_*=              |
 | =org.cmacs.Editor1.Video=      | =cmacs-dbus-iface-media.c=      | =video_*=                   |
@@ -172,6 +172,40 @@ Earlier interfaces also grew parity methods: BufferManager
 ProcessManager =SendTo=, Project =ListFiles/ReadFile/WriteFile=, and
 Compositor =FocusClient/CloseClient/SetClientGeometry/SetLayout/
 WorkspaceList/WorkspaceSwitch/Screenshot=.
+
+** org.cmacs.Editor1.Gsurf
+
+Every method is a thin bridge into a =cmacs-gsurf-mcp-*= Elisp helper
+and returns a string (JSON for the list methods).  An empty =buffer=
+means the most recent gsurf buffer.  Strings are spliced into the Elisp
+call with =cmacs_dispatch_lisp_escape=.
+
+| Method | In | Out | MCP tool |
+|--------+----+-----+----------|
+| =Open= | =s url= | =s= buffer name | =gsurf_open= |
+| =Navigate= | =s url=, =s buffer= | =s= | =gsurf_navigate= |
+| =Back= / =Forward= / =Reload= / =Stop= | =s buffer= | =s= | =gsurf_back= ... |
+| =GetUri= / =GetTitle= | =s buffer= | =s= | =gsurf_get_uri= / =_title= |
+| =Current= / =List= / =ModulesList= | — | =s= JSON | =gsurf_current= / =_list= / =_modules_list= |
+| =EvalJs= | =s script=, =s buffer= | =s= | =gsurf_eval_js= |
+| =SetZoom= | =d level=, =s buffer= | =s= | =gsurf_set_zoom= |
+| =LiteOpen= / =ExtractText= | =s url= / =s buffer= | =s= | =gsurf_lite_open= / =gsurf_extract_text= |
+| =DownloadList= / =DownloadCancel= | — / =x id= | =s= | =gsurf_download_*= |
+| =Snapshot= | =s file=, =b full_page=, =s buffer= | =s= path | =gsurf_snapshot= |
+| =PrintPdf= | =s file=, =s buffer= | =s= path | =gsurf_print_pdf= |
+| =PermissionPolicy= | =s origin=, =s type=, =s verdict= | =s= | =gsurf_permission_policy= |
+| =Click= | =d x=, =d y=, =i button= (0 = 1), =s buffer= | =s= | =gsurf_click= |
+| =TypeText= | =s text=, =s buffer= | =s= | =gsurf_type_text= |
+| =PressKey= | =s key=, =s modifiers= (=ctrl+shift=), =s buffer= | =s= | =gsurf_press_key= |
+| =ClickElement= | =s selector=, =s buffer= | =s= (async start) | =gsurf_click_element= |
+| =SetCookie= | =s name=, =s value=, =s domain=, =s path=, =b secure=, =b http_only=, =x expires=, =s buffer= | =s= | =gsurf_set_cookie= |
+| =ToggleModule= | =s name=, =b enabled= | =s= | =gsurf_toggle_module= |
+| =RunAction= | =s action=, =s buffer= | =s= =performed= / =not handled= | =gsurf_run_action= |
+| =ListActions= | — | =s= JSON | =gsurf_list_actions= |
+| =ListContainers= | — | =s= JSON | =gsurf_list_containers= |
+
+The input methods deliver trusted native events and borrow the page's
+keyboard focus only for the call (see the gsurf manual, *Page input*).
 
 Sync discipline: adding a tool in =cmacs/mcp/cmacs-mcp-tools-*.c=
 requires a matching method in the paired

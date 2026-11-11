@@ -12,6 +12,16 @@
  * `cmacs-gsurf-download-changed-functions', which the *gsurf-downloads*
  * buffer (lisp/cmacs/cmacs-gsurf-downloads.el) renders.
  *
+ * Containers: a view in a non-default gsurf container (gsurf 0.5) browses
+ * in its own WebKitWebContext, whose `download-started' never reaches the
+ * default context.  cmacs_gsurf_downloads_track_session connects the same
+ * handler to each such context once (object-data flag), so container
+ * downloads take exactly the default path.  gsurf's module-manager
+ * `download-started' signal is deliberately NOT used: it carries only the
+ * URI / suggested name / chosen path strings (emitted from inside
+ * decide-destination), not the WebKitDownload, so it can drive neither
+ * progress reporting nor cancellation.
+ *
  * Lifetime: the default WebContext is process-global and WebKitDownloads
  * outlive the view that started them, so this module keeps a pure-C
  * id->download map (no Lisp_Object, no GC interaction) and never captures a
@@ -268,6 +278,27 @@ cmacs_gsurf_downloads_init (void)
      creates, so connecting once here covers all gsurf buffers. */
   WebKitWebContext *ctx = webkit_web_context_get_default ();
   g_signal_connect (ctx, "download-started",
+                    G_CALLBACK (on_download_started), NULL);
+}
+
+void
+cmacs_gsurf_downloads_track_session (void *session)
+{
+  /* NULL is the engine default context, connected once by downloads_init.
+     Anything else is a container's own WebKitWebContext (WebKitGTK 4.1);
+     the type check keeps a future backend's session type from being
+     mistaken for one. */
+  if (session == NULL || !WEBKIT_IS_WEB_CONTEXT (session))
+    return;
+  cmacs_gsurf_downloads_init ();
+  if (g_object_get_data (G_OBJECT (session), "cmacs-gsurf-downloads") != NULL)
+    return;
+  g_object_set_data (G_OBJECT (session), "cmacs-gsurf-downloads",
+                     GINT_TO_POINTER (1));
+  /* The handler is context-agnostic (it ignores CONTEXT); a destroyed
+     temporary container drops the connection with its context, while
+     in-flight downloads hold their own references. */
+  g_signal_connect (session, "download-started",
                     G_CALLBACK (on_download_started), NULL);
 }
 

@@ -42,6 +42,7 @@
 #endif
 
 extern void syms_of_cmacs_gsurf_defuns (void);
+extern void syms_of_cmacs_gsurf_control (void);
 
 /* ── Process-wide gsurf objects ─────────────────────────────────────── */
 
@@ -147,6 +148,9 @@ cmacs_gsurf_runtime_ensure (void)
   /* Track downloads on the shared default WebKitWebContext (idempotent). */
   cmacs_gsurf_downloads_init ();
 
+  /* Bridge the module manager's input-mode signal to Emacs (idempotent). */
+  cmacs_gsurf_control_init ();
+
   cmacs_gsurf__backend_ok = true;
   return true;
 }
@@ -163,6 +167,7 @@ void
 syms_of_cmacs_gsurf (void)
 {
   syms_of_cmacs_gsurf_defuns ();
+  syms_of_cmacs_gsurf_control ();
 }
 
 void

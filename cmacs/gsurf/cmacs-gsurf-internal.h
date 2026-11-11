@@ -25,11 +25,15 @@ G_BEGIN_DECLS
 GsurfApplication *cmacs_gsurf_app    (void);
 GsurfConfig      *cmacs_gsurf_config (void);
 
+/* The GsurfView wrapped by V (borrowed), and the reverse lookup (NULL when
+   GV belongs to no live gsurf buffer).  Defined in cmacs-gsurf-view.c. */
+GsurfView      *cmacs_gsurf_view_gsurf         (CmacsGsurfView *v);
+CmacsGsurfView *cmacs_gsurf_view_from_gsurf    (GsurfView *gv);
+
 #ifdef HAVE_CMACS_GSURF_LRG
 /* LRG-backend view accessors (defined in cmacs-gsurf-view.c, used by
    cmacs-gsurf-lrg.c).  Kept here so cmacs-gsurf.h stays libregnum-free. */
 gboolean        cmacs_gsurf_view_is_lrg        (CmacsGsurfView *v);
-GsurfView      *cmacs_gsurf_view_gsurf         (CmacsGsurfView *v);
 gboolean        cmacs_gsurf_view_focused_p     (CmacsGsurfView *v);
 CmacsGsurfView *cmacs_gsurf_lrg_focused_view   (void);
 #endif

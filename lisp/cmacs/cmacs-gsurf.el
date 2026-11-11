@@ -204,6 +204,143 @@ Loaded last, so it overrides the YAML layers.  Nil means no C config."
   :type '(choice (const :tag "None" nil) file)
   :group 'cmacs-gsurf)
 
+;;;; Module knobs (gsurf 0.5) -----------------------------------------
+;; Convenience defcustoms for the toolkit-neutral modules gsurf 0.5 grew.
+;; Each is merged into `cmacs-gsurf-modules' by
+;; `cmacs-gsurf--effective-modules' before the YAML is synthesised, so
+;; they ride the same path (and an explicit entry in
+;; `cmacs-gsurf-modules' still works).  nil always means "leave it to
+;; `cmacs-gsurf-modules' / the module's own default"; the knobs override
+;; the same keys there.
+
+(defconst cmacs-gsurf--module-switch-type
+  '(choice (const :tag "Leave to `cmacs-gsurf-modules'" nil)
+           (const :tag "Enable" t)
+           (const :tag "Disable" off))
+  "Customize type shared by the module on/off knobs.")
+
+(defcustom cmacs-gsurf-languages nil
+  "Languages pages see, most preferred first, as BCP 47 tags.
+For example (\"en-US\" \"de\").  Sets gsurf's `browser.languages':
+navigator.language(s) and the Accept-Language header.  Nil leaves the
+locale's languages (LANGUAGE / LC_ALL / LC_MESSAGES / LANG)."
+  :type '(repeat string)
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-containers nil
+  "Enable the gsurf `containers' module (isolated browsing identities).
+A container is a separate cookie jar, storage and cache, like Firefox
+containers.  The module decides which container a new view opens in
+\(host rules, the opener's container, the new-tab policy).  Views can
+also be put in a container explicitly with
+`cmacs-gsurf-open-in-container'."
+  :type cmacs-gsurf--module-switch-type
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-containers-new-tab nil
+  "Container a fresh gsurf buffer opens in when `containers' is on.
+\"temporary\" (the module's default: a throw-away container per
+buffer), \"default\" (the engine's own session), or a container id.
+Nil leaves the module's default."
+  :type '(choice (const :tag "Module default" nil)
+                 (const "temporary") (const "default") string)
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-container-definitions nil
+  "Persistent containers for the `containers' module.
+A list of plists, each with :name and optionally :id, :color, :hosts (a
+list of host regexps that open in it), :proxy, :proxy_ignore and
+:user_agent -- the keys of the module's `containers:' list.  Example:
+  ((:name \"Media\" :color \"#f9e2af\"
+    :hosts (\"(^|\\\\.)youtube\\\\.com$\")))"
+  :type '(repeat plist)
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-hardening nil
+  "Enable the gsurf `hardening' module (LibreWolf-style privacy).
+HTTPS-only upgrades, tracking-parameter stripping, cross-origin referer
+trimming, Global Privacy Control, no prefetch, third-party cookie
+blocking and WebKit tracking prevention.  Fine-tune it through
+`cmacs-gsurf-hardening-options'."
+  :type cmacs-gsurf--module-switch-type
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-hardening-options nil
+  "Extra options for the `hardening' module, as a plist.
+Keys are the module's: :https_only, :https_only_local, :strip_params,
+:referer, :gpc, :dnt, :no_prefetch, :third_party_cookies, :itp,
+:webrtc, :exempt.  Example: (:https_only_local t :webrtc t)."
+  :type 'plist
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-form-autofill nil
+  "Enable the gsurf `form_autofill' module.
+Fills address/contact forms from profiles in
+~/.config/gsurf/autofill.yaml (mode 0600) or
+`cmacs-gsurf-form-autofill-options'.  Run it with
+\\[cmacs-gsurf-form-autofill] in a gsurf buffer.  Card data is only read
+from the private file and only filled on https pages."
+  :type cmacs-gsurf--module-switch-type
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-form-autofill-options nil
+  "Extra options for the `form_autofill' module, as a plist.
+Keys: :file, :suggest_on_focus, :exclude, :profiles (a list of plists
+with :label, :given_name, :family_name, :email, :tel, :street, :city,
+:region, :postal_code, :country)."
+  :type 'plist
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-dark-mode nil
+  "Enable the gsurf `dark_mode' module.
+Toggle it per page with \\[cmacs-gsurf-dark-mode-toggle] and per site
+\(remembered) with \\[cmacs-gsurf-dark-mode-toggle-site]."
+  :type cmacs-gsurf--module-switch-type
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-dark-mode-style nil
+  "How the `dark_mode' module darkens pages.
+`native' asks for the site's own dark theme (prefers-color-scheme),
+`filter' inverts with a CSS filter, `dynamic' re-colours like Dark
+Reader, `off' disables it.  Nil leaves the module default (filter)."
+  :type '(choice (const :tag "Module default" nil)
+                 (const off) (const native) (const filter) (const dynamic))
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-dark-mode-sites nil
+  "Per-site `dark_mode' rules: a list of plists, first match wins.
+Each has :match (a host regexp) and any of :mode, :brightness,
+:contrast, :sepia, :grayscale.  Sites toggled with
+`cmacs-gsurf-dark-mode-toggle-site' are saved by the module itself in
+$XDG_DATA_HOME/gsurf/dark_mode/sites.yaml."
+  :type '(repeat plist)
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-adblock nil
+  "Enable the gsurf `adblock' module (uBlock Origin / ABP lists).
+Lists are parsed natively: network rules, element hiding, procedural
+cosmetics, scriptlets, $redirect and $removeparam.  Set the lists in
+`cmacs-gsurf-adblock-filter-lists'."
+  :type cmacs-gsurf--module-switch-type
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-adblock-filter-lists nil
+  "Filter lists for the `adblock' module.
+Each element is a file name, or a plist (:path FILE :trusted t) for a
+list allowed to use trusted-* scriptlets (uBlock's own lists).  Fetch
+EasyList and uBlock's lists with `make adblock-lists' in deps/gsurf
+\(they land in ~/.config/gsurf/adblock/).  Nil leaves the module's
+default list set."
+  :type '(repeat (choice file plist))
+  :group 'cmacs-gsurf)
+
+(defcustom cmacs-gsurf-adblock-host-files nil
+  "Hosts-format block lists for the `adblock' module.
+One host per line (or \"0.0.0.0 host\"): domain-level blocking that
+also stops top-level navigations.  Nil leaves the module default."
+  :type '(repeat file)
+  :group 'cmacs-gsurf)
+
 (declare-function cmacs-gsurf-supported-p "cmacs-gsurf-defuns.c" ())
 (declare-function cmacs-gsurf-attach "cmacs-gsurf-defuns.c" (buffer))
 (declare-function cmacs-gsurf-detach "cmacs-gsurf-defuns.c" (buffer))
@@ -237,29 +374,121 @@ Loaded last, so it overrides the YAML layers.  Nil means no C config."
 (declare-function cmacs-gsurf-load-config-file "cmacs-gsurf-defuns.c" (file))
 (declare-function cmacs-gsurf-load-config-c-file "cmacs-gsurf-defuns.c" (file))
 (declare-function cmacs-gsurf-reconfigure-modules "cmacs-gsurf-defuns.c" ())
+(declare-function cmacs-gsurf-attach-in-container "cmacs-gsurf-control.c"
+                  (buffer container &optional opener uri))
+(declare-function cmacs-gsurf-buffer-for-view-id "cmacs-gsurf-control.c" (id))
+(declare-function cmacs-gsurf--mode-line-input-mode "cmacs-gsurf-control" ())
 
 ;;;; Config synthesis + application -----------------------------------
 
 (defvar cmacs-gsurf--config-applied nil
   "Non-nil once `cmacs-gsurf--apply-config' has run (config is process-global).")
 
+(defun cmacs-gsurf--plist-p (v)
+  "Non-nil when V is a non-empty plist whose keys are keywords."
+  (and (consp v) (keywordp (car v)) (zerop (% (length v) 2))))
+
+(defun cmacs-gsurf--yaml-key (k)
+  "Render plist key K (a keyword or symbol) as a YAML mapping key."
+  (if (keywordp k) (substring (symbol-name k) 1) (format "%s" k)))
+
 (defun cmacs-gsurf--yaml-scalar (v)
-  "Render Lisp value V as a YAML scalar string."
+  "Render Lisp value V as a YAML value (flow style, one line).
+Scalars become YAML scalars; a plist becomes a flow mapping
+{key: value, ...}; any other list or a vector becomes a flow sequence
+[a, b, ...] (use a vector for an empty sequence, since nil is false)."
   (cond ((eq v t)        "true")
         ((eq v nil)      "false")
         ((integerp v)    (number-to-string v))
         ((numberp v)     (number-to-string v))
-        ((symbolp v)     (format "%S" (symbol-name v)))
         ((stringp v)     (format "%S" v))   ; double-quoted, escaped
+        ((symbolp v)     (format "%S" (symbol-name v)))
+        ((cmacs-gsurf--plist-p v)
+         (let (parts)
+           (while v
+             (push (format "%s: %s" (cmacs-gsurf--yaml-key (car v))
+                           (cmacs-gsurf--yaml-scalar (cadr v)))
+                   parts)
+             (setq v (cddr v)))
+           (concat "{" (string-join (nreverse parts) ", ") "}")))
+        ((or (consp v) (vectorp v))
+         (concat "[" (mapconcat #'cmacs-gsurf--yaml-scalar v ", ") "]"))
         (t               (format "%S" v))))
 
+(defun cmacs-gsurf--knob-entries ()
+  "Return (MODULE . PLIST) overrides derived from the module knobs.
+Only knobs that are non-nil contribute, so with every knob at its
+default this is nil and `cmacs-gsurf-modules' is used verbatim."
+  (let (out)
+    (cl-flet ((switch (knob) (cond ((eq knob 'off) (list :enabled nil))
+                                   (knob (list :enabled t)))))
+      (let ((pl (append (switch cmacs-gsurf-containers)
+                        (and cmacs-gsurf-containers-new-tab
+                             (list :new_tab cmacs-gsurf-containers-new-tab))
+                        (and cmacs-gsurf-container-definitions
+                             (list :containers
+                                   cmacs-gsurf-container-definitions)))))
+        (when pl (push (cons "containers" pl) out)))
+      (let ((pl (append (switch cmacs-gsurf-hardening)
+                        cmacs-gsurf-hardening-options)))
+        (when pl (push (cons "hardening" pl) out)))
+      (let ((pl (append (switch cmacs-gsurf-form-autofill)
+                        cmacs-gsurf-form-autofill-options)))
+        (when pl (push (cons "form_autofill" pl) out)))
+      (let ((pl (append (switch cmacs-gsurf-dark-mode)
+                        (and cmacs-gsurf-dark-mode-style
+                             (list :mode cmacs-gsurf-dark-mode-style))
+                        (and cmacs-gsurf-dark-mode-sites
+                             (list :sites cmacs-gsurf-dark-mode-sites)))))
+        (when pl (push (cons "dark_mode" pl) out)))
+      (let ((pl (append (switch cmacs-gsurf-adblock)
+                        (and cmacs-gsurf-adblock-filter-lists
+                             (list :filter_lists
+                                   cmacs-gsurf-adblock-filter-lists))
+                        (and cmacs-gsurf-adblock-host-files
+                             (list :host_files
+                                   cmacs-gsurf-adblock-host-files)))))
+        (when pl (push (cons "adblock" pl) out))))
+    (nreverse out)))
+
+(defun cmacs-gsurf--effective-modules ()
+  "Return `cmacs-gsurf-modules' with the module knobs merged in.
+A knob's keys override the same keys of an existing entry for that
+module; a module with no entry gets one appended."
+  (let ((mods (mapcar (lambda (e) (cons (car e) (copy-sequence (cdr e))))
+                      cmacs-gsurf-modules)))
+    (dolist (over (cmacs-gsurf--knob-entries))
+      (let ((cell (assoc (car over) mods)))
+        (if (null cell)
+            (setq mods (append mods (list (cons (car over)
+                                                (copy-sequence (cdr over))))))
+          (let ((pl (cdr over)))
+            (while pl
+              (setcdr cell (plist-put (cdr cell) (car pl) (cadr pl)))
+              (setq pl (cddr pl)))))))
+    mods))
+
 (defun cmacs-gsurf--config-to-yaml ()
-  "Build a gsurf `modules:' YAML document from `cmacs-gsurf-modules'.
-Returns the empty string when there is nothing to configure."
-  (if (null cmacs-gsurf-modules)
+  "Build a gsurf YAML document from the Emacs-side configuration.
+The `modules:' section comes from `cmacs-gsurf-modules' merged with
+the module knobs (`cmacs-gsurf--effective-modules'); a `browser:'
+section carries `cmacs-gsurf-languages'.  Returns the empty string when
+there is nothing to configure."
+  (let ((mods (cmacs-gsurf--effective-modules))
+        (browser (if cmacs-gsurf-languages
+                     (format "browser:\n  languages: %s\n"
+                             (cmacs-gsurf--yaml-scalar
+                              (vconcat cmacs-gsurf-languages)))
+                   "")))
+    (concat browser (cmacs-gsurf--modules-yaml mods))))
+
+(defun cmacs-gsurf--modules-yaml (mods)
+  "Render MODS, an alist of (MODULE . PLIST), as a `modules:' YAML section.
+Returns the empty string for nil."
+  (if (null mods)
       ""
     (let ((out "modules:\n"))
-      (dolist (entry cmacs-gsurf-modules)
+      (dolist (entry mods)
         (let ((name (car entry))
               (pl (cdr entry)))
           (setq out (concat out (format "  %s:\n" name)))
@@ -325,6 +554,29 @@ reconfigured to pick up option changes."
   (message "cmacs-gsurf: configuration reloaded"))
 
 ;;;; Internal book-keeping ---------------------------------------------
+
+;; How a new buffer's view is created.  `cmacs-gsurf-mode' kills local
+;; variables, so the opener / container for the view it attaches are
+;; passed in through these dynamically bound globals (see
+;; `cmacs-gsurf--open'), and the opener is then recorded buffer-locally.
+
+(defvar cmacs-gsurf--next-container nil
+  "Container id for the view the next `cmacs-gsurf-mode' attaches, or nil.
+Bound dynamically by `cmacs-gsurf--open'; never set it globally.")
+
+(defvar cmacs-gsurf--next-opener nil
+  "Opener gsurf buffer for the view the next `cmacs-gsurf-mode' attaches.
+Bound dynamically by `cmacs-gsurf--open'; never set it globally.")
+
+(defvar cmacs-gsurf--next-uri nil
+  "First URI of the view the next `cmacs-gsurf-mode' attaches (a hint).
+Lets the containers module's host rules place the view.  Bound
+dynamically by `cmacs-gsurf--open'.")
+
+(defvar-local cmacs-gsurf--opener nil
+  "The gsurf buffer this one was opened from, or nil.
+The view's opener id (`cmacs-gsurf-opener-id') is the durable record;
+this is a convenience for Lisp.")
 
 (defvar cmacs-gsurf--buffers nil
   "List of live `cmacs-gsurf-mode' buffers (for widget repositioning).")
@@ -578,6 +830,20 @@ moves a small fixed amount while Emacs keeps focus."
     (define-key m (kbd "C-c C-b") #'cmacs-gsurf-bookmarks)
     (define-key m (kbd "m")       #'cmacs-gsurf-bookmark-add)
     (define-key m (kbd "q")       #'quit-window)
+    ;; gsurf 0.5 control surface (cmacs-gsurf-control.el): help, buffer
+    ;; tree, actions, containers, page input, module toggles.  The C-M-
+    ;; keys are the ones gsurf binds while a page holds the keyboard.
+    (define-key m (kbd "?")       #'cmacs-gsurf-keybinds-help)
+    (define-key m (kbd "T")       #'cmacs-gsurf-tree)
+    (define-key m (kbd "C-c C-x") #'cmacs-gsurf-run-action)
+    (define-key m (kbd "C-c C-n") #'cmacs-gsurf-open-in-container)
+    (define-key m (kbd "C-c C-t") #'cmacs-gsurf-open-in-temporary-container)
+    (define-key m (kbd "C-c .")   #'cmacs-gsurf-click-selector)
+    (define-key m (kbd "C-c C-k") #'cmacs-gsurf-press-key)
+    (define-key m (kbd "C-c C-y") #'cmacs-gsurf-type-text)
+    (define-key m (kbd "C-M-d")   #'cmacs-gsurf-dark-mode-toggle)
+    (define-key m (kbd "C-M-S-d") #'cmacs-gsurf-dark-mode-toggle-site)
+    (define-key m (kbd "C-M-f")   #'cmacs-gsurf-form-autofill)
     m)
   "Keymap for `cmacs-gsurf-mode'.
 A gsurf buffer starts under Emacs/evil control: the web widget is
@@ -627,7 +893,8 @@ Escape returns control to Emacs.
   (setq-local mode-line-format
               '("%e" mode-line-front-space
                 mode-line-buffer-identification
-                "  " (:eval (cmacs-gsurf--mode-line-progress))
+                "  " (:eval (cmacs-gsurf--mode-line-input-mode))
+                (:eval (cmacs-gsurf--mode-line-progress))
                 (:eval (cmacs-gsurf--mode-line-url)) "  gsurf"))
   (setq-local header-line-format
               '((:eval (cmacs-gsurf--header-line))))
@@ -636,7 +903,19 @@ Escape returns control to Emacs.
   ;; first attach, which is what triggers module loading -- module
   ;; `enabled' flags are read from this config at load time.  Idempotent.
   (cmacs-gsurf--apply-config)
-  (cmacs-gsurf-attach (current-buffer))
+  ;; A buffer opened from another one (a link "in new tab", a popup) or
+  ;; into a specific container gets its view through gsurf_view_new_full,
+  ;; which records the opener and requests the container; WebKit fixes a
+  ;; view's session at creation, so this is the only chance.
+  (setq-local cmacs-gsurf--opener
+              (and (buffer-live-p cmacs-gsurf--next-opener)
+                   cmacs-gsurf--next-opener))
+  (if (or cmacs-gsurf--next-container cmacs-gsurf--opener)
+      (cmacs-gsurf-attach-in-container (current-buffer)
+                                       cmacs-gsurf--next-container
+                                       cmacs-gsurf--opener
+                                       cmacs-gsurf--next-uri)
+    (cmacs-gsurf-attach (current-buffer)))
   ;; Push any saved permission policy into the C table (global, idempotent).
   (cmacs-gsurf--apply-permission-policy)
   (when (/= cmacs-gsurf-default-zoom 1.0)
@@ -771,12 +1050,17 @@ Escape returns control to Emacs.
     (with-current-buffer buffer
       (force-mode-line-update))))
 
-(defun cmacs-gsurf--open-popup (url)
+(defun cmacs-gsurf--open-popup (url &optional opener-id)
   "Open URL (a popup / new-window request) in a new gsurf buffer.
-Called from the C `create-view' bridge.  Displayed per
-`cmacs-gsurf-popup-display-function'."
+Called from the C `create-view' bridge.  OPENER-ID is the gsurf view id
+of the page that asked; when its buffer is still live the new view
+records it as opener (buffer tree, container inheritance).  Displayed
+per `cmacs-gsurf-popup-display-function'."
   (when (and url (not (string-empty-p url)))
-    (let ((buf (save-window-excursion (cmacs-gsurf url))))
+    (let* ((opener (and opener-id
+                        (fboundp 'cmacs-gsurf-buffer-for-view-id)
+                        (cmacs-gsurf-buffer-for-view-id opener-id)))
+           (buf (cmacs-gsurf--open url nil opener)))
       (when (functionp cmacs-gsurf-popup-display-function)
         (funcall cmacs-gsurf-popup-display-function buf))
       buf)))
@@ -995,7 +1279,17 @@ With a prefix argument, pipe the page HTML instead of the rendered text."
       "-"  #'cmacs-gsurf-zoom-out
       "0"  #'cmacs-gsurf-zoom-reset
       "/"  #'cmacs-gsurf-find-in-page
-      "q"  #'quit-window))
+      "q"  #'quit-window
+      ;; gsurf 0.5 control surface (cmacs-gsurf-control.el)
+      "?"  #'cmacs-gsurf-keybinds-help
+      "T"  #'cmacs-gsurf-tree
+      "ga" #'cmacs-gsurf-run-action
+      "gc" #'cmacs-gsurf-open-in-container
+      "gC" #'cmacs-gsurf-open-in-temporary-container
+      "gi" #'cmacs-gsurf-focus-first-input
+      "gd" #'cmacs-gsurf-dark-mode-toggle
+      "gD" #'cmacs-gsurf-dark-mode-toggle-site
+      "gF" #'cmacs-gsurf-form-autofill))
   ;; The aux map above is still shadowed by evil's OWN global bindings for some
   ;; keys (notably C-e/C-y = `evil-scroll-line-down'/`-up' in Doom), so the
   ;; line-scroll keys silently stop working.  Mark cmacs-gsurf-mode-map as an
@@ -1065,14 +1359,27 @@ With a prefix argument, pipe the page HTML instead of the rendered text."
    (list (read-string "URL or search: " nil nil cmacs-gsurf-home-url)))
   (unless (cmacs-gsurf-supported-p)
     (user-error "cmacs-gsurf not built; reconfigure with --with-cmacs-gsurf"))
+  (let ((buf (cmacs-gsurf--open url)))
+    (switch-to-buffer buf)
+    buf))
+
+(defun cmacs-gsurf--open (url &optional container opener)
+  "Create a gsurf buffer loading URL and return it, without displaying it.
+CONTAINER (nil, a container id, \"temporary\" or \"default\") is
+requested for the new view; OPENER (a gsurf buffer, or nil) is
+recorded as the view it was opened from."
+  (unless (cmacs-gsurf-supported-p)
+    (user-error "cmacs-gsurf not built; reconfigure with --with-cmacs-gsurf"))
   (let* ((target (cmacs-gsurf--normalize-url (or url cmacs-gsurf-home-url)))
          (buf (generate-new-buffer "*gsurf*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (insert "cmacs-gsurf: the window body shows the live web view.\n"))
-      (cmacs-gsurf-mode)
+      (let ((cmacs-gsurf--next-container container)
+            (cmacs-gsurf--next-opener opener)
+            (cmacs-gsurf--next-uri target))
+        (cmacs-gsurf-mode))
       (cmacs-gsurf-load-uri buf target))
-    (switch-to-buffer buf)
     buf))
 
 ;;;###autoload
@@ -1604,6 +1911,12 @@ remains on `=' / `+' / `-')."
 ;; `cmacs-gsurf-download-changed-functions' recorder is always active (the
 ;; *gsurf-downloads* buffer can then show history opened at any time).
 (require 'cmacs-gsurf-downloads)
+
+;; gsurf 0.5 control surface: page input, cookies/proxy, containers, the
+;; buffer tree, actions, input-mode indicator and keybinding help.  Loaded
+;; eagerly: the mode line and the C new-view / mode-changed bridges call
+;; into it.
+(require 'cmacs-gsurf-control)
 
 (provide 'cmacs-gsurf)
 ;;; cmacs-gsurf.el ends here
