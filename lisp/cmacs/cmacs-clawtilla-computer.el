@@ -29,6 +29,13 @@
 ;; appears in this buffer with no edit, and `make parity' fails a client
 ;; that walks the enumeration in one place and hardcodes it in another.
 ;;
+;; The fifth, Browser (clawtilla 0.9.0), is the agent's web browser: a
+;; gsurf on a private Xvfb that the daemon starts on the first browser
+;; call.  This buffer draws its picture, opens an address in it, clicks
+;; where the mouse clicks on the picture -- mapped back from the scaled
+;; image to the page's own CSS pixels -- and stops it.  A daemon built
+;; without GSURF=1 says so rather than drawing an empty frame.
+;;
 ;; Which halves are worth showing at all depends on the computer's type,
 ;; and that is also the library's answer: `computer-type' carries
 ;; `screen', `mounts' and `image' per type, so an agent with
@@ -52,6 +59,23 @@
   "What `computer.screen' last said about the screen.")
 (defvar-local cmacs-clawtilla-computer--frame nil
   "The last screen frame, as an Emacs image, or nil.")
+(defvar-local cmacs-clawtilla-computer--browser nil
+  "What `browser.frame' last said about this agent's browser, or nil.
+
+JSON text, as the daemon sent it less the picture: it goes back to the
+library for the session line, and a re-encoding of the ordinary parse
+would turn `running: false' into an object.")
+(defvar-local cmacs-clawtilla-computer--browser-list nil
+  "The last `browser.list' reply: `available' and every session.")
+(defvar-local cmacs-clawtilla-computer--browser-image nil
+  "The browser picture as an Emacs image, or nil.")
+(defvar-local cmacs-clawtilla-computer--browser-size nil
+  "The picture's own size in pixels, (WIDTH . HEIGHT), or nil.
+
+Read from the PNG itself, because the image is drawn scaled to fit the
+window and a click must be mapped back to the page's pixels.")
+
+(declare-function cmacs-clawtilla--browser-line "cmacs-clawtilla-defuns.c")
 
 (defun cmacs-clawtilla-computer--views ()
   "Return the computer's views, in the library's order."
@@ -121,6 +145,60 @@
                          (let ((size (alist-get 'size file)))
                            (if size (file-size-human-readable size) ""))))))))
 
+(defun cmacs-clawtilla-computer--browser-sessions ()
+  "Return the `browser.list' sessions this agent drives or shares."
+  (let ((agent cmacs-clawtilla-computer--agent))
+    (seq-filter (lambda (session)
+                  (or (member agent (alist-get 'agents session))
+                      (equal (alist-get 'key session)
+                             (format "agent:%s" agent))))
+                (alist-get 'sessions cmacs-clawtilla-computer--browser-list))))
+
+(defun cmacs-clawtilla-computer--draw-browser ()
+  "Draw the Browser view."
+  (let ((listing cmacs-clawtilla-computer--browser-list))
+    (cond
+     ((and listing (assq 'available listing)
+           (not (eq t (alist-get 'available listing))))
+      (insert "  " (propertize
+                    "This daemon was built without GSURF=1, so no agent has a browser."
+                    'face 'cmacs-clawtilla-error)
+              "\n"))
+     (t
+      ;; The line above the picture is the library's sentence, the same
+      ;; one the GTK, web and lrg clients draw.
+      (insert "  " (or (cmacs-clawtilla--browser-line
+                        cmacs-clawtilla-computer--browser)
+                       "")
+              "\n\n")
+      (if cmacs-clawtilla-computer--browser-image
+          (progn
+            (insert-image cmacs-clawtilla-computer--browser-image
+                          nil nil nil t)
+            (insert "\n\n  " (cmacs-clawtilla-dim
+                              "mouse-1 clicks in the page; x clicks at a point")
+                    "\n"))
+        (insert "  " (cmacs-clawtilla-dim
+                      "No picture.  a opens an address; r reads the page again.")
+                "\n"))
+      (let ((sessions (cmacs-clawtilla-computer--browser-sessions)))
+        (when sessions
+          (insert "\n" (propertize "Sessions" 'face 'cmacs-clawtilla-heading)
+                  "\n")
+          (dolist (session sessions)
+            (cmacs-clawtilla-insert-section
+             :type 'browser-session :value session :level 1
+             :heading (format "%-24s %-7s %-8s %s"
+                              (or (alist-get 'key session) "?")
+                              (or (alist-get 'kind session) "")
+                              (if (eq t (alist-get 'running session))
+                                  (propertize "running"
+                                              'face 'cmacs-clawtilla-running)
+                                (propertize "stopped"
+                                            'face 'cmacs-clawtilla-stopped))
+                              (cmacs-clawtilla-dim
+                               (or (alist-get 'uri session) "")))))))))))
+
 (defun cmacs-clawtilla-computer--draw ()
   "Redraw the computer buffer."
   (cmacs-clawtilla-ui-preserving
@@ -159,6 +237,7 @@
         ("screen" (cmacs-clawtilla-computer--draw-screen))
         ("mounts" (cmacs-clawtilla-computer--draw-mounts))
         ("exchange" (cmacs-clawtilla-computer--draw-exchange))
+        ("browser" (cmacs-clawtilla-computer--draw-browser))
         (_ (cmacs-clawtilla-computer--draw-shell))))))
 
 
@@ -193,6 +272,16 @@
            (setq cmacs-clawtilla-computer--screen data)
            (cmacs-clawtilla-computer--draw)))))
     (cmacs-clawtilla-request
+     conn "browser.list" nil
+     (lambda (data err)
+       (when (and (buffer-live-p buffer) (not err))
+         (with-current-buffer buffer
+           (setq cmacs-clawtilla-computer--browser-list data)
+           (cmacs-clawtilla-computer--draw)))))
+    (when (equal (buffer-local-value 'cmacs-clawtilla-computer--view buffer)
+                 "browser")
+      (with-current-buffer buffer (cmacs-clawtilla-computer-browser-frame)))
+    (cmacs-clawtilla-request
      conn "exchange.list" payload
      (lambda (data err)
        (when (and (buffer-live-p buffer) (not err))
@@ -211,7 +300,11 @@
                         (cmacs-clawtilla-computer--views)))
          (rest (cdr (member cmacs-clawtilla-computer--view nicks))))
     (setq cmacs-clawtilla-computer--view (or (car rest) (car nicks)))
-    (cmacs-clawtilla-computer--draw)))
+    (cmacs-clawtilla-computer--draw)
+    ;; A frame is a screenshot of a live page: asked for on arrival,
+    ;; never on a timer from a buffer nobody is reading.
+    (when (equal cmacs-clawtilla-computer--view "browser")
+      (cmacs-clawtilla-computer-browser-frame))))
 
 (defun cmacs-clawtilla-computer-exec (command)
   "Run COMMAND on this agent's computer."
@@ -435,6 +528,166 @@ is not shared control, it is a corrupted command line."
    (list (cons 'agent cmacs-clawtilla-computer--agent))
    (lambda (_d e) (message "clawtilla: %s" (or e "control toggled")))))
 
+;;;; The browser.
+
+(defun cmacs-clawtilla-computer--png-size (data)
+  "Return the pixel size of the PNG in the unibyte string DATA.
+
+As (WIDTH . HEIGHT), read from the IHDR chunk, or nil when DATA is not
+a PNG.  The picture is drawn scaled to the window, so mapping a click
+needs the page's own size -- which is the picture's, one CSS pixel to
+one image pixel."
+  (when (and (stringp data) (>= (length data) 24)
+             (string-prefix-p "\x89PNG" data))
+    (cl-flet ((u32 (offset)
+                (logior (ash (aref data offset) 24)
+                        (ash (aref data (+ offset 1)) 16)
+                        (ash (aref data (+ offset 2)) 8)
+                        (aref data (+ offset 3)))))
+      (cons (u32 16) (u32 20)))))
+
+(defun cmacs-clawtilla-computer--map-click (x y shown native)
+  "Map a click at X, Y on an image drawn at SHOWN to the page's pixels.
+
+SHOWN and NATIVE are (WIDTH . HEIGHT): the size the image is drawn at,
+and its own size.  Returns (PX . PY) in the page's CSS pixels, clamped
+inside the page, or nil when either size is unknown or empty."
+  (when (and shown native
+             (> (car shown) 0) (> (cdr shown) 0)
+             (> (car native) 0) (> (cdr native) 0))
+    (cons (max 0 (min (1- (car native))
+                      (floor (* x (/ (float (car native)) (car shown))))))
+          (max 0 (min (1- (cdr native))
+                      (floor (* y (/ (float (cdr native)) (cdr shown)))))))))
+
+(defun cmacs-clawtilla-computer--browser-image-of (data)
+  "Return an Emacs image of the PNG DATA, scaled to fit the window."
+  (let ((window (get-buffer-window (current-buffer))))
+    (apply #'create-image data 'png t
+           (when window
+             (list :max-width (max 64 (- (window-body-width window t) 16)))))))
+
+(defun cmacs-clawtilla-computer--split-frame (json)
+  "Split the `browser.frame' reply text JSON into (SESSION-JSON . PNG).
+
+SESSION-JSON is the reply less its picture, still as JSON text with
+null and false kept as themselves; PNG is the decoded picture as a
+unibyte string, or nil when the session is not running."
+  (when (stringp json)
+    (let* ((faithful (json-parse-string json :object-type 'alist
+                                        :array-type 'array
+                                        :null-object :json-null
+                                        :false-object :json-false))
+           (payload (if (and (assq 'ok faithful) (assq 'payload faithful))
+                        (alist-get 'payload faithful)
+                      faithful))
+           (encoded (alist-get 'png_base64 payload))
+           (rest (seq-remove (lambda (pair) (eq (car pair) 'png_base64))
+                             payload)))
+      (cons (and (consp rest)
+                 (json-serialize rest :null-object :json-null
+                                 :false-object :json-false))
+            (and (stringp encoded) (base64-decode-string encoded))))))
+
+(defun cmacs-clawtilla-computer-browser-frame ()
+  "Read this agent's browser page again.
+
+A session that is not running answers at once with no picture; a
+frame never starts one."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request-raw
+     (cmacs-clawtilla-current) "browser.frame"
+     (list (cons 'agent cmacs-clawtilla-computer--agent))
+     (lambda (json err)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (if err
+               (message "clawtilla: %s" err)
+             (let* ((parts (cmacs-clawtilla-computer--split-frame json))
+                    (bytes (cdr parts)))
+               (setq cmacs-clawtilla-computer--browser (car parts))
+               (setq cmacs-clawtilla-computer--browser-size
+                     (cmacs-clawtilla-computer--png-size bytes))
+               (setq cmacs-clawtilla-computer--browser-image
+                     (and bytes
+                          (cmacs-clawtilla-computer--browser-image-of bytes)))))
+           (cmacs-clawtilla-computer--draw)))))))
+
+(defun cmacs-clawtilla-computer--browser-act (kind &optional extra note)
+  "Send KIND for this agent's browser with EXTRA, then read the page again.
+
+NOTE, when given, is said while the daemon works: a start waits seconds
+for an X server and an open waits up to twenty for the load."
+  (let ((buffer (current-buffer)))
+    (when note (message "clawtilla: %s" note))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) kind
+     (append (list (cons 'agent cmacs-clawtilla-computer--agent)) extra)
+     (lambda (_data err)
+       (when err (message "clawtilla: %s" err))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (cmacs-clawtilla-computer-browser-frame)))))))
+
+(defun cmacs-clawtilla-computer-browser-open (url)
+  "Open URL in this agent's browser, starting it if it must.
+
+https:// is assumed without a scheme -- by the daemon, not here."
+  (interactive "sOpen address: ")
+  (when (string-empty-p (string-trim url))
+    (user-error "No address"))
+  (setq cmacs-clawtilla-computer--view "browser")
+  (cmacs-clawtilla-computer--browser-act
+   "browser.open" (list (cons 'url (string-trim url))) "opening..."))
+
+(defun cmacs-clawtilla-computer-browser-stop ()
+  "Stop this agent's browser.
+
+The open page is lost; the profile and its logins stay."
+  (interactive)
+  (when (yes-or-no-p "Stop the browser? The page closes; logins stay. ")
+    (cmacs-clawtilla-computer--browser-act "browser.stop")))
+
+(defun cmacs-clawtilla-computer-browser-click-at (x y)
+  "Click at X, Y in the page's own CSS pixels.
+
+A person's click: it does not take a shared session's driver lease,
+since a person at the Computer page outranks an agent."
+  (interactive
+   (let ((size cmacs-clawtilla-computer--browser-size))
+     (list (read-number (format "x (0-%s): "
+                                (if size (1- (car size)) "?")))
+           (read-number (format "y (0-%s): "
+                                (if size (1- (cdr size)) "?"))))))
+  (cmacs-clawtilla-computer--browser-act
+   "browser.click" (list (cons 'x (truncate x)) (cons 'y (truncate y)))))
+
+(defun cmacs-clawtilla-computer-browser-click (event)
+  "Click in the agent's page where EVENT clicked on its picture."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (image (posn-image posn))
+         (xy (posn-object-x-y posn))
+         (window (posn-window posn)))
+    (if (not (and image
+                  (equal cmacs-clawtilla-computer--view "browser")
+                  cmacs-clawtilla-computer--browser-size))
+        ;; Not on the picture: an ordinary click, so point still moves.
+        (when (windowp window)
+          (select-window window)
+          (when (posn-point posn) (goto-char (posn-point posn))))
+      (let* ((shown (image-size image t (and (windowp window)
+                                             (window-frame window))))
+             (target (cmacs-clawtilla-computer--map-click
+                      (car xy) (cdr xy)
+                      (cons (truncate (car shown)) (truncate (cdr shown)))
+                      cmacs-clawtilla-computer--browser-size)))
+        (when target
+          (cmacs-clawtilla-computer-browser-click-at (car target)
+                                                     (cdr target)))))))
+
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-computer-menu ()
@@ -452,6 +705,11 @@ is not shared control, it is a corrupted command line."
    [("o" "watch it" cmacs-clawtilla-computer-observe)
     ("O" "stop watching" cmacs-clawtilla-computer-observe-stop)
     ("D" "toggle desktop control" cmacs-clawtilla-computer-control)]]
+  ["Browser"
+   [("a" "open an address" cmacs-clawtilla-computer-browser-open)
+    ("r" "read the page again" cmacs-clawtilla-computer-browser-frame)]
+   [("x" "click at a point" cmacs-clawtilla-computer-browser-click-at)
+    ("X" "stop the browser" cmacs-clawtilla-computer-browser-stop)]]
   ["Files"
    [("m" "share a directory" cmacs-clawtilla-computer-mount-add)
     ("d" "stop sharing" cmacs-clawtilla-computer-mount-remove)]
@@ -477,6 +735,11 @@ is not shared control, it is a corrupted command line."
     (define-key map (kbd "i") #'cmacs-clawtilla-computer-input)
     (define-key map (kbd "o") #'cmacs-clawtilla-computer-observe)
     (define-key map (kbd "O") #'cmacs-clawtilla-computer-observe-stop)
+    (define-key map (kbd "a") #'cmacs-clawtilla-computer-browser-open)
+    (define-key map (kbd "r") #'cmacs-clawtilla-computer-browser-frame)
+    (define-key map (kbd "x") #'cmacs-clawtilla-computer-browser-click-at)
+    (define-key map (kbd "X") #'cmacs-clawtilla-computer-browser-stop)
+    (define-key map [mouse-1] #'cmacs-clawtilla-computer-browser-click)
     (define-key map (kbd "?") #'cmacs-clawtilla-computer-menu)
     map)
   "Keymap for `cmacs-clawtilla-computer-mode'.")

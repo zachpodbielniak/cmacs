@@ -458,4 +458,217 @@ cmacs_clawt_steps_split (const char *steps_json, const char *agent_id,
   return cmacs_clawt_render_node_to_json (root);
 }
 
+/* ------------------------------------------------------------------
+   The Activity page, the Fleet page and the browser line.
+
+   Each of these is a sentence or a figure libclawt already writes for
+   the GTK, web and lrg clients (clawt-activity.h, clawt-usage.h,
+   clawt-browser.h).  A fourth client composing "running 3m 12s" or
+   "$3.20 across 41 turns" itself would be a fourth wording, and the
+   first place they would disagree is a clock edge nobody tests.
+   ------------------------------------------------------------------ */
+
+char *
+cmacs_clawt_activity_elapsed (int64_t started_us, int64_t now_us)
+{
+  /* Both in the daemon's clock: `started' from the turn, `now' from the
+     same activity.list reply, so this machine's clock skew never shows
+     up as an age.  */
+  return clawt_activity_elapsed_label (started_us, now_us);
+}
+
+char *
+cmacs_clawt_activity_stop_prompt (const char *agent_id, unsigned running)
+{
+  /* Stop is agent.interrupt, which ends EVERY turn the agent has, not
+     the row it was pressed on -- the question says so.  */
+  return clawt_activity_stop_prompt (agent_id != NULL ? agent_id : "",
+                                     running);
+}
+
+char *
+cmacs_clawt_usage_sparkline (const int64_t *values, unsigned count)
+{
+  g_autofree gint64 *copy = NULL;
+  guint i;
+
+  if (count == 0)
+    return g_strdup ("");
+
+  /* int64_t and gint64 are the same width but not, to the compiler,
+     the same type; a copy is cheaper than an argument about it.  */
+  copy = g_new (gint64, count);
+
+  for (i = 0; i < count; i++)
+    copy[i] = values[i];
+
+  return clawt_usage_sparkline (copy, count);
+}
+
+char *
+cmacs_clawt_usage_format_cost (int64_t cost_micros)
+{
+  return clawt_usage_format_cost (cost_micros);
+}
+
+char *
+cmacs_clawt_usage_fleet_payload (int period, int days)
+{
+  g_autoptr (JsonNode) payload = NULL;
+  gint64 now = g_get_real_time () / G_USEC_PER_SEC;
+
+  if (period < 0 || (guint) period >= clawt_usage_period_count ())
+    period = CLAWT_USAGE_PERIOD_DEFAULT;
+
+  if (days < 0)
+    days = 0;
+
+  /* The request the Fleet page sends in every client: the period's
+     `since', the days of daily figures, and `sort: cost'.  */
+  payload = clawt_usage_fleet_payload (
+    clawt_usage_period_since ((guint) period, now), (guint) days);
+
+  return payload != NULL ? cmacs_clawt_render_node_to_json (payload) : NULL;
+}
+
+/* The daily costs of one agent, as clawt_usage_sparkline() draws them.
+   The library draws the FLEET's strip itself (clawt_usage_fleet_strip);
+   a per-agent strip is the same function over that agent's `daily'.  */
+static gchar *
+cmacs_clawt_agent_strip (JsonObject *agent)
+{
+  JsonArray *daily;
+  g_autofree gint64 *values = NULL;
+  guint count;
+  guint i;
+
+  if (!json_object_has_member (agent, "daily"))
+    return g_strdup ("");
+
+  daily = json_object_get_array_member (agent, "daily");
+
+  if (daily == NULL || (count = json_array_get_length (daily)) == 0)
+    return g_strdup ("");
+
+  values = g_new0 (gint64, count);
+
+  for (i = 0; i < count; i++)
+    values[i] = json_array_get_int_element (daily, i);
+
+  return clawt_usage_sparkline (values, count);
+}
+
+char *
+cmacs_clawt_usage_fleet_json (const char *reply_json, int64_t now)
+{
+  g_autoptr (JsonNode) node = cmacs_clawt_render_parse (reply_json);
+  g_autoptr (JsonBuilder) builder = json_builder_new ();
+  g_autoptr (JsonNode) root = NULL;
+  JsonObject *reply;
+  JsonObject *total;
+  JsonArray *agents = NULL;
+  gint64 total_cost = 0;
+  guint i;
+
+  if (node == NULL || !JSON_NODE_HOLDS_OBJECT (node))
+    return NULL;
+
+  reply = json_node_get_object (node);
+
+  if (now <= 0)
+    now = g_get_real_time () / G_USEC_PER_SEC;
+
+  /* The daemon's clock when it gave one, for the ages.  */
+  if (json_object_has_member (reply, "now"))
+    now = json_object_get_int_member (reply, "now");
+
+  if (json_object_has_member (reply, "total")
+      && (total = json_object_get_object_member (reply, "total")) != NULL
+      && json_object_has_member (total, "cost_micros"))
+    total_cost = json_object_get_int_member (total, "cost_micros");
+
+  json_builder_begin_object (builder);
+
+  {
+    g_autofree gchar *summary = clawt_usage_fleet_summary (reply);
+    g_autofree gchar *budget = clawt_usage_fleet_budget_line (reply);
+    g_autofree gchar *strip = clawt_usage_fleet_strip (reply);
+
+    json_builder_set_member_name (builder, "summary");
+    json_builder_add_string_value (builder, summary != NULL ? summary : "");
+    /* nullable in the library: no cap set, or no days asked for.  */
+    json_builder_set_member_name (builder, "budget");
+    if (budget != NULL)
+      json_builder_add_string_value (builder, budget);
+    else
+      json_builder_add_null_value (builder);
+    json_builder_set_member_name (builder, "strip");
+    json_builder_add_string_value (builder, strip != NULL ? strip : "");
+    json_builder_set_member_name (builder, "stoppable");
+    json_builder_add_int_value (builder,
+                                clawt_usage_fleet_stoppable_count (reply));
+  }
+
+  if (json_object_has_member (reply, "agents"))
+    agents = json_object_get_array_member (reply, "agents");
+
+  json_builder_set_member_name (builder, "agents");
+  json_builder_begin_array (builder);
+
+  for (i = 0; agents != NULL && i < json_array_get_length (agents); i++)
+    {
+      JsonObject *agent = json_array_get_object_element (agents, i);
+      gint64 cost;
+      g_autofree gchar *subtitle = NULL;
+      g_autofree gchar *money = NULL;
+      g_autofree gchar *share = NULL;
+      g_autofree gchar *strip = NULL;
+
+      if (agent == NULL)
+        continue;
+
+      cost = json_object_has_member (agent, "cost_micros")
+             ? json_object_get_int_member (agent, "cost_micros") : 0;
+      subtitle = clawt_usage_fleet_row_subtitle (agent, now);
+      money = clawt_usage_format_cost (cost);
+      share = clawt_usage_share_label (cost, total_cost);
+      strip = cmacs_clawt_agent_strip (agent);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "id");
+      json_builder_add_string_value (
+        builder, json_object_get_string_member_with_default (agent, "id", ""));
+      json_builder_set_member_name (builder, "subtitle");
+      json_builder_add_string_value (builder, subtitle != NULL ? subtitle : "");
+      json_builder_set_member_name (builder, "cost");
+      json_builder_add_string_value (builder, money != NULL ? money : "");
+      json_builder_set_member_name (builder, "share");
+      json_builder_add_string_value (builder, share != NULL ? share : "");
+      json_builder_set_member_name (builder, "strip");
+      json_builder_add_string_value (builder, strip != NULL ? strip : "");
+      json_builder_set_member_name (builder, "stoppable");
+      json_builder_add_boolean_value (builder,
+                                      clawt_usage_fleet_row_stoppable (agent));
+      json_builder_end_object (builder);
+    }
+
+  json_builder_end_array (builder);
+  json_builder_end_object (builder);
+  root = json_builder_get_root (builder);
+
+  return cmacs_clawt_render_node_to_json (root);
+}
+
+char *
+cmacs_clawt_browser_session_line (const char *session_json)
+{
+  g_autoptr (JsonNode) node = cmacs_clawt_render_parse (session_json);
+
+  /* nullable in the library too: no session is a sentence of its own
+     ("not running; starts on the first browser call").  */
+  return clawt_browser_session_line (
+    (node != NULL && JSON_NODE_HOLDS_OBJECT (node))
+    ? json_node_get_object (node) : NULL);
+}
+
 #endif /* HAVE_CMACS_CLAWTILLA */

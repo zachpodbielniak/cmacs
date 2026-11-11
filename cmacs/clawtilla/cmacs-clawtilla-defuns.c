@@ -394,7 +394,14 @@ DEFUN ("cmacs-clawtilla--enum", Fcmacs_clawtilla__enum,
 
 FAMILY is one of "section", "computer-type", "computer-view",
 "import-mode", "measure-unit", "memory-scope", "appearance-scheme",
-"appearance-theme" or "relabel"; nil for anything else.  A section
+"appearance-theme", "relabel", "browser-mode", "policy-mode",
+"action-class", "usage-period" or "decision-state"; nil for anything
+else.  The three
+before the last are walked off their GTypes -- libclawt has no label
+table for them -- so their labels are the nicks made readable.  A
+usage period's nick is its index, which is what the Fleet page's
+payload takes back; a decision state carries `value', the integer
+`decision.list' sends.  A section
 carries its own pages -- there is no flat page family, because
 clawtilla ships no clawt_page_nth() and says why: a page is reached
 through its section, never chosen from a list of eleven.
@@ -807,6 +814,185 @@ it once the turn has finished.  */)
   return precedes ? Qt : Qnil;
 }
 
+/* ------------------------------------------------------------------
+   Activity, Fleet and Browser, answered by the library.
+   ------------------------------------------------------------------ */
+
+DEFUN ("cmacs-clawtilla--activity-elapsed",
+       Fcmacs_clawtilla__activity_elapsed,
+       Scmacs_clawtilla__activity_elapsed, 2, 2, 0,
+       doc: /* Return how long a turn started at STARTED has been running.
+
+STARTED and NOW are microseconds in the DAEMON's clock: `started' from
+the turn and `now' from the same activity.list reply, so this machine's
+clock skew never shows as an age.  Worded by the library ("45s",
+"3m 12s", "1h 04m"; "just now" for a turn with no start or one stamped
+in the future).  */)
+  (Lisp_Object started, Lisp_Object now)
+{
+  char *text;
+  Lisp_Object result;
+
+  CHECK_FIXNUM (started);
+  CHECK_FIXNUM (now);
+  text = cmacs_clawt_activity_elapsed (XFIXNUM (started), XFIXNUM (now));
+  result = cmacs_clawt_string (text);
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--activity-stop-prompt",
+       Fcmacs_clawtilla__activity_stop_prompt,
+       Scmacs_clawtilla__activity_stop_prompt, 2, 2, 0,
+       doc: /* Return the question to ask before stopping AGENT.
+
+RUNNING is how many turns the agent has.  Stop is `agent.interrupt',
+which ends every one of them rather than the row it was pressed on, so
+the question has to say so -- and says it in the library's words, the
+same ones the GTK and web clients ask.  */)
+  (Lisp_Object agent, Lisp_Object running)
+{
+  char *c_agent = cmacs_clawt_dup (agent);
+  char *text;
+  Lisp_Object result;
+
+  CHECK_FIXNAT (running);
+  text = cmacs_clawt_activity_stop_prompt (c_agent,
+                                           (unsigned) XFIXNAT (running));
+  result = cmacs_clawt_string (text);
+  xfree (c_agent);
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--sparkline", Fcmacs_clawtilla__sparkline,
+       Scmacs_clawtilla__sparkline, 1, 1, 0,
+       doc: /* Return VALUES, a list of costs oldest first, as a text strip.
+
+One character per value, scaled to the largest, with a dot for a day
+that cost nothing -- the library's `clawt_usage_sparkline', so the
+strip reads the same as the GTK, web and lrg clients'.  */)
+  (Lisp_Object values)
+{
+  ptrdiff_t count = list_length (values);
+  int64_t *array = NULL;
+  ptrdiff_t i = 0;
+  char *text;
+  Lisp_Object result;
+  Lisp_Object tail;
+
+  if (count > 0)
+    array = xnmalloc (count, sizeof *array);
+
+  for (tail = values; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object value = XCAR (tail);
+
+      CHECK_INTEGER (value);
+      array[i++] = FIXNUMP (value) ? XFIXNUM (value) : 0;
+    }
+
+  text = cmacs_clawt_usage_sparkline (array, (unsigned) count);
+  result = cmacs_clawt_string (text);
+  xfree (array);
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--format-cost", Fcmacs_clawtilla__format_cost,
+       Scmacs_clawtilla__format_cost, 1, 1, 0,
+       doc: /* Return MICROS, a cost in millionths of a dollar, as money.
+
+Cost crosses the wire as an integer of micro-dollars, never a float,
+and is written out by the library so every client rounds alike.  */)
+  (Lisp_Object micros)
+{
+  char *text;
+  Lisp_Object result;
+
+  CHECK_INTEGER (micros);
+  text = cmacs_clawt_usage_format_cost (FIXNUMP (micros)
+                                        ? XFIXNUM (micros) : 0);
+  result = cmacs_clawt_string (text);
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--fleet-payload", Fcmacs_clawtilla__fleet_payload,
+       Scmacs_clawtilla__fleet_payload, 0, 2, 0,
+       doc: /* Return the usage.summary payload the Fleet page sends, as JSON.
+
+PERIOD is an index into the "usage-period" enumeration, nil for the
+library's default; DAYS is how many days of daily figures, 14 when nil.
+The library builds it -- the period's `since', the days, `sort: cost'
+-- so the page asks the daemon the same question in every client.  */)
+  (Lisp_Object period, Lisp_Object days)
+{
+  char *json;
+  Lisp_Object result;
+
+  if (!NILP (period))
+    CHECK_FIXNUM (period);
+  if (!NILP (days))
+    CHECK_FIXNAT (days);
+
+  json = cmacs_clawt_usage_fleet_payload (NILP (period)
+                                          ? -1 : (int) XFIXNUM (period),
+                                          NILP (days)
+                                          ? 14 : (int) XFIXNAT (days));
+  result = cmacs_clawt_string (json);
+  cmacs_clawt_free (json);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--fleet-view", Fcmacs_clawtilla__fleet_view,
+       Scmacs_clawtilla__fleet_view, 1, 2, 0,
+       doc: /* Return what the Fleet page draws from REPLY-JSON, as JSON.
+
+REPLY-JSON is a usage.summary reply exactly as the daemon sent it; NOW
+is Unix seconds, used only when the reply carries no `now' of its own.
+The answer holds `summary', `budget' (null with no cap), the fleet
+`strip', the `stoppable' count, and per agent its `id', `subtitle',
+`cost', `share', daily `strip' and whether Stop is offered.  Every one
+is the library's wording, shared with the GTK, web and lrg clients.  */)
+  (Lisp_Object reply_json, Lisp_Object now)
+{
+  char *c_reply = cmacs_clawt_dup (reply_json);
+  int64_t c_now;
+  char *json;
+  Lisp_Object result;
+
+  if (!NILP (now))
+    CHECK_INTEGER (now);
+  /* 0 asks the transport half for this machine's clock.  */
+  c_now = (NILP (now) || !FIXNUMP (now)) ? 0 : XFIXNUM (now);
+  json = cmacs_clawt_usage_fleet_json (c_reply, c_now);
+  result = cmacs_clawt_string (json);
+  xfree (c_reply);
+  cmacs_clawt_free (json);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--browser-line", Fcmacs_clawtilla__browser_line,
+       Scmacs_clawtilla__browser_line, 1, 1, 0,
+       doc: /* Return the line drawn above an agent's browser picture.
+
+SESSION-JSON is a session object from `browser.list' or a `browser.*'
+reply, as JSON text, or nil for none.  "Running -- Example Domain
+(https://example.org/) -- driven by alpha", or that it is not running
+and starts on the first browser call: the library's sentence.  */)
+  (Lisp_Object session_json)
+{
+  char *c_session = NILP (session_json) ? NULL
+                                        : cmacs_clawt_dup (session_json);
+  char *text = cmacs_clawt_browser_session_line (c_session);
+  Lisp_Object result = cmacs_clawt_string (text);
+
+  xfree (c_session);
+  cmacs_clawt_free (text);
+  return result;
+}
+
 void
 syms_of_cmacs_clawtilla_defuns (void)
 {
@@ -862,6 +1048,13 @@ gap and anything cached from before it must be refetched.  */);
   defsubr (&Scmacs_clawtilla__step_summary);
   defsubr (&Scmacs_clawtilla__steps);
   defsubr (&Scmacs_clawtilla__step_precedes);
+  defsubr (&Scmacs_clawtilla__activity_elapsed);
+  defsubr (&Scmacs_clawtilla__activity_stop_prompt);
+  defsubr (&Scmacs_clawtilla__sparkline);
+  defsubr (&Scmacs_clawtilla__format_cost);
+  defsubr (&Scmacs_clawtilla__fleet_payload);
+  defsubr (&Scmacs_clawtilla__fleet_view);
+  defsubr (&Scmacs_clawtilla__browser_line);
 }
 
 #endif /* HAVE_CMACS_CLAWTILLA */

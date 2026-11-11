@@ -13257,6 +13257,9 @@ the same feature set as clawtilla's GTK client.
 * Clawtilla Client Not Daemon:: Why cmacs connects rather than embeds.
 * Clawtilla Getting There::     Opening it, and reaching another machine.
 * Clawtilla Buffers::           The fleet, a conversation, and the rest.
+* Clawtilla Work Pages::        Decisions, Activity and Fleet; routines.
+* Clawtilla Agent Page::        Account, shared computer, browser, rules.
+* Clawtilla Browser::           An agent's web browser, and Accounts.
 * Clawtilla Parity::            How this client is kept honest.
 * Clawtilla Nothing Blocks::    Why there is no synchronous request.
 @end menu
@@ -13304,8 +13307,11 @@ default.
 @section The buffers
 
 The fleet, one conversation per agent, an agent's own page, its
-computer, then Work, Automation, Library, Settings, Alerts and
-recordings.  Every buffer takes @kbd{?} for a transient of what it can
+computer (Shell, Screen, Mounts, Exchange and Browser), then Work
+(Tasks, Decisions, Flow, Activity and Fleet), Automation, Library,
+Settings (eight panels, Accounts among them), Alerts and recordings.
+Which pages a section has, and in what order, is the library's answer.
+Every buffer takes @kbd{?} for a transient of what it can
 do, @kbd{g r} to refresh, @kbd{TAB} to fold or change page, and
 @kbd{C-j} and @kbd{C-k} (or @kbd{g j} and @kbd{g k}) to move between
 sections.
@@ -13387,6 +13393,153 @@ library's summary, which @kbd{TAB} opens.
 A reset is not a restart.  A restart brings the same conversation back;
 a reset drops the session, and is what makes an identity change take.
 
+@node Clawtilla Work Pages
+@section Work: Decisions, Activity and Fleet
+
+@cindex clawtilla activity
+@cindex clawtilla fleet spending
+
+@subheading Decisions
+
+The inbox of what agents are waiting on you for.  @kbd{a} answers,
+@kbd{d} dismisses --- the record stays, saying you passed --- and
+@kbd{x} deletes for good, for a stale ask or one raised by mistake.  All
+three name the decision as @code{decision}, which is the key the daemon
+reads.  @kbd{o} shows settled decisions too, each saying how it ended
+--- answered, dismissed, defaulted or deleted --- from the
+@code{decision.settled} event when this session saw it, otherwise from
+the state the list reports.  Whether one is urgent is the daemon's
+answer, never worked out here.
+
+@subheading Activity
+
+Every turn running anywhere in the fleet, from @code{activity.list}:
+who, in which room, for how long, on whose behalf, how many steps, and
+the latest of them summed in the library's words.  The age is
+@code{clawt_activity_elapsed_label} measured against the daemon's own
+clock, so this machine's clock never shows up as an age.
+
+@kbd{s} stops the agent.  That is @code{agent.interrupt}, which ends
+@emph{every} turn the agent has, not the row it was pressed on, and
+leaves the agent up --- so it asks first, in
+@code{clawt_activity_stop_prompt}'s words, because a key that does more
+than its row suggests must say so.  @kbd{c} steers: the text goes
+through @code{msg.send} into the running turn, which reaches only the
+agent's conversation with you, so it is offered only on a turn the
+daemon marks steerable.  An agent that finished meanwhile takes it as a
+new message, and the two are said apart.
+
+The page refreshes on turn events, coalesced, and re-ages every ten
+seconds while it is on screen: a turn sitting in one long tool call
+produces no step for minutes, and an age that never moves reads as a
+stale page.
+
+@subheading Fleet
+
+What each agent costs and which sit idle, from one
+@code{usage.summary} asked the way every client's Fleet page asks it
+(@code{clawt_usage_fleet_payload}: the period, fourteen days of daily
+figures, sorted by cost).  The figures and the wording are all the
+library's: the period total, the day's budget line against the fleet's
+daily cap, a fourteen-day strip for the fleet and one per agent, and
+each agent's cost, share, turns and last turn.  Cost crosses the wire as
+integer micro-dollars and is formatted by the library.
+
+Whether an agent is idle, and the colour that is drawn in, are the
+daemon's (@code{idle} and @code{idle_tone}); this client never decides
+what idle means.  An agent the daemon stopped for idleness is marked
+asleep, and the next message wakes it.  @kbd{p} picks the period from
+the library's list, @kbd{s} stops the agent at point (its process and
+its computer), and @kbd{X} stops every agent the library offers Stop on
+--- running, and idle or never used --- after naming them.
+
+@subheading Routines
+
+In Automation, @kbd{A} adds a routine, and with a prefix argument also
+asks for its own model and its three flags; @kbd{U} changes one field of
+the routine at point.  A routine's @emph{model} runs it on something
+other than the agent's own --- a cheaper one for a check that compares a
+number.  @emph{read_only} runs it unable to change anything,
+@emph{proactive} lets it start work rather than only report, and
+@emph{locked} keeps the agent itself from editing or removing it.  The
+flags travel as JSON @code{true} and @code{false}, never as strings: a
+string that is not a boolean reads as the default, and the request
+succeeds and does the other thing.
+
+@node Clawtilla Agent Page
+@section An agent's page
+
+@cindex clawtilla action policy
+
+@kbd{o} on an agent opens its Overview, where every field is a line you
+press @kbd{RET} on.  The values come from @code{agent.show} --- the
+agent object for the summary fields, and its @code{settings}, every
+per-agent schema key as a string, for the rest.  Saving goes through
+@code{agent.set} as a @code{key} and a @code{value}: the schema's own
+agent-relative key, with booleans spelled @code{true} and @code{false},
+parsed by the daemon against the same schema it reports from.
+
+Four fields are a choice among things the daemon holds:
+
+@table @asis
+@item Account (@kbd{A})
+Which login the agent's CLI uses (@code{model.account}).  Offered from
+@code{account.list} asked with the agent, so every account carries the
+daemon's own answer to whether this agent can use it --- the same check
+@code{agent.set} applies.  One it cannot use is still listed, with the
+daemon's reason, and choosing it is refused: the picker offers exactly
+what saving accepts.
+
+@item Shared computer (@kbd{S})
+A machine declared under @code{computers:} that several agents share
+(@code{computer.use}), from @code{computer.shared}, each shown with its
+type, state, who uses it and how many of them are running.  A host
+computer is not shareable and is not offered.
+
+@item Browser (@kbd{W}) and Browser session (@kbd{w})
+Whether the agent drives a browser, and whose (@code{browser.mode},
+libclawt's @code{ClawtBrowserMode}, walked off its GType), and which
+shared session (@code{browser.use}, from @code{browser.list}).
+@end table
+
+@emph{Action rules} (@code{policy.rules}) decide what the agent may do
+without asking: @samp{MATCH=MODE}, read top to bottom, the first match
+deciding and an unmatched call running.  @samp{MATCH} is an action class
+or a tool-name glob, @samp{MODE} a policy mode, both offered from the
+library's GTypes.  @kbd{r} adds or changes a rule --- one for the same
+match is replaced where it stands, because order is meaning here ---
+@kbd{R} removes one and @kbd{E} edits the line whole.  An agent's own
+list replaces the fleet's defaults rather than adding to them, so
+clearing it brings the defaults back.
+
+@node Clawtilla Browser
+@section An agent's browser, and accounts
+
+@cindex clawtilla browser
+
+Since clawtilla 0.9.0 an agent can drive a real web browser, started by
+the daemon on the first browser call.  The computer buffer's Browser
+view draws the library's line above the picture
+(@code{clawt_browser_session_line}: what it is on, and who is driving),
+the picture from @code{browser.frame}, and the sessions this agent
+drives or shares.
+
+@kbd{a} opens an address, starting the session if it must; @kbd{r}
+reads the page again; @kbd{X} stops it --- the page is lost, the profile
+and its logins stay.  A click on the picture is a click in the page: the
+picture is drawn scaled to the window, so the click is mapped back
+through the image's own size to the page's CSS pixels.  @kbd{x} clicks
+at a point typed in.  A frame is asked for when the view is entered and
+after each action, never on a timer.  A daemon built without
+@code{GSURF=1} says so instead of drawing an empty frame.
+
+The Settings buffer's @emph{Accounts} panel lists the fleet's logins ---
+a CLI's config directory under a name, so two agents on one provider
+can be two different people.  @kbd{a a} declares one and @kbd{a r}
+removes the one at point, saying how many agents still name it.  Logging
+in is the CLI's own business, and no credential passes through cmacs.
+The panel reloads when another client changes the accounts.
+
 @node Clawtilla Parity
 @section Parity
 
@@ -13400,7 +13553,12 @@ not built.
 comparing this client against the GTK one across four layers: the IPC
 frame kinds each sends, the slash commands each answers, whether either
 spells out a value the library enumerates, and a table of declared
-interface affordances.
+interface affordances.  That table names a GTK symbol and a cmacs one
+per affordance --- forty of them, including the Activity and Fleet
+pages, the Browser view, the account and shared-computer pickers, the
+action-rule editor and a routine's model and flags --- so removing
+either half fails the check.  @command{just clawtilla-parity} runs it,
+and needs no build.
 
 It lives in cmacs rather than in clawtilla because clawtilla's script
 greps its own @file{clients/} and should not have to know where cmacs

@@ -48,7 +48,7 @@
   ["Fleet"
    [("f" "the fleet" cmacs-clawtilla-fleet)
     ("!" "alerts" cmacs-clawtilla-alerts)]
-   [("w" "work: tasks, decisions, flow" cmacs-clawtilla-work)
+   [("w" "work: tasks, decisions, flow, activity, fleet" cmacs-clawtilla-work)
     ("u" "automation: routines, triggers" cmacs-clawtilla-automation)
     ("l" "library: skills, memory" cmacs-clawtilla-library)]
    [("y" "recordings" cmacs-clawtilla-teach)

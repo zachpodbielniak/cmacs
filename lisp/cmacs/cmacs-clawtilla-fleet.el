@@ -337,8 +337,11 @@ makes an identity change take."
          (computer (yes-or-no-p (format "Remove %s's computer as well? " id))))
     (when (yes-or-no-p (format "Really remove %s? " id))
       (cmacs-clawtilla-fleet--act "agent.remove"
-                                  (list (cons 'remove_files files)
-                                        (cons 'remove_computer computer))))))
+                                  ;; :false, not nil: nil encodes as {}
+                                  ;; and the daemon reads that as unset.
+                                  (list (cons 'remove_files (if files t :false))
+                                        (cons 'remove_computer
+                                              (if computer t :false)))))))
 
 (defun cmacs-clawtilla-fleet-move (direction)
   "Move the agent at point up or down the fleet, per DIRECTION.

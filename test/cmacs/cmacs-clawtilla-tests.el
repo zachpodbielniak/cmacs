@@ -35,12 +35,16 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'subr-x)
 
 (defun cmacs-clawtilla-tests--available-p ()
   "Non-nil when this build compiled in the clawtilla client."
   (and (boundp 'is-cmacs-clawtilla) is-cmacs-clawtilla
        (fboundp 'cmacs-clawtilla-supported-p)))
+
+(declare-function cmacs-clawtilla-section--activity-turns
+                  "cmacs-clawtilla-section")
 
 (when (cmacs-clawtilla-tests--available-p)
   (require 'cmacs-clawtilla)
@@ -247,15 +251,16 @@ inventing one."
       (should (stringp (alist-get 'default-page section)))))
   (should (null (cmacs-clawtilla-enum "page"))))
 
-(ert-deftest cmacs-clawtilla-computer-views-are-four-in-order ()
-  "Shell, Screen, Mounts and Exchange, in the library's order.
+(ert-deftest cmacs-clawtilla-computer-views-are-five-in-order ()
+  "Shell, Screen, Mounts, Exchange and Browser, in the library's order.
 
 Pinned because both graphical clients draw them in that order and a
 third that disagreed would be a tab in one window and not another, with
-nothing saying so."
+nothing saying so.  Browser arrived with clawtilla 0.9.0, and the
+computer buffer draws it rather than falling through to the shell."
   (skip-unless (cmacs-clawtilla-tests--available-p))
   (should (equal (cmacs-clawtilla-enum-nicks "computer-view")
-                 '("shell" "screen" "mounts" "exchange"))))
+                 '("shell" "screen" "mounts" "exchange" "browser"))))
 
 
 ;;;; Rendering.
@@ -791,6 +796,287 @@ only asked what the option was set to."
   (should (eval (car (get 'cmacs-clawtilla-fleet-no-team-first
                           'standard-value))
                 t)))
+
+;;;; Activity, Fleet, Browser, accounts and policy (clawtilla 0.2-0.9).
+
+(ert-deftest cmacs-clawtilla-gtype-enum-families-are-walked ()
+  "Browser modes, policy modes and action classes come off their GTypes.
+
+libclawt registers these three only as GTypes, with no label table, so
+the label is the nick made readable -- and the daemon validates
+`agent.set' against the same GType, so what is offered is what saving
+accepts."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--enum)
+                    (cmacs-clawtilla-enum "browser-mode")))
+  (dolist (family '("browser-mode" "policy-mode" "action-class"
+                    "usage-period" "decision-state"))
+    (let ((entries (cmacs-clawtilla-enum family)))
+      (should entries)
+      (dolist (entry entries)
+        (should (stringp (alist-get 'nick entry)))
+        (should (stringp (alist-get 'label entry)))
+        ;; Humanised: no separator survives, and it starts upper-case.
+        (should-not (string-match-p "[_-]" (alist-get 'label entry)))
+        (should (let ((case-fold-search nil))
+                  (string-match-p "\\`[[:upper:][:digit:]]"
+                                  (alist-get 'label entry)))))))
+  ;; A policy mode with an underscore keeps it in the nick -- that is
+  ;; what `policy.rules' must spell -- and only the label loses it.
+  (should (seq-some (lambda (nick) (string-match-p "_" nick))
+                    (cmacs-clawtilla-enum-nicks "policy-mode")))
+  ;; Exactly one period is the library's default.
+  (should (= 1 (length (seq-filter (lambda (p) (eq t (alist-get 'default p)))
+                                   (cmacs-clawtilla-enum "usage-period")))))
+  ;; Decision states carry the integer `decision.list' sends.
+  (dolist (entry (cmacs-clawtilla-enum "decision-state"))
+    (should (integerp (alist-get 'value entry)))))
+
+(ert-deftest cmacs-clawtilla-sparkline-is-the-librarys ()
+  "One character per day, a gap for a day that cost nothing."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--sparkline)))
+  (let ((strip (cmacs-clawtilla--sparkline '(0 10 20 0 40))))
+    (should (= 5 (length strip)))
+    ;; An idle day is drawn unlike the smallest spend.
+    (should-not (eq (aref strip 0) (aref strip 1)))
+    (should (eq (aref strip 0) (aref strip 3)))
+    ;; The largest is the tallest, so it differs from a smaller one.
+    (should-not (eq (aref strip 4) (aref strip 1))))
+  (should (equal "" (cmacs-clawtilla--sparkline nil))))
+
+(ert-deftest cmacs-clawtilla-activity-words-are-the-librarys ()
+  "A turn's age and the Stop question are libclawt's sentences."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--activity-elapsed)))
+  (let* ((now 1800000000000000)
+         (short (cmacs-clawtilla--activity-elapsed (- now 45000000) now))
+         (long (cmacs-clawtilla--activity-elapsed (- now 3900000000) now))
+         (future (cmacs-clawtilla--activity-elapsed (+ now 5000000) now)))
+    (should (stringp short))
+    (should-not (equal short long))
+    ;; A turn stamped in the future by a skewed clock is not negative.
+    (should-not (string-match-p "-" future)))
+  (let ((prompt (cmacs-clawtilla--activity-stop-prompt "scout" 3)))
+    (should (stringp prompt))
+    (should (string-match-p "scout" prompt))))
+
+(defconst cmacs-clawtilla-tests--usage-reply
+  (concat "{\"since\":0,\"now\":1800000000,"
+          "\"daily_fleet_budget_micros\":5000000,"
+          "\"days\":[" (mapconcat (lambda (n) (format "{\"start\":%d,\"cost_micros\":%d}"
+                                                      n (* n 1000)))
+                                  (number-sequence 1 14) ",")
+          "],"
+          "\"total\":{\"turns\":3,\"cost_micros\":3000000},"
+          "\"agents\":[{\"id\":\"scout\",\"name\":\"Scout\",\"turns\":2,"
+          "\"cost_micros\":2000000,\"last_turn_at\":1799990000,"
+          "\"idle\":\"idle\",\"idle_tone\":\"warn\",\"state\":\"running\","
+          "\"asleep\":false,\"idle_stop_hours\":0,\"daily\":["
+          (mapconcat #'number-to-string
+                     '(0 0 0 0 0 0 0 0 0 0 0 0 1000000 1000000) ",")
+          "]},{\"id\":\"ox\",\"name\":\"Ox\",\"turns\":1,"
+          "\"cost_micros\":1000000,\"last_turn_at\":0,\"idle\":\"never used\","
+          "\"idle_tone\":\"neutral\",\"state\":\"stopped\",\"asleep\":false,"
+          "\"daily\":[]}]}")
+  "A `usage.summary' reply in the 0.8.0 shape, as the daemon sends it.")
+
+(ert-deftest cmacs-clawtilla-fleet-view-answers-the-page ()
+  "The Fleet page's figures and wording all come out of one library call."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--fleet-view)))
+  (let* ((view (cmacs-clawtilla--parse
+                (cmacs-clawtilla--fleet-view cmacs-clawtilla-tests--usage-reply)))
+         (agents (alist-get 'agents view)))
+    (should (stringp (alist-get 'summary view)))
+    (should (stringp (alist-get 'strip view)))
+    (should (= 2 (length agents)))
+    (should (equal "scout" (alist-get 'id (car agents))))
+    ;; A per-agent strip is one cell per daily figure.
+    (should (= 14 (length (alist-get 'strip (car agents)))))
+    (should (equal "" (alist-get 'strip (cadr agents))))
+    (should (stringp (alist-get 'cost (car agents))))
+    (should (stringp (alist-get 'share (car agents)))))
+  ;; The model the page draws zips the daemon's rows with the view's.
+  (require 'cmacs-clawtilla-section nil t)
+  (when (fboundp 'cmacs-clawtilla-section--fleet-merge)
+    (let* ((model (cmacs-clawtilla-section--fleet-merge
+                   cmacs-clawtilla-tests--usage-reply))
+           (first (car (alist-get 'agents model))))
+      (should (equal "Scout" (alist-get 'name first)))
+      (should (equal "scout" (alist-get 'id (alist-get 'view first)))))))
+
+(ert-deftest cmacs-clawtilla-fleet-payload-is-the-librarys ()
+  "The Fleet request is built by libclawt: days, and sorted by cost."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--fleet-payload)))
+  (let ((payload (cmacs-clawtilla--parse (cmacs-clawtilla--fleet-payload nil 14))))
+    (should (equal 14 (alist-get 'days payload)))
+    (should (equal "cost" (alist-get 'sort payload)))
+    (should (integerp (alist-get 'since payload))))
+  (should (stringp (cmacs-clawtilla--format-cost 1500000))))
+
+(ert-deftest cmacs-clawtilla-browser-line-has-a-sentence-for-nothing ()
+  "No session is a sentence of its own, not an empty line."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--browser-line)))
+  (should (> (length (cmacs-clawtilla--browser-line nil)) 0))
+  (should (> (length (cmacs-clawtilla--browser-line
+                      "{\"key\":\"agent:a\",\"running\":false}"))
+             0)))
+
+(ert-deftest cmacs-clawtilla-browser-click-maps-to-page-pixels ()
+  "A click on the scaled picture lands on the page's own CSS pixel."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-computer nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-computer--map-click))
+  ;; Drawn at half size: double back up.
+  (should (equal '(200 100) (let ((p (cmacs-clawtilla-computer--map-click
+                                      100 50 '(640 . 400) '(1280 . 800))))
+                              (list (car p) (cdr p)))))
+  ;; Unscaled is the identity.
+  (should (equal '(7 . 9) (cmacs-clawtilla-computer--map-click
+                           7 9 '(100 . 100) '(100 . 100))))
+  ;; The edge is clamped inside the page.
+  (should (equal '(99 . 99) (cmacs-clawtilla-computer--map-click
+                             500 500 '(100 . 100) '(100 . 100))))
+  (should-not (cmacs-clawtilla-computer--map-click 1 1 nil '(10 . 10)))
+  ;; The page's size is read from the PNG's own header.
+  (let ((png (concat "\x89PNG\r\n\x1a\n" "\0\0\0\rIHDR"
+                     (unibyte-string 0 0 5 0 0 0 3 32)
+                     (make-string 8 0))))
+    (should (equal '(1280 . 800) (cmacs-clawtilla-computer--png-size png))))
+  (should-not (cmacs-clawtilla-computer--png-size "not a picture")))
+
+(ert-deftest cmacs-clawtilla-routine-flags-are-json-booleans ()
+  "Routine flags travel as true and false, never as nil or a string.
+
+nil serializes as an empty object; a string that is not a boolean reads
+as the default.  Either way the request succeeds and does the other
+thing."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-section nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-section--routine-payload))
+  (let* ((payload (cmacs-clawtilla-section--routine-payload
+                   "nightly" '(("model" . "haiku") ("read_only" . t)
+                               ("proactive" . nil) ("locked" . :false))))
+         (json (cmacs-clawtilla--encode payload)))
+    (should (equal "nightly" (alist-get 'id payload)))
+    (should (equal "haiku" (alist-get 'model payload)))
+    (should (eq t (alist-get 'read_only payload)))
+    (should (eq :false (alist-get 'proactive payload)))
+    (should (eq :false (alist-get 'locked payload)))
+    (should (string-match-p "\"proactive\":false" json))
+    (should-not (string-match-p "{}" json))))
+
+(ert-deftest cmacs-clawtilla-decisions-are-named-by-decision ()
+  "Answer, dismiss and delete name the decision as `decision', not `id'.
+
+The daemon reads `decision' (daemon-misc.c); with `id' every answer was
+refused and none ever reached the agent that asked."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-section nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-section-delete-decision))
+  (let ((sent nil))
+    (cl-letf (((symbol-function 'cmacs-clawtilla-section--send)
+               (lambda (kind payload) (push (cons kind payload) sent)))
+              ((symbol-function 'cmacs-clawtilla-section--row-id)
+               (lambda () "d-1"))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+      (with-temp-buffer
+        (setq-local cmacs-clawtilla-section--page "decisions")
+        (cmacs-clawtilla-section-answer "approve")
+        (cmacs-clawtilla-section-dismiss)
+        (cmacs-clawtilla-section-delete-decision)))
+    (should (= 3 (length sent)))
+    (dolist (entry sent)
+      (should (equal "d-1" (alist-get 'decision (cdr entry))))
+      (should-not (assq 'id (cdr entry))))
+    (should (assoc "decision.delete" sent))))
+
+(ert-deftest cmacs-clawtilla-agent-set-sends-key-and-value ()
+  "`agent.set' takes KEY and VALUE as strings, booleans spelled out."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-agent nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-agent--set-payload))
+  (should (equal '((agent . "scout") (key . "runtime.autostart")
+                   (value . "true"))
+                 (cmacs-clawtilla-agent--set-payload
+                  "scout" (cmacs-clawtilla-agent--setting-key 'autostart) "yes")))
+  (should (equal "false" (alist-get 'value (cmacs-clawtilla-agent--set-payload
+                                            "a" "enabled" :false))))
+  (should (equal "model.model" (cmacs-clawtilla-agent--setting-key 'model)))
+  ;; A field drawn from `settings' is already its own key.
+  (should (equal "model.account"
+                 (cmacs-clawtilla-agent--setting-key 'model.account)))
+  (should (equal "" (alist-get 'value (cmacs-clawtilla-agent--set-payload
+                                       "a" "computer.use" nil)))))
+
+(ert-deftest cmacs-clawtilla-policy-rules-keep-their-order ()
+  "Changing a rule replaces it where it stands; the first match decides."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-agent nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-agent--policy-put))
+  (let ((rules (cmacs-clawtilla-agent--policy-split
+                "exec=review, write=allow,, external=ask ")))
+    (should (equal '("exec=review" "write=allow" "external=ask") rules))
+    (should (equal '("exec=deny" "write=allow" "external=ask")
+                   (cmacs-clawtilla-agent--policy-put rules "exec" "deny")))
+    (should (equal '("exec=review" "write=allow" "external=ask" "Bash=ask")
+                   (cmacs-clawtilla-agent--policy-put rules "Bash" "ask")))
+    (should (equal "exec=review, write=allow, external=ask"
+                   (cmacs-clawtilla-agent--policy-join rules))))
+  (should (null (cmacs-clawtilla-agent--policy-split ""))))
+
+(ert-deftest cmacs-clawtilla-account-picker-shows-why-not ()
+  "Unusable accounts are shown with the daemon's reason, and marked."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-agent nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-agent--account-choices))
+  (let ((choices (cmacs-clawtilla-agent--account-choices
+                  '(((id . "work") (usable . t) (description . "the job"))
+                    ((id . "home") (usable) (reason . "codex cannot take it"))))))
+    (should (= 3 (length choices)))
+    ;; The CLI's own login comes first and names no account.
+    (should (null (nth 1 (car choices))))
+    (should (equal "work" (nth 1 (nth 1 choices))))
+    (should (null (nth 2 (nth 1 choices))))
+    (should (equal "codex cannot take it" (nth 2 (nth 2 choices))))
+    (should (string-match-p "codex cannot take it" (car (nth 2 choices))))))
+
+(ert-deftest cmacs-clawtilla-shared-computers-leave-out-the-host ()
+  "A host computer is not shareable; who uses each machine is shown."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (require 'cmacs-clawtilla-agent nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-agent--shared-choices))
+  (let ((choices (cmacs-clawtilla-agent--shared-choices
+                  '(((id . "lab") (type . "container") (shareable . t)
+                     (state . "running") (users "a" "b") (running "a"))
+                    ((id . "me") (type . "host") (shareable)
+                     (state . "unbuilt") (users) (running))))))
+    (should (= 2 (length choices)))
+    (should (null (cdr (car choices))))
+    (should (equal "lab" (cdr (nth 1 choices))))
+    (should (string-match-p "2 users, 1 running" (car (nth 1 choices))))))
+
+(ert-deftest cmacs-clawtilla-activity-turns-carry-a-summary ()
+  "Each turn gets a stable id and its steps summed by the library."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (fboundp 'cmacs-clawtilla--step-summary)))
+  (require 'cmacs-clawtilla-section nil t)
+  (skip-unless (fboundp 'cmacs-clawtilla-section--activity-turns))
+  (let* ((json (concat
+                "{\"now\":1800000000000000,\"turns\":[{\"agent\":\"scout\","
+                "\"room\":\"dm:scout\",\"started\":1799999990000000,"
+                "\"steerable\":true,\"running_turns\":1,\"step_count\":1,"
+                "\"steps\":[{\"kind\":\"tool\",\"tool\":\"Read\","
+                "\"text\":\"a.c\",\"failed\":null,\"ts\":1799999995}]}]}"))
+         (turns (cmacs-clawtilla-section--activity-turns json)))
+    (should (= 1 (length turns)))
+    (should (equal "scout/dm:scout" (alist-get 'id (car turns))))
+    (should (eq t (alist-get 'steerable (car turns))))
+    (should (assq 'summary (car turns)))))
+
 
 (provide 'cmacs-clawtilla-tests)
 

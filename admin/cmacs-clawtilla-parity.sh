@@ -93,6 +93,23 @@ declare -A AFFORDANCES=(
     ["palettes from disk"]="clawt_appearance_scheme_count|appearance-scheme"
     ["connection reachability"]="clawt_connection_probe|link-notice"
     ["decision inbox"]="build_decision_page|decision"
+    ["activity page"]="clawt_gtk_build_activity_page|section--draw-activity"
+    ["activity elapsed"]="clawt_activity_elapsed_label|activity-elapsed"
+    ["activity stop prompt"]="clawt_activity_stop_prompt|activity-stop-prompt"
+    ["fleet page"]="clawt_gtk_build_fleet_page|section--draw-fleet"
+    ["fleet summary"]="clawt_usage_fleet_summary|fleet-view"
+    ["fleet payload"]="clawt_usage_fleet_payload|fleet-payload"
+    ["fleet stop idle"]="clawt_usage_fleet_row_stoppable|fleet-stop-idle"
+    ["fleet periods"]="clawt_usage_period_count|usage-period"
+    ["browser view"]="clawt_gtk_build_browser_view|computer--draw-browser"
+    ["browser session line"]="clawt_browser_session_line|browser-line"
+    ["account picker"]="account_row_build|agent-account"
+    ["shared computer picker"]="use_row_build|agent-use-computer"
+    ["action rules"]="policy_row|agent-policy"
+    ["routine model"]="dialog->model_row|\"agent\" \"model\""
+    ["routine read-only"]="read_only_row|\"read_only\""
+    ["routine proactive"]="proactive_row|\"proactive\""
+    ["routine locked"]="locked_row|\"locked\""
 )
 
 #

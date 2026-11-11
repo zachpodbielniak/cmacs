@@ -69,11 +69,11 @@ address*, and is never the default.
 | =*clawtilla: NAME*= | the fleet: teams, agents, rooms |
 | =*clawtilla: AGENT*= | one conversation |
 | =*clawtilla agent: ID*= | Overview and Mailbox |
-| =*clawtilla computer: ID*= | Shell, Screen, Mounts, Exchange |
-| =*clawtilla work*= | Tasks, Decisions, Flow |
+| =*clawtilla computer: ID*= | Shell, Screen, Mounts, Exchange, Browser |
+| =*clawtilla work*= | Tasks, Decisions, Flow, Activity, Fleet |
 | =*clawtilla automation*= | Routines, Triggers |
 | =*clawtilla library*= | Skills, Memory |
-| =*clawtilla settings*= | seven panels |
+| =*clawtilla settings*= | eight panels |
 | =*clawtilla alerts*= | what is worth interrupting you for |
 | =*clawtilla teach*= | recorded demonstrations |
 
@@ -137,6 +137,47 @@ session and =D= removes the agent.  =M-p= and =M-n= move it in the list.
 
 *A reset is not a restart.*  A restart brings the same conversation back;
 a reset drops the session, and is what makes an identity change take.
+
+*** An agent's page
+
+=o= on an agent opens its Overview, where every field is a line you
+press =RET= on.  The values come from =agent.show=: the agent object
+for the summary fields, and its =settings= --- every per-agent schema
+key, as strings --- for the rest.  Saving goes through =agent.set= as a
+=key= and a =value=, the schema's own agent-relative key
+(=model.model=, =runtime.restart=) with booleans spelled =true= and
+=false=; the daemon parses the value against the same schema it reports
+from.  A change that only reaches the agent at its next session says so.
+
+Four fields are a choice among things the daemon holds:
+
+- *Account* (=model.account=, =A=) --- which login the agent's CLI
+  uses.  Offered from =account.list= asked /with the agent/, so each
+  account carries the daemon's own =usable= answer
+  (=clawt_account_check=, the same check =agent.set= applies).  An
+  account this agent cannot use is still listed, with the daemon's
+  =reason=, and choosing it is refused --- the picker offers exactly
+  what saving accepts.
+- *Shared computer* (=computer.use=, =S=) --- a machine declared under
+  =computers:= that several agents share, from =computer.shared=, each
+  with its type, state, who uses it and how many of them are running.
+  A host computer is not shareable and is not offered.  Its settings are
+  the machine's, so the daemon refuses any other =computer.*= key on an
+  agent that uses one.
+- *Browser* (=browser.mode=, =W=) --- none, its own, or a shared one;
+  the modes are libclawt's =ClawtBrowserMode=, walked off its GType.
+- *Browser session* (=browser.use=, =w=) --- which shared session, from
+  =browser.list=.
+
+*Action rules* (=policy.rules=) decide what the agent may do without
+asking: =MATCH=MODE=, read top to bottom, the first match deciding and
+an unmatched call running.  =MATCH= is an action class (=ClawtActionClass=)
+or a tool-name glob; =MODE= is a =ClawtPolicyMode=.  =r= adds or changes
+one --- a rule for the same match is replaced where it stands, because
+order is meaning here --- =R= removes one and =E= edits the line whole.
+The daemon parses each rule where it arrives and refuses one it cannot
+read.  An agent's own list replaces the fleet's =defaults.policy.rules=
+rather than adding to it, so clearing it brings the defaults back.
 
 *** A conversation
 
@@ -205,9 +246,9 @@ the better answer when the client *is* the editor.
 
 *** A computer
 
-Shell, Screen, Mounts and Exchange --- four, in that order, because
-=clawt_computer_view_count()= says so and not because this client lists
-them.
+Shell, Screen, Mounts, Exchange and Browser --- five, in that order,
+because =clawt_computer_view_count()= says so and not because this
+client lists them.
 
 =!= runs a command.  =v= grabs a frame and =V= fetches the whole screen,
 =o= watches it and =O= stops; watching is stopped explicitly rather than
@@ -222,10 +263,109 @@ An agent with =computer: none= is told it has no machine rather than
 offered a shell into nothing --- which type has a machine is also the
 library's answer.
 
+**** The browser
+
+Since clawtilla 0.9.0 an agent can drive a real web browser: a gsurf on
+a private Xvfb, started by the daemon on the first browser call.  The
+Browser view draws the library's line above the picture
+(=clawt_browser_session_line=: what it is on, and who is driving), the
+picture itself from =browser.frame=, and the sessions from
+=browser.list= that this agent drives or shares.
+
+=a= opens an address (=browser.open=, starting the session if it must
+and waiting for the load), =r= reads the page again, =X= stops it ---
+the open page is lost, the profile and its logins stay.  *A click on the
+picture is a click in the page*: the picture is drawn scaled to fit the
+window, so the click is mapped back through the PNG's own size to the
+page's CSS pixels before =browser.click= is sent.  =x= clicks at a point
+typed in, for when there is no mouse.  A person's click does not take a
+shared session's driver lease, since a person at the Computer page
+outranks an agent.
+
+A frame is asked for when the view is entered and after each action,
+never on a timer from a buffer nobody is reading.  A daemon built
+without =GSURF=1= answers =available: false=, and the view says that
+rather than drawing an empty frame.
+
+*** Work: Tasks, Decisions, Flow, Activity and Fleet
+
+The pages and their order are the library's (=clawt_section_page_count=);
+=TAB= moves between them.
+
+**** Decisions
+
+The inbox: what agents are waiting on you for.  =a= answers, =d=
+dismisses (the record stays, saying you passed), and =x= deletes for
+good --- for a stale ask or one raised by mistake.  All three name the
+decision as =decision=, which is the key the daemon reads.  =o= shows
+settled decisions too, each saying how it ended --- answered,
+dismissed, defaulted or deleted --- from the =decision.settled= event
+when this session saw it, otherwise from the state the list reports.
+=urgent= is the daemon's (the deadline is inside a day), never worked
+out here.
+
+**** Activity
+
+Every turn running anywhere in the fleet, from =activity.list=: who, in
+which room, for how long, on whose behalf, how many steps, and the
+latest of them summed in the library's words.  The age is
+=clawt_activity_elapsed_label= against the daemon's own =now=, so this
+machine's clock never shows up as an age.
+
+=s= stops the agent --- =agent.interrupt=, which ends *every* turn it
+has, not the row it was pressed on, and leaves it up.  It asks first,
+with =clawt_activity_stop_prompt=, because a key that does more than its
+row suggests must say so.  =c= steers: the text goes through =msg.send=
+into the running turn, which reaches only the agent's conversation with
+you, so it is offered only on a turn the daemon marks =steerable=.  An
+agent that finished meanwhile takes it as a new message, and the two are
+said apart.
+
+The page refreshes on turn events, coalesced, and re-ages every ten
+seconds while it is on screen: a turn in one long tool call produces no
+step for minutes, and an age that never moves reads as a stale page.
+
+**** Fleet
+
+What each agent costs and which sit idle, from one =usage.summary=
+asked the way every client's Fleet page asks it
+(=clawt_usage_fleet_payload=: the period's =since=, fourteen days of
+daily figures, sorted by cost).  The figures and wording are all the
+library's --- the period total, the day's budget line against
+=daily_fleet_budget_micros=, the fleet's fourteen-day strip, and per
+agent its cost and share, a strip of its own days, and a subtitle with
+its turns and last turn.  Cost crosses the wire as integer
+micro-dollars and is formatted by the library.
+
+=idle= and =idle_tone= are the daemon's; this client paints the label
+in the tone it is given and never decides what idle means.  An agent the
+daemon stopped for being idle is marked asleep --- the next message
+wakes it.  =p= picks the period from the library's list, =s= stops the
+agent at point (=agent.stop=: its process and its computer), and =X=
+stops every agent the library offers Stop on --- running, and idle or
+never used --- after naming them.
+
+*** Automation: Routines and Triggers
+
+=A= adds a routine; with a prefix argument it also asks for the routine's
+own model and its three flags.  =U= changes one field of the routine at
+point: schedule, prompt, agent, model, or one of the flags.
+
+- *model* runs the routine on a model other than the agent's own --- a
+  cheaper one for a check that compares a number.  Empty is the
+  agent's.
+- *read_only* runs it unable to change anything.
+- *proactive* lets it start work rather than only report.
+- *locked* keeps the agent itself from editing or removing it.
+
+The flags travel as JSON =true= and =false=, never as a string: a string
+that is not a boolean is read as the default, and the request succeeds
+and does the other thing.
+
 *** Settings
 
-Appearance, Integrations, Connectors, Teams, Spending, Folders and Cloud
-images.  =TAB= moves between them.
+Appearance, Integrations, Connectors, Accounts, Teams, Spending, Folders
+and Cloud images.  =TAB= moves between them.
 
 Appearance is the only panel that is not the daemon's, and even its
 values are the library's: the palettes and measure units come from
@@ -235,6 +375,17 @@ width the library would refuse.
 *Connectors never show or accept a secret.*  A connected account keeps
 its credential in the daemon and hands only the tools to the agents;
 =c= begins a connection and gives you a URL to open.
+
+*Accounts* are logins: a CLI's config directory under a name, so two
+agents on the same provider can be two different people.  The panel
+lists them from =account.list=; =aa= declares one (=account.add=: id,
+provider, config directory, description) and =ar= removes the one at
+point (=account.remove=), saying how many agents still name it --- they
+become shadows until pointed elsewhere.  Logging in is the CLI's own
+business (=clawtilla account login=); no credential passes through
+here.  The panel reloads on =account.changed=, so an account added from
+another client appears.  Which account an agent uses is chosen on the
+agent's page.
 
 *** Alerts and unread
 
@@ -296,12 +447,32 @@ Two kinds are declared as allowed absences with reasons:
 =agent.file_read= and =agent.file_write=, because =/edit= opens the file
 in a buffer.
 
+The affordance layer declares forty pairs.  Since clawtilla 0.9 they
+include the Activity page, its elapsed label and stop question; the
+Fleet page, its summary, payload, periods and stop-the-idle action; the
+Browser view and its session line; the account and shared-computer
+pickers and the action-rule editor; and a routine's model and its
+read-only, proactive and locked flags.  Each names the GTK symbol and
+the cmacs one, so removing either half fails the check.
+
+=just clawtilla-parity= runs it; it needs no build.
+
 ** Why the library answers so much
 
 Nearly every rule this client follows is asked of libclawt rather than
 implemented here: the activity sentence, the team tally, run and day
 boundaries, timestamps, alert tiers, the unread rule, tool-run grouping,
-markdown.
+markdown, a turn's elapsed time and the Stop question, every figure and
+sentence on the Fleet page and its sparklines, the browser session line,
+and the values of every enumeration offered --- browser modes, policy
+modes and action classes included, which libclawt registers only as
+GTypes and which are walked off those.
+
+One family is named in C rather than walked: a decision's state.
+=decision.list= sends it as the enum's integer and libclawt registers no
+GType for it, so the =decision-state= family maps the library's own
+constants to the words the daemon uses for the same outcomes in
+=decision.settled=.
 
 That is not deference for its own sake.  The failures are on record in
 clawtilla's history: the CLI read =busy= and =peer= for as long as they

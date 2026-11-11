@@ -22,7 +22,12 @@
 ;;; Commentary:
 
 ;; The GTK client's Settings: Appearance, Integrations, Connectors,
-;; Teams, Spending, Folders and Cloud images.
+;; Accounts, Teams, Spending, Folders and Cloud images.
+;;
+;; Accounts (clawtilla 0.2.0) are logins: a CLI's config directory under
+;; a name, so two agents on the same provider can be two people.  The
+;; panel lists, adds and removes them; which one an agent uses is chosen
+;; on the agent's own page, from the daemon's usability check.
 ;;
 ;; Appearance is the one panel that is not the daemon's.  Its values are
 ;; still the library's -- palettes and measure units come from
@@ -49,6 +54,7 @@
 ;; variable, and setting one from here would create a second binding
 ;; that the fleet never reads.
 (require 'cmacs-clawtilla-fleet)
+(declare-function cmacs-clawtilla--format-cost "cmacs-clawtilla-defuns.c")
 
 (defcustom cmacs-clawtilla-colour-scheme nil
   "The palette clawtilla buffers use, or nil for the Emacs theme.
@@ -75,6 +81,7 @@ Offered from the library's own list rather than one written here."
   '(("appearance"  . "Appearance")
     ("integrations" . "Integrations")
     ("connectors"  . "Connectors")
+    ("accounts"    . "Accounts")
     ("teams"       . "Teams")
     ("spending"    . "Spending")
     ("folders"     . "Folders")
@@ -160,6 +167,18 @@ Offered from the library's own list rather than one written here."
                                 'face 'cmacs-clawtilla-stopped))
                   (cmacs-clawtilla-dim (or (alist-get 'account row) ""))))
         "no connected accounts"))
+      ("accounts"
+       (cmacs-clawtilla-settings--draw-rows
+        (lambda (row)
+          ;; The login's directory and what it is for; never a token --
+          ;; the account is a CLI's config directory, and the secret
+          ;; stays wherever that CLI keeps it.
+          (format "%-18s %-12s %-30s %s"
+                  (or (alist-get 'id row) "?")
+                  (or (alist-get 'provider row) "")
+                  (or (alist-get 'config_dir row) "")
+                  (cmacs-clawtilla-dim (or (alist-get 'description row) ""))))
+        "no accounts: every agent uses its CLI's own login"))
       ("teams"
        (cmacs-clawtilla-settings--draw-rows
         (lambda (row)
@@ -173,14 +192,19 @@ Offered from the library's own list rather than one written here."
        (progn
          (cmacs-clawtilla-settings--row
           "Fleet total"
-          (cmacs-clawtilla-settings--money
-           (alist-get 'total cmacs-clawtilla-settings--extra)))
+          ;; usage.summary's `total' is an object in the per-agent
+          ;; shape, and cost crosses as integer micro-dollars, formatted
+          ;; by the library rather than here.
+          (cmacs-clawtilla-settings--micros
+           (cmacs-clawtilla-get (alist-get 'total cmacs-clawtilla-settings--extra)
+                                'cost_micros)))
          (insert "\n")
          (cmacs-clawtilla-settings--draw-rows
           (lambda (row)
             (format "%-18s %s"
-                    (or (alist-get 'agent row) "?")
-                    (cmacs-clawtilla-settings--money (alist-get 'cost row))))
+                    (or (alist-get 'name row) (alist-get 'id row) "?")
+                    (cmacs-clawtilla-settings--micros
+                     (alist-get 'cost_micros row))))
           "nothing spent yet")))
       ("folders"
        (cmacs-clawtilla-settings--draw-rows
@@ -201,6 +225,12 @@ Offered from the library's own list rather than one written here."
                      (if size (file-size-human-readable size) "")))))
         "no cloud images")))))
 
+(defun cmacs-clawtilla-settings--micros (micros)
+  "Format MICROS (integer micro-dollars) the way the library does."
+  (if (numberp micros)
+      (cmacs-clawtilla--format-cost micros)
+    (cmacs-clawtilla-dim "—")))
+
 (defun cmacs-clawtilla-settings--money (amount)
   "Format AMOUNT, as the provider reported it."
   (if (numberp amount)
@@ -216,6 +246,7 @@ Offered from the library's own list rather than one written here."
 (defconst cmacs-clawtilla-settings--frames
   '(("integrations" "integration.list" integrations)
     ("connectors"   "connector.list"   connectors)
+    ("accounts"     "account.list"     accounts)
     ("teams"        "team.list"        teams)
     ("spending"     "usage.summary"    agents)
     ("folders"      "defaults.mount.list" mounts)
@@ -533,6 +564,65 @@ to a team by it."
      (list (cons 'id id) (cons field value))
      (cmacs-clawtilla-settings--reload))))
 
+(defun cmacs-clawtilla-settings-account-add (id provider config-dir description)
+  "Declare account ID: PROVIDER's CLI logged in under CONFIG-DIR.
+
+DESCRIPTION says what it is for.  Refused for a bad or taken id, or a
+CLI that cannot take an account; logging in is still done by the CLI
+itself (`clawtilla account login'), because the credential is the
+CLI's and never passes through here."
+  (interactive
+   (list (read-string "Account id: ")
+         (read-string "Provider (the CLI, e.g. claude-code): ")
+         (read-directory-name "Its config directory: ")
+         (read-string "What it is for: ")))
+  (cmacs-clawtilla-request
+   (cmacs-clawtilla-current) "account.add"
+   (list (cons 'id id) (cons 'provider provider)
+         (cons 'config_dir (expand-file-name config-dir))
+         (cons 'description description))
+   (cmacs-clawtilla-settings--reload)))
+
+(defun cmacs-clawtilla-settings-account-remove ()
+  "Remove the account at point.
+
+The agents that name it are not changed, and become shadows until they
+are pointed elsewhere -- the daemon answers how many, and saying that
+number is the point of asking."
+  (interactive)
+  (let ((id (cmacs-clawtilla-settings--row-id))
+        (buffer (current-buffer)))
+    (unless (equal cmacs-clawtilla-settings--panel "accounts")
+      (user-error "Not on the Accounts panel"))
+    (when (yes-or-no-p (format "Remove account %s? " id))
+      (cmacs-clawtilla-request
+       (cmacs-clawtilla-current) "account.remove" (list (cons 'id id))
+       (lambda (data err)
+         (if err
+             (message "clawtilla: %s" err)
+           (let ((using (or (cmacs-clawtilla-get data 'agents_using) 0))
+                 (refusals (cmacs-clawtilla-get data 'refusals)))
+             (message "clawtilla: removed %s%s%s" id
+                      (if (> using 0)
+                          (format "; %d agent%s still name it and are now shadows"
+                                  using (if (= using 1) "" "s"))
+                        "")
+                      (if refusals (format "; %s" refusals) "")))
+           (when (buffer-live-p buffer)
+             (cmacs-clawtilla-settings--load buffer))))))))
+
+(defun cmacs-clawtilla-settings--on-event (conn kind _data)
+  "Reload the Accounts panel on CONN when KIND says the accounts changed."
+  (when (equal kind "account.changed")
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'cmacs-clawtilla-settings-mode)
+                   (eq cmacs-clawtilla-connection conn)
+                   (equal cmacs-clawtilla-settings--panel "accounts"))
+          (cmacs-clawtilla-settings--load buffer))))))
+
+(add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-settings--on-event)
+
 (defun cmacs-clawtilla-settings-team-remove ()
   "Remove the team at point.
 
@@ -718,6 +808,9 @@ between trying again and not."
    [("f" "refresh credential" cmacs-clawtilla-settings-connector-refresh)
     ("F" "refresh catalogue" cmacs-clawtilla-settings-registry-refresh)
     ("D" "revoke" cmacs-clawtilla-settings-revoke)]]
+  ["Accounts"
+   [("aa" "add an account" cmacs-clawtilla-settings-account-add)
+    ("ar" "remove the account" cmacs-clawtilla-settings-account-remove)]]
   ["Teams and folders"
    [("t" "make a team" cmacs-clawtilla-settings-team-create)
     ("e" "change a team" cmacs-clawtilla-settings-team-set)

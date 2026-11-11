@@ -734,6 +734,128 @@ cmacs_clawt_enum_import_modes (JsonBuilder *builder)
     }
 }
 
+/* A label for an enumeration the library registers only as a GType.
+
+   Three of the families below -- the browser modes, the policy modes
+   and the action classes -- have no `_nth_label' table in libclawt:
+   they exist for the config schema, which reads their nicks off the
+   GType.  So the label is the nick made readable ("hand_back" becomes
+   "Hand back"), which is exactly what the GTK client shows for them
+   too, and no word of it is written here.  */
+static gchar *
+cmacs_clawt_enum_humanise (const gchar *nick)
+{
+  gchar *label = g_strdup (nick != NULL ? nick : "");
+  gchar *p;
+
+  for (p = label; *p != '\0'; p++)
+    if (*p == '_' || *p == '-')
+      *p = ' ';
+
+  if (*label != '\0')
+    *label = g_ascii_toupper (*label);
+
+  return label;
+}
+
+/* Walk a registered GEnum, emitting {nick, label} per value in the
+   order the type declares them.  The GType is the single source the
+   daemon itself validates `agent.set' against (clawt_enum_from_nick),
+   so a value offered from here is one saving will accept.  */
+static void
+cmacs_clawt_enum_gtype (JsonBuilder *builder, GType type)
+{
+  g_autoptr (GEnumClass) klass = NULL;
+  guint n;
+
+  if (!G_TYPE_IS_ENUM (type))
+    return;
+
+  klass = g_type_class_ref (type);
+
+  for (n = 0; n < klass->n_values; n++)
+    {
+      const GEnumValue *value = &klass->values[n];
+      g_autofree gchar *label = cmacs_clawt_enum_humanise (value->value_nick);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder, value->value_nick);
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder, label);
+      json_builder_end_object (builder);
+    }
+}
+
+/* The Fleet page's periods.  The nick is the period's INDEX as text,
+   because that is what clawt_usage_period_since() takes back -- the
+   library names no period, it numbers them -- and `default' marks the
+   one the page opens on (CLAWT_USAGE_PERIOD_DEFAULT).  */
+static void
+cmacs_clawt_enum_usage_periods (JsonBuilder *builder)
+{
+  guint n;
+  guint total = clawt_usage_period_count ();
+
+  for (n = 0; n < total; n++)
+    {
+      g_autofree gchar *nick = g_strdup_printf ("%u", n);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder, nick);
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder, clawt_usage_period_label (n));
+      json_builder_set_member_name (builder, "default");
+      json_builder_add_boolean_value (builder,
+                                      n == CLAWT_USAGE_PERIOD_DEFAULT);
+      json_builder_end_object (builder);
+    }
+}
+
+/* A decision's state.  `decision.list' sends it as the enum's INTEGER
+   and libclawt registers no GType for ClawtDecisionState, so this is
+   the one family named here -- by the library's own constants, with
+   the words the daemon uses for the same outcomes in the `how' of
+   `decision.settled'.  `value' is what the reply carries.  */
+static const gchar *
+cmacs_clawt_decision_state_nick (ClawtDecisionState state)
+{
+  switch (state)
+    {
+    case CLAWT_DECISION_OPEN:      return "open";
+    case CLAWT_DECISION_ANSWERED:  return "answered";
+    case CLAWT_DECISION_DEFAULTED: return "defaulted";
+    case CLAWT_DECISION_DISMISSED: return "dismissed";
+    default:                       return NULL;
+    }
+}
+
+static void
+cmacs_clawt_enum_decision_states (JsonBuilder *builder)
+{
+  static const ClawtDecisionState states[] = {
+    CLAWT_DECISION_OPEN, CLAWT_DECISION_ANSWERED,
+    CLAWT_DECISION_DEFAULTED, CLAWT_DECISION_DISMISSED
+  };
+  guint n;
+
+  for (n = 0; n < G_N_ELEMENTS (states); n++)
+    {
+      const gchar *nick = cmacs_clawt_decision_state_nick (states[n]);
+      g_autofree gchar *label = cmacs_clawt_enum_humanise (nick);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder, nick);
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder, label);
+      json_builder_set_member_name (builder, "value");
+      json_builder_add_int_value (builder, (gint64) states[n]);
+      json_builder_end_object (builder);
+    }
+}
+
 char *
 cmacs_clawt_enum_json (const char *family)
 {
@@ -770,6 +892,16 @@ cmacs_clawt_enum_json (const char *family)
   else if (g_str_equal (family, "relabel"))
     cmacs_clawt_enum_simple (builder, clawt_relabel_count,
                              clawt_relabel_nth_nick, clawt_relabel_nth_label);
+  else if (g_str_equal (family, "browser-mode"))
+    cmacs_clawt_enum_gtype (builder, CLAWT_TYPE_BROWSER_MODE);
+  else if (g_str_equal (family, "policy-mode"))
+    cmacs_clawt_enum_gtype (builder, CLAWT_TYPE_POLICY_MODE);
+  else if (g_str_equal (family, "action-class"))
+    cmacs_clawt_enum_gtype (builder, CLAWT_TYPE_ACTION_CLASS);
+  else if (g_str_equal (family, "usage-period"))
+    cmacs_clawt_enum_usage_periods (builder);
+  else if (g_str_equal (family, "decision-state"))
+    cmacs_clawt_enum_decision_states (builder);
   else
     return NULL;
 

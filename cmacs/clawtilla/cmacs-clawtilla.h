@@ -140,6 +140,24 @@ extern char *cmacs_clawt_steps_split (const char *steps_json,
                                       const char *agent_id,
                                       int64_t message_ts);
 
+/* The Activity page, the Fleet page and the browser line, each worded
+   by libclawt (clawt-activity.h, clawt-usage.h, clawt-browser.h).
+   `cmacs_clawt_usage_fleet_json' takes a usage.summary reply exactly as
+   the daemon sent it and answers everything the page draws from it --
+   the summary, the budget line, the strip, and per agent its cost,
+   share, subtitle, daily strip and whether Stop is offered.  */
+extern char *cmacs_clawt_activity_elapsed (int64_t started_us,
+                                           int64_t now_us);
+extern char *cmacs_clawt_activity_stop_prompt (const char *agent_id,
+                                               unsigned running);
+extern char *cmacs_clawt_usage_sparkline (const int64_t *values,
+                                          unsigned count);
+extern char *cmacs_clawt_usage_format_cost (int64_t cost_micros);
+extern char *cmacs_clawt_usage_fleet_payload (int period, int days);
+extern char *cmacs_clawt_usage_fleet_json (const char *reply_json,
+                                           int64_t now);
+extern char *cmacs_clawt_browser_session_line (const char *session_json);
+
 /* syms_of_/init_ for each translation unit.  */
 extern void syms_of_cmacs_clawtilla_defuns (void);
 

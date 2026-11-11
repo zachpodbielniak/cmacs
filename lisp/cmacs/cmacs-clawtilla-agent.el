@@ -30,6 +30,14 @@
 ;; that has to be filled in and submitted turns changing one of them
 ;; into a ceremony.
 ;;
+;; Overview also carries what libclawt 0.2-0.9 added per agent: which
+;; login its CLI uses (`model.account', offered from `account.list' with
+;; the daemon's own usability check), a machine shared with other agents
+;; (`computer.use', from `computer.shared'), its browser (`browser.mode'
+;; and `browser.use') and its action rules (`policy.rules').  These are
+;; read from `agent.show''s `settings' -- every per-agent schema key, as
+;; strings -- and written back through `agent.set' as KEY and VALUE.
+;;
 ;; The values a field offers come from the library, never from a list
 ;; written here: computer types and import modes are enumerations
 ;; clawtilla exports precisely so a client does not hold its own copy,
@@ -52,6 +60,14 @@ one -- so this is remembered rather than assumed to be the only one.")
 (defvar-local cmacs-clawtilla-agent--id nil)
 (defvar-local cmacs-clawtilla-agent--data nil)
 (defvar-local cmacs-clawtilla-agent--mailbox nil)
+(defvar-local cmacs-clawtilla-agent--settings nil
+  "The agent's `settings' from `agent.show': every per-agent schema key.
+
+Keyed by the agent-relative name the daemon uses -- `model.account',
+`computer.use', `policy.rules' -- with every value a string, because
+that is what `agent.set' parses back against the same schema.")
+(defvar-local cmacs-clawtilla-agent--shared nil
+  "The `computer.shared' list, for who else is on this agent's machine.")
 (defvar-local cmacs-clawtilla-agent--page 'agent
   "Which page of the Agent section this buffer shows.")
 
@@ -80,8 +96,21 @@ one -- so this is remembered rather than assumed to be the only one.")
                                   'provider)
     (cmacs-clawtilla-agent--field "Model" (alist-get 'model agent) 'model)
     (cmacs-clawtilla-agent--field "Effort" (alist-get 'effort agent) 'effort)
+    (cmacs-clawtilla-agent--field "Account"
+                                  (cmacs-clawtilla-agent--setting
+                                   'model.account "the CLI's own login")
+                                  'model.account)
     (cmacs-clawtilla-agent--field "Computer" (alist-get 'computer agent)
                                   'computer)
+    (cmacs-clawtilla-agent--field "Shared computer"
+                                  (cmacs-clawtilla-agent--use-label)
+                                  'computer.use)
+    (cmacs-clawtilla-agent--field "Browser"
+                                  (cmacs-clawtilla-agent--setting 'browser.mode)
+                                  'browser.mode)
+    (cmacs-clawtilla-agent--field "Browser session"
+                                  (cmacs-clawtilla-agent--setting 'browser.use)
+                                  'browser.use)
     (cmacs-clawtilla-agent--field "Team" (alist-get 'team agent) 'team)
     (cmacs-clawtilla-agent--field "Team role" (alist-get 'team_role agent)
                                   'team_role)
@@ -100,6 +129,23 @@ one -- so this is remembered rather than assumed to be the only one.")
                                       "yes" "no")
                                   'enabled)
     (insert "\n")
+    ;; What the agent may do without asking.  One rule a line, in the
+    ;; order the daemon reads them: the first that matches decides.
+    (let ((rules (cmacs-clawtilla-agent--policy-split
+                  (cmacs-clawtilla-agent--setting 'policy.rules))))
+      (cmacs-clawtilla-insert-section
+       :type 'field :value 'policy.rules :level 0 :foldable t
+       :heading (concat (propertize "Action rules" 'face 'cmacs-clawtilla-heading)
+                        "  " (cmacs-clawtilla-dim
+                              "first match wins; unmatched calls run"))
+       :body (lambda ()
+               (if (null rules)
+                   (insert "    " (cmacs-clawtilla-dim
+                                   "none of its own: the fleet's defaults apply")
+                           "\n")
+                 (dolist (rule rules)
+                   (insert "    " rule "\n"))))))
+    (insert "\n")
     ;; Credentials are shown by reference and never by value.  A client
     ;; that could print one is a client that eventually does.
     (let ((credentials (alist-get 'credentials agent)))
@@ -113,6 +159,39 @@ one -- so this is remembered rather than assumed to be the only one.")
                    (cmacs-clawtilla-agent--field
                     (format "%s" (car pair))
                     (cmacs-clawtilla-dim (format "%s" (cdr pair)))))))))))
+
+(defun cmacs-clawtilla-agent--setting (key &optional empty)
+  "Return the agent's setting KEY, or EMPTY when it is unset or blank."
+  (let ((value (alist-get key cmacs-clawtilla-agent--settings)))
+    (if (and (stringp value) (not (string-empty-p value)))
+        value
+      empty)))
+
+(defun cmacs-clawtilla-agent--use-label ()
+  "Return the shared machine this agent uses, with who else is on it."
+  (let* ((use (cmacs-clawtilla-agent--setting 'computer.use))
+         (computer (and use
+                        (seq-find (lambda (c) (equal (alist-get 'id c) use))
+                                  cmacs-clawtilla-agent--shared))))
+    (cond
+     ((null use) "its own machine")
+     ((null computer) (format "%s (not declared)" use))
+     (t (cmacs-clawtilla-agent--computer-label computer)))))
+
+(defun cmacs-clawtilla-agent--computer-label (computer)
+  "Return a one-line label for the shared COMPUTER from `computer.shared'."
+  (let ((users (alist-get 'users computer))
+        (running (alist-get 'running computer)))
+    (concat (format "%s (%s)" (alist-get 'id computer)
+                    (or (alist-get 'type computer) "?"))
+            (if (alist-get 'description computer)
+                (format " -- %s" (alist-get 'description computer))
+              "")
+            (format " · %s · %d user%s, %d running"
+                    (or (alist-get 'state computer) "?")
+                    (length users) (if (= 1 (length users)) "" "s")
+                    (length running))
+            (if users (format " (%s)" (string-join users ", ")) ""))))
 
 (defun cmacs-clawtilla-agent--draw-mailbox ()
   "Draw the agent's mailbox."
@@ -186,7 +265,17 @@ one -- so this is remembered rather than assumed to be the only one.")
                (message "clawtilla: %s" err)
              (setq cmacs-clawtilla-agent--data
                    (or (cmacs-clawtilla-get data 'agent) data))
+             (setq cmacs-clawtilla-agent--settings
+                   (cmacs-clawtilla-get data 'settings))
              (cmacs-clawtilla-agent--draw))))))
+    (cmacs-clawtilla-request
+     conn "computer.shared" nil
+     (lambda (data err)
+       (when (and (buffer-live-p buffer) (not err))
+         (with-current-buffer buffer
+           (setq cmacs-clawtilla-agent--shared
+                 (cmacs-clawtilla-get data 'computers))
+           (cmacs-clawtilla-agent--draw)))))
     (cmacs-clawtilla-request
      conn "mailbox.list" (list (cons 'agent id))
      (lambda (data err)
@@ -200,6 +289,65 @@ one -- so this is remembered rather than assumed to be the only one.")
 
 ;;;; Editing.
 
+(defconst cmacs-clawtilla-agent--setting-keys
+  '((name . "name") (description . "description")
+    (provider . "model.provider") (model . "model.model")
+    (effort . "model.effort") (computer . "computer.type")
+    (team . "team") (team_role . "team_role")
+    (restart . "runtime.restart") (autostart . "runtime.autostart")
+    (chief_of_staff . "chief_of_staff") (enabled . "enabled"))
+  "The schema key `agent.set' takes for each overview field.
+
+The overview shows `agent.show''s agent object, whose members are
+summaries (`model', `restart'); `agent.set' takes the schema's own
+agent-relative key (`model.model', `runtime.restart').  A field drawn
+from `settings' is already named by its key and is not listed here.")
+
+(defun cmacs-clawtilla-agent--setting-key (field)
+  "Return the `agent.set' key for the overview FIELD, a symbol."
+  (or (alist-get field cmacs-clawtilla-agent--setting-keys)
+      (symbol-name field)))
+
+(defun cmacs-clawtilla-agent--set-payload (agent key value)
+  "Return the `agent.set' payload setting KEY of AGENT to VALUE.
+
+`agent.set' takes `key' and `value' -- not the key as a member of its
+own -- and VALUE travels as a string: the daemon parses it against the
+schema, so a boolean is \"true\" or \"false\" and an empty string clears
+a text setting.  Sending `(model . \"x\")' instead was refused as \"agent
+and key are both required\" and nothing in the overview ever saved."
+  (list (cons 'agent agent)
+        (cons 'key (if (symbolp key) (symbol-name key) key))
+        (cons 'value (pcase value
+                       ((or 't "yes") "true")
+                       ((or :false "no") "false")
+                       ('nil "")
+                       ((pred stringp) value)
+                       (_ (format "%s" value))))))
+
+(defun cmacs-clawtilla-agent--put (key value &optional callback)
+  "Set this agent's KEY to VALUE, then reload and call CALLBACK.
+
+`restart_required' is said rather than swallowed: an AI CLI lists its
+tools when its session starts, so a permission changed under a running
+agent reaches its files and not its session."
+  (let ((buffer (current-buffer))
+        (agent (or cmacs-clawtilla-agent--id
+                   (alist-get 'id cmacs-clawtilla-agent--data))))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "agent.set"
+     (cmacs-clawtilla-agent--set-payload agent key value)
+     (lambda (data err)
+       (cond
+        (err (message "clawtilla: %s" err))
+        ((eq t (cmacs-clawtilla-get data 'restart_required))
+         (message "clawtilla: saved; it takes effect when %s restarts" agent))
+        (t (message "clawtilla: saved %s" key)))
+       (unless err
+         (when (buffer-live-p buffer)
+           (cmacs-clawtilla-agent--load buffer))
+         (when callback (funcall callback)))))))
+
 (defun cmacs-clawtilla-agent--choices (key)
   "Return the values KEY offers, or nil for free text.
 
@@ -208,6 +356,7 @@ computer type added to clawtilla is offered by this client the moment
 it exists, and `make parity' fails a client holding its own copy."
   (pcase key
     ('computer (cmacs-clawtilla-enum-nicks "computer-type"))
+    ('browser.mode (cmacs-clawtilla-enum-nicks "browser-mode"))
     ('team_role '("member" "lead"))
     ((or 'autostart 'chief_of_staff 'enabled) '("yes" "no"))
     (_ nil)))
@@ -215,29 +364,231 @@ it exists, and `make parity' fails a client holding its own copy."
 (defun cmacs-clawtilla-agent-set ()
   "Change the field at point."
   (interactive)
-  (let* ((key (cmacs-clawtilla-value-at-point 'field))
-         (agent cmacs-clawtilla-agent--data)
-         (id (alist-get 'id agent))
-         (conn (cmacs-clawtilla-current))
-         (buffer (current-buffer)))
+  (let* ((key (cmacs-clawtilla-value-at-point 'field)))
     (unless key (user-error "No field at point"))
-    (let* ((choices (cmacs-clawtilla-agent--choices key))
-           (current (alist-get key agent))
-           (value (if choices
-                      (completing-read (format "%s: " key) choices nil t)
-                    (read-string (format "%s: " key)
-                                 (and current (format "%s" current))))))
-      (cmacs-clawtilla-request
-       conn "agent.set"
-       (list (cons 'agent id)
-             (cons key (pcase value
-                         ("yes" t) ("no" :false)
-                         (_ value))))
-       (lambda (_data err)
-         (if err
-             (message "clawtilla: %s" err)
+    (pcase key
+      ;; The four that are a choice among things the daemon holds
+      ;; rather than a value somebody types.
+      ('model.account (call-interactively #'cmacs-clawtilla-agent-account))
+      ('computer.use (call-interactively #'cmacs-clawtilla-agent-use-computer))
+      ('browser.use (call-interactively #'cmacs-clawtilla-agent-browser-session))
+      ('policy.rules (call-interactively #'cmacs-clawtilla-agent-policy-edit))
+      (_
+       (let* ((agent cmacs-clawtilla-agent--data)
+              (choices (cmacs-clawtilla-agent--choices key))
+              (current (or (alist-get key agent)
+                           (alist-get key cmacs-clawtilla-agent--settings)))
+              (value (if choices
+                         (completing-read (format "%s: " key) choices nil t)
+                       (read-string (format "%s: " key)
+                                    (and current (format "%s" current))))))
+         (cmacs-clawtilla-agent--put
+          (cmacs-clawtilla-agent--setting-key key) value))))))
+
+
+;;;; Account, shared computer and browser.
+
+(defun cmacs-clawtilla-agent--account-choices (accounts)
+  "Return completion entries for ACCOUNTS from `account.list' with `agent'.
+
+Each entry is (LABEL ID REASON): ID is nil for the CLI's own login,
+REASON non-nil for an account this agent cannot use.  Usability is the
+daemon's answer -- `clawt_account_check', the same check `agent.set'
+applies -- so the picker offers exactly what saving accepts, and shows
+the others with the reason rather than hiding them."
+  (cons (list "the CLI's own login" nil nil)
+        (mapcar (lambda (account)
+                  (let ((id (alist-get 'id account))
+                        (usable (eq t (alist-get 'usable account))))
+                    (list (concat id
+                                  (if (alist-get 'description account)
+                                      (format " -- %s"
+                                              (alist-get 'description account))
+                                    "")
+                                  (if usable ""
+                                    (format "  (cannot be used: %s)"
+                                            (or (alist-get 'reason account)
+                                                "see the agent's warning"))))
+                          id
+                          (and (not usable)
+                               (or (alist-get 'reason account) "not usable")))))
+                accounts)))
+
+(defun cmacs-clawtilla-agent-account ()
+  "Choose which login this agent's CLI uses (`model.account')."
+  (interactive)
+  (let ((buffer (current-buffer))
+        (agent cmacs-clawtilla-agent--id))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "account.list" (list (cons 'agent agent))
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let* ((choices (cmacs-clawtilla-agent--account-choices
+                          (cmacs-clawtilla-get data 'accounts)))
+                (label (completing-read "Account: " choices nil t))
+                (entry (cdr (assoc label choices)))
+                (id (car entry))
+                (reason (cadr entry)))
+           ;; Shown so the reason is visible, refused so saving cannot
+           ;; turn the agent into a shadow at the next reload.
+           (when reason
+             (user-error "%s cannot log in as %s: %s" agent id reason))
            (when (buffer-live-p buffer)
-             (cmacs-clawtilla-agent--load buffer))))))))
+             (with-current-buffer buffer
+               (cmacs-clawtilla-agent--put "model.account" (or id ""))))))))))
+
+(defun cmacs-clawtilla-agent--shared-choices (computers)
+  "Return completion entries for COMPUTERS from `computer.shared'.
+
+Each is (LABEL . ID), with ID nil for the agent's own machine.  A host
+computer is not shareable and is left out, as the daemon would refuse
+it; who uses each machine and how many of them are running is part of
+the label."
+  (cons (cons "its own machine" nil)
+        (delq nil
+              (mapcar (lambda (computer)
+                        (and (or (not (assq 'shareable computer))
+                                 (eq t (alist-get 'shareable computer)))
+                             (cons (cmacs-clawtilla-agent--computer-label
+                                    computer)
+                                   (alist-get 'id computer))))
+                      computers))))
+
+(defun cmacs-clawtilla-agent-use-computer ()
+  "Put this agent on a machine declared under `computers:', or its own.
+
+A shared machine's settings are the machine's, kept under `computers:',
+and the daemon refuses any other `computer.*' key on an agent that uses
+one."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "computer.shared" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (let* ((choices (cmacs-clawtilla-agent--shared-choices
+                          (cmacs-clawtilla-get data 'computers)))
+                (label (completing-read "Use computer: " choices nil t)))
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (cmacs-clawtilla-agent--put
+                "computer.use" (or (cdr (assoc label choices)) ""))))))))))
+
+(defun cmacs-clawtilla-agent-browser-mode (mode)
+  "Set whether this agent drives a browser, and whose, to MODE.
+
+The modes are libclawt's `ClawtBrowserMode', walked off its GType."
+  (interactive
+   (list (completing-read "Browser: "
+                          (cmacs-clawtilla-enum-nicks "browser-mode") nil t)))
+  (cmacs-clawtilla-agent--put "browser.mode" mode))
+
+(defun cmacs-clawtilla-agent-browser-session ()
+  "Choose the shared browser session this agent drives (`browser.use')."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "browser.list" nil
+     (lambda (data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (unless (eq t (cmacs-clawtilla-get data 'available))
+           (message "clawtilla: this daemon was built without GSURF=1"))
+         (let* ((shared (seq-filter
+                         (lambda (session)
+                           (equal (alist-get 'kind session) "shared"))
+                         (cmacs-clawtilla-get data 'sessions)))
+                (choices (cons (cons "none" "")
+                               (mapcar (lambda (session)
+                                         (cons (format "%s  %s"
+                                                       (alist-get 'id session)
+                                                       (string-join
+                                                        (alist-get 'agents session)
+                                                        ", "))
+                                               (alist-get 'id session)))
+                                       shared)))
+                (label (completing-read "Shared session: " choices nil t)))
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (cmacs-clawtilla-agent--put
+                "browser.use" (cdr (assoc label choices)))))))))))
+
+
+;;;; Action rules.
+
+(defun cmacs-clawtilla-agent--policy-split (text)
+  "Return the rules in TEXT, a comma separated `MATCH=MODE' list."
+  (and (stringp text)
+       (seq-remove #'string-empty-p
+                   (mapcar #'string-trim (split-string text ",")))))
+
+(defun cmacs-clawtilla-agent--policy-join (rules)
+  "Return RULES as the one line `agent.set' takes for `policy.rules'."
+  (string-join rules ", "))
+
+(defun cmacs-clawtilla-agent--policy-put (rules match mode)
+  "Return RULES with MATCH set to MODE.
+
+A rule for the same MATCH is replaced where it stands, because order is
+meaning here -- the first rule that matches decides -- and moving it to
+the end would change what every rule after its old place means."
+  (let ((rule (format "%s=%s" match mode))
+        (found nil))
+    (setq rules (mapcar (lambda (existing)
+                          (if (equal (car (split-string existing "=")) match)
+                              (progn (setq found t) rule)
+                            existing))
+                        rules))
+    (if found rules (append rules (list rule)))))
+
+(defun cmacs-clawtilla-agent-policy-add (match mode)
+  "Add or change the action rule for MATCH to MODE.
+
+MATCH is an action class (offered from libclawt's `ClawtActionClass')
+or a tool-name glob such as `mcp__github__*'; MODE is a
+`ClawtPolicyMode'.  The daemon parses the rule where it arrives and
+refuses one it cannot read, naming what it expected."
+  (interactive
+   (list (completing-read "Match (an action class or a tool glob): "
+                          (cmacs-clawtilla-enum-nicks "action-class"))
+         (completing-read "Mode: " (cmacs-clawtilla-enum-nicks "policy-mode")
+                          nil t)))
+  (cmacs-clawtilla-agent--put
+   "policy.rules"
+   (cmacs-clawtilla-agent--policy-join
+    (cmacs-clawtilla-agent--policy-put
+     (cmacs-clawtilla-agent--policy-split
+      (cmacs-clawtilla-agent--setting 'policy.rules))
+     match mode))))
+
+(defun cmacs-clawtilla-agent-policy-remove (rule)
+  "Remove the action RULE from this agent's own list."
+  (interactive
+   (list (completing-read "Remove rule: "
+                          (or (cmacs-clawtilla-agent--policy-split
+                               (cmacs-clawtilla-agent--setting 'policy.rules))
+                              (user-error "This agent has no rules of its own"))
+                          nil t)))
+  (cmacs-clawtilla-agent--put
+   "policy.rules"
+   (cmacs-clawtilla-agent--policy-join
+    (remove rule (cmacs-clawtilla-agent--policy-split
+                  (cmacs-clawtilla-agent--setting 'policy.rules))))))
+
+(defun cmacs-clawtilla-agent-policy-edit (text)
+  "Replace this agent's action rules with TEXT, `MATCH=MODE' comma separated.
+
+Empty clears them, and the fleet's `defaults.policy.rules' apply again:
+an agent's own list replaces the fleet's rather than adding to it."
+  (interactive
+   (list (read-string "Action rules: "
+                      (cmacs-clawtilla-agent--setting 'policy.rules))))
+  (cmacs-clawtilla-agent--put
+   "policy.rules"
+   (cmacs-clawtilla-agent--policy-join
+    (cmacs-clawtilla-agent--policy-split text))))
 
 (defun cmacs-clawtilla-agent-next-page ()
   "Move to the next page of the Agent section."
@@ -401,7 +752,7 @@ error mentions the provider rather than the typo."
                 (choice (car (split-string picked "  " t))))
            (cmacs-clawtilla-request
             (cmacs-clawtilla-current) "agent.set"
-            (list (cons 'agent agent) (cons 'model choice))
+            (cmacs-clawtilla-agent--set-payload agent "model.model" choice)
             (lambda (_d e)
               (if e (message "clawtilla: %s" e)
                 (when (buffer-live-p buffer)
@@ -577,6 +928,15 @@ take a URL rather than a path is the library's answer too."
     ("C" "clear avatar" cmacs-clawtilla-agent-avatar-clear)]
    [("gr" "refresh" cmacs-clawtilla-refresh)
     ("q" "quit" quit-window)]]
+  ["Account, computer and browser"
+   [("A" "login account" cmacs-clawtilla-agent-account)
+    ("S" "use a shared computer" cmacs-clawtilla-agent-use-computer)]
+   [("W" "browser mode" cmacs-clawtilla-agent-browser-mode)
+    ("w" "shared browser session" cmacs-clawtilla-agent-browser-session)]]
+  ["Action rules"
+   [("r" "add or change a rule" cmacs-clawtilla-agent-policy-add)
+    ("R" "remove a rule" cmacs-clawtilla-agent-policy-remove)
+    ("E" "edit them all" cmacs-clawtilla-agent-policy-edit)]]
   ["Mailbox"
    [("a" "acknowledge" cmacs-clawtilla-agent-ack)
     ("u" "requeue" cmacs-clawtilla-agent-requeue)]
