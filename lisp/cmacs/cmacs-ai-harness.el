@@ -199,15 +199,14 @@ so rather than pretending."
 (defcustom cmacs-ai-harness-process-timeout nil
   "Milliseconds a wrapped CLI gets for one run, or nil for ai-glib's default.
 
-The library's default is thirty minutes, a guard against a CLI wedged on
-a half-open socket pinning the session forever.  ai-glib's own `ai' and
-`ai-tui' disable it outright, on the grounds that a long agentic run
-legitimately outlives any deadline you would pick and being killed
-mid-edit is worse than waiting; set this to 0 to do the same here.
+ai-glib's default is no deadline: a long agentic run legitimately
+outlives any deadline you would pick, and being killed mid-edit is worse
+than waiting.  Set a number to guard against a CLI wedged on a
+half-open socket pinning the session forever.
 
 Ignored for providers that are not CLI wrappers -- an HTTP provider has
 no subprocess to put a deadline on."
-  :type '(choice (const :tag "ai-glib default (30 minutes)" nil)
+  :type '(choice (const :tag "ai-glib default (no deadline)" nil)
                  (const :tag "No deadline" 0)
                  integer)
   :group 'cmacs-ai-harness)

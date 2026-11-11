@@ -724,15 +724,15 @@ guards, and it has happened before."
   (should (memq 'codex-cli (cmacs-ai-providers))))
 
 (ert-deftest cmacs-ai-harness-test-process-timeout-is-settable ()
-  "A CLI run's deadline is reachable and 0 removes it.
-ai-glib's own binaries disable this; the cmacs harness kept the 30-minute
-default silently, so a long agent run could die here and not in ai-tui."
+  "A CLI run's deadline is reachable, settable, and 0 removes it.
+ai-glib has no deadline by default; one set here must take."
   (skip-unless (fboundp 'cmacs-ai-harness-set-process-timeout))
   (let ((h (cmacs-ai-harness-new 'codex-cli nil temporary-file-directory)))
     (unwind-protect
         (progn
-          ;; The library default, which is what cmacs inherits.
-          (should (= 1800000 (cmacs-ai-harness-process-timeout h)))
+          ;; The library default, which is what cmacs inherits: no
+          ;; deadline (ai-glib dropped its 30-minute one, 4219b4e).
+          (should (= 0 (cmacs-ai-harness-process-timeout h)))
           (cmacs-ai-harness-set-process-timeout h 0)
           (should (= 0 (cmacs-ai-harness-process-timeout h)))
           (cmacs-ai-harness-set-process-timeout h 5000)

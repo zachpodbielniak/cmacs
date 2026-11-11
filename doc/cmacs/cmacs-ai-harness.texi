@@ -198,13 +198,11 @@ CLIs report at all---codex and grok do.
 
 @subsection Deadlines
 
-A wrapped CLI gets thirty minutes for one run, ai-glib's default, so a
-CLI wedged on a half-open socket cannot pin the session forever.
-ai-glib's own @command{ai} and @command{ai-tui} disable it outright, on
-the grounds that a long agentic run legitimately outlives any deadline
-you would pick and being killed mid-edit is worse than waiting.  Set
-@code{cmacs-ai-harness-process-timeout} to 0 for the same behaviour
-here.
+A wrapped CLI has no deadline for one run, ai-glib's default since it
+dropped its thirty-minute one: a long agentic run legitimately outlives
+any deadline you would pick, and being killed mid-edit is worse than
+waiting.  Set @code{cmacs-ai-harness-process-timeout} to a number of
+milliseconds to guard against a CLI wedged on a half-open socket.
 
 @section Tools
 

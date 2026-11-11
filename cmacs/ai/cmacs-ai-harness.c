@@ -1427,11 +1427,10 @@ DEFUN ("cmacs-ai-harness-set-process-timeout",
        Scmacs_ai_harness_set_process_timeout, 2, 2, 0,
        doc: /* Give HANDLE's CLI MILLISECONDS to finish one run; 0 removes the limit.
 
-The library's default is thirty minutes, which exists so a CLI wedged on
-a half-open socket cannot pin the session forever.  ai-glib's own `ai'
-and `ai-tui' turn it off outright, because a long agentic run legitimately
+ai-glib sets no deadline by default: a long agentic run legitimately
 outlives any deadline you would pick, and being killed mid-edit is worse
-than waiting.
+than waiting.  Set one to guard against a CLI wedged on a half-open
+socket pinning the session forever.
 
 Signals an error when HANDLE is not a CLI session.  */)
   (Lisp_Object handle, Lisp_Object milliseconds)
