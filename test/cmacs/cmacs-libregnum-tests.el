@@ -609,8 +609,12 @@ differently from a cube (regression: non-sphere prims all baked as cubes)."
               (let ((s (cmacs-libregnum-editor-node-scale buf id)))
                 (should (> (nth 0 s) 1.1))
                 (should (< (abs (- (nth 1 s) 1.0)) 0.01))))
-            ;; Rotate about Y (drag the Y ring 45deg -> 90deg).
+            ;; Rotate about Y (drag the Y ring 45deg -> 90deg).  The rings
+            ;; are sized to the node's bounds, which the scale drag above
+            ;; just stretched (to ~2.8x), so put the scale back first: the
+            ;; points below assume the unit cube's ring radius of 1.7.
             (cmacs-libregnum-editor-set-tool buf 2)
+            (cmacs-libregnum-editor-set-scale buf id 1.0 1.0 1.0)
             (cmacs-libregnum-editor-set-rotation buf id 0.0 0.0 0.0)
             (let ((b (cmacs-libregnum-project buf 1.2 0.0 1.2 vw vh))
                   (d (cmacs-libregnum-project buf 0.0 0.0 1.7 vw vh)))

@@ -15,6 +15,7 @@
 #ifdef HAVE_CMACS_LIBREGNUM
 
 #include "cmacs-libregnum-render.h"
+#include "cmacs-libregnum-lrgeditor.h"
 
 /* Expose libregnum's editor authoring layer (LrgEditor/LrgLevel/...) from the
  * umbrella header.  The symbols ship in the linked liblibregnum.a (built with
@@ -28,6 +29,11 @@
 #endif
 
 #include <libregnum.h>
+/* The lrgeditor shell host lives in cmacs-libregnum-lrgeditor.c; a
+ * standalone build of this file (the screensaver renderer) opts out. */
+#if defined(LRG_BUILD_EDITOR) && !defined(CMACS_LIBREGNUM_NO_LRGEDITOR)
+# define CMACS_HAVE_LRGEDITOR_HOST 1
+#endif
 #include <graylib.h>
 #include <raylib.h>
 #include <rlgl.h>     /* rlBegin/rlVertex3f/rlSetTexture for the tilemap quad */
@@ -588,7 +594,18 @@ struct CmacsLibregnumRenderCtx
   GPtrArray        *editor_node_map; /* borrowed LrgNode*, parallel to nodes */
   GArray           *editor_models;   /* CmacsEditorModel, drawn each frame */
   gboolean          playing;         /* play-in-editor: world is running */
-  LrgWorld         *play_world;      /* owned during play */
+  /* libregnum's play session (2D or 3D, chosen from the level): it writes
+   * what the simulation moves back onto the level's nodes each tick and
+   * restores the level exactly on stop -- the same object the lrgeditor
+   * shell's F5 uses, so both editors play a level the same way. */
+  LrgEditorPlaySession *play_session; /* owned */
+
+  /* lrgeditor shell (cmacs-libregnum-lrgeditor.c).  When app_host is set,
+   * render_to_bgra draws libregnum's whole editor application -- menus,
+   * docks, its own scene viewport -- instead of cmacs's scene, and
+   * `editor' above is a reference to the shell's LrgEditor, so the older
+   * cmacs-libregnum-editor-* DEFUNs and MCP tools edit the same document. */
+  CmacsLrgeditorHost *app_host;      /* owned */
 
   /* Mouse drag-to-move state.  During a drag the node is moved *live* with
    * the plain setter (no undo command); a single coalesced transform command
@@ -696,8 +713,14 @@ cmacs_libregnum_render_ctx_free (CmacsLibregnumRenderCtx *r)
   if (!r) return;
   if (r->game_mode) cmacs_libregnum_render_ctx_unload_game (r);
 #ifdef LRG_BUILD_EDITOR
+#ifdef CMACS_HAVE_LRGEDITOR_HOST
+  /* The shell owns its LrgEditor; drop our reference after it. */
+  g_clear_pointer (&r->app_host, cmacs_lrgeditor_host_free);
+#endif
   g_clear_object (&r->editor);
-  g_clear_object (&r->play_world);
+  if (r->play_session)
+    lrg_editor_play_session_stop (r->play_session);
+  g_clear_object (&r->play_session);
   if (r->editor_node_map) g_ptr_array_unref (r->editor_node_map);
   if (r->editor_models)
     {
@@ -1389,6 +1412,78 @@ ctx_render_chart (CmacsLibregnumRenderCtx *r, unsigned char *dst)
   EndTextureMode ();
   return TRUE;
 }
+
+#ifdef CMACS_HAVE_LRGEDITOR_HOST
+static void cmacs_editor_rebuild (CmacsLibregnumRenderCtx *r);
+
+/* Full lrgeditor-shell frame; called from the render_to_bgra branch.
+ *
+ * Two halves, in this order:
+ *   1. the app's per-frame logic, OUTSIDE any texture bracket -- its scene
+ *      viewport renders into its own render target while the canvas
+ *      processes input, and nesting that inside our BeginTextureMode would
+ *      leave our FBO unbound for the canvas draw that follows;
+ *   2. the canvas draw inside the view FBO's bracket, with the same
+ *      unconditional batch flush before the readback as the chart path
+ *      (see ctx_render_chart for why DST may be NULL under --lrg).
+ * A changed level refreshes cmacs's node map in between, so node ids the
+ * older editor DEFUNs hand out stay valid after edits made in the shell. */
+static gboolean
+ctx_render_app (CmacsLibregnumRenderCtx *r, unsigned char *dst)
+{
+  cmacs_lrgeditor_host_frame (r->app_host, r->width, r->height);
+
+  if (cmacs_lrgeditor_host_take_level_changed (r->app_host))
+    cmacs_editor_rebuild (r);
+
+  BeginTextureMode (r->fbo);
+  ClearBackground ((Color){ 30, 30, 46, 255 });
+  cmacs_lrgeditor_host_draw (r->app_host);
+  rlDrawRenderBatchActive ();
+  if (dst)
+    glReadPixels (0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_BYTE, dst);
+  EndTextureMode ();
+  return TRUE;
+}
+
+/* Host the lrgeditor shell in R.  Takes ownership of HOST.  The context's
+ * `editor' becomes a reference to the shell's LrgEditor (any level an
+ * older editor session had open here is dropped). */
+void
+cmacs_libregnum_render_ctx_app_attach (CmacsLibregnumRenderCtx *r,
+                                       CmacsLrgeditorHost *host)
+{
+  if (!r || !host) return;
+  g_clear_pointer (&r->app_host, cmacs_lrgeditor_host_free);
+  g_clear_object (&r->editor);
+  r->app_host = host;
+  r->editor = g_object_ref (cmacs_lrgeditor_host_get_editor (host));
+  if (!r->editor_node_map) r->editor_node_map = g_ptr_array_new ();
+  cmacs_editor_rebuild (r);
+}
+
+CmacsLrgeditorHost *
+cmacs_libregnum_render_ctx_app_host (CmacsLibregnumRenderCtx *r)
+{
+  return r ? r->app_host : NULL;
+}
+#else
+void
+cmacs_libregnum_render_ctx_app_attach (CmacsLibregnumRenderCtx *r,
+                                       CmacsLrgeditorHost *host)
+{
+  /* Never called without the host TU (nothing creates a host). */
+  (void) r;
+  (void) host;
+}
+
+CmacsLrgeditorHost *
+cmacs_libregnum_render_ctx_app_host (CmacsLibregnumRenderCtx *r)
+{
+  (void) r;
+  return NULL;
+}
+#endif
 
 void
 cmacs_libregnum_render_ctx_chart_enter (CmacsLibregnumRenderCtx *r,
@@ -4808,6 +4903,13 @@ render_to_bgra_1 (CmacsLibregnumRenderCtx *r, unsigned char *dst,
       return TRUE;
     }
 
+#ifdef CMACS_HAVE_LRGEDITOR_HOST
+  /* lrgeditor shell: libregnum's editor application draws the whole view.
+   * Same FBO/readback bracket as the modes below. */
+  if (r->app_host)
+    return ctx_render_app (r, dst);
+#endif
+
   /* 2D image-display mode: draw the composited image (checkerboard + quad +
    * overlay) instead of the 3D scene.  Same FBO/readback bracket as above. */
   if (r->image_mode)
@@ -6346,6 +6448,12 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
     case LRG_NODE_VISUAL_CAMERA:          cr = 200; cg = 160; cb = 240; break;
     case LRG_NODE_VISUAL_AUDIO_EMITTER:   cr = 160; cg = 200; cb = 220; break;
     case LRG_NODE_VISUAL_PREFAB_INSTANCE: cr = 220; cg = 160; cb = 200; break;
+    /* libregnum 0.9 node kinds (terrain, water, lighting helpers). */
+    case LRG_NODE_VISUAL_TERRAIN:         cr = 120; cg = 160; cb =  90; break;
+    case LRG_NODE_VISUAL_WATER:           cr =  70; cg = 130; cb = 210; break;
+    case LRG_NODE_VISUAL_DECAL:           cr = 240; cg = 170; cb = 110; break;
+    case LRG_NODE_VISUAL_REFLECTION_PROBE: cr = 210; cg = 215; cb = 225; break;
+    case LRG_NODE_VISUAL_PROBE_VOLUME:    cr = 180; cg = 220; cb = 250; break;
     default:                              cr = 170; cg = 170; cb = 180; break;
     }
 
@@ -6754,6 +6862,30 @@ cmacs_editor_bake_node (CmacsLibregnumRenderCtx *r, LrgNode *node,
       hw = 0.35f; hh = 0.35f; hd = 0.35f;
     }
   else if (kind == LRG_NODE_VISUAL_PREFAB_INSTANCE)
+    {
+      shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
+    }
+  /* libregnum 0.9 kinds.  This panel editor draws them as stand-ins
+   * sized by the node's scale: the real terrain heightfield, water
+   * surface, projected decal and baked probes are drawn by libregnum's
+   * own scene renderer, which the embedded lrgeditor shell
+   * (M-x cmacs-lrgeditor) uses. */
+  else if (kind == LRG_NODE_VISUAL_TERRAIN || kind == LRG_NODE_VISUAL_WATER)
+    {
+      shape = LRG_SHAPE (lrg_plane3d_new_at (x, y, z, 10.0f, 10.0f));
+      hw = 5.0f; hh = 0.1f; hd = 5.0f;
+    }
+  else if (kind == LRG_NODE_VISUAL_DECAL)
+    {
+      shape = LRG_SHAPE (lrg_plane3d_new_at (x, y, z, 1.0f, 1.0f));
+      hh = 0.1f;
+    }
+  else if (kind == LRG_NODE_VISUAL_REFLECTION_PROBE)
+    {
+      shape = LRG_SHAPE (lrg_sphere3d_new_at (x, y, z, 0.4f));
+      hw = 0.4f; hh = 0.4f; hd = 0.4f;
+    }
+  else if (kind == LRG_NODE_VISUAL_PROBE_VOLUME)
     {
       shape = LRG_SHAPE (lrg_cube3d_new_at (x, y, z, 1.0f, 1.0f, 1.0f));
     }
@@ -7314,26 +7446,28 @@ cmacs_libregnum_render_ctx_editor_node_script_count (CmacsLibregnumRenderCtx *r,
   return s ? (gint) s->len : 0;
 }
 
-/* Play-in-editor: instantiate the level into a throwaway LrgWorld and run it
- * (logic/components execute; the doc is never mutated).  Returns FALSE if
- * instantiation fails. */
+/* Play-in-editor through libregnum's LrgEditorPlaySession: the level is
+ * instantiated into a 2D LrgWorld or a 3D LrgWorld3D (whichever the level
+ * is), ticked from the view's animation clock, and what the simulation
+ * moves is written back onto the nodes so the baked scene follows it.
+ * Stopping restores the level exactly.  Returns FALSE if instantiation
+ * fails. */
 gboolean
 cmacs_libregnum_render_ctx_editor_play (CmacsLibregnumRenderCtx *r)
 {
-  LrgLevel  *level;
-  LrgEngine *engine;
-  GError    *e = NULL;
+  GError *e = NULL;
 
-  if (!r || !r->editor) return FALSE;
-  level = lrg_editor_get_level (r->editor);
-  if (!level) return FALSE;
-  g_clear_object (&r->play_world);
-  r->play_world = lrg_world_new ();
-  engine = lrg_engine_get_default ();
-  if (!lrg_level_instantiate (level, r->play_world, engine, &e))
+  if (!r || !r->editor || !lrg_editor_get_level (r->editor)) return FALSE;
+  if (!r->play_session)
+    {
+      r->play_session = lrg_editor_play_session_new (r->editor);
+      lrg_editor_play_session_set_engine (r->play_session, NULL);
+    }
+  if (lrg_editor_play_session_is_playing (r->play_session))
+    return TRUE;
+  if (!lrg_editor_play_session_start (r->play_session, &e))
     {
       g_clear_error (&e);
-      g_clear_object (&r->play_world);
       return FALSE;
     }
   r->playing = TRUE;
@@ -7345,7 +7479,12 @@ cmacs_libregnum_render_ctx_editor_stop (CmacsLibregnumRenderCtx *r)
 {
   if (!r) return;
   r->playing = FALSE;
-  g_clear_object (&r->play_world);
+  if (r->play_session)
+    {
+      lrg_editor_play_session_stop (r->play_session);
+      /* The level is back to its pre-play state: re-bake it. */
+      cmacs_editor_rebuild (r);
+    }
 }
 
 gboolean
@@ -7359,8 +7498,9 @@ gboolean
 cmacs_libregnum_render_ctx_editor_play_tick (CmacsLibregnumRenderCtx *r,
                                              double delta)
 {
-  if (!r || !r->playing || !r->play_world) return FALSE;
-  lrg_world_update (r->play_world, (gfloat) delta);
+  if (!r || !r->playing || !r->play_session) return FALSE;
+  if (!lrg_editor_play_session_tick (r->play_session, (gfloat) delta))
+    return FALSE;
   cmacs_libregnum_render_ctx_editor_sync_play (r);
   return TRUE;
 }
@@ -7918,36 +8058,54 @@ cmacs_libregnum_render_ctx_editor_tilemap_info (CmacsLibregnumRenderCtx *r,
   return TRUE;
 }
 
-/* Play-rendering: reflect the running world's object positions back onto the
- * baked scene nodes + drawables, so script-driven motion is visible.  World
- * objects are created in the same depth-first order as nodes (1:1). */
+/* Play-rendering: the play session has already written the simulated
+ * transforms onto the level's nodes; copy each node's position onto its
+ * baked scene node, drawable and mesh model so the motion is visible
+ * without re-baking (which reloads assets) every frame.  Baked ids are
+ * 1:1 with editor_node_map. */
 void
 cmacs_libregnum_render_ctx_editor_sync_play (CmacsLibregnumRenderCtx *r)
 {
-  GList *objects, *l;
-  guint  i;
-  if (!r || !r->playing || !r->play_world || !r->nodes) return;
-  objects = lrg_world_get_objects (r->play_world);
-  for (l = objects, i = 0; l != NULL && i < r->nodes->len; l = l->next, i++)
+  guint i, mi;
+
+  if (!r || !r->playing || !r->nodes || !r->editor_node_map) return;
+  for (i = 0; i < r->nodes->len && i < r->editor_node_map->len; i++)
     {
-      LrgGameObject *obj = l->data;
-      g_autoptr (GrlVector2) p = NULL;
+      LrgNode *node = g_ptr_array_index (r->editor_node_map, i);
+      GrlVector3 *loc = node ? lrg_node_get_location (node) : NULL;
       CmacsNode *n;
-      if (!LRG_IS_GAME_OBJECT (obj)) continue;
-      p = grl_entity_get_position (GRL_ENTITY (obj));
-      if (!p) continue;
+
+      if (!loc) continue;
       n = &g_array_index (r->nodes, CmacsNode, i);
-      /* instantiate maps node (x,y) -> entity (x,y); reflect it back. */
-      n->x = p->x;
-      n->y = p->y;
-      /* Move the drawable too when shapes are 1:1 with nodes (the common
+      n->x = loc->x;
+      n->y = loc->y;
+      n->z = loc->z;
+      /* The drawable too when shapes are 1:1 with nodes (the common
        * all-primitive case); otherwise the wireframe still tracks. */
       if (r->drawables->len == r->nodes->len)
         {
           gpointer d = g_ptr_array_index (r->drawables, i);
           if (d && LRG_IS_SHAPE3D (d))
-            lrg_shape3d_set_position_xyz (LRG_SHAPE3D (d), p->x, p->y, n->z);
+            lrg_shape3d_set_position_xyz (LRG_SHAPE3D (d),
+                                          loc->x, loc->y, loc->z);
         }
+    }
+  /* Mesh, sprite and tilemap models are drawn from editor_models. */
+  for (mi = 0; r->editor_models && mi < r->editor_models->len; mi++)
+    {
+      CmacsEditorModel *em = &g_array_index (r->editor_models,
+                                             CmacsEditorModel, mi);
+      LrgNode *node;
+      GrlVector3 *loc;
+
+      if (em->node_id < 0 || (guint) em->node_id >= r->editor_node_map->len)
+        continue;
+      node = g_ptr_array_index (r->editor_node_map, em->node_id);
+      loc = node ? lrg_node_get_location (node) : NULL;
+      if (!loc) continue;
+      em->x = loc->x;
+      em->y = loc->y;
+      em->z = loc->z;
     }
 }
 

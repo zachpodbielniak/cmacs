@@ -87,6 +87,11 @@ struct frame;
 extern void cmacs_libregnum_overlay_paint (struct frame *f, cairo_t *cr);
 
 /* ── Input routing (cmacs-libregnum-input.c) ────────────────────── */
+/* lrgeditor shell DEFUNs (cmacs-libregnum-lrgeditor-defuns.c). */
+extern void syms_of_cmacs_libregnum_lrgeditor (void);
+
+/* Drop any lrgeditor input grab held by V (called on view teardown). */
+extern void cmacs_libregnum_input_forget_view (CmacsLibregnumView *v);
 extern gboolean cmacs_libregnum_handle_motion (struct frame *f,
                                                double x, double y);
 extern gboolean cmacs_libregnum_handle_button (struct frame *f,

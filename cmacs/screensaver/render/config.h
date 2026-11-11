@@ -15,4 +15,9 @@
 
 #define HAVE_CMACS_LIBREGNUM 1
 
+/* The renderer never hosts the lrgeditor shell, and does not link
+ * cmacs-libregnum-lrgeditor.c (which needs cmacs's GLib loop): leave the
+ * render context's app branch out of this copy of render.c. */
+#define CMACS_LIBREGNUM_NO_LRGEDITOR 1
+
 #endif /* CMACS_SCREENSAVER_RENDER_CONFIG_H */

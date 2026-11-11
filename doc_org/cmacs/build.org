@@ -422,6 +422,10 @@ cmacs) overrides =LIBREGNUM_DIR= ... so only ONE libregnum is ever linked
 into the host."  Prefer this to anything else; it is the difference
 between one library in the binary and two.
 
+=LIBREGNUM_DIR= alone is not always enough.  gsurf >= 0.5.10 links its =--lrg=3d= tab space against =$(LIBREGNUM_DIR)/build/release/lib/liblibregnum.a= unless told otherwise, and with =--enable-cmacs-deps-debug= plus a debug libregnum build type that archive does not exist -- gsurf's makefile then builds a second libregnum of its own.  cmacs therefore also passes =LRG_LIBREGNUM_LIB= naming the archive it links (=CMACS_LIBREGNUM_STATIC_LIB=).
+
+A dep can also pull in a system library cmacs has to link after it.  libregnum >= 0.9 auto-enables =fribidi= when =pkg-config fribidi= succeeds; =configure= repeats that probe for the temacs and =cmacs-screensaver-render= link lines, so the two always agree.  When bumping a dep, diff its =config.mk= for new =?= 1= auto-probes (=git diff OLD NEW -- config.mk rules.mk | grep -E '^\+.*(pkg-config|\?=)'=): every one that adds =-l= flags to an archive cmacs whole-archives needs the same treatment.
+
 ** Keeping a checkout current
 
 =just pull= (an alias for =just sync=) rebases cmacs onto origin and then

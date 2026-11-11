@@ -352,6 +352,7 @@ void
 cmacs_libregnum_view_destroy (CmacsLibregnumView *v)
 {
   if (!v) return;
+  cmacs_libregnum_input_forget_view (v);
   if (cmacs_libregnum__views)
     g_hash_table_remove (cmacs_libregnum__views,
                          GUINT_TO_POINTER (v->view_id));

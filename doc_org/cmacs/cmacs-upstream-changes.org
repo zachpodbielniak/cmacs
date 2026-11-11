@@ -328,10 +328,15 @@ embedded Doom config.
   gjs/PyGObject scripting backends can introspect the editor types; the
   Justfile =run= recipe exports =GI_TYPELIB_PATH= to the libregnum + graylib
   gir dirs (symbols resolve from temacs's own =-rdynamic= statics, so no
-  matching =LD_LIBRARY_PATH= is added).  It deliberately does *not* pass
-  =BUILD_EDITOR_UI=1=, so the engine's standalone editor app is not compiled
-  into temacs (a separate, optional frontend).  The =deps/gsurf= rule
-  similarly pins =STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3=.
+  matching =LD_LIBRARY_PATH= is added).  It leaves =BUILD_EDITOR_UI= at
+  libregnum's default of 1, so the engine's editor application (=LrgEditorApp=,
+  the canvas-based =lrgeditor= shell) is in the whole-archived =liblibregnum.a=:
+  =M-x cmacs-lrgeditor= hosts it inside an Emacs window (see the
+  /lrgeditor shell/ section of =cmacs-libregnum.org=).  The =deps/gsurf= rule
+  similarly pins =STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3=, and when the gsurf
+  =--lrg= backend is on it also names cmacs's libregnum archive with
+  =LRG_LIBREGNUM_LIB= (gsurf links its 3D tab space against
+  =build/release/= by default, which does not exist for a debug libregnum).
 
 ** test/Makefile.in --- cmacs test-suite support
 

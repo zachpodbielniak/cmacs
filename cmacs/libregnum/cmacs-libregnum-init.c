@@ -23,6 +23,7 @@ void
 syms_of_cmacs_libregnum (void)
 {
   syms_of_cmacs_libregnum_defuns ();
+  syms_of_cmacs_libregnum_lrgeditor ();
 #ifdef HAVE_PGTK
   syms_of_cmacs_libregnum_dnd ();
 #endif

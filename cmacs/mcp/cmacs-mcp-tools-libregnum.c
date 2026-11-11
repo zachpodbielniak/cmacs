@@ -5,9 +5,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Thin MCP tools that drive the libregnum editor by dispatching Elisp
- * (`cmacs-libregnum-editor-*') onto the active editor buffer.  The MCP `eval'
- * tool already reaches every DEFUN; these are convenience wrappers with typed
- * schemas so an agent can author levels without hand-writing Elisp.
+ * (`cmacs-libregnum-editor-*', `cmacs-lrgeditor-*') onto the active editor
+ * buffer.  The MCP `eval' tool already reaches every DEFUN; these are
+ * convenience wrappers with typed schemas so an agent can author levels
+ * without hand-writing Elisp.
+ *
+ * The editor is libregnum's `lrgeditor'.  The embedded shell
+ * (M-x cmacs-lrgeditor, buffer *lrgeditor*) is preferred when it is open;
+ * the older Emacs-panel editor (*cmacs-libregnum editor*) otherwise.  Both
+ * answer the same node DEFUNs, since the shell's LrgEditor is the one the
+ * view's render context edits.  Tools are named `lrgeditor_*'; the
+ * `lrg_editor_*' names they had before are registered too, for one
+ * release, so existing agent prompts keep working.
  */
 
 #include <config.h>
@@ -15,9 +24,11 @@
 #if defined(HAVE_CMACS_MCP) && defined(HAVE_CMACS_LIBREGNUM)
 
 #include "lisp.h"
+#include <string.h>
 #include "cmacs-mcp-tools.h"
 #include "cmacs-eval-dispatch.h"
 
+#define LRG_SHELL_BUF  "*lrgeditor*"
 #define LRG_EDITOR_BUF "*cmacs-libregnum editor*"
 
 /* Render STR as an Elisp string literal ("..." with " and \\ escaped), or the
@@ -59,11 +70,18 @@ lrg_eval_result (gchar *elisp)
 static gchar *
 lrg_with_editor (gchar *body)
 {
+  /* `shell' is non-nil when BUF is the embedded lrgeditor shell, so a body
+     can prefer the shell's own actions (play/stop/save) over the older
+     editor's DEFUNs. */
   gchar *out = g_strdup_printf
-    ("(let ((buf (get-buffer \"%s\")))"
+    ("(let* ((sb (get-buffer \"%s\"))"
+     "        (shell (and sb (fboundp 'cmacs-lrgeditor-attached-p)"
+     "                    (cmacs-lrgeditor-attached-p sb)))"
+     "        (buf (or (and shell sb) (get-buffer \"%s\"))))"
+     " (ignore shell)"
      " (if (and buf (cmacs-libregnum-editor-active-p buf)) (progn %s)"
-     "   \"No libregnum editor open (M-x cmacs-libregnum-editor)\"))",
-     LRG_EDITOR_BUF, body);
+     "   \"No libregnum editor open (M-x cmacs-lrgeditor)\"))",
+     LRG_SHELL_BUF, LRG_EDITOR_BUF, body);
   g_free (body);
   return out;
 }
@@ -151,16 +169,47 @@ handle_save (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 }
 
 static McpToolResult *
+handle_action (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  g_autofree gchar *id = lrg_lisp_str (json_object_has_member (a, "id")
+    ? json_object_get_string_member_with_default (a, "id", NULL) : NULL);
+  (void) s; (void) n; (void) u;
+  return lrg_eval_result (lrg_with_editor (g_strdup_printf
+    ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
+     " (if (cmacs-lrgeditor-activate-action buf %s) \"done\""
+     "   \"unknown or disabled action\"))", id)));
+}
+
+static McpToolResult *
+handle_actions (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lrg_eval_result (lrg_with_editor (g_strdup
+    ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
+     " (mapconcat #'identity (cmacs-lrgeditor-actions buf) \"\\n\"))")));
+}
+
+static McpToolResult *
+handle_socket (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
+{
+  (void) s; (void) n; (void) a; (void) u;
+  return lrg_eval_result (lrg_with_editor (g_strdup
+    ("(or (and shell (cmacs-lrgeditor-socket buf))"
+     " \"not serving the editor protocol\")")));
+}
+
+static McpToolResult *
 handle_open (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
+  /* No path opens the shell on its welcome screen. */
   g_autofree gchar *path = lrg_lisp_str (json_object_has_member (a, "path")
-    ? json_object_get_string_member_with_default (a, "path", NULL) : "level.rlevel");
+    ? json_object_get_string_member_with_default (a, "path", NULL) : NULL);
   (void) s; (void) n; (void) u;
   /* Require first: in a session that never loaded cmacs-libregnum.el the
    * entry command -- and the C->Elisp click dispatchers defined alongside
    * it -- would be void (the same class as the gnuseye click bug). */
   return lrg_eval_result (g_strdup_printf
-    ("(progn (require 'cmacs-libregnum) (cmacs-libregnum-editor %s)"
+    ("(progn (require 'cmacs-lrgeditor) (cmacs-lrgeditor %s)"
      " \"opened\")", path));
 }
 
@@ -169,8 +218,9 @@ handle_play (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   (void) s; (void) n; (void) a; (void) u;
   return lrg_eval_result (lrg_with_editor (g_strdup
-    ("(if (cmacs-libregnum-editor-play buf) \"playing\""
-     " \"could not instantiate\")")));
+    ("(if (if shell (cmacs-lrgeditor-activate-action buf \"play.start\")"
+     "       (cmacs-libregnum-editor-play buf))"
+     "     \"playing\" \"could not instantiate\")")));
 }
 
 static McpToolResult *
@@ -178,16 +228,28 @@ handle_stop (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
 {
   (void) s; (void) n; (void) a; (void) u;
   return lrg_eval_result (lrg_with_editor (g_strdup
-    ("(progn (cmacs-libregnum-editor-stop buf) \"stopped\")")));
+    ("(progn (if shell (cmacs-lrgeditor-activate-action buf \"play.stop\")"
+     "         (cmacs-libregnum-editor-stop buf))"
+     " \"stopped\")")));
 }
 
 static void
 lrg_add (McpServer *server, const gchar *name, const gchar *desc,
-         const gchar *schema_json, gboolean read_only,
+         const gchar *schema_json, gboolean read_only, gboolean legacy_too,
          McpToolResult *(*handler) (McpServer *, const gchar *,
                                     JsonObject *, gpointer))
 {
-  McpTool *tool = mcp_tool_new (name, desc);
+  McpTool *tool;
+  g_autofree gchar *legacy = NULL;
+
+  /* Every tool is also reachable under its pre-rename `lrg_editor_*'
+     name (see the file comment); new tools have no legacy name. */
+  if (g_str_has_prefix (name, "lrgeditor_") && legacy_too)
+    {
+      legacy = g_strconcat ("lrg_editor_", name + strlen ("lrgeditor_"), NULL);
+      lrg_add (server, legacy, desc, schema_json, read_only, FALSE, handler);
+    }
+  tool = mcp_tool_new (name, desc);
   if (schema_json)
     mcp_tool_set_input_schema (tool, cmacs_mcp_schema_from_string (schema_json));
   if (read_only)
@@ -199,55 +261,71 @@ lrg_add (McpServer *server, const gchar *name, const gchar *desc,
 void
 cmacs_mcp_tools_libregnum_register (McpServer *server)
 {
-  lrg_add (server, "lrg_editor_object_tree",
+  lrg_add (server, "lrgeditor_object_tree",
     "List the libregnum editor's node tree (name/kind/depth/id).",
-    NULL, TRUE, handle_object_tree);
+    NULL, TRUE, TRUE, handle_object_tree);
 
-  lrg_add (server, "lrg_editor_add_primitive",
+  lrg_add (server, "lrgeditor_add_primitive",
     "Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,"
     "4 ico-sphere,5 cylinder,6 cone,7 torus,8 grid.",
     "{\"type\":\"object\",\"properties\":{"
     "\"primitive\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}},"
-    "\"required\":[\"primitive\"]}", FALSE, handle_add_primitive);
+    "\"required\":[\"primitive\"]}", FALSE, TRUE, handle_add_primitive);
 
-  lrg_add (server, "lrg_editor_add_visual",
+  lrg_add (server, "lrgeditor_add_visual",
     "Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,"
     "5 light,6 camera,7 audio. ASSET is the model/image/tileset file.",
     "{\"type\":\"object\",\"properties\":{"
     "\"kind\":{\"type\":\"integer\"},\"asset\":{\"type\":\"string\"},"
     "\"name\":{\"type\":\"string\"}},\"required\":[\"kind\"]}",
-    FALSE, handle_add_visual);
+    FALSE, TRUE, handle_add_visual);
 
-  lrg_add (server, "lrg_editor_move",
+  lrg_add (server, "lrgeditor_move",
     "Set node ID's position to (X Y Z) as one undoable edit.",
     "{\"type\":\"object\",\"properties\":{"
     "\"id\":{\"type\":\"integer\"},\"x\":{\"type\":\"number\"},"
     "\"y\":{\"type\":\"number\"},\"z\":{\"type\":\"number\"}},"
-    "\"required\":[\"id\",\"x\",\"y\",\"z\"]}", FALSE, handle_move);
+    "\"required\":[\"id\",\"x\",\"y\",\"z\"]}", FALSE, TRUE, handle_move);
 
-  lrg_add (server, "lrg_editor_select", "Select node ID in the editor.",
+  lrg_add (server, "lrgeditor_select", "Select node ID in the editor.",
     "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},"
-    "\"required\":[\"id\"]}", FALSE, handle_select);
+    "\"required\":[\"id\"]}", FALSE, TRUE, handle_select);
 
-  lrg_add (server, "lrg_editor_delete", "Delete node ID from the level.",
+  lrg_add (server, "lrgeditor_delete", "Delete node ID from the level.",
     "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},"
-    "\"required\":[\"id\"]}", FALSE, handle_delete);
+    "\"required\":[\"id\"]}", FALSE, TRUE, handle_delete);
 
-  lrg_add (server, "lrg_editor_open",
-    "Open (or create) the libregnum editor on a .rlevel PATH.",
+  lrg_add (server, "lrgeditor_open",
+    "Open libregnum's editor (the lrgeditor shell) on PATH: a project"
+    " directory or a .rlevel file; no PATH opens its welcome screen.",
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
+    FALSE, TRUE, handle_open);
+
+  lrg_add (server, "lrgeditor_save", "Save the level to a .rlevel PATH.",
     "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
-    "\"required\":[\"path\"]}", FALSE, handle_open);
+    "\"required\":[\"path\"]}", FALSE, TRUE, handle_save);
 
-  lrg_add (server, "lrg_editor_save", "Save the level to a .rlevel PATH.",
-    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
-    "\"required\":[\"path\"]}", FALSE, handle_save);
-
-  lrg_add (server, "lrg_editor_play",
+  lrg_add (server, "lrgeditor_play",
     "Play-in-editor: instantiate the level into a runtime world and run it.",
-    NULL, FALSE, handle_play);
+    NULL, FALSE, TRUE, handle_play);
 
-  lrg_add (server, "lrg_editor_stop", "Stop play-in-editor.",
-    NULL, FALSE, handle_stop);
+  lrg_add (server, "lrgeditor_stop", "Stop play-in-editor.",
+    NULL, FALSE, TRUE, handle_stop);
+
+  lrg_add (server, "lrgeditor_action",
+    "Run an lrgeditor action by id (e.g. file.save, edit.undo, play.start,"
+    " view.top) in the embedded shell. lrgeditor_actions lists them.",
+    "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},"
+    "\"required\":[\"id\"]}", FALSE, FALSE, handle_action);
+
+  lrg_add (server, "lrgeditor_actions",
+    "List the action ids the embedded lrgeditor shell registers.",
+    NULL, TRUE, FALSE, handle_actions);
+
+  lrg_add (server, "lrgeditor_socket",
+    "Socket the embedded lrgeditor serves libregnum's editor protocol on"
+    " (for lrgeditorctl --socket, its MCP verbs, or libregnum.el).",
+    NULL, TRUE, FALSE, handle_socket);
 }
 
 #endif /* HAVE_CMACS_MCP && HAVE_CMACS_LIBREGNUM */

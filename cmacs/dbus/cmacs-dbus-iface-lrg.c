@@ -7,7 +7,7 @@
  *
  * org.cmacs.Editor1.Lrg
  *
- * MCP parity: mirrors the lrg_editor_* tools in
+ * MCP parity: mirrors the lrgeditor_* tools in
  * cmacs/mcp/cmacs-mcp-tools-libregnum.c (sync discipline: adding a
  * tool there requires a matching method here, and vice versa).  The
  * elisp bodies are identical to the MCP handlers'. */
@@ -23,7 +23,9 @@
 #include <gio/gio.h>
 #include <string.h>
 
-/* Keep in sync with LRG_EDITOR_BUF in cmacs-mcp-tools-libregnum.c. */
+/* Keep in sync with LRG_SHELL_BUF / LRG_EDITOR_BUF in
+ * cmacs-mcp-tools-libregnum.c. */
+#define LRG_SHELL_BUF  "*lrgeditor*"
 #define LRG_EDITOR_BUF "*cmacs-libregnum editor*"
 
 static const gchar *iface_xml =
@@ -72,6 +74,16 @@ static const gchar *iface_xml =
   "    <method name='ObjectTree'>"
   "      <arg type='s' name='tree' direction='out'/>"
   "    </method>"
+  "    <method name='Action'>"
+  "      <arg type='s' name='id' direction='in'/>"
+  "      <arg type='s' name='result' direction='out'/>"
+  "    </method>"
+  "    <method name='Actions'>"
+  "      <arg type='s' name='ids' direction='out'/>"
+  "    </method>"
+  "    <method name='Socket'>"
+  "      <arg type='s' name='socket' direction='out'/>"
+  "    </method>"
   "  </interface>"
   "</node>";
 
@@ -117,10 +129,14 @@ static gchar *
 lrg_with_editor (gchar *body)
 {
   gchar *out = g_strdup_printf
-    ("(let ((buf (get-buffer \"%s\")))"
+    ("(let* ((sb (get-buffer \"%s\"))"
+     "        (shell (and sb (fboundp 'cmacs-lrgeditor-attached-p)"
+     "                    (cmacs-lrgeditor-attached-p sb)))"
+     "        (buf (or (and shell sb) (get-buffer \"%s\"))))"
+     " (ignore shell)"
      " (if (and buf (cmacs-libregnum-editor-active-p buf)) (progn %s)"
-     "   \"No libregnum editor open (M-x cmacs-libregnum-editor)\"))",
-     LRG_EDITOR_BUF, body);
+     "   \"No libregnum editor open (M-x cmacs-lrgeditor)\"))",
+     LRG_SHELL_BUF, LRG_EDITOR_BUF, body);
   g_free (body);
   return out;
 }
@@ -137,19 +153,23 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       const gchar *path;
       gchar *qp;
       g_variant_get (p, "(&s)", &path);
-      qp = lrg_lisp_str (path, "level.rlevel");
+      /* An empty path opens the shell on its welcome screen. */
+      qp = (*path != '\0') ? lrg_lisp_str (path, NULL) : g_strdup ("nil");
       lrg_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-libregnum) (cmacs-libregnum-editor %s)"
+        ("(progn (require 'cmacs-lrgeditor) (cmacs-lrgeditor %s)"
          " \"opened\")", qp));
       g_free (qp);
     }
   else if (g_strcmp0 (m, "Play") == 0)
     lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(if (cmacs-libregnum-editor-play buf) \"playing\""
-       " \"could not instantiate\")")));
+      ("(if (if shell (cmacs-lrgeditor-activate-action buf \"play.start\")"
+       "       (cmacs-libregnum-editor-play buf))"
+       "     \"playing\" \"could not instantiate\")")));
   else if (g_strcmp0 (m, "Stop") == 0)
     lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(progn (cmacs-libregnum-editor-stop buf) \"stopped\")")));
+      ("(progn (if shell (cmacs-lrgeditor-activate-action buf \"play.stop\")"
+       "         (cmacs-libregnum-editor-stop buf))"
+       " \"stopped\")")));
   else if (g_strcmp0 (m, "Save") == 0)
     {
       const gchar *path;
@@ -216,6 +236,26 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
   else if (g_strcmp0 (m, "ObjectTree") == 0)
     lrg_reply (iv, lrg_with_editor (g_strdup
       ("(format \"%S\" (cmacs-libregnum-tree-nodes buf))")));
+  else if (g_strcmp0 (m, "Action") == 0)
+    {
+      const gchar *id;
+      gchar *qi;
+      g_variant_get (p, "(&s)", &id);
+      qi = lrg_lisp_str (id, NULL);
+      lrg_reply (iv, lrg_with_editor (g_strdup_printf
+        ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
+         " (if (cmacs-lrgeditor-activate-action buf %s) \"done\""
+         "   \"unknown or disabled action\"))", qi)));
+      g_free (qi);
+    }
+  else if (g_strcmp0 (m, "Actions") == 0)
+    lrg_reply (iv, lrg_with_editor (g_strdup
+      ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
+       " (mapconcat #'identity (cmacs-lrgeditor-actions buf) \"\\n\"))")));
+  else if (g_strcmp0 (m, "Socket") == 0)
+    lrg_reply (iv, lrg_with_editor (g_strdup
+      ("(or (and shell (cmacs-lrgeditor-socket buf))"
+       " \"not serving the editor protocol\")")));
 }
 
 static const GDBusInterfaceVTable vtable = {

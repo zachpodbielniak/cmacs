@@ -10254,6 +10254,13 @@ just the ones cmacs itself calls -- must be present and, via
 @option{--allow-multiple-definition} absorbs raylib's inline raymath,
 which the headers emit without @code{static} into multiple objects.
 
+The archive keeps libregnum's defaults @code{BUILD_EDITOR=1} and
+@code{BUILD_EDITOR_UI=1}, so the editor application behind
+@kbd{M-x cmacs-lrgeditor} is linked in.  Since libregnum 0.9 it calls
+@code{fribidi} when libregnum's @code{pkg-config fribidi} probe succeeds;
+configure runs the same probe and appends @option{-lfribidi} (Fedora:
+@code{fribidi-devel}).
+
 @section Known limitations (v1)
 
 @itemize @bullet
@@ -10902,6 +10909,93 @@ features lack dedicated ERT tests.
 mode does not composite in the editor FBO batch, so sprites/tiles use textured
 @code{GrlModel} planes (mesh/VAO path) and ranges/frustums use untextured lines.
 @end itemize
+
+@section The lrgeditor shell
+
+@cindex lrgeditor
+@findex cmacs-lrgeditor
+@kbd{M-x cmacs-lrgeditor} opens libregnum's editor application---the
+program the standalone @command{lrgeditor} binary runs---inside an Emacs
+window: menu bar and toolbar, the docked hierarchy, inspector, tiles,
+assets, console, problems, history, timeline, profiler, code and sources
+panels, split scene viewports, the asset editors, project files and
+play-in-editor in 2D or 3D.  It was called @samp{lrg-editor} before
+libregnum 0.1; libregnum and cmacs now say @samp{lrgeditor}.  With a
+prefix argument it prompts for a project directory or a level file.
+
+@subsection How it is hosted
+
+Since libregnum 0.8.1 the editor is an @code{LrgEditorApp} drawn on an
+@code{LrgCanvas}, and @code{lrg_editor_app_process_frame} is the whole
+per-frame logic, needing no window.  cmacs drives it from a libregnum
+view: @file{cmacs-libregnum-lrgeditor.c} owns the app and gathers input
+into an @code{LrgCanvasInput}; the view's render context runs the app's
+frame logic outside any texture bracket (the editor's scene viewport
+renders into its own target then), then @code{lrg_canvas_render} inside
+the view framebuffer's bracket.  The same path serves pgtk and
+@option{--lrg}.  @file{cmacs-libregnum-lrgeditor-defuns.c} is the Lisp
+surface and @file{lisp/cmacs/cmacs-lrgeditor.el} the mode and commands.
+
+The render context's @code{LrgEditor} is the shell's, so the older node
+DEFUNs (@code{cmacs-libregnum-editor-add-primitive}, @code{-select},
+@code{-save}, @dots{}), the @code{lrgeditor_*} MCP tools and the
+@code{org.cmacs.Editor1.Lrg} D-Bus interface edit the document the shell
+shows; an edit made in the shell re-bakes the node map those DEFUNs use
+on the next frame.
+
+@subsection Input
+
+The mouse goes to the shell from C, before Emacs sees it, under pgtk and
+@option{--lrg}; a press starts a grab so a drag past the window edge
+still ends, and selects the shell's window so the next keys reach it.
+Keys go through @code{cmacs-lrgeditor-mode-map}, whose default binding
+forwards every key, so the editor's own shortcuts apply (@kbd{C-s} save,
+@kbd{C-z} undo, @kbd{F5} play, W/A/S/D fly); held keys are emulated from
+auto-repeat (@code{cmacs-lrgeditor-key-release-delay}).
+
+@vindex cmacs-lrgeditor-prefix
+Emacs-side commands are behind @code{cmacs-lrgeditor-prefix} (default
+@kbd{C-\}): @kbd{o} other window, @kbd{b} switch buffer, @kbd{x}
+@kbd{M-x}, @kbd{a} run an editor action by id, @kbd{f} open, @kbd{n}
+new project, @kbd{l} libregnum.el's outline, @kbd{c} connect
+libregnum.el, @kbd{s} show the protocol socket, @kbd{k} close, @kbd{0}
+to @kbd{3} window splits.  @code{cmacs-lrgeditor-passthrough-keys}
+(@kbd{M-x}, @kbd{C-g}) stay Emacs's.
+
+Input restarts the view's animation clock (@code{cmacs-lrgeditor-fps});
+it stops again after @code{cmacs-lrgeditor-idle-seconds} without input,
+except while playing.
+
+@subsection The editor protocol and libregnum.el
+
+With @code{cmacs-lrgeditor-start-server} (the default) the shell serves
+libregnum's JSON-lines editor protocol on a Unix socket
+(@code{cmacs-lrgeditor-socket}, else the editor's settings, else
+@file{$XDG_RUNTIME_DIR/libregnum/editor-@var{pid}.sock}), so
+@command{lrgeditorctl --socket}, @command{lrgeditorctl mcp} and
+libregnum.el---libregnum's own Emacs package in
+@file{deps/libregnum/editors/emacs/}: outline, inspector, log, script
+debugger---drive the embedded editor.  @code{cmacs-lrgeditor} connects
+libregnum.el when it can find it, and opens the editor's ``external
+editor'' files beside the shell.  The protocol's sources live on cmacs's
+GLib context, which is dispatched in every @code{pselect}, so a
+synchronous request from this Emacs to its own editor is answered.
+
+@subsection Lisp, MCP and D-Bus
+
+@code{cmacs-lrgeditor-run-action} (and the primitive
+@code{cmacs-lrgeditor-activate-action}) run any editor action by id;
+@code{cmacs-lrgeditor-actions} lists them.  MCP tools are named
+@code{lrgeditor_*} (open, save, play, stop, object_tree, add_primitive,
+add_visual, move, select, delete, action, actions, socket) and prefer the
+shell's buffer when it is open; the old @code{lrg_editor_*} names remain
+for one release.  @code{org.cmacs.Editor1.Lrg} gains @code{Action},
+@code{Actions} and @code{Socket}.
+
+The Emacs-panel editor (@kbd{M-x cmacs-libregnum-editor}) remains.  It
+draws libregnum 0.9's terrain, water, decal and probe nodes as coloured
+stand-ins, and its play-in-editor now uses @code{LrgEditorPlaySession}
+(2D or 3D, level restored on stop), like the shell.
 
 @c ===================================================================
 @include gnuseye/gnuseye.texi

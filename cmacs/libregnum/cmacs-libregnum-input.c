@@ -17,6 +17,7 @@
 #include "buffer.h"
 #include "cmacs-libregnum.h"
 #include "cmacs-libregnum-render.h"
+#include "cmacs-libregnum-lrgeditor.h"
 #include "cmacs-eval-dispatch.h"
 #include "cmacs-glib-loop.h"
 
@@ -687,10 +688,191 @@ window_showing_view (Lisp_Object window, CmacsLibregnumView *v)
   return NULL;
 }
 
+/* ── lrgeditor shell ────────────────────────────────────────────────
+ * A view hosting libregnum's editor application takes raw pointer input:
+ * presses, motion and releases go straight to its LrgCanvasInput, the
+ * way GLFW feeds the standalone `lrgeditor'.  Keys come from Elisp
+ * (cmacs-lrgeditor.el), since Emacs owns the keymap.
+ *
+ * A press inside the view starts a grab: until every button is up, motion
+ * and the final release go to that view even past its window edge, so a
+ * dock splitter or a viewport orbit cannot get stuck held. */
+static CmacsLibregnumView *app_grab_view;
+static guint app_grab_buttons;
+
+static struct CmacsLrgeditorHost *
+app_host_of (CmacsLibregnumView *v)
+{
+  return v ? cmacs_libregnum_render_ctx_app_host
+               (cmacs_libregnum_view_get_render_ctx (v))
+           : NULL;
+}
+
+/* Frame pixels -> view pixels for V without rejecting points outside the
+ * window (a grab follows the pointer past the edge).  Returns false only
+ * when V is not shown on F. */
+static bool
+app_view_coords (struct frame *f, CmacsLibregnumView *v, double x, double y,
+                 double *vx, double *vy, bool *inside)
+{
+  struct window *win;
+  int px, py, pw, ph, w = 0, h = 0;
+
+  if (!f || !FRAME_LIVE_P (f)) return false;
+  win = window_showing_view (FRAME_ROOT_WINDOW (f), v);
+  if (!win) return false;
+  /* The TEXT_AREA body: the same rect the overlay paints the view into
+     (see frame_to_view_coords). */
+  window_box (win, TEXT_AREA, &px, &py, &pw, &ph);
+  cmacs_libregnum_view_get_size (v, &w, &h);
+  if (pw <= 0 || ph <= 0 || w <= 0 || h <= 0) return false;
+  *inside = (x >= px && x < px + pw && y >= py && y < py + ph);
+  *vx = (x - px) * (double) w / pw;
+  *vy = (y - py) * (double) h / ph;
+  return true;
+}
+
+static guint
+app_current_mods (void)
+{
+  int m = image_current_mods ();
+  guint mods = 0;
+
+  if (m & 1) mods |= CMACS_LRGEDITOR_MOD_SHIFT;
+  if (m & 2) mods |= CMACS_LRGEDITOR_MOD_CTRL;
+  if (m & 4) mods |= CMACS_LRGEDITOR_MOD_ALT;
+  return mods;
+}
+
+/* Input arrived: draw continuously for a while (the canvas animates hover
+ * and springs) -- cmacs-lrgeditor.el turns the clock off again once the
+ * shell has been idle. */
+static void
+app_wake (CmacsLibregnumView *v)
+{
+  cmacs_libregnum_view_set_animated (v, TRUE, 0);
+  cmacs_libregnum_view_request_redraw (v);
+}
+
+/* A press in the shell selects its Emacs window, so the keys typed next
+   reach the shell's keymap.  Lisp, so deferred to the cmacs context. */
+static gboolean
+app_focus_idle (gpointer user)
+{
+  Lisp_Object *buffer = user;
+
+  cmacs_dispatch_safe_call1 (intern ("cmacs-lrgeditor--focus-from-click"),
+                             *buffer);
+  g_free (buffer);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+app_defer_focus (CmacsLibregnumView *v)
+{
+  /* The buffer is GC-rooted by the view registry for the brief hop. */
+  Lisp_Object *buffer = g_new (Lisp_Object, 1);
+
+  *buffer = cmacs_libregnum_view_get_buffer (v);
+  g_main_context_invoke (cmacs_glib_get_context (), app_focus_idle, buffer);
+}
+
+static gboolean
+app_route_motion (struct frame *f, double x, double y)
+{
+  CmacsLibregnumView *v = app_grab_view;
+  struct CmacsLrgeditorHost *host;
+  double vx, vy;
+  bool inside;
+
+  if (!v) v = pointer_view_for_frame (f, x, y, NULL);
+  host = app_host_of (v);
+  if (!host) return FALSE;
+  if (!app_view_coords (f, v, x, y, &vx, &vy, &inside)) return FALSE;
+  if (!inside && v != app_grab_view) return FALSE;
+  cmacs_lrgeditor_host_set_modifiers (host, app_current_mods ());
+  cmacs_lrgeditor_host_pointer (host, vx, vy);
+  app_wake (v);
+  return TRUE;
+}
+
+static gboolean
+app_route_button (struct frame *f, int button, int press, double x, double y)
+{
+  CmacsLibregnumView *v = press ? NULL : app_grab_view;
+  struct CmacsLrgeditorHost *host;
+  double vx, vy;
+  bool inside;
+  int grl;
+  guint mask;
+
+  if (!v) v = pointer_view_for_frame (f, x, y, NULL);
+  host = app_host_of (v);
+  if (!host) return FALSE;
+  if (!app_view_coords (f, v, x, y, &vx, &vy, &inside)) return FALSE;
+  if (press && !inside) return FALSE;
+
+  /* X11/GDK 1,2,3 = left, middle, right; GrlMouseButton 0,2,1. */
+  grl = (button == 1) ? CMACS_LRGEDITOR_BUTTON_LEFT
+        : (button == 3) ? CMACS_LRGEDITOR_BUTTON_RIGHT
+        : (button == 2) ? CMACS_LRGEDITOR_BUTTON_MIDDLE
+        : button - 1;
+  mask = 1u << (guint) MIN (MAX (grl, 0), 31);
+
+  cmacs_lrgeditor_host_set_modifiers (host, app_current_mods ());
+  cmacs_lrgeditor_host_button (host, grl, press != 0, vx, vy);
+  if (press)
+    {
+      if (app_grab_buttons == 0)
+        app_defer_focus (v);
+      app_grab_view = v;
+      app_grab_buttons |= mask;
+    }
+  else
+    {
+      app_grab_buttons &= ~mask;
+      if (app_grab_buttons == 0)
+        app_grab_view = NULL;
+    }
+  app_wake (v);
+  return TRUE;
+}
+
+static gboolean
+app_route_scroll (struct frame *f, double dx, double dy, double x, double y)
+{
+  CmacsLibregnumView *v = pointer_view_for_frame (f, x, y, NULL);
+  struct CmacsLrgeditorHost *host = app_host_of (v);
+  double vx, vy;
+  bool inside;
+
+  if (!host) return FALSE;
+  if (!app_view_coords (f, v, x, y, &vx, &vy, &inside) || !inside)
+    return FALSE;
+  cmacs_lrgeditor_host_pointer (host, vx, vy);
+  /* GDK reports +DY for scrolling down; raylib's wheel (what the canvas
+     expects) is +1 for scrolling up. */
+  cmacs_lrgeditor_host_wheel (host, -dx, -dy);
+  app_wake (v);
+  return TRUE;
+}
+
+/* The shell's view is being torn down: forget any grab on it. */
+void
+cmacs_libregnum_input_forget_view (CmacsLibregnumView *v)
+{
+  if (app_grab_view == v)
+    {
+      app_grab_view = NULL;
+      app_grab_buttons = 0;
+    }
+}
+
 gboolean
 cmacs_libregnum_handle_motion (struct frame *f, double x, double y)
 {
   if (!f || !FRAME_LIVE_P (f)) return FALSE;
+  if (app_route_motion (f, x, y)) return TRUE;
   /* During an active drag the pointer may stray outside the viewport
    * window -- GTK keeps delivering motion to the implicit grab -- so keep
    * driving the view that owns the drag.  Otherwise route to whatever
@@ -905,6 +1087,7 @@ cmacs_libregnum_handle_button (struct frame *f, int button, int press,
                                double x, double y)
 {
   if (!f || !FRAME_LIVE_P (f)) return FALSE;
+  if (app_route_button (f, button, press, x, y)) return TRUE;
   /* Route to the viewport under the pointer (press) or, for a button-up
    * that ends a drag, the view that owns the drag (the pointer may have
    * run past the window edge).  NOT the selected window -- so right-drag
@@ -1271,6 +1454,7 @@ gboolean
 cmacs_libregnum_handle_scroll (struct frame *f, double dx, double dy,
                                double x, double y)
 {
+  if (app_route_scroll (f, dx, dy, x, y)) return TRUE;
   (void) dx;
   /* Zoom whatever viewport is under the pointer (not the selected window). */
   CmacsLibregnumView *v = pointer_view_for_frame (f, x, y, NULL);

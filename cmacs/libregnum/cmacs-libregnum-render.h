@@ -812,6 +812,14 @@ extern gboolean cmacs_libregnum_render_ctx_host_game
                                char **error_msg);
 extern gboolean cmacs_libregnum_render_ctx_is_game
                               (CmacsLibregnumRenderCtx *r);
+/* lrgeditor shell (cmacs-libregnum-lrgeditor.h).  _app_attach takes
+ * ownership of HOST; _app_host returns it (borrowed) or NULL. */
+struct CmacsLrgeditorHost;
+extern void cmacs_libregnum_render_ctx_app_attach
+                              (CmacsLibregnumRenderCtx *r,
+                               struct CmacsLrgeditorHost *host);
+extern struct CmacsLrgeditorHost *cmacs_libregnum_render_ctx_app_host
+                              (CmacsLibregnumRenderCtx *r);
 /* Full-focus mouse capture: TRUE = view grabs all frame clicks while focused
  * (game); FALSE (default) = only clicks inside its own window (editor). */
 extern gboolean cmacs_libregnum_render_ctx_get_mouse_capture_all

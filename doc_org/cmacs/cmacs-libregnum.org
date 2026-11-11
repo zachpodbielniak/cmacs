@@ -127,6 +127,8 @@ itself calls (e.g. game-template types) — must be present and, via
 raylib's inline raymath (=QuaternionToMatrix=, =MatrixDecompose=, …),
 which the headers emit without =static= into multiple objects.
 
+The archive is built with libregnum's own defaults for =BUILD_EDITOR= and =BUILD_EDITOR_UI= (both 1), so the editor runtime /and/ the editor application behind =M-x cmacs-lrgeditor= are linked in.  Since libregnum 0.9 the archive also calls into =fribidi= whenever libregnum's =pkg-config fribidi= probe succeeds (bidirectional text shaping in =lrg-paint-font.c=); =configure= runs the same probe and appends =-lfribidi= after the archive, alongside the optional scripting backends (luajit, python3, gjs, girepository).  On Fedora that is =fribidi-devel=; =install-deps= and the =Containerfile= list it.
+
 * Interactive commands
 
 =M-x cmacs-libregnum-demo= opens an empty scene buffer; useful as
@@ -1339,6 +1341,56 @@ now implemented (see the sections above):
   param; fallback to =play-sound-file= when audio subsystem absent.
 - *Wireframe / cast-shadow flags* — ="wireframe"= and ="cast_shadow"= visual
   params authored per node; shadow mapping remains deferred.
+
+* lrgeditor shell
+
+=M-x cmacs-lrgeditor= opens libregnum's editor application -- the program the standalone =lrgeditor= binary runs -- inside an Emacs window.  Everything the standalone editor has is there: the menu bar and toolbar, the docked hierarchy, inspector, tiles, assets, console, problems, history, timeline, profiler, code and sources panels, split and quad scene viewports, the asset editors (materials, shader graphs, post stacks, particles, weather, terrain, water, navigation, behaviour trees, state machines, animation graphs, sequencer, physics assets, mixer, music and Foley), project files and play-in-editor in 2D or 3D.  It was called =lrg-editor= before libregnum 0.1; the binary and the documentation now say =lrgeditor=, and so does cmacs.
+
+** How it is hosted
+
+libregnum 0.8.1 rebuilt the editor on its retained UI toolkit: an =LrgEditorApp= owns an =LrgCanvas=, and one call, =lrg_editor_app_process_frame (app, input, width, height)=, is the whole per-frame logic and needs no window.  The standalone program wraps that in a GLFW loop.  cmacs wraps it in a libregnum view instead:
+
+- =cmacs-libregnum-lrgeditor.c= (sees =<libregnum.h>=, never =lisp.h=) owns the =LrgEditor= and =LrgEditorApp= and gathers input into an =LrgCanvasInput= between frames, so a press and release shorter than a frame both arrive.
+- The view's render context (=cmacs-libregnum-render.c=, the only raylib translation unit) gains an app branch in =render_to_bgra=: the app's frame logic runs first, outside any texture bracket, because the editor's scene viewport renders into its own target during it; then =lrg_canvas_render()= runs inside the view FBO's =BeginTextureMode= bracket with the usual batch flush before the readback.  The same branch serves pgtk (BGRA readback) and =--lrg= (the FBO texture is presented directly).
+- =cmacs-libregnum-lrgeditor-defuns.c= (sees =lisp.h=, never libregnum) is the Lisp surface, and =lisp/cmacs/cmacs-lrgeditor.el= the mode, keymap and commands.
+
+The render context's =editor= field becomes a reference to the shell's =LrgEditor=.  So the older node DEFUNs (=cmacs-libregnum-editor-add-primitive=, =-select=, =-set-position=, =-save=, ...), the =lrgeditor_*= MCP tools and the =org.cmacs.Editor1.Lrg= D-Bus interface all edit the document the shell shows.  A shell edit emits =LrgEditor::changed=, and the next frame re-bakes the node map those DEFUNs address nodes through, so ids stay valid.
+
+** Input
+
+- *Mouse* goes to the shell from C, in =cmacs-libregnum-input.c=, before Emacs sees it: presses, motion and releases, under pgtk and =--lrg= alike.  A press inside the shell starts a grab, so a dock splitter drag or a viewport orbit that runs past the window edge still ends cleanly.  The press also selects the shell's Emacs window, so the next keys reach it.
+- *Keys* go through =cmacs-lrgeditor-mode-map=, whose default binding forwards every key, so the editor's own shortcuts apply (Ctrl+S, Ctrl+Z, F5 play, F6 run the game, Alt+F menus, W/A/S/D fly...).  Emacs delivers no key releases, so a held key is emulated from auto-repeat (=cmacs-lrgeditor-key-release-delay=), the way the game host does it.  Printable keys also arrive as text, for focused text fields.
+- *Emacs's own commands* sit behind =cmacs-lrgeditor-prefix= (default =C-\=): =o= other window, =b= switch buffer, =x= M-x, =a= run any editor action by id, =f= open a project or level, =n= new project, =l= libregnum.el's outline, =c= connect libregnum.el, =s= show and copy the protocol socket, =k= close the editor, =0=-=3= window splits.  =cmacs-lrgeditor-passthrough-keys= (default =M-x=, =C-g=) stay Emacs's outright.  Under Evil the buffer starts in emacs state.
+
+** Drawing only when needed
+
+A view draws on demand.  Input from either path restarts the view's animation clock (=cmacs-lrgeditor-fps=, default 30) so hover highlights and springs animate; a half-second timer in the buffer stops it again after =cmacs-lrgeditor-idle-seconds= without input, except while the level is playing.  A hidden buffer is skipped by the clock as for every libregnum view.
+
+** The editor protocol, lrgeditorctl and libregnum.el
+
+With =cmacs-lrgeditor-start-server= (the default) the shell serves libregnum's JSON-lines editor protocol on a Unix socket: =cmacs-lrgeditor-socket=, else the editor settings' =server-socket=, else =$XDG_RUNTIME_DIR/libregnum/editor-PID.sock=.  Everything that drives a standalone =lrgeditor= drives this one:
+
+- =lrgeditorctl --socket SOCKET ...= (node, selection, level, play, prefab, tilemap, timeline, view verbs), and =lrgeditorctl mcp= for an agent;
+- libregnum.el, libregnum's own Emacs package (=deps/libregnum/editors/emacs/=): level outline with two-way selection, node inspector, editor log, script debugger and DAP, tool scripts, profiler captures.  =cmacs-lrgeditor= connects it automatically when it can find it (=cmacs-lrgeditor-connect-libregnum-el=, =cmacs-lrgeditor-libregnum-el-directory=, else =load-path=, else the submodule under =source-directory=), and routes the editor's "open in external editor" to =find-file= beside the shell.
+
+The protocol's sources are created with cmacs's GLib context pushed as the thread default.  That context is dispatched in every =pselect=, including the =accept-process-output= loop libregnum.el's synchronous requests wait in, and always under the =waiting_for_input= guard -- so a request made from this Emacs to the editor in this Emacs is answered instead of timing out.
+
+** Lisp, MCP and D-Bus surface
+
+| Lisp | What |
+|------+------|
+| =cmacs-lrgeditor= (=&optional PATH=) | Open the shell; PATH is a project directory or a level file |
+| =cmacs-lrgeditor-open=, =-new-project= | Open a project/level, create a project |
+| =cmacs-lrgeditor-run-action= | Run any editor action by id, from the editor's registry |
+| =cmacs-lrgeditor-activate-action= (=BUFFER ID=), =cmacs-lrgeditor-actions= | The same, as primitives |
+| =cmacs-lrgeditor-socket=, =-playing-p=, =-status=, =-quit-requested-p= | State |
+| =cmacs-lrgeditor--key=, =--text=, =--release-all= | Input primitives (keys are raylib =KEY_*= codes) |
+
+MCP tools are named =lrgeditor_*= (=open=, =save=, =play=, =stop=, =object_tree=, =add_primitive=, =add_visual=, =move=, =select=, =delete=, plus =action=, =actions= and =socket= for the shell).  They prefer the shell's buffer, =*lrgeditor*=, when it is open, and fall back to the Emacs-panel editor below.  The old =lrg_editor_*= names are still registered for one release.  =org.cmacs.Editor1.Lrg= mirrors them, with =Action=, =Actions= and =Socket= added.
+
+** The Emacs-panel editor
+
+=M-x cmacs-libregnum-editor= (the [[*Native editor frontend]] above) stays: an editor made of Emacs buffers (palette, outliner, inspector) around a cmacs-drawn viewport.  It draws libregnum 0.9's new node kinds -- terrain, water, decal, reflection probe, probe volume -- as coloured stand-ins sized by the node's scale; the real heightfield, water surface and baked probes are drawn by libregnum's scene renderer, which only the shell uses.  Its play-in-editor now goes through =LrgEditorPlaySession=, like the shell's: 2D or 3D from the level, transforms written back onto the nodes each tick, and the level restored exactly on stop.
 
 * See also
 
