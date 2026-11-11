@@ -58,6 +58,19 @@ extern AiProviderType cmacs_ai_provider_type_from_symbol (Lisp_Object sym);
  * whichever server the environment happens to name. */
 extern void cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov);
 
+/* Run PROV under the account `cmacs-ai-cli-config-dirs' names for SYM
+ * (or, failing that, for PROV's provider type), through
+ * ai_cli_client_set_config_dir.  Call it wherever a client is built, the
+ * same places as cmacs_ai_apply_endpoint_settings.
+ *
+ * Does not signal for a bad setting: returns NULL when there is nothing
+ * to do or the directory took, else a newly allocated message the
+ * caller g_frees
+ * after releasing PROV and signals as a `user-error' -- an entry for an
+ * HTTP provider, or for a CLI that keeps its login under $HOME
+ * (cursor, antigravity). */
+extern gchar *cmacs_ai_apply_cli_config_dir (Lisp_Object sym, gpointer prov);
+
 extern void   cmacs_ai_client_registry_init  (void);
 extern guint  cmacs_ai_client_register       (gpointer client_gobject);
 extern gpointer cmacs_ai_client_lookup       (guint handle);

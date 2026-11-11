@@ -461,10 +461,21 @@ pending."
 opencode expresses what claude does with a flag as an environment
 variable; this mirrors what ai-glib sets for the same purpose.")
 
+(defvar cmacs-ai-cli-config-dirs)
+
 (defun cmacs-brigade--codex-home ()
-  "The Codex home directory a run should start from."
-  (or (getenv "CODEX_HOME")
-      (expand-file-name ".codex" (or (getenv "HOME") "~"))))
+  "The Codex home directory a run should start from.
+
+The account configured in `cmacs-ai-cli-config-dirs' wins, so the
+overlay links that login's auth.json and not the default one's; then
+CODEX_HOME, then ~/.codex."
+  (let ((configured (and (boundp 'cmacs-ai-cli-config-dirs)
+                         (or (alist-get 'codex-cli cmacs-ai-cli-config-dirs)
+                             (alist-get 'codex cmacs-ai-cli-config-dirs)))))
+    (if (stringp configured)
+        (expand-file-name configured)
+      (or (getenv "CODEX_HOME")
+          (expand-file-name ".codex" (or (getenv "HOME") "~"))))))
 
 (defun cmacs-brigade--codex-overlay (config)
   "Build a CODEX_HOME overlay whose config.toml carries CONFIG's servers.

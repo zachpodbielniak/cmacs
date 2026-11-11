@@ -236,6 +236,11 @@ The subsystem's own symbols use the shorter `cmacs-brigade-' prefix.")
   ;; session or a chat buffer asks what tools exist, and both can happen
   ;; before any user code runs.
   (require 'cmacs-brigade-subagent nil 'noerror)
+  ;; Eager for the same reason: web_research and web_lql (libresearch)
+  ;; must be in the registry before the first session lists its tools.
+  ;; A no-op build-wise without cmacs-ai: the tools answer that
+  ;; libresearch is unavailable.
+  (require 'cmacs-brigade-research nil 'noerror)
   ;; Eager: the finished-run hook has to be in place before the first
   ;; run ends, and a spawn has to be able to notice its origin the first
   ;; time a chat calls agent_spawn.

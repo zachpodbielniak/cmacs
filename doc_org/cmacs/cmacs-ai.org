@@ -52,10 +52,53 @@ passes =--ask-for-approval never=, and skip-permissions would only add
 =--dangerously-bypass-approvals-and-sandbox=, which removes the sandbox
 outright.
 
-ai-glib's codex client declares no MCP config surface, so a codex chat
-in cmacs has no cmacs tools. The brigade's own =codex= worker does
-deliver them --- see the brigade manual --- because it spawns the CLI
-itself and can hand it a =CODEX_HOME=.
+Since ai-glib 0.10 the codex client accepts an =mcp-config-codex=
+endpoint, delivered as =-c mcp_servers...= arguments.  cmacs does not use
+it for its own tools: argv is world-readable through =/proc=, and the
+dialect cannot carry a server's =env=, which is where the brigade's
+socket token lives.  The agent harness and the brigade's =codex= worker
+deliver cmacs's tools through a =CODEX_HOME= overlay instead --- see
+the harness and brigade manuals.
+
+** CLI accounts
+
+A CLI agent keeps its login in a config directory, and pointing it at
+another one is a second account on the same machine.
+=cmacs-ai-cli-config-dirs= maps a provider to that directory:
+
+#+begin_src elisp
+(setq cmacs-ai-cli-config-dirs
+      '((claude-code . "~/.config/claude-work")
+        (codex-cli   . "~/.codex-work")))
+#+end_src
+
+ai-glib knows which variables each CLI reads
+(=ai_cli_client_set_config_dir=):
+
+| Provider                      | Variable set                          |
+|-------------------------------+---------------------------------------|
+| =claude-code=, =claude-tmux=  | =CLAUDE_CONFIG_DIR=                   |
+| =codex-cli= (=codex=)         | =CODEX_HOME=                          |
+| =grok-build=                  | =GROK_HOME=                           |
+| =opencode=                    | its XDG config, data and state roots  |
+| =cursor=, =antigravity=       | none -- they read =$HOME=             |
+
+It is applied everywhere cmacs builds a client: =cmacs-ai-client-new=
+(chats), the one-shot calls (=cmacs-ai-prompt-sync=, =cmacs-ai-call=)
+and the agent harness.  An entry is matched by the exact provider symbol
+first, then by the client type's own name -- so it also applies to a
+client built from the default provider, and =codex= finds an entry
+written for =codex-cli= and the reverse.
+
+The directory is not created: a CLI started against an empty one asks
+you to log in, which is the remedy.  An entry for =cursor= or
+=antigravity=, or for an HTTP provider, is a =user-error= when the client
+is built rather than a setting that silently does nothing.
+
+The harness's codex tool overlay and the brigade's codex worker build a
+=CODEX_HOME= overlay of their own to deliver cmacs's MCP tools; they
+start it from the configured =codex-cli= directory, so the account's
+=auth.json= is the one linked in.
 
 ** Your own OpenAI-compatible servers
 
@@ -748,18 +791,48 @@ chat/agent buffer's executor only when a search backend is configured.
 =cmacs-ai-chat--init= does this automatically from
 =cmacs-ai-search-provider= (default ='auto=):
 
-| Provider symbol | Backend                                          |
-|-----------------+--------------------------------------------------|
-| =auto=          | Brave or Bing if its key is set, else DuckDuckGo |
-| =brave=         | Brave Search (needs a key)                       |
-| =bing=          | Bing Search (needs a key)                        |
-| =duckduckgo=    | Keyless DuckDuckGo (best-effort, no SLA)         |
-| =nil=           | Disabled                                         |
+| Provider symbol | Backend                                                         |
+|-----------------+-----------------------------------------------------------------|
+| =auto=          | ai-glib's choice: libresearch if =LIBRESEARCH_URL= is set, else Brave or Bing if its key is set, else DuckDuckGo |
+| =libresearch=   | A libresearchd server at =cmacs-ai-libresearch-url= (self-hosted metasearch) |
+| =brave=         | Brave Search (needs a key)                                      |
+| =bing=          | Bing Search (needs a key)                                       |
+| =duckduckgo=    | Keyless DuckDuckGo (best-effort, no SLA)                        |
+| =nil=           | Disabled                                                        |
 
 Keyed backends read =cmacs-ai-search-api-key=, falling back to the
 =BRAVE_API_KEY= / =BING_API_KEY= environment variable.  A keyed
 provider with no key available logs a message and leaves =web_search=
 off; =auto= always succeeds thanks to the keyless fallback.
+
+*=auto= follows the environment.*  Since ai-glib 0.10,
+=ai_search_provider_new_default= puts a libresearch server first: setting
+=LIBRESEARCH_URL= (and =LIBRESEARCH_TOKEN=, if the server wants a token)
+moves every =auto= chat onto it, with no cmacs setting changed.  That is
+deliberate upstream -- naming a self-hosted engine is a choice of it over
+a third-party API -- but it means =auto= is not a fixed backend.  Choose
+=libresearch= (or another symbol) explicitly to pin one.
+
+The =libresearch= backend takes its URL from =cmacs-ai-libresearch-url=
+(default =http://127.0.0.1:8087=, libresearchd's own) and its bearer
+token from =cmacs-ai-libresearch-token-function=, which by default looks
+the token up with auth-source by the URL's host and port and falls back
+to =LIBRESEARCH_TOKEN=:
+
+#+begin_example
+machine 127.0.0.1 port 8087 password YOUR-TOKEN
+#+end_example
+
+The token is never a customize value.  Nothing is contacted when the
+backend is set, so an unreachable server shows up as a failing search,
+not as an error when the chat opens.  The same server also answers the
+research commands -- see [[*Research (libresearch)][Research (libresearch)]].
+
+From Lisp, =cmacs-ai-set-search-provider= is the front door: it resolves
+the libresearch URL and token, which the C primitive
+=cmacs-ai-tools-set-search-provider EXECUTOR PROVIDER &optional API-KEY
+ENDPOINT= cannot look up itself.  The chat, =cmacs-ai-call='s
+=:search-provider= and the shared executor setup all go through it.
 
 Once registered, the model may pass the tool's options: =count=,
 =freshness= (any/day/week/month/year), =safesearch=
@@ -776,8 +849,13 @@ tools.
 #+BEGIN_SRC elisp
 ;; Enable web_search explicitly on a standalone executor.
 (let ((exec (cmacs-ai-tools-new)))
-  (cmacs-ai-tools-set-search-provider exec 'duckduckgo)
+  (cmacs-ai-set-search-provider exec 'duckduckgo)
   (member "web_search" (cmacs-ai-tools-list exec)))   ; => t
+
+;; The same against a libresearch server on another machine.
+(let ((cmacs-ai-libresearch-url "http://search.lan:8087")
+      (exec (cmacs-ai-tools-new)))
+  (cmacs-ai-set-search-provider exec 'libresearch))
 #+END_SRC
 
 ** Inline images
@@ -794,6 +872,167 @@ UI).  Non-image responses, error statuses, and undecodable data are
 ignored silently.  Image width is capped at
 =cmacs-ai-chat-image-max-width= (or ~92% of the chat window).
 Toggling =org-link-preview= (=C-c C-x C-v=) clears the previews.
+
+* Research (libresearch)
+
+libresearch is a self-hosted metasearch engine; libresearchd serves it
+over REST.  ai-glib's =AiLibresearchSearch= is a client of that server,
+and cmacs exposes everything it does beyond plain search: a cited
+answer to a question, a page's readable text (optionally from the
+Wayback Machine), LQL queries over search results, and the server's LQL
+environment.  The server and its token are the same
+=cmacs-ai-libresearch-url= / =cmacs-ai-libresearch-token-function= the
+=libresearch= web_search backend uses ([[*Web search][Web search]]).
+
+** Commands
+
+| Command                          | What it does                                                   |
+|----------------------------------+----------------------------------------------------------------|
+| =cmacs-ai-research=              | A question -> =*cmacs-ai research*=: the cited answer, then the sources as Org links.  =C-u= = deep (the server's model runs follow-up searches); a numeric prefix = pages to read (1-20) |
+| =cmacs-ai-web-fetch=             | A URL (default: the one at point) -> its readable text.  =C-u= asks whether the Wayback Machine may stand in: =never=, =fallback=, =only= |
+| =cmacs-ai-lql=                   | An LQL query -> an Org table of its rows.  =C-u= = explain: the plan without running it |
+| =cmacs-ai-research-search=       | Plain metasearch -> an Org list of results.  =C-u= asks for a category (web, images, videos, news, code) |
+| =cmacs-ai-research-environment=  | What LQL may name on this server: its commands, sources, functions and constants |
+
+A result buffer is Org, read-only, in =cmacs-ai-research-result-mode=:
+=g= (=revert-buffer=) runs the request again and =C-c C-k= cancels one
+still running.  The answer's =[n]= citations match the numbered source
+list; sources the server did not read or did not cite are marked, as
+is a source read from an archived copy.
+
+LQL pipes search results through commands:
+
+#+begin_example
+search "glib", category: CODE | filter extra.stars > 100 | fields title, url
+gtk docs | filter site("docs.gtk.org")
+#+end_example
+
+An invalid query comes back as the server's message, with its position
+and a caret under the offending text.
+
+** In a chat
+
+Three compose commands run a request and put the result in the
+transcript under its own heading, without a model turn:
+
+| Compose line          | Does                          |
+|-----------------------+-------------------------------|
+| =/research QUESTION=  | a standard research run       |
+| =/research! QUESTION= | a deep one                    |
+| =/fetch URL=          | the page's text               |
+| =/lql QUERY=          | the query's rows, as a table  |
+
+The heading appears at once with a placeholder and is filled when the
+server answers, so the chat stays usable during a run that takes
+minutes.  The result is rendered without Org headlines -- a line that
+would start one is escaped -- so it cannot split the transcript.  It
+lands in the transcript, not in the model's context for the live
+session; a resumed chat reads it back as part of the user's turn.
+
+** Programmatic use
+
+=cmacs-ai-research-request KIND ARG CALLBACK &rest OPTIONS= starts a
+request of KIND (=research=, =fetch=, =lql=, =search=, =environment=)
+and returns its id; CALLBACK receives one payload on the Lisp thread:
+
+#+begin_example
+(:ok :kind KIND :text TEXT :json JSON)
+(:error MESSAGE)
+(:cancelled)
+#+end_example
+
+TEXT is ai-glib's own rendering (=ai_libresearch_format_*=) -- the text
+every host shows a model -- and JSON the server's document, which
+=cmacs-ai-research-org-body= turns into Org.  OPTIONS are the
+primitive's: =:deep=, =:pages=, =:explain=, =:archive=, =:max-chars=,
+=:category=, =:count=, =:site=, =:max-rows=, =:timeout=; the URL and
+token are added for you.
+
+=cmacs-ai-research-sync= (payload) and =cmacs-ai-research-sync-text=
+(text, or ="error: ..."=) wait for the answer instead.  They poll with
+=accept-process-output= and never =sit-for=: they are what the MCP and
+brigade tools call, and inside an RPC dispatch =inhibit-interaction= is
+bound, under which =read-event= -- and so =sit-for= -- signals.
+
+#+begin_src elisp
+(cmacs-ai-research-request
+ 'research "What changed in GLib 2.86?"
+ (lambda (p)
+   (when (eq (car p) :ok)
+     (message "%s" (plist-get (cdr p) :text))))
+ :deep t :pages 8)
+
+(cmacs-ai-research-sync-text 'lql "glib | fields title, url | limit 5")
+#+end_src
+
+** How a request runs
+
+Every request runs on a *worker thread* with a private thread-default
+=GMainContext= (=cmacs/ai/cmacs-ai-libresearch.c=), not on the editor's
+loop the way embeddings and streams do.  Three reasons, all specific to
+this API:
+
+- A research run takes minutes, and the callers that have to look
+  synchronous -- MCP, brigade tools -- wait for it.  When that wait is
+  inside an MCP or D-Bus dispatch, the cmacs GLib hook is already
+  dispatching and skips the nested iteration, so a request bound to the
+  editor's context would never complete.  A worker's own loop does not
+  care who waits or how.
+- The default context is iterated only when a toolkit does it; =emacs
+  --lrg= and a tty frame have none.
+- Nothing about a request needs Lisp until it is over.
+
+Only C strings cross the thread boundary.  The job is refcounted, so a
+caller can stop waiting while its worker is still blocked on the
+network; the result is delivered once, through
+=cmacs_glib_invoke_on_main=, or collected by
+=cmacs-ai--libresearch-poll=.  A callback is held in a staticpro'd hash
+table, never in the C job.
+
+| Primitive                                   | Purpose                                     |
+|---------------------------------------------+---------------------------------------------|
+| =cmacs-ai--libresearch-search QUERY CALLBACK &optional OPTIONS= | metasearch          |
+| =cmacs-ai--libresearch-fetch URL CALLBACK &optional OPTIONS=    | page text           |
+| =cmacs-ai--libresearch-lql LQL CALLBACK &optional OPTIONS=      | LQL query           |
+| =cmacs-ai--libresearch-research QUESTION CALLBACK &optional OPTIONS= | cited answer   |
+| =cmacs-ai--libresearch-environment &optional CALLBACK OPTIONS=  | LQL environment     |
+| =cmacs-ai--libresearch-poll ID=             | nil while pending, else the payload         |
+| =cmacs-ai--libresearch-cancel ID=           | cancel; the result is still (:cancelled)    |
+| =cmacs-ai--libresearch-format KIND JSON &optional MAX-ROWS= | ai-glib's text for a document, no server needed |
+| =cmacs-ai--libresearch-default-endpoint=    | ai-glib's built-in URL                      |
+
+The primitives check every argument before a thread starts: =:pages=
+1-20, =:count= 1-100, =:max-chars= 100-1000000, =:archive= one of
+never/fallback/only, =:category= one of web/images/videos/news/code.
+Without =:endpoint= they read =LIBRESEARCH_URL=, then use ai-glib's
+default; without =:token=, =LIBRESEARCH_TOKEN=.
+
+** Surfaces
+
+- MCP: =ai_research=, =ai_web_fetch=, =ai_lql= ([[*MCP tools][MCP tools]]).
+- Brigade agents: =web_research= and =web_lql=
+  (=lisp/cmacs/cmacs-brigade-research.el=), reaching in-process agents,
+  CLI agents over the relay and external MCP clients.  Not =ai_*=: the
+  brigade allowlist refuses that prefix outright.
+- Chat buffers: =/research=, =/fetch=, =/lql=, and =web_search= with the
+  =libresearch= backend.
+
+** Options
+
+| Defcustom                                | Default                    |
+|------------------------------------------+----------------------------|
+| =cmacs-ai-libresearch-url=               | =http://127.0.0.1:8087=    |
+| =cmacs-ai-libresearch-token-function=    | auth-source, then =LIBRESEARCH_TOKEN= |
+| =cmacs-ai-libresearch-timeout=           | nil (ai-glib: 30 s idle)   |
+| =cmacs-ai-libresearch-research-timeout=  | 900 s                      |
+| =cmacs-ai-research-pages=                | nil (server default)       |
+| =cmacs-ai-research-fetch-archive=        | ='never=                   |
+| =cmacs-ai-research-fetch-max-chars=      | nil (server default)       |
+| =cmacs-ai-research-lql-max-rows=         | 200                        |
+| =cmacs-ai-research-cell-width=           | 80                         |
+
+A server without its research module answers research requests with
+an error naming that; the other requests still work.
 
 * Image generation
 
@@ -1256,7 +1495,7 @@ runs, the typelib is reachable from:
 
 * MCP tools
 
-Built with =--with-cmacs-mcp=, seven tools are exposed:
+Built with =--with-cmacs-mcp=, ten tools are exposed:
 
 | Tool                   | Args                                    |
 |------------------------+-----------------------------------------|
@@ -1267,6 +1506,9 @@ Built with =--with-cmacs-mcp=, seven tools are exposed:
 | =ai_open_chat=         | =prompt=, =provider=, =model= (all opt) |
 | =ai_embed_similarity=  | =a= req, =b= req, =model= (opt)          |
 | =generate_image=       | =prompt= req, =references=, =provider=, =model=, =aspect=, =size=, =quality=, =buffer= |
+| =ai_research=          | =question= req, =deep= (bool), =pages= (1-20) |
+| =ai_web_fetch=         | =url= req, =archive= (never/fallback/only), =max_chars= |
+| =ai_lql=               | =query= req, =explain= (bool)           |
 
 =ai_embed_similarity= returns the cosine of two texts' embeddings.
 Embeddings reach MCP as a /score/ and not as vectors on purpose: a
@@ -1275,6 +1517,14 @@ can act on directly --- and semantic /search/ is already served by
 =memory_search= over the brigade index.  What is useful over the wire is
 the comparison itself: near-duplicate detection, or checking an answer
 against its source.
+
+=ai_research=, =ai_web_fetch= and =ai_lql= are libresearch
+([[*Research (libresearch)][Research (libresearch)]]); each returns ai-glib's text
+rendering, and an MCP error result whose text starts =error:= when the
+server fails.  The network runs on a worker thread, but the Lisp thread
+waits for the answer -- for =ai_research= that is minutes.  Like every
+=ai_*= tool they are hidden from in-process chats; agents use the
+brigade's =web_research= / =web_lql= instead.
 
 =ai_list_models= returns a JSON object mapping each provider to its
 model-name array (network for API providers, static tables for CLI
@@ -1352,6 +1602,9 @@ built-ins do (see /Tool use/).  Default nil = full trust.
 | =cmacs-ai-tool-confirm=         | nil                          |
 | =cmacs-ai-search-provider=      | ='auto=                      |
 | =cmacs-ai-search-api-key=       | nil (use environment)        |
+| =cmacs-ai-libresearch-url=      | =http://127.0.0.1:8087=      |
+| =cmacs-ai-libresearch-token-function= | auth-source, then =LIBRESEARCH_TOKEN= |
+| =cmacs-ai-cli-config-dirs=      | nil (each CLI's default account) |
 | =cmacs-ai-chat-inline-images=   | t                            |
 | =cmacs-ai-chat-image-max-width= | 800 (px)                     |
 | =cmacs-ai-chat-dir=             | =$XDG_DATA_HOME/cmacs-ai/= (archive + resume pool) |

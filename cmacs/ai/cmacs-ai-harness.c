@@ -323,6 +323,20 @@ cmacs_ai_harness__make_provider (Lisp_Object provider_sym,
    * arrive only here. */
   cmacs_ai_apply_endpoint_settings (provider_sym, prov);
 
+  /* And a CLI agent's account, the same way every other client gets
+   * one -- a second login that worked in a chat buffer and not here
+   * would be the endpoint-table bug over again. */
+  {
+    gchar *why = cmacs_ai_apply_cli_config_dir (provider_sym, prov);
+    if (why != NULL)
+      {
+        Lisp_Object msg = build_string (why);
+        g_free (why);
+        g_object_unref (prov);
+        xsignal1 (Quser_error, msg);
+      }
+  }
+
   /* Set after construction rather than passed in: the factory takes a
    * config, and the two client hierarchies spell the model setter
    * differently. */

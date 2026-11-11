@@ -21,6 +21,7 @@ extern void syms_of_cmacs_ai_tools_defuns  (void);
 extern void syms_of_cmacs_ai_image_defuns  (void);
 extern void syms_of_cmacs_ai_embed_defuns  (void);
 extern void syms_of_cmacs_ai_harness       (void);
+extern void syms_of_cmacs_ai_libresearch_defuns (void);
 
 static bool init_done = false;
 
@@ -36,6 +37,7 @@ syms_of_cmacs_ai (void)
   syms_of_cmacs_ai_image_defuns ();
   syms_of_cmacs_ai_embed_defuns ();
   syms_of_cmacs_ai_harness ();
+  syms_of_cmacs_ai_libresearch_defuns ();
 }
 
 void

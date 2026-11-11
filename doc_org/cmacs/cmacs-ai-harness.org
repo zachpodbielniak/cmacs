@@ -185,6 +185,10 @@ The =-c mcp_servers...= override would have avoided the directory entirely and i
 
 This is the same overlay the brigade's own =codex= worker builds, and it is the same function --- one implementation of the symlink care that makes an overlay usable at all.
 
+The "real" home the overlay links from is the configured codex account when there is one: =cmacs-brigade--codex-home= reads =cmacs-ai-cli-config-dirs= (=codex-cli= or =codex=) before =CODEX_HOME= and =~/.codex=, so a session running under a second login gets that login's =auth.json=. The client itself is built with the same directory through =ai_cli_client_set_config_dir=; the overlay's =CODEX_HOME=, set afterwards, takes precedence for the spawn.
+
+*Why not ai-glib's =ai_mcp_config_endpoint_for=.* ai-glib 0.10 can translate one Claude-schema server list into every CLI's dialect, codex included, and write it to a 0600 file. It is not a drop-in for this overlay. Its codex dialect is =-c= assignments on the command line, which carry =command= and =args= only: a server whose environment holds a secret is left out rather than moved into argv. The brigade's server is exactly that -- its scoped socket and =CMACS_BRIGADE_TOKEN= live in =env= -- so the translated endpoint would arrive empty (=skipped= naming it) and the session would have no cmacs tools. The overlay keeps the secret in a 0600 file. It stays until ai-glib's codex delivery can carry an environment.
+
 ** Dialects
 
 The agents do not agree on a config schema. =cmacs-brigade-host-provision= takes

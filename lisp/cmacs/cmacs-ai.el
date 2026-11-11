@@ -240,14 +240,26 @@ window width."
 ;;;; country, language, site, fetch_content) are then offered to the
 ;;;; model automatically via the tool schema.
 
+;; `cmacs-ai-tools-set-search-provider' lives in cmacs-ai-tools.c.
+(declare-function cmacs-ai-tools-set-search-provider "cmacs-ai-tools.c"
+                  (executor provider &optional api-key endpoint))
+(declare-function auth-source-search "auth-source" (&rest spec))
+(declare-function url-host "url-parse" (cl-x))
+(declare-function url-port-if-non-default "url-parse" (urlobj))
+
 (defcustom cmacs-ai-search-provider 'auto
   "Backend for ai-glib's web_search tool in chat/agent buffers.
 
 One of:
-  `auto'        Use Brave or Bing when its API key is set, else fall
-                back to the keyless DuckDuckGo backend (best-effort,
-                no SLA).  This makes web_search available out of the
-                box.
+  `auto'        ai-glib's choice from the environment: a libresearch
+                server when LIBRESEARCH_URL is set (LIBRESEARCH_TOKEN
+                as its token), else Brave or Bing when its API key is
+                set, else the keyless DuckDuckGo backend (best-effort,
+                no SLA).  Setting LIBRESEARCH_URL therefore changes
+                what `auto' does.
+  `libresearch' A libresearchd server -- self-hosted metasearch -- at
+                `cmacs-ai-libresearch-url', with the token from
+                `cmacs-ai-libresearch-token'.
   `brave'       Brave Search -- requires `cmacs-ai-search-api-key' or
                 the BRAVE_API_KEY environment variable.
   `bing'        Bing Search -- requires `cmacs-ai-search-api-key' or
@@ -259,20 +271,150 @@ A keyed provider with no key available logs a message and simply
 leaves web_search unregistered (the rest of the tools still work).
 Per-buffer override via `(setq-local cmacs-ai-search-provider ...)'
 before the buffer's first send."
-  :type '(choice (const :tag "Auto (Brave/Bing if keyed, else DuckDuckGo)" auto)
+  :type '(choice (const :tag "Auto (libresearch/Brave/Bing from the environment, else DuckDuckGo)" auto)
+                 (const :tag "libresearch server" libresearch)
                  (const :tag "Brave Search" brave)
                  (const :tag "Bing Search" bing)
                  (const :tag "DuckDuckGo (keyless)" duckduckgo)
                  (const :tag "Disabled" nil))
   :group 'cmacs-ai)
 
+(defconst cmacs-ai-search-providers '(auto libresearch brave bing duckduckgo)
+  "Every value `cmacs-ai-search-provider' takes, bar nil.
+The one list the interactive choosers complete over.")
+
 (defcustom cmacs-ai-search-api-key nil
   "API key for the keyed web_search backends (Brave/Bing).
 When nil, the key is read from the BRAVE_API_KEY / BING_API_KEY
 environment variable (matching how provider API keys are sourced).
 Set a string here to override.  Ignored by the keyless DuckDuckGo
-backend."
+backend, and by `libresearch', whose token comes from
+`cmacs-ai-libresearch-token' instead."
   :type '(choice (const :tag "Use environment variable" nil) string)
+  :group 'cmacs-ai)
+
+;;;; libresearch: a self-hosted metasearch server (libresearchd).  It
+;;;; backs web_search when chosen above, and on its own the research
+;;;; commands in cmacs-ai-research.el: cited answers, page fetches and
+;;;; LQL queries.
+
+(defcustom cmacs-ai-libresearch-url "http://127.0.0.1:8087"
+  "Base URL of the libresearch server (libresearchd).
+The default is where libresearchd listens out of the box.  Used by the
+`libresearch' web_search backend and by every `cmacs-ai-research'
+command.  The LIBRESEARCH_URL environment variable governs only the
+`auto' web_search backend, which is ai-glib's own choice."
+  :type 'string
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-libresearch-token-function #'cmacs-ai-libresearch-auth-source-token
+  "Function of one argument, the server URL, returning its bearer token.
+Nil from the function means \"send no token\", which is right for a
+server without `api.tokens'.  The default looks the token up with
+auth-source -- a ~/.authinfo.gpg line such as
+
+  machine 127.0.0.1 port 8087 password TOKEN
+
+-- and falls back to the LIBRESEARCH_TOKEN environment variable.  The
+secret itself never belongs in a customize file."
+  :type 'function
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-libresearch-timeout nil
+  "Seconds before a libresearch request other than research gives up.
+Nil leaves it to ai-glib, which times out an idle connection after 30
+seconds."
+  :type '(choice (const :tag "ai-glib's default" nil) natnum)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-libresearch-research-timeout 900
+  "Seconds before a libresearch research run gives up.
+A run reads several pages and asks a model about them, so minutes are
+normal; this is also how long a waiting MCP or brigade caller blocks."
+  :type 'natnum
+  :group 'cmacs-ai)
+
+(defun cmacs-ai-libresearch-auth-source-token (url)
+  "Return the libresearch bearer token for URL, or nil.
+Looks for an auth-source entry whose host is URL's host (and port its
+port, when it has one), then falls back to LIBRESEARCH_TOKEN."
+  (require 'url-parse)
+  (or (let* ((parsed (url-generic-parse-url url))
+             (host (url-host parsed))
+             (port (url-port-if-non-default parsed)))
+        (when (and host (not (string-empty-p host)))
+          (require 'auth-source)
+          (let* ((found (car (apply #'auth-source-search
+                                    :host host :max 1
+                                    (and port (list :port (number-to-string port))))))
+                 (secret (plist-get found :secret)))
+            (if (functionp secret) (funcall secret) secret))))
+      (let ((env (getenv "LIBRESEARCH_TOKEN")))
+        (and env (not (string-empty-p env)) env))))
+
+(defun cmacs-ai-libresearch-token (&optional url)
+  "Return the bearer token for the libresearch server at URL, or nil.
+URL defaults to `cmacs-ai-libresearch-url'."
+  (let ((url (or url cmacs-ai-libresearch-url)))
+    (and cmacs-ai-libresearch-token-function url
+         (funcall cmacs-ai-libresearch-token-function url))))
+
+(defun cmacs-ai-libresearch-options (&rest extra)
+  "Connection plist for the libresearch primitives, with EXTRA appended.
+Carries :endpoint and :token resolved from `cmacs-ai-libresearch-url'
+and `cmacs-ai-libresearch-token', and :timeout from
+`cmacs-ai-libresearch-timeout' unless EXTRA sets its own."
+  (let ((url cmacs-ai-libresearch-url))
+    (append extra
+            (and url (not (string-empty-p url)) (list :endpoint url))
+            (let ((tok (cmacs-ai-libresearch-token url)))
+              (and tok (list :token tok)))
+            (and cmacs-ai-libresearch-timeout
+                 (not (plist-member extra :timeout))
+                 (list :timeout cmacs-ai-libresearch-timeout)))))
+
+(defun cmacs-ai-set-search-provider (executor provider &optional api-key)
+  "Register web_search on EXECUTOR with backend PROVIDER.
+The Lisp front door to `cmacs-ai-tools-set-search-provider': for
+`libresearch' it supplies `cmacs-ai-libresearch-url' and the
+auth-source token, which the C primitive cannot look up itself.
+API-KEY, when given, wins over both the token and
+`cmacs-ai-search-api-key'.  Returns t; signals as the primitive does."
+  (unless (memq provider cmacs-ai-search-providers)
+    (user-error "cmacs-ai: unknown web_search provider %S (one of %s)"
+                provider (mapconcat #'symbol-name cmacs-ai-search-providers ", ")))
+  (if (eq provider 'libresearch)
+      (cmacs-ai-tools-set-search-provider
+       executor provider
+       (or api-key (cmacs-ai-libresearch-token))
+       cmacs-ai-libresearch-url)
+    (cmacs-ai-tools-set-search-provider
+     executor provider (or api-key cmacs-ai-search-api-key))))
+
+;;;; CLI accounts: which login a CLI agent runs under.
+
+(defcustom cmacs-ai-cli-config-dirs nil
+  "Config directory per CLI provider, to run it under another account.
+
+An alist of (PROVIDER . DIRECTORY).  When cmacs builds a CLI client for
+PROVIDER -- a chat, `cmacs-ai-call', the agent harness -- ai-glib points
+the variables that CLI reads at DIRECTORY:
+
+  claude-code, claude-tmux   CLAUDE_CONFIG_DIR
+  codex-cli (or codex)       CODEX_HOME
+  grok-build                 GROK_HOME
+  opencode                   its XDG config/data/state roots
+
+so two entries are two logins on one machine.  The directory is not
+created: an empty one makes the CLI ask you to log in, which is the
+remedy.  cursor and antigravity keep their login under $HOME, which no
+variable moves; an entry for either, or for an HTTP provider, is a
+`user-error' when the client is built rather than a silently ignored
+setting.  PROVIDER is matched exactly first, then by the client's own
+type name, so an entry also applies when a client is built from the
+default provider."
+  :type '(alist :key-type (symbol :tag "Provider")
+                :value-type (directory :tag "Config directory"))
   :group 'cmacs-ai)
 
 ;;;; cmacs MCP bridge: exposes cmacs's own MCP tool surface as
@@ -737,8 +879,7 @@ and not the whole executor.  Returns EXECUTOR."
     (when (and cmacs-ai-search-provider
                (fboundp 'cmacs-ai-tools-set-search-provider))
       (condition-case err
-          (cmacs-ai-tools-set-search-provider
-           executor cmacs-ai-search-provider cmacs-ai-search-api-key)
+          (cmacs-ai-set-search-provider executor cmacs-ai-search-provider)
         (error
          (message "cmacs-ai: web_search unavailable: %S" err)))))
   executor)

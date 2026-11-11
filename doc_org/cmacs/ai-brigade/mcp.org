@@ -186,6 +186,27 @@ existing shim, and sees the full tool set including everything registered with
 =cmacs-brigade-deftool=. The relay is for *scoped* access, which is what an
 agent the brigade spawned gets.
 
+* Web research (libresearch)
+
+=lisp/cmacs/cmacs-brigade-research.el= registers two tools in the =web=
+group, so =group:web= in an allowlist grants both:
+
+| Tool | Args | Returns |
+|---+---+---|
+| =web_research= | =question=, =deep= (opt), =pages= (opt, 1-20) | a cited answer: the text with =[n]= citations, then the numbered sources |
+| =web_lql= | =query=, =explain= (opt) | an LQL result (at most 100 rows), or its plan |
+
+They talk to the libresearch server named by =cmacs-ai-libresearch-url=,
+with the auth-source token (see the Research section of the cmacs-ai
+manual).  Both wait for their answer rather than returning a job id; the
+request runs on a worker thread and the wait polls with
+=accept-process-output=, so an MCP caller -- where =inhibit-interaction=
+is bound and =sit-for= would signal -- works the same as an in-process
+agent.  A research run is minutes.
+
+They are not =ai_research= / =ai_lql=, cmacs's own MCP tools for the same
+requests: the allowlist refuses every =ai_= name, so agents get these.
+
 * Config dialects
 
 The agents do not agree on a schema, so =cmacs-brigade-host-provision= takes a

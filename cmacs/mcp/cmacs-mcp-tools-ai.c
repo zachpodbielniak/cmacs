@@ -10,6 +10,9 @@
  *   - ai_list_providers: enumerate provider symbols
  *   - ai_list_models:   enumerate model names per provider
  *   - ai_open_chat:     open a chat buffer with an initial prompt
+ *   - ai_research:      libresearch cited answer to a question
+ *   - ai_web_fetch:     libresearch page read (Wayback fallback)
+ *   - ai_lql:           libresearch LQL query
  *   - generate_image:   generate an image and insert it into a buffer
  *                       (unprefixed on purpose -- see its handler)
  *
@@ -374,6 +377,152 @@ handle_ai_open_chat (McpServer *server, const gchar *name,
   return r;
 }
 
+/*
+ * ai_research / ai_web_fetch / ai_lql -- libresearch (cmacs-ai-research.el).
+ *
+ * The request itself runs on a worker thread (cmacs-ai-libresearch.c);
+ * the eval below waits for it by polling with accept-process-output,
+ * which keeps process I/O alive and, unlike sit-for, does not read
+ * events -- this dispatch binds inhibit-interaction, under which
+ * read-event signals.  The Lisp thread is still occupied for the wait,
+ * which for ai_research is minutes: the descriptions say so.
+ *
+ * Strings from the caller are spliced into the form through
+ * cmacs_dispatch_lisp_escape, never g_strescape (whose octal escapes
+ * the reader turns into raw bytes).  Integers are formatted by us.
+ */
+
+/* Run the research-library FORM (already escaped) and wrap its result.
+ * cmacs-ai-research-sync-text answers "error: ..." for a failure, which
+ * becomes an MCP error result. */
+static McpToolResult *
+cmacs_mcp_ai__research_eval (const gchar *form, const gchar *what)
+{
+  g_autoptr (GError) err = NULL;
+  g_autofree gchar *expr = g_strdup_printf (
+    "(condition-case e"
+    " (progn (require 'cmacs-ai-research) %s)"
+    " (error (format \"error: %%s\" (error-message-string e))))",
+    form);
+  g_autofree gchar *res = cmacs_dispatch_eval_string (expr, &err);
+  gboolean failed = res == NULL || g_str_has_prefix (res, "error: ");
+  McpToolResult *r = mcp_tool_result_new (failed);
+
+  mcp_tool_result_add_text (r,
+    res ? res : (err ? err->message : what));
+  return r;
+}
+
+static McpToolResult *
+handle_ai_research (McpServer *server, const gchar *name,
+                    JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *question = json_object_get_string_member_with_default (
+    arguments, "question", NULL);
+  gboolean deep = json_object_has_member (arguments, "deep")
+    ? json_object_get_boolean_member_with_default (arguments, "deep", FALSE)
+    : FALSE;
+  gint64 pages = json_object_has_member (arguments, "pages")
+    ? json_object_get_int_member_with_default (arguments, "pages", 0) : 0;
+
+  if (question == NULL || *question == '\0')
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_research: missing 'question'");
+      return r;
+    }
+  if (pages < 0 || pages > 20)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_research: 'pages' must be 1-20");
+      return r;
+    }
+
+  g_autofree gchar *q_esc = cmacs_dispatch_lisp_escape (question);
+  g_autofree gchar *pages_arg = pages > 0
+    ? g_strdup_printf (" :pages %d", (int) pages) : g_strdup ("");
+  g_autofree gchar *form = g_strdup_printf (
+    "(cmacs-ai-research-sync-text 'research \"%s\"%s%s)",
+    q_esc, deep ? " :deep t" : "", pages_arg);
+  return cmacs_mcp_ai__research_eval (form, "ai_research failed");
+}
+
+static McpToolResult *
+handle_ai_web_fetch (McpServer *server, const gchar *name,
+                     JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *url = json_object_get_string_member_with_default (
+    arguments, "url", NULL);
+  const gchar *archive = json_object_get_string_member_with_default (
+    arguments, "archive", NULL);
+  gint64 max_chars = json_object_has_member (arguments, "max_chars")
+    ? json_object_get_int_member_with_default (arguments, "max_chars", 0) : 0;
+
+  if (url == NULL || *url == '\0')
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_web_fetch: missing 'url'");
+      return r;
+    }
+  /* Checked here rather than left to the primitive so the caller gets
+   * the vocabulary back, not a Lisp error dump. */
+  if (archive != NULL && *archive != '\0'
+      && g_strcmp0 (archive, "never") != 0
+      && g_strcmp0 (archive, "fallback") != 0
+      && g_strcmp0 (archive, "only") != 0)
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r,
+        "ai_web_fetch: 'archive' must be never, fallback or only");
+      return r;
+    }
+  if (max_chars != 0 && (max_chars < 100 || max_chars > 1000000))
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r,
+        "ai_web_fetch: 'max_chars' must be 100-1000000");
+      return r;
+    }
+
+  g_autofree gchar *url_esc = cmacs_dispatch_lisp_escape (url);
+  g_autofree gchar *archive_arg = archive != NULL && *archive != '\0'
+    ? g_strdup_printf (" :archive \"%s\"", archive)   /* one of three literals */
+    : g_strdup ("");
+  g_autofree gchar *max_arg = max_chars > 0
+    ? g_strdup_printf (" :max-chars %d", (int) max_chars) : g_strdup ("");
+  g_autofree gchar *form = g_strdup_printf (
+    "(cmacs-ai-research-sync-text 'fetch \"%s\"%s%s)",
+    url_esc, archive_arg, max_arg);
+  return cmacs_mcp_ai__research_eval (form, "ai_web_fetch failed");
+}
+
+static McpToolResult *
+handle_ai_lql (McpServer *server, const gchar *name,
+               JsonObject *arguments, gpointer user_data)
+{
+  (void) server; (void) name; (void) user_data;
+  const gchar *query = json_object_get_string_member_with_default (
+    arguments, "query", NULL);
+  gboolean explain = json_object_has_member (arguments, "explain")
+    ? json_object_get_boolean_member_with_default (arguments, "explain", FALSE)
+    : FALSE;
+
+  if (query == NULL || *query == '\0')
+    {
+      McpToolResult *r = mcp_tool_result_new (TRUE);
+      mcp_tool_result_add_text (r, "ai_lql: missing 'query'");
+      return r;
+    }
+
+  g_autofree gchar *q_esc = cmacs_dispatch_lisp_escape (query);
+  g_autofree gchar *form = g_strdup_printf (
+    "(cmacs-ai-research-sync-text 'lql \"%s\" :max-rows 100%s)",
+    q_esc, explain ? " :explain t" : "");
+  return cmacs_mcp_ai__research_eval (form, "ai_lql failed");
+}
+
 void
 cmacs_mcp_tools_ai_register (McpServer *server)
 {
@@ -501,6 +650,63 @@ cmacs_mcp_tools_ai_register (McpServer *server)
     "}}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_ai_open_chat, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("ai_research",
+    "Research a question on the web with libresearch and return a cited "
+    "answer: the answer with numbered citations [n], then the sources "
+    "(title, URL).  Needs a libresearch server (cmacs-ai-libresearch-url). "
+    "'deep' lets the server run follow-up searches; 'pages' (1-20) is how "
+    "many pages it reads.  WARNING: a run takes minutes, and the cmacs "
+    "Lisp thread waits for it (the network runs on a worker thread).");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"question\":{\"type\":\"string\",\"description\":\"The question\"},"
+    "\"deep\":{\"type\":\"boolean\","
+    "\"description\":\"Run follow-up searches\"},"
+    "\"pages\":{\"type\":\"integer\",\"description\":\"Pages to read, 1-20\"}"
+    "},\"required\":[\"question\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_ai_research, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("ai_web_fetch",
+    "Read a web page's text through libresearch (the server applies its "
+    "own SSRF guard).  'archive' is never (default), fallback (use the "
+    "Wayback Machine when the live page fails) or only; 'max_chars' "
+    "(100-1000000) caps the text.  Returns title, URL, the archived copy "
+    "if one stood in, then the text.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"url\":{\"type\":\"string\",\"description\":\"Page URL\"},"
+    "\"archive\":{\"type\":\"string\","
+    "\"enum\":[\"never\",\"fallback\",\"only\"],"
+    "\"description\":\"Wayback Machine policy\"},"
+    "\"max_chars\":{\"type\":\"integer\",\"description\":\"Longest text\"}"
+    "},\"required\":[\"url\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_ai_web_fetch, NULL, NULL);
+  g_object_unref (tool);
+
+  tool = mcp_tool_new ("ai_lql",
+    "Run an LQL query on the libresearch server and return its rows "
+    "(at most 100 shown).  LQL pipes search results: "
+    "search \"glib\", category: CODE | filter extra.stars > 100 | fields "
+    "title, url -- or the shorthand gtk docs | filter "
+    "site(\"docs.gtk.org\").  'explain' returns the plan without "
+    "running it.  An invalid query reports the server's position and "
+    "caret excerpt.");
+  schema = cmacs_mcp_schema_from_string (
+    "{\"type\":\"object\",\"properties\":{"
+    "\"query\":{\"type\":\"string\",\"description\":\"LQL query\"},"
+    "\"explain\":{\"type\":\"boolean\","
+    "\"description\":\"Plan without running\"}"
+    "},\"required\":[\"query\"]}");
+  mcp_tool_set_input_schema (tool, schema);
+  mcp_tool_set_read_only_hint (tool, TRUE);
+  mcp_server_add_tool (server, tool, handle_ai_lql, NULL, NULL);
   g_object_unref (tool);
 }
 

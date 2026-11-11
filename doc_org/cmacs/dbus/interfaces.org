@@ -154,7 +154,7 @@ on the matching =HAVE_CMACS_*= build flag:
 | =org.cmacs.Editor1.Edit=       | =cmacs-dbus-iface-edit.c=       | =edit_buffer= family        |
 | =org.cmacs.Editor1.Input=      | =cmacs-dbus-iface-input.c=      | =send_keys=, =execute_command= |
 | =org.cmacs.Editor1.Debug=      | =cmacs-dbus-iface-debug.c=      | =backtrace=, =memory_info=, profiler, describe_* |
-| =org.cmacs.Editor1.Ai=         | =cmacs-dbus-iface-ai.c=         | =ai_*=                      |
+| =org.cmacs.Editor1.Ai=         | =cmacs-dbus-iface-ai.c=         | =ai_*= (=Research=, =WebFetch=, =Lql= mirror =ai_research=, =ai_web_fetch=, =ai_lql=) |
 | =org.cmacs.Editor1.Brigade=    | =cmacs-dbus-iface-brigade.c=    | =agent_*= (spawn/status/result/cancel/list/agents/providers/models) and the mailbox =agent_send/inbox/drop/log/close= |
 | =org.cmacs.Editor1.Gsurf=      | =cmacs-dbus-iface-gsurf.c=      | =gsurf_*= (29 tools; see below) |
 | =org.cmacs.Editor1.GnusEye=    | =cmacs-dbus-iface-gnuseye.c=    | =gnuseye_*=                 |

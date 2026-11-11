@@ -1023,26 +1023,46 @@ An absolute path from the model is always used as given.  Returns t.  */)
 
 DEFUN ("cmacs-ai-tools-set-search-provider",
        Fcmacs_ai_tools_set_search_provider,
-       Scmacs_ai_tools_set_search_provider, 2, 3, 0,
+       Scmacs_ai_tools_set_search_provider, 2, 4, 0,
        doc: /* Enable the web_search tool on EXECUTOR using PROVIDER.
 
-PROVIDER is one of the symbols `auto', `brave', `bing', or
-`duckduckgo'.  `auto' uses Brave or Bing when the corresponding API
-key is available and otherwise falls back to the keyless DuckDuckGo
-backend (best-effort, no SLA).  `brave' and `bing' require an API
-key: the optional API-KEY string, or else the BRAVE_API_KEY /
-BING_API_KEY environment variable.  `duckduckgo' needs no key.
+PROVIDER is one of the symbols `auto', `libresearch', `brave', `bing',
+or `duckduckgo'.
+
+`auto' is ai-glib's own choice from the environment: a libresearch
+server when LIBRESEARCH_URL is set (with LIBRESEARCH_TOKEN as its
+bearer token), else Brave when BRAVE_API_KEY is set, else Bing when
+BING_API_KEY is set, else the keyless DuckDuckGo backend (best-effort,
+no SLA).  Setting LIBRESEARCH_URL therefore changes what `auto' means.
+
+`libresearch' is a libresearchd server (self-hosted metasearch).
+ENDPOINT is its base URL; nil falls back to LIBRESEARCH_URL and then
+to ai-glib's default, http://127.0.0.1:8087.  API-KEY is the server's
+bearer token; nil falls back to LIBRESEARCH_TOKEN, and a server that
+wants none needs neither.  Nothing is contacted here, so an unreachable
+server shows up as a failing search, not as an error from this call.
+
+`brave' and `bing' require an API key: the optional API-KEY string, or
+else the BRAVE_API_KEY / BING_API_KEY environment variable.
+`duckduckgo' needs no key.  ENDPOINT is ignored by every provider but
+`libresearch'.
 
 Registers ai-glib's web_search tool on EXECUTOR so the model can use
 it -- and, when it asks, the tool's count/freshness/safesearch/
 country/language/site/fetch_content options.  Returns t, or signals
-an error when a keyed provider has no key or PROVIDER is unknown.  */)
-  (Lisp_Object executor, Lisp_Object provider, Lisp_Object api_key)
+an error when a keyed provider has no key or PROVIDER is unknown.
+
+Lisp callers normally go through `cmacs-ai-set-search-provider', which
+reads `cmacs-ai-libresearch-url' and the auth-source token first.  */)
+  (Lisp_Object executor, Lisp_Object provider, Lisp_Object api_key,
+   Lisp_Object endpoint)
 {
   CHECK_FIXNAT (executor);
   CHECK_SYMBOL (provider);
   if (!NILP (api_key))
     CHECK_STRING (api_key);
+  if (!NILP (endpoint))
+    CHECK_STRING (endpoint);
 
   AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
   if (exec == NULL) error ("cmacs-ai: bad executor handle");
@@ -1056,6 +1076,18 @@ an error when a keyed provider has no key or PROVIDER is unknown.  */)
       if (sp == NULL)
         error ("cmacs-ai: search provider unavailable: %s",
                err ? err->message : "unknown");
+    }
+  else if (EQ (provider, intern ("libresearch")))
+    {
+      const gchar *url = !NILP (endpoint) && SCHARS (endpoint) > 0
+                         ? SSDATA (endpoint) : g_getenv ("LIBRESEARCH_URL");
+      const gchar *key = !NILP (api_key) ? SSDATA (api_key)
+                                         : g_getenv ("LIBRESEARCH_TOKEN");
+
+      /* NULL or empty means ai-glib's AI_LIBRESEARCH_DEFAULT_ENDPOINT;
+       * an empty token means "send no Authorization header".  */
+      sp = AI_SEARCH_PROVIDER (ai_libresearch_search_new (
+             url, (key != NULL && *key != '\0') ? key : NULL));
     }
   else if (EQ (provider, intern ("duckduckgo")))
     {

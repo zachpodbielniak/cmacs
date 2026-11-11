@@ -195,13 +195,13 @@ here.")
   (pcase format
     ('opencode "mcp-config-opencode")
     ('grok     "mcp-config-grok")
-    ;; ai-glib's codex client declares no MCP endpoint kind, so nothing
-    ;; is ever handed this string: codex reads CODEX_HOME/config.toml
-    ;; and has no flag naming another file, so both callers deliver an
-    ;; overlay home instead -- the brigade's `codex' worker and, since
-    ;; it grew the same branch, the harness.  The entry stays because it
-    ;; names the dialect correctly, and the day the client declares a
-    ;; kind this is the string it will declare.
+    ;; ai-glib >= 0.10 accepts this kind (it renders `-c' arguments),
+    ;; but that dialect carries only a command and its args: a server
+    ;; with `env' is skipped, and the brigade server's scoped socket and
+    ;; token live in `env'.  So both callers -- the brigade's `codex'
+    ;; worker and the harness -- still deliver an overlay CODEX_HOME
+    ;; instead (which also keeps the token off a world-readable argv).
+    ;; The entry stays because it names the dialect correctly.
     ('codex    "mcp-config-codex")
     (_         "mcp-config")))
 

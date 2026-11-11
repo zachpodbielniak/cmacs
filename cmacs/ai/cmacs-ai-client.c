@@ -140,6 +140,97 @@ cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov)
     cmacs_ai__apply_endpoint (ep, prov);
 }
 
+/* ── CLI accounts (`cmacs-ai-cli-config-dirs') ──────────────────────
+ *
+ * A CLI agent keeps its login in a config directory: CLAUDE_CONFIG_DIR,
+ * CODEX_HOME, GROK_HOME, opencode's XDG roots.  ai-glib knows which
+ * variable each CLI reads (ai_cli_client_set_config_dir), so cmacs only
+ * has to say which directory -- and say it at every place a client is
+ * built, or a second account works in a chat and not in the harness.
+ *
+ * Lookup order for one client: an entry keyed by the exact symbol it was
+ * built from (a user-named provider, or an alias such as `codex'), then
+ * an entry keyed by ai-glib's own name for its type, so a client built
+ * from the default provider (no symbol at all) still finds its account. */
+
+/* The directory configured for SYM / PROV's type, or Qnil.  */
+static Lisp_Object
+cmacs_ai__cli_config_dir_for (Lisp_Object sym, gpointer prov)
+{
+  Lisp_Object alist, tail, canonical = Qnil;
+
+  alist = find_symbol_value (intern ("cmacs-ai-cli-config-dirs"));
+  if (!CONSP (alist))
+    return Qnil;
+
+  if (AI_IS_PROVIDER (prov))
+    canonical = intern (ai_provider_type_to_string (
+                          ai_provider_get_provider_type (AI_PROVIDER (prov))));
+
+  /* Exact symbol first.  */
+  if (SYMBOLP (sym) && !NILP (sym))
+    for (tail = alist; CONSP (tail); tail = XCDR (tail))
+      {
+        Lisp_Object entry = XCAR (tail);
+        if (CONSP (entry) && EQ (XCAR (entry), sym))
+          return XCDR (entry);
+      }
+
+  /* Then the type's canonical name -- and `codex', the alias every
+   * other table here accepts for `codex-cli'.  */
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      if (!CONSP (entry))
+        continue;
+      if (EQ (XCAR (entry), canonical)
+          || (EQ (canonical, intern ("codex-cli"))
+              && EQ (XCAR (entry), intern ("codex"))))
+        return XCDR (entry);
+    }
+  return Qnil;
+}
+
+gchar *
+cmacs_ai_apply_cli_config_dir (Lisp_Object sym, gpointer prov)
+{
+  Lisp_Object dir, enc;
+  g_autoptr (GError) gerror = NULL;
+  const gchar *type_name;
+
+  if (prov == NULL)
+    return NULL;
+  dir = cmacs_ai__cli_config_dir_for (sym, prov);
+  if (NILP (dir))
+    return NULL;
+
+  type_name = G_OBJECT_TYPE_NAME (prov);
+
+  if (!STRINGP (dir))
+    return g_strdup_printf ("cmacs-ai-cli-config-dirs: the entry for %s "
+                            "is not a directory name", type_name);
+
+  /* An HTTP provider spawns nothing, so there is no account to move:
+   * say so rather than leave the user believing two logins exist.  */
+  if (!AI_IS_CLI_CLIENT (prov))
+    return g_strdup_printf ("cmacs-ai-cli-config-dirs: %s is an HTTP "
+                            "provider; a config directory only applies "
+                            "to CLI agents", type_name);
+
+  if (!ai_cli_client_supports_config_dir (AI_CLI_CLIENT (prov)))
+    return g_strdup_printf ("cmacs-ai-cli-config-dirs: %s cannot run "
+                            "under a separate account (it keeps its "
+                            "login under $HOME)", type_name);
+
+  enc = ENCODE_FILE (Fexpand_file_name (dir, Qnil));
+  if (!ai_cli_client_set_config_dir (AI_CLI_CLIENT (prov), SSDATA (enc),
+                                     &gerror))
+    return g_strdup_printf ("cmacs-ai-cli-config-dirs: %s",
+                            gerror != NULL ? gerror->message
+                                           : "could not set the directory");
+  return NULL;
+}
+
 static AiProvider *
 cmacs_ai__make_client (Lisp_Object provider_sym)
 {
@@ -247,6 +338,16 @@ Free with `cmacs-ai-client-free'.  */)
   AiProvider *p = cmacs_ai__make_client (provider);
   if (p == NULL)
     error ("cmacs-ai: unknown provider %s", SSDATA (SYMBOL_NAME (provider)));
+  {
+    gchar *why = cmacs_ai_apply_cli_config_dir (provider, p);
+    if (why != NULL)
+      {
+        Lisp_Object msg = build_string (why);
+        g_free (why);
+        g_object_unref (p);
+        xsignal1 (Quser_error, msg);
+      }
+  }
   if (!NILP (model))
     {
       CHECK_STRING (model);

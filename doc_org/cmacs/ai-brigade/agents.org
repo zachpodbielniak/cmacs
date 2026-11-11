@@ -183,6 +183,12 @@ an option: it is the user's, agents run concurrently, and a crash would
 leave a server declared there for every later codex run. The overlay
 lives in =cmacs-brigade-runtime-dir=, not the shared temp directory,
 because codex refuses to create its PATH helpers under one.
+The real home it links from is the account named for =codex-cli= (or
+=codex=) in =cmacs-ai-cli-config-dirs= when there is one, else
+=CODEX_HOME=, else =~/.codex=.  ai-glib's =ai_mcp_config_endpoint_for=
+is not used here: its codex dialect is =-c= arguments, which cannot carry
+the server's =env=, so the brigade's token-bearing server would be
+skipped.
 
 It reports as *JSONL*, not one object. =codex exec --json= streams an
 event per line, so the worker reads =thread.started= for the session id,

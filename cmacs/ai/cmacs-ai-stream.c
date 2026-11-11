@@ -449,22 +449,41 @@ cmacs_ai__simple_for (Lisp_Object provider, Lisp_Object model)
       model_str = SSDATA (model);
     }
 
+  AiSimple *ai;
+
   if (!NILP (provider))
     {
-      AiSimple *ai = ai_simple_new_with_provider (
+      ai = ai_simple_new_with_provider (
         cmacs_ai__provider_type (provider), model_str);
       /* A named endpoint is the type plus its own URL and key, and the
        * type is all that reached the factory. */
       if (ai != NULL)
         cmacs_ai_apply_endpoint_settings (provider,
                                           ai_simple_get_provider (ai));
-      return ai;
     }
-  if (model_str != NULL)
-    return ai_simple_new_with_provider
+  else if (model_str != NULL)
+    ai = ai_simple_new_with_provider
       (ai_config_get_default_provider (ai_config_get_default ()),
        model_str);
-  return ai_simple_new ();
+  else
+    ai = ai_simple_new ();
+
+  /* A CLI agent's account, from `cmacs-ai-cli-config-dirs'.  Also for
+   * the default provider (PROVIDER nil): the lookup falls back to the
+   * client type's own name. */
+  if (ai != NULL)
+    {
+      gchar *why = cmacs_ai_apply_cli_config_dir (
+                     provider, ai_simple_get_provider (ai));
+      if (why != NULL)
+        {
+          Lisp_Object msg = build_string (why);
+          g_free (why);
+          g_object_unref (ai);
+          xsignal1 (Quser_error, msg);
+        }
+    }
+  return ai;
 }
 
 DEFUN ("cmacs-ai-prompt-sync", Fcmacs_ai_prompt_sync,

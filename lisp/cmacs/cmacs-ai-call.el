@@ -42,6 +42,9 @@
 
 (require 'cmacs)
 
+(declare-function cmacs-ai-set-search-provider "cmacs-ai"
+                  (executor provider &optional api-key))
+
 (defun cmacs-ai-define-tool (name description params callback)
   "Return a tool spec usable in `cmacs-ai-call' :tools.
 NAME and DESCRIPTION are strings.  PARAMS is a list of parameter
@@ -88,7 +91,8 @@ KEYS is a plist:
   :mcp-bridge BOOL     expose the cmacs MCP tool surface (needs
                        --with-cmacs-mcp).
   :search-provider X   enable a web_search tool via backend X (a symbol:
-                       auto/brave/bing/duckduckgo).
+                       auto/libresearch/brave/bing/duckduckgo; see
+                       `cmacs-ai-search-provider').
   :directory DIR       run the built-in tools in DIR: relative paths
                        resolve against it and shell commands run there.
                        Without it they use Emacs's own directory, which
@@ -122,7 +126,10 @@ the call -- keep tool loops short, especially under `emacs --gowl'."
                   (error "cmacs-ai-call :mcp-bridge requires --with-cmacs-mcp"))
                 (cmacs-ai-tools-register-mcp-bridge executor))
               (when search
-                (cmacs-ai-tools-set-search-provider executor search))
+                ;; Through cmacs-ai's front door, which resolves the
+                ;; libresearch URL and token the primitive cannot.
+                (require 'cmacs-ai)
+                (cmacs-ai-set-search-provider executor search))
               (when dir
                 (cmacs-ai-tools-set-working-directory executor dir))
               (dolist (spec tools)

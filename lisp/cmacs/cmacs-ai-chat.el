@@ -364,10 +364,9 @@ ai-glib's web_search backend.  Shared by `cmacs-ai-chat--init' and
              cmacs-ai-search-provider
              (fboundp 'cmacs-ai-tools-set-search-provider))
     (condition-case err
-        (cmacs-ai-tools-set-search-provider
+        (cmacs-ai-set-search-provider
          cmacs-ai-chat-tool-executor
-         cmacs-ai-search-provider
-         cmacs-ai-search-api-key)
+         cmacs-ai-search-provider)
       (error
        (message "cmacs-ai: web_search unavailable: %S" err))))
   ;; Let other subsystems contribute tools.  Runs last so a subsystem
@@ -505,21 +504,20 @@ so filesystem tools resolve against the same tree."
 
 (defun cmacs-ai-chat-set-search-provider (provider &optional api-key)
   "Switch the web_search backend for the current chat buffer to PROVIDER.
-Interactively prompts for PROVIDER (auto/brave/bing/duckduckgo).
+Interactively prompts for PROVIDER, one of `cmacs-ai-search-providers'.
 Re-registers ai-glib's web_search tool on this buffer's executor;
 takes effect on the next send.  Optional API-KEY overrides
-`cmacs-ai-search-api-key' / the environment for keyed providers."
+`cmacs-ai-search-api-key' / the environment for keyed providers, and
+the token for `libresearch'."
   (interactive
    (list (intern (completing-read
                   "web_search provider: "
-                  '("auto" "brave" "bing" "duckduckgo") nil t))))
+                  (mapcar #'symbol-name cmacs-ai-search-providers) nil t))))
   (unless cmacs-ai-chat-tool-executor
     (user-error "This chat buffer has no tool executor"))
   (unless (fboundp 'cmacs-ai-tools-set-search-provider)
     (user-error "cmacs was built without web_search support"))
-  (cmacs-ai-tools-set-search-provider
-   cmacs-ai-chat-tool-executor provider
-   (or api-key cmacs-ai-search-api-key))
+  (cmacs-ai-set-search-provider cmacs-ai-chat-tool-executor provider api-key)
   (setq-local cmacs-ai-search-provider provider)
   (message "cmacs-ai: web_search now uses %s" provider))
 
@@ -1297,6 +1295,7 @@ result, and continue the stream until the model stops."
           ;; make sure the shipped ones are on the hook before it runs.
           (require 'cmacs-ai-image-chat nil 'noerror)
           (require 'cmacs-ai-ingest nil 'noerror)
+          (require 'cmacs-ai-research nil 'noerror)
           (run-hook-with-args-until-success
            'cmacs-ai-chat-slash-command-functions text))
         ;; `/image PROMPT', `/ingest URL' and friends act directly, with
