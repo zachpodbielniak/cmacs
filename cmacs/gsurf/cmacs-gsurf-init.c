@@ -5,8 +5,8 @@
  *
  * Brings up the gsurf runtime (library + windowing backend + the
  * process GsurfApplication/GsurfConfig + module manager) on first use,
- * and prepends the bundled Gsurf-0.1 typelib directory to the
- * GObject-Introspection search path so (gi-require "Gsurf" "0.1") and
+ * and prepends the bundled Gsurf-0.5 typelib directory to the
+ * GObject-Introspection search path so (gi-require "Gsurf" "0.5") and
  * the bacon `cmacsgi' builtin work with no GI_TYPELIB_PATH setup.
  *
  * Config policy: cmacs-gsurf does NOT read gsurf's own user config

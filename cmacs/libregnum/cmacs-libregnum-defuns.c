@@ -17,15 +17,12 @@
 /* lrg-script-binding.h is GLib-only (no raylib/Color conflict) so it is
  * safe to include here alongside lisp.h.  We define LIBREGNUM_COMPILATION
  * to satisfy the "only include via libregnum.h" guard in that header.
- * Define LRG_BUILD_EDITOR to get the symbols (it is always set in our
- * build since liblibregnum.a is built with BUILD_EDITOR=1). */
-#ifndef LRG_BUILD_EDITOR
-#define LRG_BUILD_EDITOR 1
-#endif
+ * Since libregnum 0.9 the level runtime (src/level/) is always built, so
+ * unlike the old src/editor/ path no LRG_BUILD_EDITOR gate applies. */
 #ifndef LIBREGNUM_COMPILATION
 #define LIBREGNUM_COMPILATION
 #endif
-#include "editor/lrg-script-binding.h"
+#include "level/lrg-script-binding.h"
 #undef LIBREGNUM_COMPILATION
 
 #include <math.h>

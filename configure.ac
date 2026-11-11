@@ -1194,7 +1194,11 @@ if test "$with_cmacs_libregnum" != "no"; then
   # girepository-2.0 (GLib's integrated GIRepository 3.0) is the GI runtime
   # libregnum's scripting backend links against since its migration off the
   # legacy libgirepository-1.0.
-  for cmacs_lrg_sm in luajit python3-embed gjs-1.0 girepository-2.0; do
+  # fribidi: libregnum (>= 0.9) auto-enables bidi text shaping in
+  # lrg-paint-font.c when `pkg-config fribidi' succeeds (FRIBIDI ?= 1 in its
+  # config.mk), so the same probe decides here -- the whole-archived objects
+  # then call fribidi_* and need -lfribidi after the archive.
+  for cmacs_lrg_sm in luajit python3-embed gjs-1.0 girepository-2.0 fribidi; do
     if $PKG_CONFIG --exists "$cmacs_lrg_sm" 2>/dev/null; then
       CMACS_LIBREGNUM_LIBS="$CMACS_LIBREGNUM_LIBS `$PKG_CONFIG --libs $cmacs_lrg_sm`"
     fi
@@ -1653,7 +1657,7 @@ if test "$with_cmacs_gsurf" != "no"; then
   fi
   # gsurf is sourced from the top-level deps/gsurf submodule and built
   # STATIC=1 (libgsurf.a whole-archived into temacs), BUILD_GIR=1
-  # (Gsurf-0.1.typelib for cmacsgi/GI), GTK_BACKEND=gtk3 (matches pgtk +
+  # (Gsurf-0.5.typelib for cmacsgi/GI), GTK_BACKEND=gtk3 (matches pgtk +
   # xwidgets' webkit2gtk-4.1 stack).  System-package mode is not
   # supported -- one source of truth, one .a on the link line.
   PKG_CHECK_MODULES([CMACS_GSURF_DEPS],

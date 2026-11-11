@@ -18,7 +18,7 @@ history, dark mode, user scripts, and ~25 more.
 
 You can drive gsurf from:
 - *Elisp* — =M-x cmacs-gsurf= and the =cmacs-gsurf-*= commands/DEFUNs.
-- *cmacsgi / GObject Introspection* — =(gi-require "Gsurf" "0.1")= then
+- *cmacsgi / GObject Introspection* — =(gi-require "Gsurf" "0.5")= then
   call the gsurf API; also from the bacon =cmacsgi= builtin.
 - *MCP* — =gsurf_open=, =gsurf_navigate=, =gsurf_current=, … tools.
 - *cmacs-ai* — the MCP =gsurf_*= tools are in the default chat tool tier.
@@ -32,7 +32,7 @@ You can drive gsurf from:
 
 Requires =--with-cmacs-glib= and =--with-pgtk= (the live widget embed
 parents into the pgtk frame's =GtkFixed=).  =--with-cmacs-mcp= adds the
-=gsurf_*= MCP tools; =--with-cmacs-gi= makes the bundled =Gsurf-0.1=
+=gsurf_*= MCP tools; =--with-cmacs-gi= makes the bundled =Gsurf-0.5=
 typelib resolvable for cmacsgi.
 
 =--with-cmacs-gsurf-lrg= additionally builds the GTK-free *libregnum
@@ -552,7 +552,7 @@ search path.  Inspect / toggle at runtime from Elisp:
 path, so no =GI_TYPELIB_PATH= setup is needed:
 
 #+begin_src emacs-lisp
-(gi-require "Gsurf" "0.1")
+(gi-require "Gsurf" "0.5")
 #+end_src
 
 The same works from the bacon =cmacsgi= builtin (=M-x bacon=).

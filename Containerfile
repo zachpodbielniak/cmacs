@@ -187,7 +187,7 @@ RUN set -eux; \
             gstreamer1-libav \
             pipewire-devel pipewire-libs pulseaudio-libs-devel \
             cmake espeak-ng python3-pip \
-            mesa-libGL-devel mesa-libEGL-devel openxr-devel openssl-devel \
+            mesa-libGL-devel mesa-libEGL-devel openxr-devel openssl-devel fribidi-devel \
             libX11-devel libXrandr-devel libXcursor-devel \
             libXinerama-devel libXi-devel \
             ffmpeg-free wl-clipboard \
@@ -234,7 +234,7 @@ RUN set -eux; \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav \
             libpipewire-0.3-dev libpulse-dev \
             cmake espeak-ng python3-pip python3-venv \
-            libgl1-mesa-dev libegl1-mesa-dev libopenxr-dev libssl-dev libpng-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libopenxr-dev libssl-dev libpng-dev libfribidi-dev \
             libx11-dev libxrandr-dev libxcursor-dev \
             libxinerama-dev libxi-dev \
             ffmpeg wl-clipboard \
@@ -298,7 +298,7 @@ RUN set -eux; \
             gst-plugins-ugly gst-libav \
             pipewire libpulse \
             cmake espeak-ng python-pip \
-            mesa libglvnd openxr openssl libpng \
+            mesa libglvnd openxr openssl libpng fribidi \
             libx11 libxrandr libxcursor libxinerama libxi \
             ffmpeg wl-clipboard \
             poppler \

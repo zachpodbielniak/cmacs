@@ -59,10 +59,10 @@
                            (cmacs-gsurf--normalize-url "hello world"))))
 
 (ert-deftest cmacs-gsurf-gi-typelib ()
-  "The bundled Gsurf-0.1 typelib resolves via GObject Introspection."
+  "The bundled Gsurf-0.5 typelib resolves via GObject Introspection."
   (skip-unless (and (fboundp 'cmacs-gsurf-supported-p)
                     (fboundp 'gi-require)))
-  (should (gi-require "Gsurf" "0.1")))
+  (should (gi-require "Gsurf" "0.5")))
 
 (ert-deftest cmacs-gsurf-config-synthesis ()
   "`cmacs-gsurf-modules' is synthesised into a gsurf modules: YAML doc."

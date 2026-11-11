@@ -1476,7 +1476,7 @@ $(CMACS_VIDSTUDIO_OBJ): $(CMACS_LIBREGNUM_STATIC_LIB)
 endif
 
 ## gsurf: built STATIC=1 (libgsurf.a whole-archived into temacs),
-## BUILD_GIR=1 (Gsurf-0.1.typelib for cmacsgi), GTK_BACKEND=gtk3
+## BUILD_GIR=1 (Gsurf-0.5.typelib for cmacsgi), GTK_BACKEND=gtk3
 ## (matches pgtk + xwidgets' webkit2gtk-4.1).  The default `all' target
 ## also builds the stock modules into deps/gsurf/build/$(CMACS_DEP_BUILDTYPE)/modules
 ## and generates gsurf-version.h (which gsurf.h needs), so make the
@@ -1495,6 +1495,9 @@ endif
 ## override) rather than gsurf's own bundled deps/libregnum, so only ONE
 ## libregnum/graylib/raylib is linked into temacs (the static-lib dedup
 ## invariant).  gsurf builds standalone against its own copy by default.
+## LRG_LIBREGNUM_LIB: gsurf >= 0.5.10 links its --lrg=3d scene against
+## $(LIBREGNUM_DIR)/build/release/... by default; name cmacs's archive so a
+## debug libregnum build type does not send gsurf off to build its own.
 $(CMACS_GSURF_STATIC_LIB):
 	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/gsurf STATIC=1 BUILD_GIR=1 GTK_BACKEND=gtk3 \
 	    CRISPY_DIR=$(CMACS_CANON_CRISPY) \
@@ -1502,7 +1505,8 @@ $(CMACS_GSURF_STATIC_LIB):
 	    MCP_GLIB_DIR=$(CMACS_CANON_MCP_GLIB) \
 	    YAMLGLIB_STATIC=$(CMACS_CANON_YAML_GLIB_STATIC) \
 	  $(if $(filter yes,$(CMACS_GSURF_LRG)),LRG_BACKEND=1 \
-	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum))
+	    LIBREGNUM_DIR=$(abspath $(srcdir)/../deps/libregnum) \
+	    LRG_LIBREGNUM_LIB=$(abspath $(CMACS_LIBREGNUM_STATIC_LIB)))
 $(CMACS_GSURF_OBJ): $(CMACS_GSURF_STATIC_LIB)
 
 ## Build the cmacs-specific gsurf modules (.so loaded at runtime by the

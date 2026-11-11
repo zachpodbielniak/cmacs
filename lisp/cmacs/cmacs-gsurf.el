@@ -15,7 +15,7 @@
 ;; gsurf's own modules (search engines, ad-block, vim modal navigation,
 ;; history, dark mode, ...) run in-process and apply to these views;
 ;; control is also available from Elisp, cmacsgi (GObject
-;; Introspection: (gi-require "Gsurf" "0.1")), MCP, and cmacs-ai.
+;; Introspection: (gi-require "Gsurf" "0.5")), MCP, and cmacs-ai.
 
 ;;; Code:
 

@@ -11367,9 +11367,9 @@ Inspect and toggle at runtime with @code{cmacs-gsurf-modules-list} and
 
 @section cmacsgi / introspection
 
-@code{init_cmacs_gsurf} prepends the bundled @file{Gsurf-0.1.typelib}
+@code{init_cmacs_gsurf} prepends the bundled @file{Gsurf-0.5.typelib}
 directory to the GObject-Introspection search path, so
-@code{(gi-require "Gsurf" "0.1")} and the Bacon @code{cmacsgi} builtin
+@code{(gi-require "Gsurf" "0.5")} and the Bacon @code{cmacsgi} builtin
 work with no @env{GI_TYPELIB_PATH} setup.
 
 @section MCP and cmacs-ai

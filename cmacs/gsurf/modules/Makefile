@@ -53,7 +53,12 @@ MODULES     := $(patsubst %.c,$(OUTDIR)/%.so,$(SRCS))
 
 all: $(MODULES)
 
-$(OUTDIR)/%.so: %.c
+# Rebuild a module when any gsurf header changes: a submodule bump that
+# grows a vtable or a struct otherwise leaves the old .so loading against
+# the new temacs (the rule used to name only its own .c).
+GSURF_HDRS  := $(shell find $(GSURF_DIR)/src -name '*.h' 2>/dev/null)
+
+$(OUTDIR)/%.so: %.c $(GSURF_HDRS)
 	@mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 

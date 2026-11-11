@@ -309,8 +309,10 @@ set_packages_fedora () {
 	# screenshot path and by libregnum.
 	# openxr-devel: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
 	# openssl-devel: libregnum links OpenSSL (MMO datagram TLS).
+	# fribidi-devel: libregnum >= 0.9 shapes bidi text with fribidi when
+	# pkg-config finds it (optional; without it text stays left-to-right).
 	PKGS_LIBREGNUM=(mesa-libGL-devel mesa-libEGL-devel openxr-devel openssl-devel libpng-devel
-	                libX11-devel libXrandr-devel
+	                fribidi-devel libX11-devel libXrandr-devel
 	                libXcursor-devel libXinerama-devel libXi-devel)
 	# libregnum scripting backends for the in-Emacs level editor: luajit-devel
 	# (Lua), python3-devel (Python), gjs-devel (JavaScript; pulls mozjsNN-devel).
@@ -449,7 +451,7 @@ set_packages_debian () {
 	# libopenxr-dev: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
 	# libssl-dev: libregnum links OpenSSL (MMO datagram TLS).
 	PKGS_LIBREGNUM=(libgl1-mesa-dev libegl1-mesa-dev libopenxr-dev libssl-dev libpng-dev
-	                libx11-dev libxrandr-dev
+	                libfribidi-dev libx11-dev libxrandr-dev
 	                libxcursor-dev libxinerama-dev libxi-dev)
 	# cmacs-cad: OCCT splits into per-module -dev packages on Debian.
 	PKGS_CAD=(libocct-foundation-dev libocct-modeling-data-dev
@@ -529,7 +531,7 @@ set_packages_arch () {
 	# screenshot path and libregnum both require libpng.pc.
 	# openxr: --with-cmacs-lrgvr (emacs --lrg=3dvr in a headset).
 	# openssl: libregnum links OpenSSL (MMO datagram TLS).
-	PKGS_LIBREGNUM=(mesa libglvnd openxr openssl libx11 libxrandr libxcursor libxinerama
+	PKGS_LIBREGNUM=(mesa libglvnd openxr openssl fribidi libx11 libxrandr libxcursor libxinerama
 	                libxi libpng)
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
@@ -569,7 +571,7 @@ set_packages_macos () {
 	PKGS_AUDIO=(pipewire cmake pipx espeak-ng)
 	# macOS: raylib uses Cocoa, not X11.  No extra system deps
 	# beyond Xcode CLT.  Leave empty so PKGS_LIBREGNUM exists.
-	PKGS_LIBREGNUM=()
+	PKGS_LIBREGNUM=(fribidi)
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	# Homebrew's libxml2 is keg-only; pkg-config finds the SDK copy.
@@ -606,7 +608,7 @@ set_packages_freebsd () {
 	            gstreamer1-plugins-bad gstreamer1-plugins-ugly
 	            gstreamer1-plugins-libav)
 	PKGS_AUDIO=(pipewire pulseaudio cmake py39-pipx espeak-ng)
-	PKGS_LIBREGNUM=(mesa-libs libX11 libXrandr libXcursor libXinerama libXi)
+	PKGS_LIBREGNUM=(mesa-libs fribidi libX11 libXrandr libXcursor libXinerama libXi)
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
