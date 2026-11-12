@@ -228,10 +228,19 @@ notify_frame_ready (CmacsLibregnumView *v)
 #endif
 }
 
+/* USER is the view's id, not the view: a buffer can be killed (and its
+ * view destroyed) between the request and this idle, and a raw pointer
+ * then renders through freed memory -- which a view that redraws as
+ * often as the lrgeditor shell does reached in the first test that
+ * killed one.  Ids come from a counter and are never reused, so a
+ * missing entry means exactly "this view is gone". */
 static gboolean
 redraw_idle (gpointer user)
 {
-  CmacsLibregnumView *v = user;
+  CmacsLibregnumView *v = cmacs_libregnum__views
+    ? g_hash_table_lookup (cmacs_libregnum__views, user) : NULL;
+  if (!v)
+    return G_SOURCE_REMOVE;
   if (!g_atomic_int_compare_and_exchange (&v->redraw_pending, 1, 0))
     return G_SOURCE_REMOVE;
   if (!v->render) return G_SOURCE_REMOVE;
@@ -395,7 +404,8 @@ cmacs_libregnum_view_request_redraw (CmacsLibregnumView *v)
 {
   if (!v) return;
   if (g_atomic_int_compare_and_exchange (&v->redraw_pending, 0, 1))
-    g_main_context_invoke (cmacs_glib_get_context (), redraw_idle, v);
+    g_main_context_invoke (cmacs_glib_get_context (), redraw_idle,
+                           GUINT_TO_POINTER (v->view_id));
 }
 
 /* ── Animation clock ─────────────────────────────────────────────── */
