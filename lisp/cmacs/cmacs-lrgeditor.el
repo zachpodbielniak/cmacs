@@ -47,6 +47,9 @@
                   (buffer))
 (declare-function cmacs-lrgeditor--open "cmacs-libregnum-lrgeditor-defuns.c"
                   (buffer path))
+(declare-function cmacs-lrgeditor-can-open-p "cmacs-libregnum-lrgeditor-defuns.c"
+                  (file))
+(declare-function libregnum-rlevel-mode "libregnum" ())
 (declare-function cmacs-lrgeditor--new-project "cmacs-libregnum-lrgeditor-defuns.c"
                   (buffer dir name))
 (declare-function cmacs-lrgeditor--start-server "cmacs-libregnum-lrgeditor-defuns.c"
@@ -82,6 +85,17 @@
 
 
 ;;;; Options.
+
+;; Declared before any function that let-binds them: under lexical
+;; binding a `let' of a not-yet-special symbol is lexical and would not
+;; reach `cmacs-lrgeditor-visit-mode'.
+(defvar cmacs-lrgeditor--visit-as-text nil
+  "Non-nil while a file is being visited that must stay text.")
+
+(defvar-local cmacs-lrgeditor--pending-visit nil
+  "Non-nil in a freshly visited asset buffer the shell may take over.")
+;; A later major-mode change in the same command must not drop the flag.
+(put 'cmacs-lrgeditor--pending-visit 'permanent-local t)
 
 (defgroup cmacs-lrgeditor nil
   "libregnum's lrgeditor shell embedded in cmacs."
@@ -354,8 +368,12 @@ keys typed next reach the editor's keymap."
                      dirs)))))
 
 (defun cmacs-lrgeditor--open-file (file line column)
-  "Visit FILE at LINE and COLUMN for the embedded editor, beside it."
-  (let ((buf (find-file-noselect file)))
+  "Visit FILE at LINE and COLUMN for the embedded editor, beside it.
+The editor asked for the file as text (its \"open in external editor\"),
+so it is visited as text even when it is a type the shell would open
+itself -- see `cmacs-lrgeditor-visit-files'."
+  (let ((buf (let ((cmacs-lrgeditor--visit-as-text t))
+               (find-file-noselect file))))
     (pop-to-buffer buf '((display-buffer-reuse-window
                           display-buffer-use-some-window)
                          (inhibit-same-window . t)))
@@ -376,6 +394,113 @@ keys typed next reach the editor's keymap."
     (setq libregnum-open-file-function #'cmacs-lrgeditor--open-file)
     (libregnum-connect socket)
     (message "libregnum.el connected to %s" socket)))
+
+
+;;;; Visiting files: C-x C-f on an asset opens it in the shell.
+
+(defcustom cmacs-lrgeditor-visit-files t
+  "Whether visiting a libregnum asset interactively opens it in the editor.
+With this on, \\[find-file] (or dired's RET, or any command that visits a
+file and shows it) on a level, prefab, sequence, project.ryaml or any
+format one of the shell's editors handles -- .rsong, .rfoley, .rmat,
+.rbt, .rfsm, .rparticles, .rweather, .rmixer, .rtileset, .rsprite,
+.rwater, .rnav, .rvscript, .rpost, .rshadergraph, .ranim, .rbonemap,
+.rskel2d, .rphysasset -- opens it in the *lrgeditor* buffer, the way a
+double click in the editor's own assets panel does.
+
+Visits that do not show the file (grep, org links, `find-file-noselect'
+from code), visits from the editor itself (its \"open in external
+editor\"), a text-only frame, and a file the shell turns out to have no
+editor for all keep the ordinary text buffer.  To read one as text
+anyway, use \\[cmacs-lrgeditor-find-file-as-text] or
+\\[find-file-literally]."
+  :type 'boolean)
+
+
+;;;###autoload
+(defconst cmacs-lrgeditor-visit-regexp
+  (concat "\\(?:\\.r\\(?:level\\|prefab\\|seq\\|song\\|foley\\|mat\\|post"
+          "\\|shadergraph\\|anim\\|bonemap\\|skel2d\\|physasset\\|bt\\|fsm"
+          "\\|particles\\|weather\\|mixer\\|tileset\\|sprite\\|water\\|nav"
+          "\\|vscript\\)\\|/project\\.ryaml\\)\\'")
+  "File names `cmacs-lrgeditor-visit-mode' is put on.
+The libregnum asset types the shell edits; which of them it really
+opens is decided per file by `cmacs-lrgeditor-can-open-p'.")
+
+;;;###autoload
+(add-to-list 'auto-mode-alist
+             (cons cmacs-lrgeditor-visit-regexp 'cmacs-lrgeditor-visit-mode))
+
+(defun cmacs-lrgeditor--text-mode ()
+  "Put the current buffer in the best text mode for a libregnum asset.
+Every one of them is YAML."
+  (cond
+   ((and (fboundp 'libregnum-rlevel-mode)
+         (string-match-p "\\.r\\(?:level\\|prefab\\)\\'"
+                         (or buffer-file-name "")))
+    (libregnum-rlevel-mode))
+   ((and (fboundp 'yaml-ts-mode) (fboundp 'treesit-ready-p)
+         (treesit-ready-p 'yaml t))
+    (yaml-ts-mode))
+   ((fboundp 'yaml-mode) (yaml-mode))
+   (t (text-mode))))
+
+;;;###autoload
+(defun cmacs-lrgeditor-visit-mode ()
+  "Visit a libregnum asset: as YAML text, then in the editor if it was asked for.
+This is what `auto-mode-alist' runs for the types in
+`cmacs-lrgeditor-visit-regexp'.  The buffer gets an ordinary YAML mode
+first, so it is usable whatever happens next; when the visit came from
+an interactive command and leaves the file on screen, the shell takes
+it over once the command finishes (see `cmacs-lrgeditor-visit-files')."
+  (interactive)
+  (cmacs-lrgeditor--text-mode)
+  (when (and cmacs-lrgeditor-visit-files
+             (not cmacs-lrgeditor--visit-as-text)
+             buffer-file-name
+             ;; Inside a command: desktop restore and other start-up or
+             ;; timer visits have none, and must not open an editor.
+             this-command
+             (fboundp 'cmacs-lrgeditor--attach))
+    (setq cmacs-lrgeditor--pending-visit t)
+    (add-hook 'post-command-hook #'cmacs-lrgeditor--take-pending-visits)))
+
+(defun cmacs-lrgeditor--take-pending-visits ()
+  "Open, in the shell, every asset the command just finished left on screen.
+Run once from `post-command-hook' after `cmacs-lrgeditor-visit-mode'.
+The text buffer is replaced by *lrgeditor* in the window that showed
+it, unless it is modified, not on screen, in a text-only frame, or a
+file the shell has no editor for."
+  (remove-hook 'post-command-hook #'cmacs-lrgeditor--take-pending-visits)
+  (dolist (buf (buffer-list))
+    (when (buffer-local-value 'cmacs-lrgeditor--pending-visit buf)
+      (with-current-buffer buf
+        (setq cmacs-lrgeditor--pending-visit nil))
+      (let ((win (get-buffer-window buf t))
+            (file (buffer-file-name buf)))
+        (when (and win file
+                   (display-graphic-p (window-frame win))
+                   (not (buffer-modified-p buf))
+                   (condition-case nil (cmacs-lrgeditor-can-open-p file)
+                     (error nil)))
+          (kill-buffer buf)
+          (with-selected-window win
+            (condition-case err
+                (cmacs-lrgeditor file)
+              (error
+               ;; The shell refused it after all: give the file back
+               ;; as text rather than leave the window on nothing.
+               (let ((cmacs-lrgeditor--visit-as-text t))
+                 (find-file file))
+               (message "lrgeditor: %s; visiting it as text"
+                        (error-message-string err))))))))))
+
+;;;###autoload
+(defun cmacs-lrgeditor-find-file-as-text (file)
+  "Visit FILE as text even when the lrgeditor shell would open it."
+  (interactive (list (read-file-name "Find file as text: ")))
+  (let ((cmacs-lrgeditor--visit-as-text t))
+    (find-file file)))
 
 
 ;;;; Commands.

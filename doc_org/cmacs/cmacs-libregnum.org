@@ -1362,6 +1362,23 @@ The render context's =editor= field becomes a reference to the shell's =LrgEdito
 - *Keys* go through =cmacs-lrgeditor-mode-map=, whose default binding forwards every key, so the editor's own shortcuts apply (Ctrl+S, Ctrl+Z, F5 play, F6 run the game, Alt+F menus, W/A/S/D fly...).  Emacs delivers no key releases, so a held key is emulated from auto-repeat (=cmacs-lrgeditor-key-release-delay=), the way the game host does it.  Printable keys also arrive as text, for focused text fields.
 - *Emacs's own commands* sit behind =cmacs-lrgeditor-prefix= (default =C-\=): =o= other window, =b= switch buffer, =x= M-x, =a= run any editor action by id, =f= open a project or level, =n= new project, =l= libregnum.el's outline, =c= connect libregnum.el, =s= show and copy the protocol socket, =k= close the editor, =0=-=3= window splits.  =cmacs-lrgeditor-passthrough-keys= (default =M-x=, =C-g=) stay Emacs's outright.  Under Evil the buffer starts in emacs state.
 
+** Visiting assets: C-x C-f opens them in the editor
+
+With =cmacs-lrgeditor-visit-files= (the default), visiting a libregnum asset from a command that shows it -- =C-x C-f=, =find-file-other-window=, dired's =RET= -- opens it in the =*lrgeditor*= buffer, the way a double click in the shell's own assets panel does:
+
+| File | Opens in |
+|------+----------|
+| =project.ryaml= (or the project directory via =cmacs-lrgeditor-open=) | the project |
+| =.rlevel=, =.rprefab= | the edited level |
+| =.rseq= | the sequencer panel |
+| =.rsong=, =.rfoley=, =.rmat=, =.rpost=, =.rshadergraph=, =.ranim=, =.rbonemap=, =.rskel2d=, =.rphysasset=, =.rbt=, =.rfsm=, =.rparticles=, =.rweather=, =.rmixer=, =.rtileset=, =.rsprite=, =.rwater=, =.rnav=, =.rvscript= | that format's editor tab |
+
+A file inside a libregnum project that is not the open one opens its project first (the nearest =project.ryaml= above it), so its assets resolve.
+
+How it works: =auto-mode-alist= maps those names (=cmacs-lrgeditor-visit-regexp=, autoloaded, so it works before anything is loaded) to =cmacs-lrgeditor-visit-mode=.  That gives the buffer an ordinary YAML mode first (=libregnum-rlevel-mode= for levels when libregnum.el is loaded, else =yaml-ts-mode= / =yaml-mode= / =text-mode=), so the buffer is usable whatever follows.  Then, once the command finishes, =post-command-hook= hands the file to the shell -- only if the visit came from a command (desktop restore and timers have none), left the buffer on screen (grep, org links and =find-file-noselect= from code do not), in a graphical frame, unmodified, and =cmacs-lrgeditor-can-open-p= agrees (it asks the shell's own routing, which reads a data file's =format:=).  The text buffer is killed and the window shows =*lrgeditor*=; if the shell refuses the file after all it comes back as text.
+
+Files the shell itself asks to open as text (its "open in external editor", through libregnum.el) always stay text.  So do =find-file-literally= and =M-x cmacs-lrgeditor-find-file-as-text=.
+
 ** Drawing only when needed
 
 A view draws on demand.  Input from either path restarts the view's animation clock (=cmacs-lrgeditor-fps=, default 30) so hover highlights and springs animate; a half-second timer in the buffer stops it again after =cmacs-lrgeditor-idle-seconds= without input, except while the level is playing.  A hidden buffer is skipped by the clock as for every libregnum view.

@@ -10966,6 +10966,25 @@ Input restarts the view's animation clock (@code{cmacs-lrgeditor-fps});
 it stops again after @code{cmacs-lrgeditor-idle-seconds} without input,
 except while playing.
 
+@subsection Visiting assets
+
+@vindex cmacs-lrgeditor-visit-files
+@findex cmacs-lrgeditor-find-file-as-text
+With @code{cmacs-lrgeditor-visit-files} (the default), visiting a
+libregnum asset from a command that shows it (@kbd{C-x C-f}, dired's
+@kbd{RET}) opens it in @samp{*lrgeditor*}, as a double click in the
+shell's assets panel would: @file{project.ryaml} opens the project,
+@file{.rlevel} and @file{.rprefab} the level, @file{.rseq} the
+sequencer, and @file{.rsong}, @file{.rfoley}, @file{.rmat},
+@file{.rbt}, @file{.rfsm}, @file{.rparticles} and the other data
+formats their editor.  A file inside another project opens that project
+first.  The buffer gets a YAML mode first; after the command, the shell
+takes it over only when the file is on screen in a graphical frame,
+unmodified, and @code{cmacs-lrgeditor-can-open-p} agrees.  Visits from
+code, desktop restore, the shell's own ``open in external editor'',
+@code{find-file-literally} and @kbd{M-x
+cmacs-lrgeditor-find-file-as-text} stay text.
+
 @subsection The editor protocol and libregnum.el
 
 With @code{cmacs-lrgeditor-start-server} (the default) the shell serves

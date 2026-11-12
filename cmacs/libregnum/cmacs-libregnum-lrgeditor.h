@@ -53,10 +53,16 @@ extern void cmacs_lrgeditor_host_free (CmacsLrgeditorHost *self);
  * this header stays libregnum-free).  Borrowed. */
 extern gpointer cmacs_lrgeditor_host_get_editor (CmacsLrgeditorHost *self);
 
-/* Documents.  _open takes a project directory or a level file. */
+/* Documents.  _open takes a project directory (or its project.ryaml), a
+ * level or prefab, a sequence, or any file a data editor handles (.rsong,
+ * .rmat, .rbt, ...), routed as the shell's assets panel routes a double
+ * click; a file inside another project opens that project first.
+ * _can_open answers whether a FILE has such an editor (no host needed:
+ * the answer comes from the file's format). */
 extern gboolean cmacs_lrgeditor_host_open (CmacsLrgeditorHost *self,
                                            const char *path,
                                            char **error_msg);
+extern gboolean cmacs_lrgeditor_host_can_open (const char *path);
 extern gboolean cmacs_lrgeditor_host_new_project (CmacsLrgeditorHost *self,
                                                   const char *dir,
                                                   const char *name,

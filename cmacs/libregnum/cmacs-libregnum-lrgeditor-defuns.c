@@ -111,7 +111,11 @@ DEFUN ("cmacs-lrgeditor-attached-p", Fcmacs_lrgeditor_attached_p,
 DEFUN ("cmacs-lrgeditor--open", Fcmacs_lrgeditor__open,
        Scmacs_lrgeditor__open, 2, 2, 0,
        doc: /* Open PATH in the shell hosted in BUFFER.
-A directory is opened as a project, anything else as a level file.  */)
+PATH is a project directory or its project.ryaml, a level or prefab, a
+sequence, or any file one of the shell's data editors handles (.rsong,
+.rmat, .rbt, .rparticles, ...); see `cmacs-lrgeditor-can-open-p'.  It is
+routed the way the shell's assets panel routes a double click, and a
+file inside another project opens that project first.  */)
   (Lisp_Object buffer, Lisp_Object path)
 {
   CmacsLrgeditorHost *host = lrgeditor_host (buffer);
@@ -123,6 +127,20 @@ A directory is opened as a project, anything else as a level file.  */)
     lrgeditor_signal (err, "could not open");
   lrgeditor_wake (buffer);
   return Qt;
+}
+
+DEFUN ("cmacs-lrgeditor-can-open-p", Fcmacs_lrgeditor_can_open_p,
+       Scmacs_lrgeditor_can_open_p, 1, 1, 0,
+       doc: /* Return non-nil if the lrgeditor shell has an editor for FILE.
+That is a project.ryaml, a level or prefab, a sequence, or a file whose
+format one of the shell's data editors handles.  The format is read from
+the file (a data file's `format:' key), so FILE must exist.  No shell
+needs to be open to ask.  */)
+  (Lisp_Object file)
+{
+  CHECK_STRING (file);
+  file = ENCODE_FILE (Fexpand_file_name (file, Qnil));
+  return cmacs_lrgeditor_host_can_open (SSDATA (file)) ? Qt : Qnil;
 }
 
 DEFUN ("cmacs-lrgeditor--new-project", Fcmacs_lrgeditor__new_project,
@@ -309,6 +327,7 @@ syms_of_cmacs_libregnum_lrgeditor (void)
   defsubr (&Scmacs_lrgeditor__attach);
   defsubr (&Scmacs_lrgeditor_attached_p);
   defsubr (&Scmacs_lrgeditor__open);
+  defsubr (&Scmacs_lrgeditor_can_open_p);
   defsubr (&Scmacs_lrgeditor__new_project);
   defsubr (&Scmacs_lrgeditor__start_server);
   defsubr (&Scmacs_lrgeditor_socket);

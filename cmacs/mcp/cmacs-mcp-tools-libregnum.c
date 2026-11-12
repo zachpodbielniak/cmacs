@@ -297,7 +297,9 @@ cmacs_mcp_tools_libregnum_register (McpServer *server)
 
   lrg_add (server, "lrgeditor_open",
     "Open libregnum's editor (the lrgeditor shell) on PATH: a project"
-    " directory or a .rlevel file; no PATH opens its welcome screen.",
+    " directory or project.ryaml, a .rlevel/.rprefab, a .rseq, or any asset"
+    " one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles,"
+    " ...); no PATH opens its welcome screen.",
     "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
     FALSE, TRUE, handle_open);
 

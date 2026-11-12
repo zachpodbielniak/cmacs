@@ -70,7 +70,95 @@
     (should (eq (lookup-key cmacs-lrgeditor-mode-map (kbd "C-s") t)
                 #'cmacs-lrgeditor-dispatch-key))))
 
+;;;; Visiting assets with C-x C-f (batch).
+
+(defun cmacs-lrgeditor-tests--example (rel)
+  "Return libregnum example file REL, or skip when the submodule lacks it."
+  (let ((f (expand-file-name (concat "deps/libregnum/" rel)
+                             (or (bound-and-true-p source-directory) ""))))
+    (unless (file-readable-p f)
+      (ert-skip (format "no %s in the libregnum submodule" rel)))
+    f))
+
+(ert-deftest cmacs-lrgeditor-tests-visit-regexp ()
+  "Asset types reach `cmacs-lrgeditor-visit-mode'; other files do not."
+  (dolist (f '("/p/levels/a.rlevel" "/p/music/neon.rsong" "/p/fx/hit.rfoley"
+               "/p/m/base.rmat" "/p/ai/guard.rbt" "/p/project.ryaml"
+               "/p/s/intro.rseq"))
+    (should (eq (assoc-default f auto-mode-alist #'string-match)
+                'cmacs-lrgeditor-visit-mode)))
+  (dolist (f '("/p/main.rs" "/p/notes.yaml" "/p/other.ryaml" "/p/x.rsongs"))
+    (should-not (eq (assoc-default f auto-mode-alist #'string-match)
+                    'cmacs-lrgeditor-visit-mode))))
+
+(ert-deftest cmacs-lrgeditor-tests-can-open-p ()
+  "The shell's own routing decides, from the file's format."
+  (skip-unless (fboundp 'cmacs-lrgeditor-can-open-p))
+  (should (cmacs-lrgeditor-can-open-p
+           (cmacs-lrgeditor-tests--example "examples/data/music/neon-drive.rsong")))
+  (should (cmacs-lrgeditor-can-open-p
+           (cmacs-lrgeditor-tests--example
+            "examples/data/levels/level-3d-runtime.rlevel")))
+  (should-not (cmacs-lrgeditor-can-open-p
+               (cmacs-lrgeditor-tests--example "README.org"))))
+
+(ert-deftest cmacs-lrgeditor-tests-visit-guards ()
+  "Visits from code, as text, or in a text frame keep the text buffer."
+  (skip-unless (fboundp 'cmacs-lrgeditor-can-open-p))
+  (let ((song (cmacs-lrgeditor-tests--example
+               "examples/data/music/neon-drive.rsong")))
+    (unwind-protect
+        (progn
+          ;; Asked for as text: never pending.
+          (let ((this-command 'find-file)
+                (cmacs-lrgeditor--visit-as-text t))
+            (with-current-buffer (find-file-noselect song)
+              (should-not cmacs-lrgeditor--pending-visit)
+              (should buffer-file-name)))
+          (kill-buffer (get-file-buffer song))
+          ;; No command running (start-up, timers): never pending.
+          (let ((this-command nil))
+            (with-current-buffer (find-file-noselect song)
+              (should-not cmacs-lrgeditor--pending-visit)))
+          (kill-buffer (get-file-buffer song))
+          ;; Interactive: pending.  In a text-only frame the take-over
+          ;; then leaves the text buffer alone (a graphical run takes it
+          ;; into the shell instead -- the GL test below covers that).
+          (let ((this-command 'find-file))
+            (find-file song))
+          (should (buffer-local-value 'cmacs-lrgeditor--pending-visit
+                                      (get-file-buffer song)))
+          (unless (display-graphic-p)
+            (cmacs-lrgeditor--take-pending-visits)
+            (should (get-file-buffer song))
+            (should-not (buffer-local-value 'cmacs-lrgeditor--pending-visit
+                                            (get-file-buffer song)))))
+      (remove-hook 'post-command-hook #'cmacs-lrgeditor--take-pending-visits)
+      (when (get-file-buffer song) (kill-buffer (get-file-buffer song))))))
+
 ;;;; The real shell (needs GL).
+
+(ert-deftest cmacs-lrgeditor-tests-find-file-opens-in-shell ()
+  "An interactive visit of a .rsong lands in the shell, not a text buffer."
+  (cmacs-lrgeditor-tests--gl-skip-or)
+  (let* ((song (cmacs-lrgeditor-tests--example
+                "examples/data/music/neon-drive.rsong"))
+         (dir (make-temp-file "cmacs-lrgeditor-" t))
+         (cmacs-lrgeditor-settings-file (expand-file-name "editor.yaml" dir))
+         (cmacs-lrgeditor-start-server nil)
+         (cmacs-lrgeditor-connect-libregnum-el nil))
+    (unwind-protect
+        (progn
+          (let ((this-command 'find-file))
+            (find-file song))
+          (cmacs-lrgeditor--take-pending-visits)
+          (should-not (get-file-buffer song))
+          (should (eq (window-buffer (selected-window))
+                      (get-buffer "*lrgeditor*")))
+          (should (cmacs-lrgeditor-attached-p (get-buffer "*lrgeditor*"))))
+      (when (get-buffer "*lrgeditor*") (kill-buffer "*lrgeditor*"))
+      (when (get-file-buffer song) (kill-buffer (get-file-buffer song)))
+      (delete-directory dir t))))
 
 (ert-deftest cmacs-lrgeditor-tests-symbols ()
   "The shell's primitives are defined when libregnum is built."
@@ -134,6 +222,8 @@
          (cmacs-lrgeditor-socket (expand-file-name "ed.sock" dir))
          (cmacs-lrgeditor-connect-libregnum-el nil)
          (buf nil))
+    ;; A shell left by another test was started without a server.
+    (when (get-buffer "*lrgeditor*") (kill-buffer "*lrgeditor*"))
     (unwind-protect
         (progn
           (setq buf (cmacs-lrgeditor))

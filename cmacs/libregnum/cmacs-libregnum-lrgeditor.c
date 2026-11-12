@@ -172,30 +172,117 @@ host_fail (GError *error, const char *fallback, char **error_msg)
   return FALSE;
 }
 
+/* The libregnum project PATH belongs to: the nearest directory at or
+ * above it holding a project.ryaml, or NULL.  (transfer full) */
+static gchar *
+host_find_project_dir (const char *path)
+{
+  g_autofree gchar *dir = g_file_test (path, G_FILE_TEST_IS_DIR)
+                            ? g_strdup (path) : g_path_get_dirname (path);
+
+  while (dir != NULL)
+    {
+      g_autofree gchar *manifest = g_build_filename (dir, "project.ryaml",
+                                                     NULL);
+      gchar *parent;
+
+      if (g_file_test (manifest, G_FILE_TEST_IS_REGULAR))
+        return g_steal_pointer (&dir);
+      parent = g_path_get_dirname (dir);
+      if (g_strcmp0 (parent, dir) == 0)
+        {
+          g_free (parent);
+          break;
+        }
+      g_free (dir);
+      dir = parent;
+    }
+  return NULL;
+}
+
+/* Open PATH the way the shell's own assets panel does on a double click
+ * (lrg-editor-assets-panel.c open_entry), using only public API:
+ *
+ *   - a directory, or a project.ryaml, opens that project;
+ *   - .rlevel / .rprefab open as the edited level;
+ *   - .rseq opens in the sequencer panel;
+ *   - every format a data editor handles (.rsong, .rmat, .rbt, .rparticles,
+ *     ... -- lrg_editor_data_editor_can_open) opens in that editor's tab.
+ *
+ * A file inside a project that is not the open one opens that project
+ * first, so its assets, scripts and settings resolve.  Anything else is
+ * refused: the panel would hand it to the *external* editor, which is
+ * this Emacs, and the caller visiting it here is already that. */
 gboolean
 cmacs_lrgeditor_host_open (CmacsLrgeditorHost *self, const char *path,
                            char **error_msg)
 {
   GError *error = NULL;
-  gboolean ok;
+  gboolean ok = FALSE;
+  g_autofree gchar *project = NULL;
+  g_autofree gchar *base = NULL;
+  const gchar *open_dir;
 
   if (self == NULL || path == NULL)
     return host_fail (NULL, "no path", error_msg);
+  base = g_path_get_basename (path);
+
   /* Opening a project starts file monitors: same context rule as _new. */
   g_main_context_push_thread_default (cmacs_glib_get_context ());
 
-  /* A directory is a project (project.ryaml inside); anything else is
-   * taken to be a level file. */
-  if (g_file_test (path, G_FILE_TEST_IS_DIR))
-    ok = lrg_editor_app_open_project (self->app, path, &error);
-  else
-    ok = lrg_editor_app_open_level (self->app, path, &error);
-  g_main_context_pop_thread_default (cmacs_glib_get_context ());
+  if (g_file_test (path, G_FILE_TEST_IS_DIR)
+      || g_strcmp0 (base, "project.ryaml") == 0)
+    {
+      project = g_file_test (path, G_FILE_TEST_IS_DIR)
+                  ? g_strdup (path) : g_path_get_dirname (path);
+      ok = lrg_editor_app_open_project (self->app, project, &error);
+      goto done;
+    }
 
+  if (!cmacs_lrgeditor_host_can_open (path))
+    {
+      g_main_context_pop_thread_default (cmacs_glib_get_context ());
+      return host_fail (NULL, "lrgeditor has no editor for this file",
+                        error_msg);
+    }
+
+  /* Bring the file's project along when it is not the open one. */
+  project = host_find_project_dir (path);
+  open_dir = lrg_editor_app_get_project_dir (self->app);
+  if (project != NULL && g_strcmp0 (project, open_dir) != 0
+      && !lrg_editor_app_open_project (self->app, project, &error))
+    goto done;
+
+  if (g_str_has_suffix (path, ".rlevel") || g_str_has_suffix (path, ".rprefab"))
+    ok = lrg_editor_app_open_level (self->app, path, &error);
+  else if (g_str_has_suffix (path, ".rseq"))
+    ok = lrg_editor_sequencer_panel_open_file (self->app, path, &error);
+  else
+    ok = lrg_editor_data_editor_open (self->app, path, &error) != NULL;
+
+ done:
+  g_main_context_pop_thread_default (cmacs_glib_get_context ());
   if (!ok)
     return host_fail (error, "could not open", error_msg);
   self->level_changed = TRUE;
   return TRUE;
+}
+
+/* TRUE if cmacs_lrgeditor_host_open() has an editor for the file PATH:
+ * a level or prefab, a sequence, or a format a data editor handles. */
+gboolean
+cmacs_lrgeditor_host_can_open (const char *path)
+{
+  g_autofree gchar *base = NULL;
+
+  if (path == NULL)
+    return FALSE;
+  base = g_path_get_basename (path);
+  return g_strcmp0 (base, "project.ryaml") == 0
+         || g_str_has_suffix (path, ".rlevel")
+         || g_str_has_suffix (path, ".rprefab")
+         || g_str_has_suffix (path, ".rseq")
+         || lrg_editor_data_editor_can_open (path);
 }
 
 gboolean
