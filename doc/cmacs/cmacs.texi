@@ -5230,14 +5230,27 @@ focus dimming.  Unfocused windows fade to a configurable opacity.
 (gowl-enable-module "alpha")
 (gowl-set-focused-alpha 0.9)
 (gowl-set-unfocused-alpha 0.9)
-;; Per-client override:
+;; Per-client opacity, pinned through focus changes:
 (gowl-set-client-alpha client 0.5)
-;; Set all clients at once:
+(gowl-set-client-alpha client nil)        ; unpin
+(gowl-client-pinned-alpha client)         ; @result{} 0.5, or nil
+;; Set all unpinned clients at once:
 (gowl-set-all-alpha 0.8)
 ;; Query current config:
 (gowl-alpha-info)
   @result{} ((focused-alpha . 0.9) (unfocused-alpha . 0.9))
 @end example
+
+@findex gowl-client-pinned-alpha
+To keep a window opaque, or at any fixed opacity, pin it: a window
+rule's @code{opacity}, @code{gowl-set-client-alpha}, the IPC's
+@code{window.set_opacity}, or the effects opt-out
+(@code{cmacs-gowl-no-fx-apps}, @env{GOWL_NO_FX=1}, which pins 1.0).
+The alpha module gives a pinned window its pinned value on every focus
+change.  Before pins it rewrote every window's opacity on each focus
+change, so re-asserting an opaque window from
+@code{cmacs-gowl-focus-changed-functions} flashed the dimmed value
+first; no such hook is needed now.
 
 @subsubheading Wallpaper
 

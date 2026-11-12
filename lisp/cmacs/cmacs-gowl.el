@@ -339,7 +339,9 @@ opaque window shows no backdrop of any kind."
 
 A window that matches gets no backdrop, no shadow and no open or close
 animation -- the same three things the `no-blur\=', `no-shadow\=' and
-`no-anim\=' window rules ask for.
+`no-anim\=' window rules ask for -- and is kept fully opaque: its
+opacity is pinned at 1.0, so the alpha module\='s focus dimming leaves it
+alone (a rule\='s own `opacity\=' still wins).
 
 Each name is matched case-insensitively against the window\='s app_id AND
 against the command name of its process and every one of that process\='s

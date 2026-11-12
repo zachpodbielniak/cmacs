@@ -9133,10 +9133,19 @@ static gfloat cmacs_alpha_focused = 1.0f;
 static gfloat cmacs_alpha_unfocused = 0.8f;
 
 DEFUN ("gowl-set-client-alpha", Fgowl_set_client_alpha,
-       Sgowl_set_client_alpha, 2, 2, 0,
-       doc: /* Set the opacity of CLIENT to ALPHA (a float 0.0 to 1.0).
-Immediately walks the client's scene tree and applies the opacity. */)
-  (Lisp_Object client, Lisp_Object alpha)
+       Sgowl_set_client_alpha, 2, 3, 0,
+       doc: /* Set the opacity of CLIENT to ALPHA (a float 0.0 to 1.0) and keep it.
+
+The opacity is PINNED: the alpha module's focus dimming leaves CLIENT at
+ALPHA whether it has focus or not, the same as a window rule's
+`opacity'.  Without the pin the module rewrote the opacity on the next
+focus change, so a window kept opaque by re-setting it after every focus
+change flashed the dimmed value first.
+
+ALPHA nil unpins CLIENT, leaving its current opacity until the next
+focus change.  With TRANSIENT non-nil, ALPHA is applied without pinning,
+and lasts only until the next focus change.  */)
+  (Lisp_Object client, Lisp_Object alpha, Lisp_Object transient)
 {
   specpdl_ref count = cmacs_gowl_lock_scoped ();
   GowlClient *c;
@@ -9144,16 +9153,41 @@ Immediately walks the client's scene tree and applies the opacity. */)
 
   GOWL_CHECK_RUNNING ();
   c = gowl_resolve_client (client);
+  if (NILP (alpha))
+    {
+      gowl_client_set_pinned_alpha (c, 0.0f);
+      return unbind_to (count, Qt);
+    }
   CHECK_NUMBER (alpha);
   val = XFLOATINT (alpha);
-  gowl_client_set_alpha (c, (gfloat) val);
+  if (!NILP (transient) || val <= 0.0)
+    gowl_client_set_alpha (c, (gfloat) val);
+  else
+    gowl_client_set_pinned_alpha (c, (gfloat) val);
   return unbind_to (count, Qt);
+}
+
+DEFUN ("gowl-client-pinned-alpha", Fgowl_client_pinned_alpha,
+       Sgowl_client_pinned_alpha, 1, 1, 0,
+       doc: /* Return the opacity pinned on CLIENT, or nil when none is.
+See `gowl-set-client-alpha'.  */)
+  (Lisp_Object client)
+{
+  specpdl_ref count = cmacs_gowl_lock_scoped ();
+  GowlClient *c;
+  gfloat pinned;
+
+  GOWL_CHECK_RUNNING ();
+  c = gowl_resolve_client (client);
+  pinned = gowl_client_get_pinned_alpha (c);
+  return unbind_to (count, pinned > 0.0f ? make_float (pinned) : Qnil);
 }
 
 DEFUN ("gowl-set-all-alpha", Fgowl_set_all_alpha,
        Sgowl_set_all_alpha, 1, 1, 0,
        doc: /* Set opacity of ALL clients to ALPHA (a float 0.0 to 1.0).
-Returns the number of clients affected. */)
+Windows with a pinned opacity (see `gowl-set-client-alpha') are left
+alone.  Returns the number of clients affected. */)
   (Lisp_Object alpha)
 {
   specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
@@ -9169,6 +9203,8 @@ Returns the number of clients affected. */)
   for (l = clients; l != NULL; l = l->next)
     {
       GowlClient *c = GOWL_CLIENT (l->data);
+      if (gowl_client_get_pinned_alpha (c) > 0.0f)
+        continue;
       gowl_client_set_alpha (c, (gfloat) val);
       count++;
     }
@@ -13455,6 +13491,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_wallpaper_info);
   defsubr (&Sgowl_set_output_wallpaper);
   defsubr (&Sgowl_set_client_alpha);
+  defsubr (&Sgowl_client_pinned_alpha);
   defsubr (&Sgowl_set_all_alpha);
   defsubr (&Sgowl_set_focused_alpha);
   defsubr (&Sgowl_set_unfocused_alpha);

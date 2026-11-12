@@ -4403,19 +4403,24 @@ Per-client window opacity with automatic focus dimming.
 (gowl-enable-module "alpha")
 (gowl-set-focused-alpha 0.9)
 (gowl-set-unfocused-alpha 0.9)
-;; Per-client override:
+;; Per-client opacity, pinned through focus changes:
 (gowl-set-client-alpha client 0.5)
-;; Set all clients at once:
+(gowl-set-client-alpha client nil)        ; unpin
+(gowl-client-pinned-alpha client)         ; => 0.5, or nil
+;; Set all unpinned clients at once:
 (gowl-set-all-alpha 0.8)
 ;; Query:
 (gowl-alpha-info)
   ;; => ((focused-alpha . 0.9) (unfocused-alpha . 0.9))
 #+end_src
 
+*Keeping a window opaque (or at any fixed opacity).* Pin it: a window rule's =opacity= (=gowl-add-rule-entry '((app-id . "mpv") (opacity . 1.0))=), =gowl-set-client-alpha=, the IPC's =window.set_opacity=, or the effects opt-out (=cmacs-gowl-no-fx-apps=, =GOWL_NO_FX=1=, which pins 1.0).  The alpha module gives a pinned window its pinned value on every focus change instead of =focused-alpha= / =unfocused-alpha=.  Before pins existed the module rewrote every window's opacity on each focus change, so a rule's opacity held only until the next one, and re-asserting it from =cmacs-gowl-focus-changed-functions= showed the dimmed value for a frame first -- a flash on hover focus, and no restore at all on a focus change that hook does not see.  Such a hook is no longer needed.
+
 | Function                          | Description                              |
 |-----------------------------------+------------------------------------------|
-| =gowl-set-client-alpha=          | Set opacity of a specific client         |
-| =gowl-set-all-alpha=             | Set opacity of all clients at once       |
+| =gowl-set-client-alpha=          | Set and pin a client's opacity (nil unpins; TRANSIENT sets without pinning) |
+| =gowl-client-pinned-alpha=       | A client's pinned opacity, or nil        |
+| =gowl-set-all-alpha=             | Set opacity of all unpinned clients      |
 | =gowl-set-focused-alpha=         | Set focused window opacity               |
 | =gowl-set-unfocused-alpha=       | Set unfocused window opacity             |
 | =gowl-alpha-info=                | Query current alpha config               |
