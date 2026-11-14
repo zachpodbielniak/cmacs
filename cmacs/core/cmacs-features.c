@@ -97,6 +97,15 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_DBEXPLORER
   "dbexplorer",
 #endif
+#ifdef HAVE_CMACS_LQL
+  "lql",
+#endif
+#ifdef HAVE_CMACS_TALLOW
+  "tallow",
+#endif
+#ifdef HAVE_CMACS_LIBRESEARCH
+  "libresearch",
+#endif
 #ifdef HAVE_CMACS_CLAWTILLA
   "clawtilla",
 #endif
@@ -324,6 +333,24 @@ syms_of_cmacs_features (void)
   is_cmacs_dbexplorer = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-LQL", is_cmacs_lql,
+    doc: /* Non-nil if this build was configured --with-cmacs-lql.  */);
+#ifdef HAVE_CMACS_LQL
+  is_cmacs_lql = true;
+#endif
+
+  DEFVAR_BOOL ("IS-CMACS-TALLOW", is_cmacs_tallow,
+    doc: /* Non-nil if this build was configured --with-cmacs-tallow.  */);
+#ifdef HAVE_CMACS_TALLOW
+  is_cmacs_tallow = true;
+#endif
+
+  DEFVAR_BOOL ("IS-CMACS-LIBRESEARCH", is_cmacs_libresearch,
+    doc: /* Non-nil if this build was configured --with-cmacs-libresearch.  */);
+#ifdef HAVE_CMACS_LIBRESEARCH
+  is_cmacs_libresearch = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-CLAWTILLA", is_cmacs_clawtilla,
     doc: /* Non-nil if this build was configured --with-cmacs-clawtilla.  */);
 #ifdef HAVE_CMACS_CLAWTILLA
@@ -468,6 +495,9 @@ The networks also need onnxruntime: see `cmacs-handtrack-available-p'.  */);
   cmacs_features__alias ("is-cmacs-secondbrain", "IS-CMACS-SECONDBRAIN");
   cmacs_features__alias ("is-cmacs-office",      "IS-CMACS-OFFICE");
   cmacs_features__alias ("is-cmacs-dbexplorer", "IS-CMACS-DBEXPLORER");
+  cmacs_features__alias ("is-cmacs-lql",        "IS-CMACS-LQL");
+  cmacs_features__alias ("is-cmacs-tallow",     "IS-CMACS-TALLOW");
+  cmacs_features__alias ("is-cmacs-libresearch", "IS-CMACS-LIBRESEARCH");
   cmacs_features__alias ("is-cmacs-clawtilla",  "IS-CMACS-CLAWTILLA");
   cmacs_features__alias ("is-cmacs-spacemouse", "IS-CMACS-SPACEMOUSE");
   cmacs_features__alias ("is-cmacs-camera",     "IS-CMACS-CAMERA");

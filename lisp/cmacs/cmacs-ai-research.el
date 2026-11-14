@@ -28,7 +28,7 @@
 ;; than reading events, so it also works inside an RPC dispatch, where
 ;; `inhibit-interaction' makes `sit-for' signal.
 ;;
-;; The server and its token come from `cmacs-ai-libresearch-url' and
+;; The server and its token come from `cmacs-ai-libresearch-endpoint' and
 ;; `cmacs-ai-libresearch-token' (auth-source) in cmacs-ai.el.
 
 ;;; Code:
@@ -116,7 +116,7 @@ Lisp thread -- (:ok :kind K :text TEXT :json JSON), (:error MSG) or
 `cmacs-ai-research-wait'.  OPTIONS is the plist the primitive takes
 \(:deep, :pages, :explain, :archive, :max-chars, :category, :count,
 :site, :max-rows, :timeout); the server URL and token are added from
-`cmacs-ai-libresearch-url' and `cmacs-ai-libresearch-token'."
+`cmacs-ai-libresearch-endpoint' and `cmacs-ai-libresearch-token'."
   (cmacs-ai-research--ensure)
   (let* ((timeout (cmacs-ai-research--timeout kind))
          (opts (apply #'cmacs-ai-libresearch-options
@@ -514,7 +514,7 @@ run takes minutes and Emacs stays usable meanwhile."
              (cmacs-ai-research--escape question)
              (if deep "deep" "standard")
              (if pages (format ", %d pages" pages) "")
-             cmacs-ai-libresearch-url)
+             (cmacs-ai-libresearch-endpoint))
      'research question
      (append (and deep (list :deep t)) (and pages (list :pages pages))))))
 
@@ -593,7 +593,7 @@ included: the authoritative list for this instance."
   (interactive)
   (cmacs-ai-research--show
    "*cmacs-ai lql environment*"
-   (concat "LQL environment: " cmacs-ai-libresearch-url)
+   (concat "LQL environment: " (cmacs-ai-libresearch-endpoint))
    ""
    'environment nil nil))
 

@@ -40,6 +40,7 @@ SKIP=(
 	"deps/podomation=deps/yaml-glib"
 	"deps/podomation/deps/ai-glib=deps/yaml-glib"
 	"deps/ai-glib=deps/yaml-glib"
+	"deps/libre-query-language=deps/yaml-glib"
 	"deps/clawtilla/deps/libreclaw=deps/yaml-glib"
 	"deps/clawtilla/deps/libreclaw=deps/mcp-glib"
 	"deps/clawtilla/deps/libreclaw/deps/podomation=deps/crispy"

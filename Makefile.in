@@ -772,6 +772,36 @@ ifeq (${ns_self_contained},no)
 			fi; \
 		done; \
 	fi
+	## LQL (--with-cmacs-lql): the `lql' program and its language server,
+	## which cmacs-lql.el runs for eglot, plus the upstream lql-mode and
+	## ob-lql into the standard site-lisp (on the default load-path).  The
+	## library itself is linked into emacs, so it is not installed.
+	@lqlbuild=$(srcdir)/deps/libre-query-language/build/$(CMACS_DEP_BUILDTYPE); \
+	if test -f "$$lqlbuild/lql-language-server"; then \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${bindir}" "$(DESTDIR)${datadir}/emacs/site-lisp"; \
+		${INSTALL_PROGRAM} "$$lqlbuild/lql" "$(DESTDIR)${bindir}/lql"; \
+		${INSTALL_PROGRAM} "$$lqlbuild/lql-language-server" \
+			"$(DESTDIR)${bindir}/lql-language-server"; \
+		for f in $(srcdir)/deps/libre-query-language/editors/emacs/*.el; do \
+			test -f "$$f" && ${INSTALL_DATA} "$$f" \
+				"$(DESTDIR)${datadir}/emacs/site-lisp/$$(basename $$f)"; \
+		done; \
+	fi; true
+	## Tallow (--with-cmacs-tallow): the whole toolchain through tallow's
+	## own install -- an installed `tallow' needs its runtime, std and
+	## pkg-config files next to it, which is exactly what that installs.
+	## Same build type as the tree was built with, or it would rebuild.
+	@if test -f $(srcdir)/deps/tallow/build/$(CMACS_DEP_BUILDTYPE)/tallow; then \
+		$(MAKE) -C $(srcdir)/deps/tallow install \
+			$(if $(filter debug,$(CMACS_DEP_BUILDTYPE)),DEBUG=1) \
+			PREFIX="${prefix}" BINDIR="${bindir}" LIBDIR="${libdir}" \
+			DATADIR="${datadir}" DESTDIR="$(DESTDIR)"; \
+		umask 022; ${MKDIR_P} "$(DESTDIR)${datadir}/emacs/site-lisp"; \
+		for f in $(srcdir)/deps/tallow/editors/emacs/*.el; do \
+			test -f "$$f" && ${INSTALL_DATA} "$$f" \
+				"$(DESTDIR)${datadir}/emacs/site-lisp/$$(basename $$f)"; \
+		done; \
+	fi; true
 	@podmoddir="${exec_prefix}/$$(if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)/podomation/modules"; \
 	if test -d $(srcdir)/deps/podomation/build/$(CMACS_DEP_BUILDTYPE)/modules; then \
 		umask 022; ${MKDIR_P} "$(DESTDIR)$$podmoddir"; \

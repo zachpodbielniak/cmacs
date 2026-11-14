@@ -82,6 +82,9 @@ interaction.
 * CMacs Clawtilla::             Drive a fleet of agents from the editor.
 * CMacs Spacemouse::            A SpaceMouse / 6DOF device as the 3D camera.
 * CMacs Camera::                Camera capture, and hands seen by it as gestures.
+* CMacs LQL::                   The libre query language, linked in.
+* CMacs Tallow::                The Tallow language: mode, LSP, REPL, debugging.
+* CMacs Libresearch::           A libresearch client: search results to comb through.
 * Build Configuration::         Configure flags and dependencies.
 * Upstream Changes::            Every edit cmacs makes to stock Emacs sources.
 @end menu
@@ -14049,6 +14052,405 @@ finger in the pinch it scrolls (moved) or right-clicks (tapped) --- in C,
 through the same functions the @code{gowl-pointer-*} DEFUNs wrap, with
 anything held released when the hand is lost.
 
+@node CMacs LQL
+@chapter CMacs LQL: The Libre Query Language, Linked In
+
+@cindex LQL
+@cindex libre query language
+@cindex query, editor state
+
+@code{--with-cmacs-lql} links LQL (@file{deps/libre-query-language})
+into cmacs.  You get the language plus every source the @command{lql}
+program has: files of any format (JSON, CSV, YAML, TOML, XML, logs,
+compressed), @code{git_log} and the other git sources, @code{exec} and
+command definitions, the systemd journal, coredumps, Kubernetes and SQL.
+It also adds the editor's own state as sources: @code{buffers},
+@code{windows}, @code{processes}, @code{recentf}, @code{kill_ring},
+@code{bookmarks}, @code{org_headings}, @code{gowl_clients}, and anything
+you define with @code{cmacs-lql-define-source}.  Everything is
+read-only.  The full manual is @file{doc_org/cmacs/lql.org}.
+
+@example
+fetch buffers
+| filter modified and file != null
+| fields name, file, size
+| sort size DESC
+@end example
+
+@menu
+* LQL Quick Start::
+* LQL Architecture::
+* LQL Results Grid::
+* LQL REPL::
+* LQL Editor Sources::
+* LQL Language Server::
+* LQL Surfaces::
+* LQL Customization::
+@end menu
+
+@node LQL Quick Start
+@section Quick Start
+
+@table @asis
+@item @kbd{M-x cmacs-lql-query}
+Read a query, run it, show the rows in a grid.
+@item @kbd{M-x cmacs-lql-repl}
+The REPL: @key{RET} runs a complete query, @key{TAB} completes.
+@item A @file{.lql} file and @kbd{C-c C-c}
+Run the query at point (the region, else the block between blank lines).
+@item @command{emacsctl lql query 'fetch processes'}
+The same from a shell, against a running cmacs.
+@end table
+
+In @code{lql-mode}: @kbd{C-c C-c} runs, @kbd{C-c C-e} explains the plan,
+@kbd{C-c C-f} formats, @kbd{C-c C-t} switches the buffer between the
+@code{local} and @code{libresearch} targets (the buffer-local
+@code{cmacs-lql-target}, safe as a file-local variable), and @kbd{C-c
+C-z} opens the REPL.
+
+@node LQL Architecture
+@section Architecture
+
+The build links two archives: @file{liblql-1.0.a}, the language (GLib
+only), and @file{liblql-tools.a}, the sources the @command{lql} program
+registers.  One @code{LqlEnvironment} is built per process, on first use.
+Registration follows the program's order: built-ins, tool sources, SQL,
+then the user's aliases, then the Elisp sources as they are defined.
+
+The C side is three files.  @file{cmacs-lql-env.c} sees @file{lql.h} but
+never @file{lisp.h}.  @file{cmacs-lql-defuns.c} is the reverse.
+@file{cmacs-lql-init.c} holds the @code{syms_of_} hooks.  Only C strings
+cross between the two halves: JSON in, JSON out.
+
+@strong{Queries never run on the editor's thread.}
+@code{cmacs-lql--run} queues a job on a one-thread pool and returns an
+id at once.  The worker runs it under a private thread-default
+@code{GMainContext}.  The payload reaches a callback once, on the Lisp
+thread, through @code{cmacs_glib_invoke_on_main}, or a caller polls
+@code{cmacs-lql--poll}.  Editor state is never read from the worker:
+Lisp snapshots the Elisp sources a query names to JSON first, and the
+worker installs them as memory-source tables under the environment
+lock.
+
+@strong{The editor never waits on a query.}  Completion, hover,
+signature, diagnostics, describe, explain and format only @emph{try} the
+lock.  When it is held they signal @code{cmacs-lql-busy}, a child of
+@code{cmacs-lql-error}.  Source definitions are queued and applied by the
+next holder of the lock.
+
+A payload is one of:
+@example
+(:ok :json JSON :text TEXT :rows N :elapsed SECONDS)
+(:error MESSAGE)
+(:cancelled)
+@end example
+@noindent
+@code{JSON} is @code{@{"columns":[@{"name","type"@}],"rows":[[...]],"total":N@}}.
+@code{total} counts every row the query produced, even when
+@code{:max-rows} truncated @code{rows}.  liblql uses UTF-8 byte offsets:
+the DEFUNs pass @code{SSDATA} unchanged and convert the character
+position on the way in.
+
+@node LQL Results Grid
+@section The Results Grid
+
+@code{cmacs-lql-results-mode} is a @code{tabulated-list-mode} grid that
+the libresearch client shares.  It sorts on typed values.  The mode line
+shows rows (shown/total), elapsed time and the target.
+
+@table @kbd
+@item RET
+Visit what the row names; otherwise show the row.  The visitors are on
+@code{cmacs-lql-results-visit-functions} and are tried in order: a
+@code{file}/@code{path} column (plus @code{line}), a
+@code{url}/@code{link}, a live @code{buffer}, an org @code{id}.
+@item v
+Show the row as a record.
+@item /
+Narrow: append @code{| filter EXPR} and run the query again.
+@item R
+Refine locally: run @code{fetch results | PIPELINE} over the rows shown,
+without fetching again.
+@item e
+Edit the query and run it again.
+@item g
+Run it again.
+@item c
+Hide or show a column.
+@item m
+@itemx u
+@itemx U
+Mark, unmark, unmark all.
+@item w
+@itemx W
+Copy the cell; copy the marked rows as JSON.
+@item E
+Export as org, CSV or JSON, to the kill ring, a buffer or a file.
+@item x
+Explain the plan.
+@item t
+Toggle the target (local/libresearch) and run again.
+@item C-c C-k
+Cancel the running query.
+@end table
+
+@node LQL REPL
+@section The REPL
+
+@kbd{M-x cmacs-lql-repl} runs queries asynchronously on the worker.
+@key{RET} sends a complete query.  A line ending in @samp{|}, @samp{,} or
+@samp{(} continues, and @kbd{C-j} always continues.  @key{TAB} completes
+from liblql's own assist code (cmacs's sources included), and eldoc
+shows signatures.  Each table prints as text with a @samp{[grid]}
+button.  @kbd{C-c C-k} cancels.  The colon commands are @code{:help},
+@code{:sources}, @code{:explain Q}, @code{:format Q}, @code{:describe},
+@code{:target local|libresearch}, @code{:grid} and @code{:clear}.
+
+@node LQL Editor Sources
+@section Editor Sources
+
+@multitable @columnfractions .2 .5 .3
+@headitem Source @tab Columns @tab Rows
+@item @code{buffers} @tab name, file, directory, mode, size, modified, read_only, visible, process, hidden @tab @code{(buffer-list)}
+@item @code{windows} @tab frame, buffer, width, height, selected, dedicated, point @tab every window
+@item @code{processes} @tab name, pid, status, type, command, buffer @tab @code{(process-list)}
+@item @code{recentf} @tab rank, file, directory, extension, remote, exists @tab @code{recentf-list}
+@item @code{kill_ring} @tab index, length, text @tab @code{kill-ring}
+@item @code{bookmarks} @tab name, file, position @tab @code{bookmark-alist}
+@item @code{org_headings} @tab file, line, level, heading, todo, priority, tags, scheduled, deadline, id @tab @code{org-agenda-files}, bounded by @code{cmacs-lql-org-max-files}
+@item @code{gowl_clients} @tab client @tab gowl's windows
+@end multitable
+
+A source function runs on the editor thread, only when a query names its
+source.
+
+@lisp
+(cmacs-lql-define-source
+ "features" '(("name" string))
+ (lambda () (mapcar (lambda (f) (list :name f)) features))
+ "Loaded Lisp features.")
+@end lisp
+
+The column types are @code{string}, @code{int}, @code{double},
+@code{boolean}, @code{timestamp}, @code{duration}, @code{array},
+@code{record} and @code{any}.  A row is a plist or an alist.  A
+@code{nil} in a boolean column is false; elsewhere it is NULL.  A time
+value or @code{float-time} seconds becomes a Timestamp.  A name that
+collides with a built-in source is refused.
+
+@node LQL Language Server
+@section The Language Server
+
+@code{lql-mode} is upstream's.  cmacs maps @code{lql-mode} to
+@code{cmacs-lql-server-contact} in @code{eglot-server-programs}.  The
+contact runs the tree's @command{lql-language-server} (else the one on
+@env{PATH}) with @option{--environment} pointing at
+@code{cmacs-lql-environment-file}.  That file is
+@code{lql_environment_describe} of cmacs's own environment, rewritten
+whenever a source is defined, so the server knows @code{buffers} and its
+columns.  @code{cmacs-lsp-ensure} starts eglot when a @file{.lql} file
+opens (@code{cmacs-lql-auto-eglot}).  @code{ob-lql} is set up for org
+babel.
+
+@node LQL Surfaces
+@section Agent, D-Bus and CLI Surfaces
+
+The brigade tools @code{lql_query} and @code{lql_sources} reach
+in-process agents, CLI agents and MCP clients.
+@code{org.cmacs.Editor1.Lql} has the methods @code{Query(s,i)},
+@code{QueryJson(s,i)}, @code{Explain(s)} and @code{Sources()}.  A bad
+query is a normal reply starting @samp{error: }.  The @command{emacsctl}
+verbs are:
+
+@example
+emacsctl lql query 'fetch buffers | filter modified' 20
+emacsctl lql json 'fetch processes' -o table
+emacsctl lql explain 'fetch git_log | limit 5'
+emacsctl lql sources
+@end example
+
+The Lisp API is @code{cmacs-lql-run}, @code{cmacs-lql-run-sync},
+@code{cmacs-lql-wait}, @code{cmacs-lql-parse},
+@code{cmacs-lql-define-source}, @code{cmacs-lql-completions},
+@code{cmacs-lql-hover-text} and @code{cmacs-lql-results-show}.
+
+@node LQL Customization
+@section Customization
+
+@code{cmacs-lql-max-rows} (5000), @code{cmacs-lql-timeout} (120 s),
+@code{cmacs-lql-org-max-files} (200),
+@code{cmacs-lql-kill-ring-max-chars}, @code{cmacs-lql-environment-file},
+@code{cmacs-lql-auto-eglot}, @code{cmacs-lql-results-max-column-width},
+@code{cmacs-lql-results-null-string},
+@code{cmacs-lql-results-visit-functions},
+@code{cmacs-lql-results-url-function}, @code{cmacs-lql-repl-max-rows},
+@code{cmacs-lql-repl-prompt}.
+
+@node CMacs Tallow
+@chapter CMacs Tallow: The Tallow Language
+
+@cindex Tallow
+@cindex tallow-mode
+@cindex debugging, Tallow
+
+@code{--with-cmacs-tallow} builds the Tallow toolchain
+(@file{deps/tallow}) with cmacs and installs it alongside.  A
+@file{.tlw} file then needs no configuration.  Nothing is linked into
+Emacs; every tool is a subprocess, so a panicking program cannot take
+the editor (or the gowl session) down.  The full manual is
+@file{doc_org/cmacs/tallow.org}.
+
+@menu
+* Tallow Editing::
+* Tallow REPL::
+* Tallow Debugging::
+@end menu
+
+@node Tallow Editing
+@section Editing, the Language Server and Commands
+
+@code{tallow-mode} is upstream's (@file{deps/tallow/editors/emacs}).
+eglot runs @samp{tallow lsp} through
+@code{cmacs-tallow-server-contact}.  It provides completion, types on
+hover, inlay hints, signature help, definitions, references, rename,
+symbols, call and type hierarchies, code actions, code lenses and
+semantic tokens.  The buffer is formatted on save
+(@code{cmacs-tallow-format-on-save}).  @file{tallow.yaml} marks a
+project root.  @code{cmacs-tallow-program} finds the toolchain in
+@env{CMACS_TALLOW_DIR}, then the tree's @file{build/debug} or
+@file{build/release}, then @env{PATH}.
+
+@table @kbd
+@item C-c C-c
+@code{cmacs-tallow-run}: @samp{tallow run} (prefix: program arguments).
+@item C-c C-t
+@code{cmacs-tallow-test}.
+@item C-c C-v
+@code{cmacs-tallow-check}.
+@item C-c C-e
+@code{cmacs-tallow-explain}: explain a diagnostic code.
+@item C-c C-d
+@code{cmacs-tallow-debug} (prefix: time travel).
+@item C-c C-z
+@code{cmacs-tallow-repl}.
+@item C-c C-r
+@itemx C-M-x
+@itemx C-c C-b
+Evaluate the region, the definition, or the buffer in the REPL.
+@end table
+
+@noindent
+@kbd{M-x cmacs-tallow-new} creates a project.
+
+@node Tallow REPL
+@section The REPL
+
+@kbd{M-x cmacs-tallow-repl} runs @samp{tallow-suet repl --json} (or
+@samp{tallow repl --json}, per @code{cmacs-tallow-repl-backend}).
+Requests and responses are one JSON object per line, each carrying an
+@code{id}.  The ops are @code{eval}, @code{complete}, @code{type},
+@code{items} and @code{reset}.  The response kinds are @code{ready},
+@code{output} (with its @code{stream}), @code{value} (with its type; an
+item or statement answers @code{""} of type @code{()}), @code{error}
+(with a code such as @code{E0301}, @code{panic}, @code{limit} or
+@code{bad-request}, and a 1-based span), @code{incomplete}, @code{type},
+@code{candidates}, @code{items}, @code{ok} and @code{exit}.  A panic or
+a resource limit ends only that input.  cmacs renders them in
+@code{comint-preoutput-filter-functions}.  Answers to its own
+synchronous requests (completion) go to their waiter, never into the
+buffer.  In the REPL, @key{TAB} completes, and the colon commands are
+@code{:type EXPR}, @code{:items} and @code{:reset}.
+
+@node Tallow Debugging
+@section Debugging
+
+With dape loaded, cmacs adds two configurations.  @code{tallow} is
+@samp{tallow dap} over gdb; the adapter always builds with
+@samp{tallow build -g}, so C maps back to @file{.tlw}, and supports
+@code{restart}, @code{setVariable}, @code{completions} and
+@code{loadedSources}.  @code{tallow-suet} runs the suet VM with
+@code{:backend "suet"} and adds @code{stepBack} and
+@code{reverseContinue}.  @kbd{M-x cmacs-tallow-debug} starts the first;
+with a prefix argument it starts the time-travel one.  @code{:program}
+defaults to the current file.
+
+@node CMacs Libresearch
+@chapter CMacs Libresearch: Search Results to Comb Through
+
+@cindex libresearch
+@cindex search, web
+@cindex authinfo, libresearch
+
+@code{--with-cmacs-libresearch} is a client of a libresearch server
+(@command{libresearchd}).  It adds no submodule: it rides cmacs-ai's
+transport, so it requires @code{--with-cmacs-ai}.  The full manual is
+@file{doc_org/cmacs/libresearch.org}.
+
+@menu
+* Libresearch Configuration::
+* Libresearch Searching::
+* Libresearch AI::
+@end menu
+
+@node Libresearch Configuration
+@section Configuration
+
+One @file{~/.authinfo} or @file{~/.authinfo.gpg} line names the server
+and carries its token:
+
+@example
+machine search.example.org port 443 login libresearch password TOKEN
+@end example
+
+@code{cmacs-ai-libresearch-endpoint} resolves the server in this order:
+@code{cmacs-ai-libresearch-url} when set, then the entry whose login is
+@code{cmacs-ai-libresearch-login}, then @env{LIBRESEARCH_URL}, then
+@samp{http://127.0.0.1:8087}.  Port 443 or @samp{https} means
+@samp{https://}.  The token is the entry's secret, else any entry for
+the host, else @env{LIBRESEARCH_TOKEN}.  @kbd{M-x
+cmacs-libresearch-server} shows what was found.
+
+@node Libresearch Searching
+@section Searching
+
+@kbd{M-x cmacs-libresearch-search} (prefix: pick a category) opens
+@file{*Search: QUERY*}, a grid derived from the LQL results grid.
+
+@table @kbd
+@item RET
+Open the result (gsurf, else the browser).
+@item f
+Fetch the page as org.
+@item r
+Research a question, pointing the server at the marked results.
+@item i
+Ingest the marked results into the second brain.
+@item E
+Write the marked results to an org note in the PARA inbox.
+@item l
+Copy org links.
+@item /
+Refine locally with LQL over the @code{results} source.
+@item s
+@itemx S
+Search again; next page.
+@end table
+
+@noindent
+@code{cmacs-libresearch-query} runs LQL on the server into a grid.
+@code{cmacs-libresearch-research} gives a cited answer in org.
+@code{cmacs-libresearch-fetch} fetches a page.
+
+@node Libresearch AI
+@section The AI Side
+
+The AI tools use the same resolver.  @code{cmacs-ai-search-provider}
+@code{auto} prefers libresearch whenever a server is configured
+(@code{cmacs-ai-libresearch-configured-p}).  This holds for chats, the
+harness and @code{cmacs-ai-call}.  The brigade tools are
+@code{web_research}, @code{web_lql} and @code{web_search_show}; the last
+opens a search grid for the user.
+
 @node Build Configuration
 @chapter Build Configuration
 
@@ -14197,6 +14599,9 @@ fully-featured build matching Fedora defaults, use:
   --with-cmacs-spacemouse \
   --with-cmacs-camera \
   --with-cmacs-handtrack \
+  --with-cmacs-lql \
+  --with-cmacs-tallow \
+  --with-cmacs-libresearch \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
 @end example

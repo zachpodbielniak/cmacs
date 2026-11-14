@@ -43,3 +43,9 @@
 [submodule "deps/yaml-glib"]
 	path = deps/yaml-glib
 	url = git@gitlab.com:copyleft-games/yaml-glib.git
+[submodule "deps/libre-query-language"]
+	path = deps/libre-query-language
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/libre-query-language.git
+[submodule "deps/tallow"]
+	path = deps/tallow
+	url = git@git-ssh.podbielniak.com:zachpodbielniak/tallow.git

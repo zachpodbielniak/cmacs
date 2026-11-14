@@ -1,0 +1,134 @@
+#+title: CMacs Tallow — the Tallow language, out of the box
+#+description: The Tallow toolchain built with cmacs; tallow-mode, the language server, a JSON REPL, dape debugging with time travel, run/test/check/explain
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem tallow language lsp repl dap debugging
+#+created: 2026-11-14T00:00:00-05:00
+#+updated: 2026-11-14T00:00:00-05:00
+#+version: 0.1
+
+* Overview
+
+[[https://git.podbielniak.com/zachpodbielniak/tallow][Tallow]] (=deps/tallow=, =.tlw= files) is a procedural language that compiles to gnu89 C on GLib/GObject.  GIR is its module system and ownership is part of the type system.  It is self-hosting, and it ships its own tooling: a language server, two debug adapters (gdb-backed, and the suet bytecode VM's time-travel debugger), a REPL, a formatter, a test runner and an explainer for diagnostic codes.
+
+=--with-cmacs-tallow= builds that toolchain with cmacs and wires all of it in.  A =.tlw= file needs no configuration:
+
+- =tallow-mode= (upstream, =deps/tallow/editors/emacs=) provides syntax highlighting, indentation that matches =tallow fmt=, imenu, comments, and compilation error regexps.
+- eglot runs =tallow lsp= automatically.  You get completion, types on hover, inlay hints, signature help, diagnostics, go-to definition, declaration, type definition and implementation, references, rename, document and workspace symbols, call and type hierarchies, code actions, code lenses and semantic tokens.  The buffer is formatted on save.
+- =cmacs-tallow-repl= is a comint REPL over =tallow-suet repl --json=.
+- Debugging goes through dape, with a =tallow= configuration (gdb, programs built =-g=) and a =tallow-suet= configuration that can step backwards and reverse-continue.
+- There are commands to run, test and check a file or project, explain a diagnostic code, and create a new project.
+- =tallow.yaml= marks a project root for project.el.
+- =ob-tallow= is loaded after org, for =#+begin_src tallow= blocks.
+
+Nothing is linked into Emacs.  Every tool is a subprocess, so a panicking program, a runaway eval or a crashed debug adapter can never take the editor down.  Under =--gowl= it can't take the session down either.
+
+** Requirements
+
+- Configure flag =--with-cmacs-tallow=, part of the default flag set.
+- Building: gcc, make, GLib.  =libffi= is needed for the suet VM (the REPL and the time-travel debugger).  =gdb= is needed for =tallow dap=.  Fedora: =glib2-devel libffi-devel gdb=, plus optionally =libgccjit-devel libdex-devel=.  =./install-deps= installs them.
+- Debugging needs the =dape= package (GNU ELPA; Doom's =:tools debugger= uses it).
+
+* How cmacs finds the toolchain
+
+=src/Makefile.in= builds the submodule as part of =all= (=cmacs-tallow-toolchain=): the three-stage bootstrap from =bootstrap/tallowc.c=, the runtime, libtallow, and suet.  The top-level =make install= runs tallow's own =install= with cmacs's prefix, because an installed =tallow= needs its runtime library, std sources and pkg-config files beside it.  It also installs =tallow-mode.el= and =ob-tallow.el= into the standard site-lisp.
+
+=cmacs-tallow-program= finds a program in this order:
+
+1. =$CMACS_TALLOW_DIR=;
+2. =deps/tallow/build/debug=, then =deps/tallow/build/release=, in the tree this cmacs was built from (=source-directory=);
+3. =PATH=.
+
+So a development build always uses the tallow it was built with.  An in-tree =tallow= finds its own runtime from the tree.
+
+* Editing
+
+| Key       | Command                    | Does                                                    |
+|-----------+----------------------------+---------------------------------------------------------|
+| =C-c C-c= | =cmacs-tallow-run=         | =tallow run= the file (or project); prefix: program arguments |
+| =C-c C-t= | =cmacs-tallow-test=        | =tallow test=                                           |
+| =C-c C-v= | =cmacs-tallow-check=       | =tallow check= the file                                 |
+| =C-c C-e= | =cmacs-tallow-explain=     | Explain a diagnostic code (the one at point by default) |
+| =C-c C-d= | =cmacs-tallow-debug=       | Debug with dape (prefix: time travel)                   |
+| =C-c C-z= | =cmacs-tallow-repl=        | The REPL                                                |
+| =C-c C-r= | =cmacs-tallow-send-region= | Evaluate the region in the REPL                         |
+| =C-M-x=   | =cmacs-tallow-send-defun=  | Evaluate the definition at point                        |
+| =C-c C-b= | =cmacs-tallow-send-buffer= | Evaluate the buffer                                     |
+
+=M-x cmacs-tallow-new= creates a project with =tallow new= and opens it in dired.
+
+Run, test and check use =compilation-mode=, in the project root when there is a =tallow.yaml= above the file.  Errors are clickable through upstream's compilation regexp.
+
+** The language server
+
+=eglot-server-programs= maps =tallow-mode= to =cmacs-tallow-server-contact=, which returns =(TALLOW "lsp")=.  Upstream's own registration (=tallow-register-with-eglot=) is turned off so the two cannot race.  =cmacs-lsp-ensure= starts eglot when a =.tlw= file opens; =cmacs-tallow-auto-eglot= turns that off.  With =cmacs-tallow-format-on-save= set, =before-save-hook= formats through =eglot-format-buffer=, which is =tallow fmt=.
+
+* The REPL
+
+=M-x cmacs-tallow-repl= starts =tallow-suet repl --json= (or =tallow repl --json= when =cmacs-tallow-repl-backend= is ="tallow"=) in =*Tallow*=.
+
+Each request is one JSON object per line, with an =id= the response echoes:
+
+| Request                                  | Response kinds                                      |
+|------------------------------------------+-----------------------------------------------------|
+| ={"id":N,"op":"eval","code":"..."}=      | =output= (program output, first), then =value= or =error=; =incomplete= when the input needs more lines |
+| ={"id":N,"op":"complete","prefix":"..."}= | =candidates= with =items= of ={label, kind, detail}= |
+| ={"id":N,"op":"type","code":"..."}=      | =type= with ={"type": ...}=                         |
+| ={"id":N,"op":"items"}=                  | =items=                                             |
+| ={"id":N,"op":"reset"}=                  | =ok=                                                |
+
+On start the REPL sends ={"kind":"ready","version":...}=.  =id= may be any JSON value and is echoed back unchanged.
+
+- =output= is ={"stream":"stdout"|"stderr","text":...}=.  It always arrives before the input's final response.
+- =value= is ={"value":"<printed>","type":"<type>"}=.  An item or a statement answers with ="value":""= and ="type":"()"=, which cmacs shows as just a fresh prompt.
+- =error= is ={"message","code","span":{line,col,end_line,end_col}}=.  =code= is a diagnostic code (=E0301=), or one of =panic=, =limit=, =denied=, =failed=, =unsupported=, =error=, or =bad-request= (a line that is not JSON, or an unknown op).  =span= is 1-based with =end_col= exclusive, relative to the code sent, and is present only when the error lies inside the input.
+- =exit= is ={"code":C}=, sent when an input calls =exit(C)=.  The REPL then exits with status C, and comint shows it.
+- Every =eval= ends with exactly one of =value=, =error=, =incomplete= or =exit=.  A panic or a resource limit (=--max-steps=, =--max-mem=, =--max-depth=, applied per input) ends only that input, never the REPL.
+
+The protocol is documented upstream in =deps/tallow/docs/compiler/suet.org= (=#repl-json=).
+
+cmacs turns this into ordinary REPL text in =comint-preoutput-filter-functions=:
+
+- values are printed with their type (=3 : i64=);
+- errors are printed with their diagnostic code and position;
+- program output is printed as written;
+- an =incomplete= response shows a =....>= continuation prompt.
+
+Responses to cmacs's own synchronous requests (completion) are routed to their waiters, never into the buffer.  A partial line is held until the rest arrives.
+
+| In the REPL | Does                                                  |
+|-------------+-------------------------------------------------------|
+| =TAB=       | Complete through the REPL's =complete= op (it knows the REPL's own definitions) |
+| =:type EXPR= | The type of =EXPR=                                   |
+| =:items=    | What the session has defined                          |
+| =:reset=    | Start the session over                                |
+| =C-c C-z=   | Back to the source buffer                             |
+
+* Debugging
+
+With dape loaded, cmacs adds two entries to =dape-configs=:
+
+| Config         | Adapter                         | Can                                                         |
+|----------------+---------------------------------+-------------------------------------------------------------|
+| =tallow=       | =tallow dap= over =gdb --interpreter=mi3= | Breakpoints (line, function, exception), stepping, stack, scopes, variables, evaluate, pause, =restart= (rebuilds an edited source, keeps breakpoints), =setVariable= (a local, field or element by its Tallow name), =completions= (locals, functions, fields after =x.=) and =loadedSources=.  The adapter always builds with =tallow build -g= (=#line=, =-O0 -g3=) into a temporary directory; there is no flag to pass. |
+| =tallow-suet=  | =tallow dap= with =:backend "suet"= (it re-executes itself as =tallow-suet dap=) | Stepping and inspection on the bytecode VM, plus =stepBack= and =reverseContinue=: run to the bug, then step backwards to where it came from.  Optional launch fields =record= / =replay= (JSON Lines traces), =snapshotInterval= (10000) and =snapshotBudget= (64).  No C is built.  The newer gdb-only requests (=restart=, =setVariable=, ...) are not in this adapter yet. |
+
+=M-x cmacs-tallow-debug= (=C-c C-d=) starts =tallow=; with a prefix argument it starts =tallow-suet=.  =M-x dape= offers both by name too, and dape's usual syntax overrides a field: =tallow-suet :program "src/main.tlw"=.  =:program= defaults to the current file, else the project root.  If dape is not installed, =cmacs-tallow-debug= says so and stops.  It never installs packages itself.
+
+gdb pretty-printers for Tallow values ship in the runtime (=tallow_gdb.py=) and load automatically.
+
+* Customization
+
+| Variable                       | Default  | Meaning                                          |
+|--------------------------------+----------+--------------------------------------------------|
+| =cmacs-tallow-format-on-save=  | =t=      | Format with =tallow fmt= (via eglot) on save     |
+| =cmacs-tallow-auto-eglot=      | =t=      | Start eglot in =.tlw= buffers                    |
+| =cmacs-tallow-repl-backend=    | ="suet"= | =tallow-suet repl= or =tallow repl=              |
+| =cmacs-tallow-repl-buffer-name= | =*Tallow*= | The REPL buffer                               |
+| =cmacs-tallow-repl-prompt=     | =tallow> = | The prompt cmacs draws                         |
+
+* Troubleshooting
+
+- *=.tlw= opens in =prog-mode= with a message* :: =tallow-mode= was not found.  Check that =deps/tallow/editors/emacs= exists in a dev tree, or that the installed site-lisp copy does.
+- *"no `tallow'"* :: The toolchain was not built (=--with-cmacs-tallow= off), or is not on =PATH= for an installed cmacs.
+- *The REPL prints raw JSON* :: The =tallow= on your =PATH= predates =repl --json=.  Use the tree's build, or update tallow.
+- *dape says the adapter exited* :: =tallow dap= needs =gdb=; the time-travel config needs =tallow-suet= (built with libffi).

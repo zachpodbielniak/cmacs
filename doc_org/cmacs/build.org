@@ -124,6 +124,9 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-camera=        | Camera capture through GStreamer (PipeWire, V4L2, the Camera portal); frames in memory only, an indicator while open (requires glib) |
 | =--with-cmacs-handtrack=     | Camera hand tracking: MediaPipe palm + landmark models on onnxruntime (optional), desktop hand gestures through the VR gesture classifier (requires camera + libregnum) |
 | =--with-cmacs-spacemouse=    | SpaceMouse / 6DOF input via spacenavd (libspnav when found): orbit/pan/zoom libregnum scenes, the 3D lrg frame and the VR viewer; buttons as =<spacemouse-N>= (requires glib) |
+| =--with-cmacs-lql=           | LQL linked in (liblql + liblql-tools): files/git/journal/SQL plus editor-state sources, results grid, async REPL, language server with cmacs's environment, =emacsctl lql= (requires glib) |
+| =--with-cmacs-tallow=        | Tallow toolchain built and installed with cmacs; =tallow-mode=, eglot on =tallow lsp=, JSON REPL, dape debugging (gdb + suet time travel) |
+| =--with-cmacs-libresearch=   | libresearch client: search results grid, server LQL, research, fetch; server + token from authinfo, shared with the AI tools (requires ai) |
 | =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
 | =--enable-cmacs-deps-debug=   | In-house deps -O0 -g3 DWARF (gdb + cintrospect); default.  Not libregnum: see below |
@@ -188,6 +191,9 @@ Example with explicit flags:
   --with-cmacs-spacemouse \
   --with-cmacs-camera \
   --with-cmacs-handtrack \
+  --with-cmacs-lql \
+  --with-cmacs-tallow \
+  --with-cmacs-libresearch \
   --with-cmacs-ai-brigade \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
@@ -275,6 +281,9 @@ rest (see the Ubuntu 24.04 section below).
 | MCP      | =mcp-glib-1.0= pkg-config      | =deps/mcp-glib/=           |
 | API      | (built from =cmacs/api/=)      | (always bundled)           |
 | Office   | =libzip= + =libxml-2.0= pkg-config | (none, system only)    |
+| LQL      | (always bundled: =liblql-tools.a= is not installed by LQL) | =deps/libre-query-language/= (=liblql-1.0.a= + =liblql-tools.a=); needs =json-glib-1.0 yaml-0.1 libxml-2.0 libzstd liblzma bzip2=, optional =libsystemd sqlite3 libpq= |
+| Tallow   | (toolchain, not linked)        | =deps/tallow/= built by =src/Makefile.in=, installed by tallow's own =install=; =libffi= (suet), =gdb= (=tallow dap=) |
+| libresearch | (Elisp; rides cmacs-ai's transport) | (no submodule) |
 
 ** LibreClaw dependencies
 

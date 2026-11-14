@@ -1,0 +1,341 @@
+#+title: CMacs LQL — the libre query language, linked into the editor
+#+description: Query files, git, the journal, SQL, Kubernetes and the editor's own state with LQL; results in a grid, an async REPL, and .lql files with a language server that knows cmacs
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem lql query data lsp repl
+#+created: 2026-11-14T00:00:00-05:00
+#+updated: 2026-11-14T00:00:00-05:00
+#+version: 0.1
+
+* Overview
+
+LQL ([[https://git.podbielniak.com/zachpodbielniak/libre-query-language][libre-query-language]], the =deps/libre-query-language= submodule) is a pipeline query language: a source, then stages separated by =|=.
+
+#+begin_src lql
+fetch buffers
+| filter modified and file != null
+| fields name, file, size
+| sort size DESC
+#+end_src
+
+=--with-cmacs-lql= links the language into cmacs.  You get every source the =lql= program has, plus the editor's own state as sources.  Results land in a grid you can sort, filter, mark and export, or in a REPL.  =.lql= files open with =lql-mode= and a language server that already knows cmacs's sources, with no setup.
+
+What you get:
+
+- *Every source the =lql= program has*: files of any format (JSON, JSON Lines, CSV, TSV, YAML, TOML, INI, XML, systemd units, logs in many dialects, compressed with gzip/zstd/xz/bzip2), =git_log= and the other git sources, =exec= and the command definitions (built-in plus =~/.config/lql/commands=), the systemd journal, coredumps, Kubernetes, and SQLite/PostgreSQL through =sql=.
+- *The editor as data*: =buffers=, =windows=, =processes=, =recentf=, =kill_ring=, =bookmarks=, =org_headings=, =gowl_clients=, and anything you add with =cmacs-lql-define-source=.
+- *A results grid* (=cmacs-lql-results-mode=), shared with the libresearch client: sort, narrow, refine locally, mark, copy, export, and =RET= to visit whatever a row names.
+- *An async REPL* (=M-x cmacs-lql-repl=) with liblql's own completion and signature help.
+- *=.lql= files that just work*: =lql-mode= (font-lock and indentation from upstream), eglot running the tree's =lql-language-server= against an environment file cmacs writes, and =C-c C-c= to run the query at point.
+- *Agent and CLI surfaces*: the =lql_query= / =lql_sources= tools (in-process agents, CLI agents and MCP clients), =org.cmacs.Editor1.Lql= on D-Bus, and =emacsctl lql=.
+
+Everything is read-only.  LQL has no statement that writes, and no cmacs source writes to the editor.
+
+** Requirements
+
+- Configure flag =--with-cmacs-lql=.  It is part of the default flag set and requires =--with-cmacs-glib=.
+- Libraries: GLib/GIO, json-glib, yaml (libyaml), libxml2, zstd, xz (liblzma) and bzip2.  Optional: libsystemd (the journal source), sqlite3 and libpq (=sql= sources).
+- Fedora packages: =json-glib-devel libyaml-devel libxml2-devel libzstd-devel xz-devel bzip2-devel=; optional =systemd-devel sqlite-devel libpq-devel=.  =./install-deps= installs them, and =./install-deps --check= reports any that are missing.
+
+* Quick start
+
+| Do this                                          | Get                                                                |
+|--------------------------------------------------+--------------------------------------------------------------------|
+| =M-x cmacs-lql-query RET fetch buffers RET=      | Every buffer, in a grid                                            |
+| =M-x cmacs-lql-repl=                             | The REPL; type a query, =RET= runs it, =TAB= completes             |
+| Visit =foo.lql=, write a query, =C-c C-c=        | The query at point (the region, or the block between blank lines) in a grid |
+| =emacsctl lql query 'fetch processes'=           | The same from a shell, against a running cmacs                     |
+
+Some queries to start from:
+
+#+begin_src lql
+# the ten biggest modified buffers
+fetch buffers | filter modified | sort size DESC | limit 10
+
+# TODOs across your agenda files, by file
+fetch org_headings
+| filter todo == "TODO"
+| summarize n = count(), by: {file}
+| sort n DESC
+
+# who touched this repo most in the last month
+fetch git_log | filter time > now() - 30d
+| summarize commits = count(), by: {author}
+| sort commits DESC
+
+# failed units in the journal since boot
+fetch journal | filter priority <= 3 | fields time, unit, message
+#+end_src
+
+* Architecture
+
+** Two archives, one environment
+
+The build links two archives from the submodule:
+
+- =liblql-1.0.a= :: The language: parser, checker, evaluator, executor, built-in functions and commands, the memory source, and the assist code (completion, hover, signature, diagnostics, format).  It needs only GLib.
+- =liblql-tools.a= :: The sources and formats the =lql= program offers.  =lql_tool_register_sources= and =lql_tool_register_sql= register them on an environment exactly as the program does.  This archive is why a query in cmacs can read what the CLI can.
+
+cmacs builds exactly one =LqlEnvironment= per process, on first use, not at startup.  An Emacs that never runs a query never reads =~/.config/lql= and never probes for =kubectl= or =journalctl=.  The registration order matches the =lql= program:
+
+1. the language's built-ins (=lql_environment_new=);
+2. the tool sources (files, git, exec and command definitions, journal, coredumps, Kubernetes);
+3. SQL;
+4. the user's aliases, last, so an alias can never take the name of a source;
+5. the Elisp sources, as they are defined.
+
+** The C/Lisp split
+
+The subsystem has three translation units, split the way dbexplorer is:
+
+| File                       | Sees               | Role                                                      |
+|----------------------------+--------------------+-----------------------------------------------------------|
+| =cmacs/lql/cmacs-lql-env.c=    | =<lql.h>=, tool headers | The environment, snapshots, result JSON, the assist wrappers |
+| =cmacs/lql/cmacs-lql-defuns.c= | =lisp.h=           | The DEFUNs, the job registry, the worker thread           |
+| =cmacs/lql/cmacs-lql-init.c=   | =lisp.h=           | =syms_of_= / =init_= aggregation                          |
+
+=cmacs-lql-env.c= never includes =lisp.h= and =cmacs-lql-defuns.c= never includes =<lql.h>=.  Only C strings cross between them: JSON in, JSON out.
+
+** Threading: queries never run on the editor's thread
+
+A query can take seconds: a =git_log= over a large repo, the journal, a remote PostgreSQL.  So:
+
+1. =cmacs-lql--run= queues a job on a one-thread =GThreadPool= and returns an integer id at once.  Jobs run one at a time.
+2. The worker runs the job under a private thread-default =GMainContext=, so an async source never touches the editor's loop.  (cmacs-ai-libresearch.c does the same, because MCP and D-Bus callers wait with polling from inside a dispatch, and a request bound to the editor's own context would never complete there.)
+3. The payload comes back either to a callback, delivered once on the Lisp thread through =cmacs_glib_invoke_on_main=, or to a caller polling =cmacs-lql--poll=.  Pending callbacks live in a =staticpro='d hash table, never in the C job.
+
+*Editor state is never read from the worker thread.*  Before submitting, Lisp finds which Elisp sources the query names (whole-symbol matches) and calls their functions on the Lisp thread.  It serialises the rows to JSON and sends them with the job as =:snapshots=.  The worker installs them as =LqlMemorySource= tables while it holds the environment lock, then runs the query.
+
+** Locking: the editor never waits
+
+=ENV_LOCK= guards the environment.  A run holds it from installing its snapshots until its table is built, so a snapshot is never swapped under a running fetch.
+
+The editor-side helpers are completion, hover, signature, diagnostics, describe, explain and format.  They only *try* the lock.  If a query holds it, they signal =cmacs-lql-busy= (a child of =cmacs-lql-error=), and the Lisp wrappers turn that into "no answer this time".  A frozen minibuffer would be worse than a missing candidate.
+
+Source definitions go on a separate pending list with its own small lock, and the next holder of =ENV_LOCK= applies them.  So =cmacs-lql-define-source= never blocks either.
+
+** Payloads and result JSON
+
+| Payload                                                 | Meaning               |
+|---------------------------------------------------------+-----------------------|
+| =(:ok :json JSON :text TEXT :rows N :elapsed SECONDS)=  | Success               |
+| =(:error MESSAGE)=                                      | Parse/check/run error |
+| =(:cancelled)=                                          | =cmacs-lql--cancel=   |
+
+=JSON= is =&#123;"columns":[&#123;"name","type"&#125;],"rows":[[...]],"total":N&#125;=.  Cells are liblql's own JSON for each value, so arrays and records stay structured.  =total= counts every row the query produced, even when =:max-rows= truncated =rows=.  =TEXT= is present only when =:text-width= asked for it; it is =lql_table_to_text_wrapped=.  =cmacs-lql-parse= turns =JSON= into =(:columns ((NAME . TYPE)...) :rows (VECTOR...) :total N)=.
+
+** Offsets
+
+liblql uses byte offsets into UTF-8.  A multibyte Lisp string's data is UTF-8 for any text a query can contain, so the DEFUNs pass =SSDATA= unchanged and convert the character position on the way in (=string_char_to_byte=).  Offsets in the returned JSON stay in bytes; =cmacs-lql--byte-to-char= converts the few Lisp needs (completion bounds).
+
+* Commands and keys
+
+** Anywhere
+
+| Command                  | Does                                                                  |
+|--------------------------+-----------------------------------------------------------------------|
+| =cmacs-lql-query=        | Read a query, run it, show the grid                                   |
+| =cmacs-lql-repl=         | Open the REPL                                                         |
+| =cmacs-lql-write-environment= | Rewrite the language server's environment file now               |
+
+** In =lql-mode= (=.lql= files)
+
+| Key       | Command                      | Does                                                                |
+|-----------+------------------------------+---------------------------------------------------------------------|
+| =C-c C-c= | =cmacs-lql-run-at-point=     | Run the region, or the blank-line-delimited block at point, in a grid |
+| =C-c C-e= | =cmacs-lql-explain-at-point= | Show the plan liblql would run                                      |
+| =C-c C-f= | =cmacs-lql-format-at-point=  | Reformat the query with liblql's formatter (to =fill-column=)       |
+| =C-c C-t= | =cmacs-lql-toggle-target=    | Switch this buffer between =local= and =libresearch=                |
+| =C-c C-z= | =cmacs-lql-repl=             | The REPL                                                            |
+
+=cmacs-lql-target= is buffer-local and safe as a file-local variable.  Put =# -*- cmacs-lql-target: libresearch -*-= at the top of a file of search queries.
+
+** The results grid (=cmacs-lql-results-mode=)
+
+| Key       | Does                                                                            |
+|-----------+---------------------------------------------------------------------------------|
+| =RET=     | Visit what the row names (see below); otherwise show the row                    |
+| =v=       | Show the whole row as a record                                                  |
+| =/=       | Narrow: append =| filter EXPR= and run again against the source (offers =column == value= from point) |
+| =R=       | Refine locally: run =fetch results \vert{} PIPELINE= over the rows shown, without fetching again |
+| =e=       | Edit the query and run it again                                                 |
+| =g=       | Run it again                                                                    |
+| =S=       | Sort by the column at point (=tabulated-list=), on the typed value              |
+| =c=       | Hide or show a column                                                           |
+| =m= =u= =U= | Mark, unmark, unmark all                                                      |
+| =w=       | Copy the cell at point                                                          |
+| =W=       | Copy the marked rows (or the row at point) as JSON                              |
+| =E=       | Export as an org table, CSV or JSON, to the kill ring, a buffer or a file       |
+| =x=       | Explain the plan                                                                |
+| =t=       | Switch the target (=local= / =libresearch=) and run again                       |
+| =C-c C-k= | Cancel the running query                                                        |
+
+The mode line shows rows (=shown/total= when truncated), the time the run took, and the target when it is not local.
+
+*** What =RET= visits
+
+=cmacs-lql-results-visit-functions= is a hook: each function receives the row as an alist of =(COLUMN . VALUE)=, and the first one that returns non-nil wins.  The defaults:
+
+| Function                          | When the row has                       | Does                                  |
+|-----------------------------------+----------------------------------------+---------------------------------------|
+| =cmacs-lql-results-visit-file=    | =file= / =path= / =filename= (+ =line=) | Visit it, at the line                 |
+| =cmacs-lql-results-visit-url=     | =url= / =link= / =href= / =uri=        | =cmacs-lql-results-url-function= (gsurf when available, else =browse-url=) |
+| =cmacs-lql-results-visit-buffer=  | =buffer= / =name= of a live buffer     | Switch to it                          |
+| =cmacs-lql-results-visit-org-id=  | =id= / =org_id=                        | =org-id-goto=                         |
+
+To teach =RET= about a new kind of row:
+
+#+begin_src emacs-lisp
+(add-hook 'cmacs-lql-results-visit-functions
+          (lambda (row)
+            (when-let* ((pid (cdr (assoc "pid" row))))
+              (proced) (message "pid %s" pid) t)))
+#+end_src
+
+** The REPL (=cmacs-lql-repl-mode=)
+
+- =RET= runs a complete query.  A line ending in =|=, =,= or =(= continues on the next line, and =C-j= always does.  =M-RET= sends regardless.
+- =TAB= completes from =lql_assist_complete=: sources (cmacs's included), commands, functions, columns of the source in play, keywords.  Candidates carry their kind and documentation for corfu/company.
+- Eldoc shows the signature of the call at point.
+- Queries run async on the worker; the prompt comes back with the rows, and =C-c C-k= cancels.
+- Each table prints as aligned text, at most =cmacs-lql-repl-max-rows= rows, followed by a =[grid]= button that opens the full result in a grid.
+
+Colon commands:
+
+| Command      | Does                                                    |
+|--------------+---------------------------------------------------------|
+| =:help=      | List these                                              |
+| =:sources=   | Every source name, cmacs's included                     |
+| =:explain Q= | The plan for =Q=                                        |
+| =:format Q=  | =Q= formatted                                           |
+| =:describe=  | Rewrite the language server's environment file          |
+| =:target T=  | =local= or =libresearch=                                |
+| =:grid=      | Open the last result in a grid                          |
+| =:clear=     | Clear the buffer                                        |
+
+* Editor sources
+
+| Source         | Columns                                                                                      | Rows                                    |
+|----------------+----------------------------------------------------------------------------------------------+-----------------------------------------|
+| =buffers=      | name, file, directory, mode, size, modified, read_only, visible, process, hidden             | =(buffer-list)=                         |
+| =windows=      | frame, buffer, width, height, selected, dedicated, point                                      | every window of every frame             |
+| =processes=    | name, pid, status, type, command, buffer                                                      | =(process-list)=                        |
+| =recentf=      | rank, file, directory, extension, remote, exists                                              | =recentf-list=                          |
+| =kill_ring=    | index, length, text (first =cmacs-lql-kill-ring-max-chars=)                                   | =kill-ring=                             |
+| =bookmarks=    | name, file, position                                                                          | =bookmark-alist=                        |
+| =org_headings= | file, line, level, heading, todo, priority, tags, scheduled, deadline, id                     | =org-agenda-files= (at most =cmacs-lql-org-max-files=) |
+| =gowl_clients= | client                                                                                        | gowl's windows (only under =--gowl=)    |
+
+A source's function runs on the editor thread only when a query names that source, just before the query runs.  =org_headings= reads every agenda file it is allowed, so =cmacs-lql-org-max-files= bounds it.
+
+** Defining your own
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-source
+ "features"
+ '(("name" string) ("autoloaded" boolean))
+ (lambda ()
+   (mapcar (lambda (f) (list :name f :autoloaded (and (autoloadp (symbol-function f)) t)))
+           features))
+ "Loaded Lisp features.")
+#+end_src
+
+- =NAME= must be an identifier (=[A-Za-z_][A-Za-z0-9_]*=).  It cannot shadow a built-in or tool source; the definition is dropped with a warning.  Redefining an Elisp source replaces it.
+- Column types: =string=, =int=, =double=, =boolean=, =timestamp=, =duration=, =array=, =record=, =any=.  Aliases =integer=, =float=, =number=, =bool= and =list= are accepted.
+- A row is a plist (=:col VALUE ...=) or an alist.  Columns a row leaves out are =NULL=, and fields beyond the declared columns come along untyped.
+- Conversion: =nil= in a boolean column is false and elsewhere =NULL=.  A Lisp time value or =float-time= seconds becomes a Timestamp, and a number in a duration column is seconds.  A list becomes an Array, a keyword plist a Record, a buffer its name.
+- A function that signals costs that source's rows (a message says why); the query still runs.
+
+* The language server and =lql-mode=
+
+=lql-mode= is upstream's, from =deps/libre-query-language/editors/emacs= in a dev tree or the installed =site-lisp=.  It provides font-lock, indentation and the =.lql= association.  cmacs adds:
+
+- =auto-mode-alist= sends =.lql= through =cmacs-lql-mode-autoload=, which loads the mode and binds the keys above.
+- *eglot*: =eglot-server-programs= maps =lql-mode= to =cmacs-lql-server-contact= (upstream's own registration is turned off so the two cannot race).  The contact runs the tree's =lql-language-server= (=build/debug= or =build/release=, or =CMACS_LQL_DIR=), else the one on =PATH=, with =--environment= pointing at =cmacs-lql-environment-file= (=$XDG_CACHE_HOME/cmacs/lql-environment.json=), plus any =lql-environment-commands=.
+- *The environment file* is =lql_environment_describe= of cmacs's own environment: built-ins, tool sources and the Elisp sources.  So completion, hover and diagnostics in =.lql= files know =buffers= and its columns.  It is rewritten (debounced, write-then-rename) whenever a source is defined, and the server reloads it on change.
+- =cmacs-lsp-ensure= starts eglot when a =.lql= file opens, under =cmacs-lql-auto-eglot=.
+- *=ob-lql=*: loaded after org, with =ob-lql-program= pointed at the tree's =lql= so =#+begin_src lql= blocks run with no PATH setup.
+
+What the language server answers is listed in [[file:../../deps/libre-query-language/docs/editor/][the LQL editor docs]]: completion with resolve and snippets, hover with column types per pipeline stage, signature help, go to definition, references, rename, document symbols, inlay hints (the schema after each stage), code actions (did-you-mean), formatting, folding, semantic tokens and pull diagnostics.
+
+* Agent, D-Bus and CLI surfaces
+
+** Agent tools
+
+=lisp/cmacs/cmacs-brigade-research.el= defines two brigade tools.  A brigade tool reaches in-process agents, CLI agents over the MCP relay, and external MCP clients from one definition:
+
+- =lql_query= :: =query=, optional =max_rows= (default 100, at most 2000).  Returns the rows as a text table plus a count and timing.
+- =lql_sources= :: Every source, with the editor's own listed separately.
+
+** D-Bus: =org.cmacs.Editor1.Lql=
+
+| Method      | In                    | Out     |
+|-------------+-----------------------+---------|
+| =Query=     | =s query=, =i max_rows= | =s table= |
+| =QueryJson= | =s query=, =i max_rows= | =s json=  |
+| =Explain=   | =s query=             | =s plan=  |
+| =Sources=   |                       | =s sources= |
+
+A bad query is a normal reply that starts with =error: =, not a D-Bus error.  =max_rows= <= 0 means 100, capped at 10000.  The query text reaches Lisp only through =cmacs_dbus_lisp_escape=.
+
+** =emacsctl lql=
+
+#+begin_src sh
+emacsctl lql query 'fetch buffers | filter modified' 20
+emacsctl lql json 'fetch processes' -o table
+emacsctl lql explain 'fetch git_log | limit 5'
+emacsctl lql sources
+#+end_src
+
+* Lisp API
+
+| Function                          | Does                                                            |
+|-----------------------------------+-----------------------------------------------------------------|
+| =cmacs-lql-run QUERY CALLBACK &rest OPTS= | Async run; returns the id.  OPTS: =:max-rows= =:text-width= =:timeout= (seconds) |
+| =cmacs-lql-run-sync QUERY &rest OPTS= | Run and wait (safe inside MCP/D-Bus dispatch); returns the payload |
+| =cmacs-lql-wait ID &optional TIMEOUT= | Wait for an id                                               |
+| =cmacs-lql-parse JSON=            | Result JSON → table plist                                       |
+| =cmacs-lql-payload-table PAYLOAD= | Table plist of an =:ok= payload                                 |
+| =cmacs-lql-define-source NAME COLUMNS FN &optional DOC= | Define an Elisp source            |
+| =cmacs-lql-completions TEXT POS=  | =(LABEL KIND DETAIL DOC START END)= list, or nil while busy     |
+| =cmacs-lql-hover-text TEXT POS=   | Hover markdown, or nil                                          |
+| =cmacs-lql-results-show QUERY TABLE &key target mode buffer= | Show a computed table in a grid  |
+| =cmacs-lql-results--loading QUERY &key target buffer mode parent= | Open a grid and run QUERY on TARGET |
+
+A /target/ is =local=, =libresearch=, or a function =(lambda (query callback))= whose callback receives a table plist or =(:error MSG)=.  The libresearch search grid is built this way.
+
+** Primitives (=cmacs/lql/cmacs-lql-defuns.c=)
+
+=cmacs-lql--run=, =--poll=, =--cancel=, =--define-source=, =--describe=, =--complete=, =--hover=, =--signature=, =--diagnose=, =--explain=, =--format=, =--sources=, =--version=.  Errors: =cmacs-lql-error=, and =cmacs-lql-busy= (a child of it).
+
+* Customization
+
+| Variable                              | Default                  | Meaning                                         |
+|---------------------------------------+--------------------------+-------------------------------------------------|
+| =cmacs-lql-max-rows=                  | 5000                     | Rows handed back to a grid or REPL              |
+| =cmacs-lql-timeout=                   | 120                      | Seconds before a run gives up                   |
+| =cmacs-lql-org-max-files=             | 200                      | Bound on =org_headings=                         |
+| =cmacs-lql-kill-ring-max-chars=       | 500                      | Text kept per kill                              |
+| =cmacs-lql-environment-file=          | =$XDG_CACHE_HOME/cmacs/lql-environment.json= | Where the server's environment goes |
+| =cmacs-lql-auto-eglot=                | =t=                      | Start eglot in =.lql= buffers                   |
+| =cmacs-lql-results-max-column-width=  | 60                       | Widest grid column                              |
+| =cmacs-lql-results-null-string=       | =·=                      | How NULL is drawn                               |
+| =cmacs-lql-results-visit-functions=   | file, url, buffer, org id | What =RET= tries                               |
+| =cmacs-lql-results-url-function=      | gsurf, else =browse-url= | How a URL opens                                 |
+| =cmacs-lql-repl-max-rows=             | 200                      | Rows the REPL prints                            |
+| =cmacs-lql-repl-prompt=               | =lql> =                  | The prompt                                      |
+
+* Build notes
+
+- =configure.ac= decides which optional drivers =liblql-tools.a= gets (journal, sqlite, postgres) by probing, passes them to the sub-make (=CMACS_LQL_MAKE_FLAGS=), and links exactly those libraries.  =TUI= is always off.
+- LQL's nested =deps/yaml-glib= is skipped (=admin/cmacs-submodules.sh=).  The tools archive and programs use cmacs's canonical =deps/yaml-glib= (=YAML_GLIB_DIR=), linked last so an archive that already embeds those objects (libregnum) satisfies them first.
+- LQL's include directories are =-isystem=, so cmacs's warning set does not land on a third-party header.  Because =CMACS_LQL_CFLAGS= is in =ALL_CFLAGS= and names =build/<type>/include= (generated by LQL's build), every object is order-only on the LQL build.  Without that, a fresh parallel build warns =-Wmissing-include-dirs= once per object.
+- =make install= installs =lql=, =lql-language-server= and upstream's =lql-mode.el= / =ob-lql.el= into the standard =site-lisp=.
+- =just verify-fresh= covers the archives (class =dep-libre-query-language=).
+
+* Troubleshooting
+
+- *"an LQL query is running; try again"* :: A helper (completion, explain, describe) found the environment busy.  Wait for the query, or =C-c C-k= it.
+- *A new source is not offered by completion in a =.lql= buffer* :: The environment file is rewritten on an idle timer; =M-x cmacs-lql-write-environment= forces it.
+- *=fetch NAME= says unknown source* :: =M-x cmacs-lql-repl= then =:sources=.  An Elisp source whose name collides with a built-in one is refused (see =*Messages*=).
+- *An Elisp source returns no rows* :: Its function signalled; =*Messages*= has =cmacs-lql: source NAME failed: ...=.
+- *=.lql= opens in =prog-mode= with a message* :: =lql-mode= was not found: the submodule is missing in a dev tree, or the installed site-lisp copy is.

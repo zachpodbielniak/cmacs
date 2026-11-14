@@ -318,6 +318,14 @@ embedded Doom config.
   symlinks each =cmacs/<subsystem>/NAME.c= into =srcdir=; new subsystem
   objects (e.g. the libregnum editor's =cmacs-libregnum-dnd.o=) are picked
   up automatically once added to a =CMACS_*_OBJ= var.
+- *An order-only edge from every object to a dep build*:
+  =$(ALLOBJS): | $(CMACS_LQL_STATIC_LIB)= (under =ifneq ($(CMACS_LQL_OBJ),)=).
+  =CMACS_LQL_CFLAGS= is in =ALL_CFLAGS= and names LQL's generated
+  =build/<type>/include=; without the edge a fresh parallel build compiles
+  objects before that directory exists and warns =-Wmissing-include-dirs=
+  once per object.  Order-only so an LQL rebuild does not make every
+  object out of date.  Tallow is a separate =all: cmacs-tallow-toolchain=
+  edge: nothing of it is linked.
 - *Submodule build rules*: recipes build the vendored deps before linking.
   The =deps/libregnum= rule passes =CRISPY=1 HAS_GI=1= +
   =GI_RUNTIME_{CFLAGS,LIBS}= (so crispy + the gjs/PyGObject scripting backends

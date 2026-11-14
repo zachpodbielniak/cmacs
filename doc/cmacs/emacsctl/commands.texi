@@ -101,7 +101,8 @@ a missing subsystem maps to exit code 3 with a clear message:
 @code{gnuseye}, @code{pod} (podomation), @code{video}, @code{audio},
 @code{speech} (whisper + piper), @code{lrg} (libregnum editor),
 @code{calc} (@code{eval}, @code{symbolic}, @code{units},
-@code{list}, @code{describe}), @code{compositor} (whose verbs include
+@code{list}, @code{describe}), @code{lql} (@code{query}, @code{json},
+@code{explain}, @code{sources}; @pxref{LQL Surfaces}), @code{compositor} (whose verbs include
 @code{keybinds} to list the live keybind table with each bind's action
 nick and description, and @code{run-keybind KEY} to run what a key is
 bound to --- which is not the same as injecting the key, since an

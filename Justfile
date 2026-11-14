@@ -136,6 +136,9 @@ configure_flags := """
     --with-cmacs-spacemouse
     --with-cmacs-camera
     --with-cmacs-handtrack
+    --with-cmacs-lql
+    --with-cmacs-tallow
+    --with-cmacs-libresearch
     --enable-cmacs-cpatch
     --enable-cmacs-deps-debug
 """

@@ -2980,6 +2980,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_DBEXPLORER
       syms_of_cmacs_dbexplorer ();	/* CMACS: database explorer */
 #endif
+#ifdef HAVE_CMACS_LQL
+      syms_of_cmacs_lql ();	/* CMACS: LQL query language */
+#endif
 #ifdef HAVE_CMACS_CLAWTILLA
       syms_of_cmacs_clawtilla ();	/* CMACS: clawtilla fleet client */
 #endif
@@ -3151,6 +3154,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_DBEXPLORER
   init_cmacs_dbexplorer ();	/* CMACS: database explorer */
+#endif
+#ifdef HAVE_CMACS_LQL
+  init_cmacs_lql ();	/* CMACS: LQL query language */
 #endif
 #ifdef HAVE_CMACS_CLAWTILLA
   init_cmacs_clawtilla ();	/* CMACS: clawtilla fleet client */

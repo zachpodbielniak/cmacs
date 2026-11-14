@@ -295,6 +295,17 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_IFACE_DBEXPLORER, "Export",
     "s:connection s:sql s:format s:path", CTL_REPLY_STRING },
 
+  /* lql --- LQL linked into the target cmacs: files, git, journal,
+   * sql, and the editor's own state.  Read-only by construction. */
+  { "lql query", "Run an LQL query; prints the rows as a table",
+    CTL_IFACE_LQL, "Query", "s:query i?:max_rows", CTL_REPLY_STRING },
+  { "lql json", "Run an LQL query; prints {columns, rows, total}",
+    CTL_IFACE_LQL, "QueryJson", "s:query i?:max_rows", CTL_REPLY_JSON },
+  { "lql explain", "Show the plan for an LQL query",
+    CTL_IFACE_LQL, "Explain", "s:query", CTL_REPLY_STRING },
+  { "lql sources", "List every LQL source",
+    CTL_IFACE_LQL, "Sources", NULL, CTL_REPLY_STRING },
+
   /* instance/log surface */
   { "logs show", "Recent *Messages* lines",
     CTL_IFACE_LOG, "RecentMessages", "i?:lines", CTL_REPLY_STRING },

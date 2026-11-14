@@ -251,12 +251,12 @@ window width."
   "Backend for ai-glib's web_search tool in chat/agent buffers.
 
 One of:
-  `auto'        ai-glib's choice from the environment: a libresearch
-                server when LIBRESEARCH_URL is set (LIBRESEARCH_TOKEN
-                as its token), else Brave or Bing when its API key is
-                set, else the keyless DuckDuckGo backend (best-effort,
-                no SLA).  Setting LIBRESEARCH_URL therefore changes
-                what `auto' does.
+  `auto'        a libresearch server when one is configured -- an
+                authinfo entry for the libresearch login,
+                `cmacs-ai-libresearch-url' or LIBRESEARCH_URL (see
+                `cmacs-ai-libresearch-configured-p') -- else ai-glib's
+                choice: Brave or Bing when its API key is set, else
+                the keyless DuckDuckGo backend (best-effort, no SLA).
   `libresearch' A libresearchd server -- self-hosted metasearch -- at
                 `cmacs-ai-libresearch-url', with the token from
                 `cmacs-ai-libresearch-token'.
@@ -298,14 +298,75 @@ backend, and by `libresearch', whose token comes from
 ;;;; commands in cmacs-ai-research.el: cited answers, page fetches and
 ;;;; LQL queries.
 
-(defcustom cmacs-ai-libresearch-url "http://127.0.0.1:8087"
-  "Base URL of the libresearch server (libresearchd).
-The default is where libresearchd listens out of the box.  Used by the
-`libresearch' web_search backend and by every `cmacs-ai-research'
-command.  The LIBRESEARCH_URL environment variable governs only the
-`auto' web_search backend, which is ai-glib's own choice."
+(defcustom cmacs-ai-libresearch-url nil
+  "Base URL of the libresearch server (libresearchd), or nil to find it.
+
+Nil (the default) resolves the server with
+`cmacs-ai-libresearch-endpoint', in this order:
+
+  1. an auth-source entry whose login is \"libresearch\" -- a
+     ~/.authinfo or ~/.authinfo.gpg line such as
+
+       machine search.example.org port 443 login libresearch password TOKEN
+
+     which names the server AND carries its token in one place
+     (port 443 or \"https\" means https://; any other port, http://);
+  2. the LIBRESEARCH_URL environment variable;
+  3. http://127.0.0.1:8087, where libresearchd listens out of the box.
+
+A string here wins over all of them.  Used by the `libresearch'
+web_search backend, every `cmacs-ai-research' command and the
+cmacs-libresearch client."
+  :type '(choice (const :tag "Find it (authinfo, LIBRESEARCH_URL, localhost)" nil)
+                 string)
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-libresearch-login "libresearch"
+  "The auth-source login that marks the libresearch server's entry."
   :type 'string
   :group 'cmacs-ai)
+
+(defconst cmacs-ai-libresearch-default-url "http://127.0.0.1:8087"
+  "Where libresearchd listens out of the box.")
+
+(defun cmacs-ai-libresearch--auth-entry ()
+  "The auth-source entry for the libresearch login, or nil."
+  (require 'auth-source)
+  (car (auth-source-search :user cmacs-ai-libresearch-login :max 1)))
+
+(defun cmacs-ai-libresearch--entry-url (entry)
+  "The base URL an auth-source ENTRY names, or nil."
+  (let ((host (plist-get entry :host))
+        (port (plist-get entry :port)))
+    (when (and (stringp host) (not (string-empty-p host)))
+      (if (string-match-p "\\`[a-z]+://" host)
+          host
+        (let* ((port (if (numberp port) (number-to-string port) port))
+               (https (member port '("443" "https"))))
+          (concat (if https "https://" "http://") host
+                  (if (and port (not (member port '("443" "https" "80" "http"))))
+                      (concat ":" port)
+                    "")))))))
+
+(defun cmacs-ai-libresearch-endpoint ()
+  "The libresearch server URL, resolved as `cmacs-ai-libresearch-url' says."
+  (or (and (stringp cmacs-ai-libresearch-url)
+           (not (string-empty-p cmacs-ai-libresearch-url))
+           cmacs-ai-libresearch-url)
+      (cmacs-ai-libresearch--entry-url (cmacs-ai-libresearch--auth-entry))
+      (let ((env (getenv "LIBRESEARCH_URL")))
+        (and env (not (string-empty-p env)) env))
+      cmacs-ai-libresearch-default-url))
+
+(defun cmacs-ai-libresearch-configured-p ()
+  "Non-nil when a libresearch server is configured, not merely defaulted.
+That is: `cmacs-ai-libresearch-url' set, an authinfo entry for the
+libresearch login, or LIBRESEARCH_URL."
+  (or (and (stringp cmacs-ai-libresearch-url)
+           (not (string-empty-p cmacs-ai-libresearch-url)))
+      (and (cmacs-ai-libresearch--auth-entry) t)
+      (let ((env (getenv "LIBRESEARCH_URL")))
+        (and env (not (string-empty-p env))))))
 
 (defcustom cmacs-ai-libresearch-token-function #'cmacs-ai-libresearch-auth-source-token
   "Function of one argument, the server URL, returning its bearer token.
@@ -336,10 +397,17 @@ normal; this is also how long a waiting MCP or brigade caller blocks."
 
 (defun cmacs-ai-libresearch-auth-source-token (url)
   "Return the libresearch bearer token for URL, or nil.
-Looks for an auth-source entry whose host is URL's host (and port its
-port, when it has one), then falls back to LIBRESEARCH_TOKEN."
+Looks first for the entry of the libresearch login whose server is
+URL (see `cmacs-ai-libresearch-url'), then for any entry whose host is
+URL's host (and port its port, when it has one), then falls back to
+LIBRESEARCH_TOKEN."
   (require 'url-parse)
-  (or (let* ((parsed (url-generic-parse-url url))
+  (or (let* ((entry (cmacs-ai-libresearch--auth-entry))
+             (secret (and entry
+                          (equal (cmacs-ai-libresearch--entry-url entry) url)
+                          (plist-get entry :secret))))
+        (if (functionp secret) (funcall secret) secret))
+      (let* ((parsed (url-generic-parse-url url))
              (host (url-host parsed))
              (port (url-port-if-non-default parsed)))
         (when (and host (not (string-empty-p host)))
@@ -354,17 +422,17 @@ port, when it has one), then falls back to LIBRESEARCH_TOKEN."
 
 (defun cmacs-ai-libresearch-token (&optional url)
   "Return the bearer token for the libresearch server at URL, or nil.
-URL defaults to `cmacs-ai-libresearch-url'."
-  (let ((url (or url cmacs-ai-libresearch-url)))
+URL defaults to `cmacs-ai-libresearch-endpoint'."
+  (let ((url (or url (cmacs-ai-libresearch-endpoint))))
     (and cmacs-ai-libresearch-token-function url
          (funcall cmacs-ai-libresearch-token-function url))))
 
 (defun cmacs-ai-libresearch-options (&rest extra)
   "Connection plist for the libresearch primitives, with EXTRA appended.
-Carries :endpoint and :token resolved from `cmacs-ai-libresearch-url'
+Carries :endpoint and :token resolved by `cmacs-ai-libresearch-endpoint'
 and `cmacs-ai-libresearch-token', and :timeout from
 `cmacs-ai-libresearch-timeout' unless EXTRA sets its own."
-  (let ((url cmacs-ai-libresearch-url))
+  (let ((url (cmacs-ai-libresearch-endpoint)))
     (append extra
             (and url (not (string-empty-p url)) (list :endpoint url))
             (let ((tok (cmacs-ai-libresearch-token url)))
@@ -383,11 +451,17 @@ API-KEY, when given, wins over both the token and
   (unless (memq provider cmacs-ai-search-providers)
     (user-error "cmacs-ai: unknown web_search provider %S (one of %s)"
                 provider (mapconcat #'symbol-name cmacs-ai-search-providers ", ")))
+  ;; `auto' prefers a libresearch server you configured (authinfo,
+  ;; `cmacs-ai-libresearch-url' or LIBRESEARCH_URL) over ai-glib's own
+  ;; environment probe, which knows nothing about authinfo.
+  (when (and (eq provider 'auto) (cmacs-ai-libresearch-configured-p))
+    (setq provider 'libresearch))
   (if (eq provider 'libresearch)
-      (cmacs-ai-tools-set-search-provider
-       executor provider
-       (or api-key (cmacs-ai-libresearch-token))
-       cmacs-ai-libresearch-url)
+      (let ((url (cmacs-ai-libresearch-endpoint)))
+        (cmacs-ai-tools-set-search-provider
+         executor provider
+         (or api-key (cmacs-ai-libresearch-token url))
+         url))
     (cmacs-ai-tools-set-search-provider
      executor provider (or api-key cmacs-ai-search-api-key))))
 

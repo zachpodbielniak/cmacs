@@ -67,5 +67,77 @@ for a plain question."
                        (list :max-rows 100)))
       (error (format "Error: %s" (error-message-string err))))))
 
+(declare-function cmacs-libresearch-search "cmacs-libresearch" (query &optional category))
+
+(cmacs-brigade-deftool web-search-show
+  "Open a libresearch web search in a results grid in the user's editor,
+for the USER to read, sort, mark and act on.  Returns at once; it does
+not return the results to you (use web_research or web_lql for that).
+Use it when the user asks to see or browse search results."
+  ((query string "What to search for")
+   (category string "A category: general, news, code, science, it, ..."
+             :optional t))
+  :group 'web
+  (if (not (and (cmacs-ai-research-available-p)
+                (require 'cmacs-libresearch nil t)))
+      "Error: libresearch is not available in this cmacs build."
+    (condition-case err
+        (progn
+          (cmacs-libresearch-search query (and (stringp category)
+                                               (not (string-empty-p category))
+                                               category))
+          (format "Opened a search for %S in the editor." query))
+      (error (format "Error: %s" (error-message-string err))))))
+
+;;;; LQL in cmacs itself (cmacs-lql.el): the same language over local
+;;;; data -- files of any format, git, the journal, SQL, and the
+;;;; editor's own state.  Read-only by construction.
+
+(declare-function cmacs-lql-available-p "cmacs-lql" ())
+(declare-function cmacs-lql-run-sync "cmacs-lql" (query &rest options))
+(declare-function cmacs-lql-source-names "cmacs-lql" ())
+(declare-function cmacs-lql--sources "cmacs-lql-defuns.c" ())
+
+(defun cmacs-brigade-research--lql-available-p ()
+  "Non-nil when local LQL is built in and loadable."
+  (and (require 'cmacs-lql nil t) (cmacs-lql-available-p)))
+
+(cmacs-brigade-deftool lql-query
+  "Run an LQL query inside the editor and return the rows as a text
+table.  LQL is a pipeline language: `fetch SOURCE | filter EXPR |
+fields a, b | sort a DESC | summarize n = count(), by: {a} | limit N'.
+Sources include files of any format (read \"path\"), git_log and the
+other git_* sources, exec, journal, coredumps, sql, Kubernetes, and the
+editor's own state: buffers, windows, processes, recentf, kill_ring,
+bookmarks, org_headings.  Call lql_sources for the full list.  Read-only."
+  ((query string "The LQL query")
+   (max_rows integer "Most rows to return (default 100)" :optional t))
+  :group 'data
+  (if (not (cmacs-brigade-research--lql-available-p))
+      "Error: LQL is not built into this cmacs (--with-cmacs-lql)."
+    (let ((p (cmacs-lql-run-sync query
+                                 :max-rows (if (and (integerp max_rows) (> max_rows 0))
+                                               (min max_rows 2000) 100)
+                                 :text-width 160)))
+      (pcase (car p)
+        (:ok (format "%s\n(%d rows, %.3fs)"
+                     (or (plist-get (cdr p) :text) "")
+                     (plist-get (cdr p) :rows) (plist-get (cdr p) :elapsed)))
+        (:error (concat "Error: " (cadr p)))
+        (_ "Error: cancelled")))))
+
+(cmacs-brigade-deftool lql-sources
+  "List every LQL source lql_query can fetch from, including the
+editor-state sources cmacs defines."
+  ()
+  :group 'data
+  (if (not (cmacs-brigade-research--lql-available-p))
+      "Error: LQL is not built into this cmacs (--with-cmacs-lql)."
+    (condition-case nil
+        (format "All sources: %s\nEditor sources: %s"
+                (string-join (cmacs-lql--sources) ", ")
+                (string-join (cmacs-lql-source-names) ", "))
+      (error "Error: a query is running; try again"))))
+
 (provide 'cmacs-brigade-research)
 ;;; cmacs-brigade-research.el ends here

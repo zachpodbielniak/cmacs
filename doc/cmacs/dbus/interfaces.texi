@@ -143,6 +143,8 @@ tools, plus the mailbox @code{Send}/@code{Inbox}/@code{Drop}/@code{Log}/
 @code{.Audio}, @code{.Speech} (@file{cmacs-dbus-iface-media.c});
 @code{.Lrg}; @code{.Calc}
 (@file{cmacs-dbus-iface-calculator.c}, the @code{calc_*} tools);
+@code{.Lql} (@file{cmacs-dbus-iface-lql.c}: @code{Query}, @code{QueryJson},
+@code{Explain}, @code{Sources}; @pxref{LQL Surfaces});
 @code{.Instance} (identity: pid, version, features[]);
 and @code{.Log} (@code{RecentMessages} plus the live
 @code{MessageLogged} signal).

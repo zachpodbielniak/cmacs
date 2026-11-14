@@ -1,0 +1,121 @@
+#+title: CMacs libresearch — search results you can comb through
+#+description: A client of a libresearch server: search grids, server LQL, cited research and page fetches, configured from one authinfo line shared with every AI tool
+#+authors: Zach Podbielniak
+#+categories: cmacs subsystem libresearch search lql ai authinfo
+#+created: 2026-11-14T00:00:00-05:00
+#+updated: 2026-11-14T00:00:00-05:00
+#+version: 0.1
+
+* Overview
+
+[[https://git.podbielniak.com/zachpodbielniak/libresearch][libresearch]] is a GLib/GObject metasearch engine.  =libresearchd= serves it over REST: search, LQL over search results, cited research answers, and page fetches.  =--with-cmacs-libresearch= is a client of that server, built for a person combing through results; the AI tools already used it for models.
+
+- *No new submodule.*  The transport is the one cmacs-ai already has, =cmacs/ai/cmacs-ai-libresearch.c= over ai-glib's =AiLibresearchSearch=.  This subsystem is Elisp (=lisp/cmacs/cmacs-libresearch.el=), so it requires =--with-cmacs-ai=.
+- *One place to configure it*: an =~/.authinfo= or =~/.authinfo.gpg= line.  The client and every AI surface resolve the server the same way, so they can never disagree.
+- *Results are a grid* derived from LQL's (=cmacs-lql-results-mode=), so a search result sorts, marks, exports and refines like any LQL result.
+
+* Configuration
+
+** The authinfo line
+
+#+begin_example
+machine search.example.org port 443 login libresearch password YOUR_API_TOKEN
+#+end_example
+
+That one line names the server and carries its token.  Port =443= (or =https=) means =https://=; any other port means =http://host:PORT=.  A host written as a full URL (=machine https://search.example.org/lrs=) is used as is.  A server with no =api.tokens= needs no password; use =password ""=.
+
+Nothing else is needed.  Run =M-x cmacs-libresearch-server= to see which server cmacs found, where it found it, and whether a token came with it.
+
+** Resolution order
+
+=cmacs-ai-libresearch-endpoint= decides the server:
+
+1. =cmacs-ai-libresearch-url=, when you set it to a string;
+2. the auth-source entry whose login is =cmacs-ai-libresearch-login= (default ="libresearch"=);
+3. the =LIBRESEARCH_URL= environment variable;
+4. =http://127.0.0.1:8087=, where libresearchd listens out of the box.
+
+=cmacs-ai-libresearch-token= decides the token:
+
+1. the secret of the libresearch-login entry, when that entry names the server in use;
+2. any auth-source entry for the server's host (and port, if it has one);
+3. =LIBRESEARCH_TOKEN=.
+
+=cmacs-ai-libresearch-token-function= replaces step 1–3 wholesale if you need something else (a password manager, a command).
+
+Secrets never go in a customize file.  auth-source handles =.authinfo.gpg= decryption and caching; =auth-source-forget-all-cached= makes it re-read.
+
+* Searching
+
+=M-x cmacs-libresearch-search= reads a query and opens =*Search: QUERY*=.  The query can use the server's own syntax: bangs (=!gh=), =site:=, quoted phrases.  With a prefix argument it also asks for a category (=cmacs-libresearch-categories=).  The request asks for =cmacs-libresearch-count= results.
+
+The grid shows title, URL, engines and score.  =snippet=, =author= and =category= start hidden; =c= shows them.
+
+| Key       | Does                                                                              |
+|-----------+-----------------------------------------------------------------------------------|
+| =RET=     | Open the result (=cmacs-lql-results-url-function=: gsurf, else the browser)       |
+| =f=       | Fetch the page's readable text into an org buffer (prefix: allow the Wayback Machine's copy) |
+| =r=       | Research a question, pointing the server at the marked results' pages             |
+| =i=       | Ingest the marked results into the second brain (=cmacs-secondbrain-ingest=)       |
+| =E=       | Write the marked results to an org note in your inbox                             |
+| =l=       | Copy org links to the marked results                                              |
+| =/=       | Refine locally with LQL (see below)                                               |
+| =s=       | Search again                                                                      |
+| =S=       | Next page of results                                                              |
+| =m= =u= =U= =v= =w= =W= =c= =g= | As in any results grid ([[file:lql.org][LQL]])                  |
+
+"Marked" means the marked rows, or the row at point when none are marked.
+
+** Refining locally
+
+=/= runs LQL *in cmacs* over the rows already in the grid.  They become the source =results=, so nothing is fetched again:
+
+#+begin_example
+fetch results | filter score > 1.5 and url ~ "github.com" | sort score DESC
+#+end_example
+
+You type only what follows =fetch results |=.  The refined grid is a full results buffer, so you can refine it again.  This needs =--with-cmacs-lql=.
+
+** Exporting to the inbox
+
+=E= writes =YYYY-MM-DD_search_SLUG.org= to =cmacs-libresearch-inbox-directory=.  That defaults to =00_inbox/personal= under the first of =cmacs-para-roots=, i.e. =~/Documents/notes=.  The file has the notes repo's header keywords (=#+title= through =#+version=), and one heading per result: an org link, an =ENGINES= property, and the snippet.
+
+* The other request kinds
+
+| Command                      | Does                                                              |
+|------------------------------+-------------------------------------------------------------------|
+| =cmacs-libresearch-query=    | Run LQL *on the server* (its environment: =search=, =research=, ...); rows in a grid |
+| =cmacs-libresearch-research= | A cited research answer in org (prefix: deep research)            |
+| =cmacs-libresearch-fetch=    | A page's readable text in org (prefix: allow the archive)         |
+| =cmacs-libresearch-server=   | Which server, found where, token or not                           |
+
+=.lql= files can target the server too.  =C-c C-t= in =lql-mode= toggles the buffer between =local= and =libresearch=, and a file can say =# -*- cmacs-lql-target: libresearch -*-=.  In a grid, =t= toggles where its query runs.
+
+* The AI side
+
+The AI tools share the same resolver:
+
+- *web_search*: =cmacs-ai-search-provider= defaults to =auto=.  =auto= now prefers libresearch whenever a server is /configured/ (=cmacs-ai-libresearch-configured-p=: the URL set, an authinfo entry for the libresearch login, or =LIBRESEARCH_URL=), and otherwise falls back to ai-glib's own choice (Brave or Bing with a key, else DuckDuckGo).  This applies to every executor cmacs builds: chat buffers, the agent harness and =cmacs-ai-call=, all through =cmacs-ai-set-search-provider=.
+- *Chat slash commands*: =/research=, =/fetch= and =/lql= (cmacs-ai-research.el).
+- *Brigade tools* (in-process agents, CLI agents over the MCP relay, external MCP clients): =web_research= (cited answer), =web_lql= (server LQL), and =web_search_show=, which opens a search grid in /your/ editor for you to look through.  For local data there are also =lql_query= and =lql_sources=.
+- *MCP tools*: =ai_research=, =ai_web_fetch=, =ai_lql=.
+
+* Customization
+
+| Variable                              | Default         | Meaning                                         |
+|---------------------------------------+-----------------+-------------------------------------------------|
+| =cmacs-ai-libresearch-url=            | nil             | Server URL; nil means find it (authinfo, env, localhost) |
+| =cmacs-ai-libresearch-login=          | ="libresearch"= | The authinfo login that marks the server's entry |
+| =cmacs-ai-libresearch-token-function= | auth-source     | How the token is found                          |
+| =cmacs-ai-libresearch-timeout=        | nil             | Seconds for non-research requests               |
+| =cmacs-ai-libresearch-research-timeout= | 900           | Seconds for research                            |
+| =cmacs-libresearch-count=             | 30              | Results per search                              |
+| =cmacs-libresearch-categories=        | general, news, code, ... | Offered with a prefix argument          |
+| =cmacs-libresearch-inbox-directory=   | nil (PARA inbox) | Where =E= writes                               |
+
+* Troubleshooting
+
+- *Searches go to localhost* :: No entry was found.  =M-x cmacs-libresearch-server= says =default=.  Check that the entry's =login= is =libresearch= (or set =cmacs-ai-libresearch-login=) and that =auth-sources= includes the file.  =auth-source-forget-all-cached= after editing it.
+- *401 Unauthorized* :: The server wants a token and none matched.  =cmacs-libresearch-server= says =no token=.
+- *web_search still uses DuckDuckGo* :: The provider was set before the entry existed.  Chats pick it up when they are created; open a new chat.
+- *=/= in a search grid says LQL is unavailable* :: cmacs was built without =--with-cmacs-lql=.

@@ -133,6 +133,9 @@ static guint reg_iface_calculator = 0;
 #ifdef HAVE_CMACS_DBEXPLORER
 static guint reg_iface_dbexplorer = 0;
 #endif
+#ifdef HAVE_CMACS_LQL
+static guint reg_iface_lql = 0;
+#endif
 #ifdef HAVE_CMACS_AI_BRIGADE
 static guint reg_iface_brigade  = 0;
 #endif
@@ -434,6 +437,12 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_calculator == 0) return FALSE;
 #endif
 
+#ifdef HAVE_CMACS_LQL
+  reg_iface_lql = cmacs_dbus_iface_lql_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_lql == 0) return FALSE;
+#endif
+
 #ifdef HAVE_CMACS_DBEXPLORER
   reg_iface_dbexplorer = cmacs_dbus_iface_dbexplorer_register (
     conn, CMACS_DBUS_ROOT_PATH, error);
@@ -473,6 +482,11 @@ unregister_modules (GDBusConnection *conn)
   if (reg_iface_dbexplorer)
     { cmacs_dbus_iface_dbexplorer_unregister (conn, reg_iface_dbexplorer);
       reg_iface_dbexplorer = 0; }
+#endif
+#ifdef HAVE_CMACS_LQL
+  if (reg_iface_lql)
+    { cmacs_dbus_iface_lql_unregister (conn, reg_iface_lql);
+      reg_iface_lql = 0; }
 #endif
 #ifdef HAVE_CMACS_CALCULATOR
   if (reg_iface_calculator)

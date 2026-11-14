@@ -80,6 +80,9 @@ or read [[file:build.org][build.org]] for the configure flags.
 | Subsystem      | Directory            | Purpose                                                   |
 |----------------+----------------------+-----------------------------------------------------------|
 | *calculator*   | =cmacs/calculator/=    | Desktop / financial / physics / CAS over GNU Calc          |
+| *lql*          | =cmacs/lql/=           | LQL linked in: editor + file/git/journal/SQL sources, grid, REPL, LSP |
+| *tallow*       | =lisp/cmacs/=          | Tallow toolchain: mode, LSP, JSON REPL, dape (gdb + time travel) |
+| *libresearch*  | =lisp/cmacs/=          | libresearch client: search grids, server LQL, research (authinfo) |
 
 Two entries are pure Elisp and so have no =cmacs/<name>/= directory:
 *transcode* and *transcribe* live entirely in =lisp/cmacs/=.  *gsurf-lrg*

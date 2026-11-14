@@ -671,6 +671,9 @@ OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/phys
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.pptx + .odt/.ods/.odp) over libzip + libxml2])
 OPTION_DEFAULT_OFF([cmacs-dbexplorer], [CMacs database explorer (query/browse/edit/export SQLite, PostgreSQL and MySQL through orm-glib)])
+OPTION_DEFAULT_OFF([cmacs-lql], [CMacs LQL query language (liblql + its file/git/SQL/journal sources, editor-state sources, results grid, REPL, language server)])
+OPTION_DEFAULT_OFF([cmacs-tallow], [CMacs Tallow language support (builds the bundled tallow toolchain; mode, LSP, REPL, dape debugging)])
+OPTION_DEFAULT_OFF([cmacs-libresearch], [CMacs libresearch client (search/query/research results buffers; authinfo config; requires --with-cmacs-ai)])
 OPTION_DEFAULT_OFF([cmacs-clawtilla], [CMacs clawtilla client (drive a local or remote agent fleet from Emacs)])
 OPTION_DEFAULT_OFF([cmacs-gnuseye], [CMacs gnuseye live planetary globe (GNU's Eye; requires libregnum)])
 OPTION_DEFAULT_OFF([cmacs-roamgraph], [CMacs org-roam knowledge-graph visualiser, 2D + 3D (requires libregnum)])
@@ -1427,6 +1430,90 @@ if test "$with_cmacs_dbexplorer" != "no"; then
   dnl file's HAVE_CMACS_GLIB && HAVE_CMACS_DBEXPLORER pair.
   CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-dbexplorer.o"
 fi
+dnl CMACS LQL: the libre-query-language engine, linked in.
+dnl
+dnl Two archives from the deps/libre-query-language submodule:
+dnl liblql-1.0.a (the language; GLib only) and liblql-tools.a, the
+dnl sources and formats the `lql' program offers (files of every
+dnl format, git, exec, the journal, coredumps, Kubernetes, SQL).  Linking
+dnl both means a query in cmacs can reach everything the CLI can, plus
+dnl the editor-state sources cmacs registers itself.
+dnl
+dnl Which optional drivers liblql-tools.a is built with is decided HERE,
+dnl the dbexplorer way: probe, hand the answer to the sub-make, link
+dnl exactly those system libraries.  TUI is always off -- the ncurses
+dnl `lql -i' has no business inside an editor.
+dnl
+dnl The tools archive also needs yaml-glib; it is linked from the
+dnl canonical deps/yaml-glib (LQL's own copy is skipped by
+dnl admin/cmacs-submodules.sh), LAST, so an archive that already embeds
+dnl those objects (libregnum) satisfies them first and nothing is pulled
+dnl twice.  The same checkout is handed to the sub-make as YAML_GLIB_DIR
+dnl for the lql and lql-language-server programs.
+if test "$with_cmacs_lql" != "no"; then
+  if test "$with_cmacs_glib" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-lql requires --with-cmacs-glib (queries complete on the cmacs GMainContext)])
+  fi
+  PKG_CHECK_MODULES([CMACS_LQL_DEPS],
+    [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-0.1
+     libxml-2.0 libzstd liblzma bzip2])
+  cmacs_lql_journal=no
+  cmacs_lql_sqlite=no
+  cmacs_lql_postgres=no
+  CMACS_LQL_OPT_LIBS=""
+  PKG_CHECK_EXISTS([libsystemd],
+    [cmacs_lql_journal=yes
+     CMACS_LQL_OPT_LIBS="$CMACS_LQL_OPT_LIBS `$PKG_CONFIG --libs libsystemd`"],
+    [AC_MSG_NOTICE([libsystemd not found -- the LQL journal source is disabled])])
+  PKG_CHECK_EXISTS([sqlite3],
+    [cmacs_lql_sqlite=yes
+     CMACS_LQL_OPT_LIBS="$CMACS_LQL_OPT_LIBS `$PKG_CONFIG --libs sqlite3`"])
+  PKG_CHECK_EXISTS([libpq],
+    [cmacs_lql_postgres=yes
+     CMACS_LQL_OPT_LIBS="$CMACS_LQL_OPT_LIBS `$PKG_CONFIG --libs libpq`"],
+    [AC_MSG_NOTICE([libpq not found -- LQL sql sources will not open postgresql:// URIs])])
+  CMACS_LQL_MAKE_FLAGS="TUI=no JOURNAL=$cmacs_lql_journal SQLITE=$cmacs_lql_sqlite POSTGRES=$cmacs_lql_postgres GIR=0"
+  CMACS_LQL_CFLAGS="-isystem \$(abs_top_srcdir)/deps/libre-query-language/src \
+    -isystem \$(abs_top_srcdir)/deps/libre-query-language/build/$cmacs_dep_buildtype/include \
+    -isystem \$(abs_top_srcdir)/deps/libre-query-language/tools/common \
+    $CMACS_LQL_DEPS_CFLAGS"
+  CMACS_LQL_LIBS="\$(abs_top_srcdir)/deps/libre-query-language/build/$cmacs_dep_buildtype/liblql-tools.a \
+    \$(abs_top_srcdir)/deps/libre-query-language/build/$cmacs_dep_buildtype/liblql-1.0.a \
+    \$(abs_top_srcdir)/deps/yaml-glib/build/release/libyaml-glib-1.0.a \
+    $CMACS_LQL_OPT_LIBS $CMACS_LQL_DEPS_LIBS"
+  AC_DEFINE([HAVE_CMACS_LQL], 1, [CMacs LQL query language subsystem])
+  CMACS_LQL_OBJ="cmacs-lql-init.o cmacs-lql-env.o cmacs-lql-defuns.o"
+  dnl org.cmacs.Editor1.Lql (emacsctl lql): an iface module, so it lives
+  dnl in CMACS_GLIB_OBJ with the rest; cmacs-glib is required above.
+  CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-lql.o"
+fi
+
+dnl CMACS Tallow: Elisp over the bundled tallow toolchain.  Nothing is
+dnl linked into Emacs -- the compiler, language server, debug adapters
+dnl and REPL are all the `tallow' program (and `tallow-suet'), run as
+dnl subprocesses so a crashing program can never take the editor (or,
+dnl under --gowl, the session) with it.  src/Makefile.in builds the
+dnl submodule; `make install' installs it alongside cmacs.
+HAVE_CMACS_TALLOW=no
+if test "$with_cmacs_tallow" != "no"; then
+  HAVE_CMACS_TALLOW=yes
+  AC_DEFINE([HAVE_CMACS_TALLOW], 1, [CMacs Tallow language support])
+fi
+AC_SUBST(HAVE_CMACS_TALLOW)
+
+dnl CMACS libresearch: an Elisp client of libresearchd over the
+dnl transport cmacs-ai already has (cmacs-ai-libresearch.c), so it is
+dnl only meaningful with --with-cmacs-ai.  LQL is optional: with it,
+dnl search results become an in-process `results' source.
+HAVE_CMACS_LIBRESEARCH=no
+if test "$with_cmacs_libresearch" != "no"; then
+  if test "$with_cmacs_ai" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-libresearch requires --with-cmacs-ai (the libresearch REST transport lives there)])
+  fi
+  HAVE_CMACS_LIBRESEARCH=yes
+  AC_DEFINE([HAVE_CMACS_LIBRESEARCH], 1, [CMacs libresearch client])
+fi
+AC_SUBST(HAVE_CMACS_LIBRESEARCH)
 if test "$with_cmacs_spacemouse" != "no"; then
   if test "$with_cmacs_glib" = "no"; then
     AC_MSG_ERROR([--with-cmacs-spacemouse requires --with-cmacs-glib (the spacenavd socket is watched by a GSource on the cmacs GMainContext)])
@@ -2200,6 +2287,10 @@ AC_SUBST(CMACS_DBEXPLORER_OBJ)
 AC_SUBST(CMACS_DBEXPLORER_CFLAGS)
 AC_SUBST(CMACS_DBEXPLORER_LIBS)
 AC_SUBST(CMACS_DBEXPLORER_ORM_FLAGS)
+AC_SUBST(CMACS_LQL_OBJ)
+AC_SUBST(CMACS_LQL_CFLAGS)
+AC_SUBST(CMACS_LQL_LIBS)
+AC_SUBST(CMACS_LQL_MAKE_FLAGS)
 AC_SUBST(CMACS_CLAWTILLA_OBJ)
 AC_SUBST(CMACS_CLAWTILLA_CFLAGS)
 AC_SUBST(CMACS_CLAWTILLA_LIBS)
@@ -9530,7 +9621,7 @@ for cmacs_isystem_var in \
   CMACS_AI_BRIGADE_CFLAGS CMACS_AI_CFLAGS CMACS_AUDIO_CFLAGS \
   CMACS_BACON_CFLAGS CMACS_CAD_CFLAGS CMACS_CALCULATOR_CFLAGS \
   CMACS_CINTROSPECT_CFLAGS CMACS_CRISPY_CFLAGS CMACS_DBEXPLORER_CFLAGS \
-  CMACS_CLAWTILLA_CFLAGS \
+  CMACS_CLAWTILLA_CFLAGS CMACS_LQL_CFLAGS \
   CMACS_GI_CFLAGS CMACS_GLIB_CFLAGS CMACS_GNUSEYE_CFLAGS \
   CMACS_GOWL_CFLAGS CMACS_GSURF_CFLAGS CMACS_IMGEDIT_CFLAGS \
   CMACS_LIBRECLAW_CFLAGS CMACS_LIBREGNUM_CFLAGS CMACS_LRGSCRIPT_CFLAGS \

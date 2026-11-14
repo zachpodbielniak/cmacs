@@ -174,6 +174,7 @@ RUN set -eux; \
             libxcb-devel xcb-util-wm-devel \
             libyaml-devel json-glib-devel libdex-devel \
             libzip-devel libxml2-devel \
+            libzstd-devel xz-devel bzip2-devel systemd-devel libffi-devel \
             gdk-pixbuf2-devel \
             libsoup3-devel readline-devel \
             libetpan-devel sqlite-devel libpq-devel \
@@ -220,6 +221,7 @@ RUN set -eux; \
             libxcb1-dev libxcb-icccm4-dev \
             libyaml-dev libjson-glib-dev \
             libzip-dev libxml2-dev \
+            libzstd-dev liblzma-dev libbz2-dev libsystemd-dev libffi-dev \
             libgdk-pixbuf-2.0-dev \
             libsoup-3.0-dev libreadline-dev \
             libetpan-dev libsqlite3-dev libpq-dev \
@@ -287,6 +289,7 @@ RUN set -eux; \
             libxcb xcb-util-wm \
             libyaml json-glib libdex \
             libzip libxml2 \
+            zstd xz bzip2 systemd-libs libffi \
             gdk-pixbuf2 \
             libsoup3 readline \
             libetpan sqlite postgresql-libs \
@@ -589,6 +592,9 @@ RUN ./autogen.sh \
         --with-cmacs-spacemouse \
         --with-cmacs-camera \
         --with-cmacs-handtrack \
+        --with-cmacs-lql \
+        --with-cmacs-tallow \
+        --with-cmacs-libresearch \
         --enable-cmacs-cpatch \
         --enable-cmacs-deps-debug \
     && make -j"${CMACS_JOBS:-$(nproc)}" \

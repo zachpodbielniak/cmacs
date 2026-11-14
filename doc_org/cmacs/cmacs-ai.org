@@ -793,8 +793,8 @@ chat/agent buffer's executor only when a search backend is configured.
 
 | Provider symbol | Backend                                                         |
 |-----------------+-----------------------------------------------------------------|
-| =auto=          | ai-glib's choice: libresearch if =LIBRESEARCH_URL= is set, else Brave or Bing if its key is set, else DuckDuckGo |
-| =libresearch=   | A libresearchd server at =cmacs-ai-libresearch-url= (self-hosted metasearch) |
+| =auto=          | A configured libresearch server (authinfo, =cmacs-ai-libresearch-url= or =LIBRESEARCH_URL=), else ai-glib's choice: Brave or Bing if its key is set, else DuckDuckGo |
+| =libresearch=   | The libresearchd server =cmacs-ai-libresearch-endpoint= resolves (self-hosted metasearch) |
 | =brave=         | Brave Search (needs a key)                                      |
 | =bing=          | Bing Search (needs a key)                                       |
 | =duckduckgo=    | Keyless DuckDuckGo (best-effort, no SLA)                        |
@@ -805,23 +805,30 @@ Keyed backends read =cmacs-ai-search-api-key=, falling back to the
 provider with no key available logs a message and leaves =web_search=
 off; =auto= always succeeds thanks to the keyless fallback.
 
-*=auto= follows the environment.*  Since ai-glib 0.10,
-=ai_search_provider_new_default= puts a libresearch server first: setting
-=LIBRESEARCH_URL= (and =LIBRESEARCH_TOKEN=, if the server wants a token)
-moves every =auto= chat onto it, with no cmacs setting changed.  That is
-deliberate upstream -- naming a self-hosted engine is a choice of it over
-a third-party API -- but it means =auto= is not a fixed backend.  Choose
-=libresearch= (or another symbol) explicitly to pin one.
+*=auto= prefers a libresearch server you configured.*  When
+=cmacs-ai-libresearch-configured-p= holds -- =cmacs-ai-libresearch-url=
+is set, an auth-source entry for the libresearch login exists, or
+=LIBRESEARCH_URL= is set -- =cmacs-ai-set-search-provider= turns =auto=
+into =libresearch=.  Otherwise =auto= is ai-glib's own choice
+(=ai_search_provider_new_default=), which knows nothing about authinfo.
+Choose a symbol explicitly to pin one backend.
 
-The =libresearch= backend takes its URL from =cmacs-ai-libresearch-url=
-(default =http://127.0.0.1:8087=, libresearchd's own) and its bearer
-token from =cmacs-ai-libresearch-token-function=, which by default looks
-the token up with auth-source by the URL's host and port and falls back
-to =LIBRESEARCH_TOKEN=:
+The =libresearch= backend takes its server from
+=cmacs-ai-libresearch-endpoint=: =cmacs-ai-libresearch-url= when set,
+else the auth-source entry whose login is =cmacs-ai-libresearch-login=
+(="libresearch"=), else =LIBRESEARCH_URL=, else =http://127.0.0.1:8087=
+(libresearchd's own).  Its bearer token comes from
+=cmacs-ai-libresearch-token-function=: the libresearch entry's secret,
+else any entry for the server's host and port, else =LIBRESEARCH_TOKEN=.
+One authinfo line therefore configures everything -- this, the research
+commands, and the [[file:libresearch.org][libresearch client]]:
 
 #+begin_example
-machine 127.0.0.1 port 8087 password YOUR-TOKEN
+machine search.example.org port 443 login libresearch password YOUR-TOKEN
 #+end_example
+
+Port 443 (or =https=) means =https://=, any other port =http://host:PORT=.
+=M-x cmacs-libresearch-server= shows what was found.
 
 The token is never a customize value.  Nothing is contacted when the
 backend is set, so an unreachable server shows up as a failing search,

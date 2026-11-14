@@ -874,16 +874,20 @@ chat/agent buffer's executor only when a backend is configured.
 
 @table @code
 @item auto
-ai-glib's choice from the environment: a libresearch server when
-@env{LIBRESEARCH_URL} is set (@env{LIBRESEARCH_TOKEN} as its token),
-else Brave or Bing when its key is set, else keyless DuckDuckGo.
-Setting @env{LIBRESEARCH_URL} therefore changes what @code{auto} does.
+A libresearch server when one is configured
+(@code{cmacs-ai-libresearch-configured-p}: @code{cmacs-ai-libresearch-url}
+set, an authinfo entry whose login is @samp{libresearch}, or
+@env{LIBRESEARCH_URL}); otherwise ai-glib's choice: Brave or Bing when
+its key is set, else keyless DuckDuckGo.
 @item libresearch
-A libresearchd server (self-hosted metasearch) at
-@code{cmacs-ai-libresearch-url}, default @code{http://127.0.0.1:8087},
-with the bearer token from @code{cmacs-ai-libresearch-token-function}
-(auth-source by the URL's host and port, then
-@env{LIBRESEARCH_TOKEN}).  See @ref{CMacs AI Research}.
+The libresearchd server (self-hosted metasearch) that
+@code{cmacs-ai-libresearch-endpoint} resolves:
+@code{cmacs-ai-libresearch-url}, else the authinfo entry for the
+libresearch login (one line names the server and carries its token,
+@samp{machine HOST port 443 login libresearch password TOKEN}), else
+@env{LIBRESEARCH_URL}, else @code{http://127.0.0.1:8087}.  The bearer
+token comes from @code{cmacs-ai-libresearch-token-function}.  See
+@ref{CMacs AI Research} and @ref{CMacs Libresearch}.
 @item brave
 Brave Search (needs a key).
 @item bing
@@ -934,8 +938,9 @@ libresearch is a self-hosted metasearch engine served over REST by
 libresearchd; ai-glib's @code{AiLibresearchSearch} is its client.
 Beyond plain search it gives cited answers, a page's readable text
 (optionally from the Wayback Machine), and LQL queries over search
-results.  The server and token are @code{cmacs-ai-libresearch-url} and
-@code{cmacs-ai-libresearch-token-function}.
+results.  The server and token are resolved by
+@code{cmacs-ai-libresearch-endpoint} and
+@code{cmacs-ai-libresearch-token-function} (@pxref{Libresearch Configuration}).
 
 @table @code
 @item M-x cmacs-ai-research

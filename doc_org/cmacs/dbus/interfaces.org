@@ -164,6 +164,7 @@ on the matching =HAVE_CMACS_*= build flag:
 | =org.cmacs.Editor1.Speech=     | =cmacs-dbus-iface-media.c=      | =transcribe=, =synthesize_speech= |
 | =org.cmacs.Editor1.Lrg=        | =cmacs-dbus-iface-lrg.c=        | =lrgeditor_*= (=Action=, =Actions=, =Socket= for the lrgeditor shell) |
 | =org.cmacs.Editor1.Calc=       | =cmacs-dbus-iface-calculator.c= | =calc_*=                    |
+| =org.cmacs.Editor1.Lql=        | =cmacs-dbus-iface-lql.c=        | =lql_query=, =lql_sources= (=Query=, =QueryJson=, =Explain=, =Sources=; see [[file:../lql.org][LQL]]) |
 | =org.cmacs.Editor1.Instance=   | =cmacs-dbus-iface-instance.c=   | (identity: pid, features[]) |
 | =org.cmacs.Editor1.Log=        | =cmacs-dbus-iface-log.c=        | =recent_messages= + live =MessageLogged= signal |
 

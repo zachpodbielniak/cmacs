@@ -370,7 +370,7 @@ vf_register_classes () {
 	# would recompile all of it again.
 	for dep in bacon crispy yaml-glib podomation ai-glib cad-glib \
 	           orm-glib clawtilla clawtilla/deps/libreclaw libregnum \
-	           gsurf screensavers
+	           gsurf screensavers libre-query-language
 	do
 		vf_class "dep-${dep##*/}" makedb "deps/${dep}" \
 			"^deps/${dep}/build/${dep_type}/(.*/)?lib[^/]*\\.(a|so(\\.[0-9]+)*)\$" \

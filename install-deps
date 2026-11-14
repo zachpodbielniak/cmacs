@@ -338,6 +338,10 @@ set_packages_fedora () {
 	# for --with-xml2, but the -devel package is what we compile
 	# against and it is not otherwise guaranteed to be present.
 	PKGS_OFFICE=(libzip-devel libxml2-devel)
+	# cmacs-lql: liblql-tools reads compressed and XML inputs (zstd, xz,
+	# bzip2, libxml2); libsystemd is optional (the journal source).
+	# cmacs-tallow: libffi for the suet VM, gdb behind `tallow dap'.
+	PKGS_LQL=(libzstd-devel xz-devel bzip2-devel libxml2-devel systemd-devel libffi-devel gdb)
 
 	# cmacs-dbexplorer talks to databases through orm-glib.  SQLite and
 	# libpq already arrive with PKGS_GLIB above (Emacs needs sqlite for
@@ -459,6 +463,8 @@ set_packages_debian () {
 	          libeigen3-dev)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip-dev libxml2-dev)
+	# cmacs-lql / cmacs-tallow.  See the Fedora block.
+	PKGS_LQL=(libzstd-dev liblzma-dev libbz2-dev libxml2-dev libsystemd-dev libffi-dev gdb)
 	# cmacs-print + ACL/xattr.  See the Fedora block.  gdbus is in
 	# libglib2.0-bin here, NOT in libglib2.0-dev.
 	PKGS_PRINT=(poppler-utils libglib2.0-bin libacl1-dev libattr1-dev)
@@ -536,6 +542,8 @@ set_packages_arch () {
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
+	# cmacs-lql / cmacs-tallow.  See the Fedora block.
+	PKGS_LQL=(zstd xz bzip2 libxml2 systemd-libs libffi gdb)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
 	# cmacs-print + ACL/xattr.  See the Fedora block.
 	PKGS_PRINT=(poppler acl attr)
@@ -576,6 +584,8 @@ set_packages_macos () {
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	# Homebrew's libxml2 is keg-only; pkg-config finds the SDK copy.
 	PKGS_OFFICE=(libzip libxml2)
+	# cmacs-lql / cmacs-tallow.  See the Fedora block.
+	PKGS_LQL=(zstd xz libffi)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
 	# cmacs-print + ACL/xattr.  See the Fedora block.  macOS carries
 	# ACL/xattr in libSystem, so there is nothing to install for those.
@@ -612,6 +622,8 @@ set_packages_freebsd () {
 	PKGS_CAD=(opencascade eigen)
 	# cmacs-office: zip container + XML parts.  See the Fedora block.
 	PKGS_OFFICE=(libzip libxml2)
+	# cmacs-lql / cmacs-tallow.  See the Fedora block.
+	PKGS_LQL=(zstd libffi gdb)
 	# cmacs-dbexplorer: MariaDB connector.  See the Fedora block.
 	# cmacs-print + ACL/xattr.  See the Fedora block.  FreeBSD's ACL and
 	# extattr interfaces are in libc.
@@ -645,6 +657,7 @@ all_packages () {
 	     "${PKGS_OFFICE[@]}" \
 	     "${PKGS_PRINT[@]}" \
 	     "${PKGS_DBEXPLORER[@]}" \
+	     "${PKGS_LQL[@]}" \
 	     "${PKGS_SPACEMOUSE[@]}" \
 	     "${PKGS_CAMERA[@]}"
 }
@@ -791,6 +804,7 @@ CHECK_REQUIRED=(
 	gobject-introspection-1.0
 	json-glib-1.0 yaml-0.1 readline libsoup-3.0 libdex-1 libcmark
 	sqlite3 libetpan libpq libssh2 libxml-2.0 libpng libzip gudev-1.0
+	libzstd liblzma bzip2
 	gnutls harfbuzz freetype2 fontconfig tree-sitter
 	gtk+-3.0 webkit2gtk-4.1 javascriptcoregtk-4.1
 	wayland-server wayland-client wayland-protocols xkbcommon libinput
@@ -1081,6 +1095,7 @@ list_packages () {
 	echo "CAD:             ${PKGS_CAD[*]:-N/A}"
 	echo "Office:          ${PKGS_OFFICE[*]:-N/A}"
 	echo "dbexplorer:      ${PKGS_DBEXPLORER[*]:-N/A}"
+	echo "LQL/Tallow:      ${PKGS_LQL[*]:-N/A}"
 	echo "SpaceMouse:      ${PKGS_SPACEMOUSE[*]:-N/A}"
 	echo "Camera/hands:    ${PKGS_CAMERA[*]:-N/A}"
 	echo ""

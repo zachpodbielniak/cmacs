@@ -5603,6 +5603,10 @@ extern void init_cmacs_dbexplorer (void);
 extern void syms_of_cmacs_clawtilla (void);
 extern void init_cmacs_clawtilla (void);
 #endif
+#ifdef HAVE_CMACS_LQL
+extern void syms_of_cmacs_lql (void);
+extern void init_cmacs_lql (void);
+#endif
 #ifdef HAVE_CMACS_SPACEMOUSE
 extern void syms_of_cmacs_spacemouse (void);
 extern void init_cmacs_spacemouse (void);

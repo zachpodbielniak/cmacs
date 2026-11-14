@@ -276,6 +276,20 @@ re-eval → report).
 | =cad_printers=     | List configured printers                            |
 | =cad_print=        | Upload G-code; print STARTS only with start+confirm |
 
+** lql and libresearch --- Query Tools (brigade)
+
+These are brigade tools (=lisp/cmacs/cmacs-brigade-research.el=), so one
+definition reaches in-process agents, CLI agents over the MCP relay, and
+external MCP clients:
+
+| Tool              | Does                                                                     |
+|-------------------+--------------------------------------------------------------------------|
+| =lql_query=       | Run LQL inside cmacs (files, git, journal, SQL, k8s, and editor state: =buffers=, =windows=, =org_headings=, ...); rows as a text table.  Read-only.  See [[file:lql.org][LQL]] |
+| =lql_sources=     | Every LQL source, the editor's own listed apart                          |
+| =web_research=    | A cited answer from the libresearch server                               |
+| =web_lql=         | LQL on the libresearch server                                            |
+| =web_search_show= | Open a libresearch search grid in the user's editor (for them, not you).  See [[file:libresearch.org][libresearch]] |
+
 * Resources
 
 MCP resources expose Emacs state as readable URIs.
