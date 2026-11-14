@@ -4,7 +4,7 @@
 #+categories: cmacs subsystem tallow language lsp repl dap debugging
 #+created: 2026-11-14T00:00:00-05:00
 #+updated: 2026-11-14T00:00:00-05:00
-#+version: 0.1
+#+version: 0.2
 
 * Overview
 
@@ -45,7 +45,8 @@ So a development build always uses the tallow it was built with.  An in-tree =ta
 | Key       | Command                    | Does                                                    |
 |-----------+----------------------------+---------------------------------------------------------|
 | =C-c C-c= | =cmacs-tallow-run=         | =tallow run= the file (or project); prefix: program arguments |
-| =C-c C-t= | =cmacs-tallow-test=        | =tallow test=                                           |
+| =C-c C-t= | =cmacs-tallow-test=        | =tallow test= (the project, else the file)              |
+| =C-c C-u= | =cmacs-tallow-fuzz=        | =tallow fuzz=: generated inputs against every contract; prefix: replay a seed |
 | =C-c C-v= | =cmacs-tallow-check=       | =tallow check= the file                                 |
 | =C-c C-e= | =cmacs-tallow-explain=     | Explain a diagnostic code (the one at point by default) |
 | =C-c C-d= | =cmacs-tallow-debug=       | Debug with dape (prefix: time travel)                   |
@@ -58,7 +59,20 @@ So a development build always uses the tallow it was built with.  An in-tree =ta
 
 Run, test and check use =compilation-mode=, in the project root when there is a =tallow.yaml= above the file.  Errors are clickable through upstream's compilation regexp.
 
-** The language server
+*** Code that calls C
+
+Tallow code with =extern= functions or =inline c= needs C include directories, packages and flags.  In a project those come from =tallow.yaml=.  For a single file (and, after the manifest's, in a project too), tallow 0.32.3+ takes =--c-include DIR=, =--pkg NAME=, =--cflags FLAGS= and =--libs FLAGS= on build, run, test and fuzz.  cmacs passes them from =cmacs-tallow-c-dependencies=, a plist, usually set per directory:
+
+#+begin_src emacs-lisp
+;; .dir-locals.el
+((tallow-mode . ((cmacs-tallow-c-dependencies
+                  . (:include ("csrc") :pkg ("glib-2.0")
+                     :cflags "-DTWICE_FACTOR=2" :libs "csrc/twice.c")))))
+#+end_src
+
+The values become compiler and linker flags, so the variable is marked risky: a =.dir-locals.el= value is asked about before it is used.
+
+* The language server
 
 =eglot-server-programs= maps =tallow-mode= to =cmacs-tallow-server-contact=, which returns =(TALLOW "lsp")=.  Upstream's own registration (=tallow-register-with-eglot=) is turned off so the two cannot race.  =cmacs-lsp-ensure= starts eglot when a =.tlw= file opens; =cmacs-tallow-auto-eglot= turns that off.  With =cmacs-tallow-format-on-save= set, =before-save-hook= formats through =eglot-format-buffer=, which is =tallow fmt=.
 

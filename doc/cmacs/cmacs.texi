@@ -14392,7 +14392,9 @@ project root.  @code{cmacs-tallow-program} finds the toolchain in
 @item C-c C-c
 @code{cmacs-tallow-run}: @samp{tallow run} (prefix: program arguments).
 @item C-c C-t
-@code{cmacs-tallow-test}.
+@code{cmacs-tallow-test}: the project's tests, else the file's.
+@item C-c C-u
+@code{cmacs-tallow-fuzz}: @samp{tallow fuzz} the contracts (prefix: a seed).
 @item C-c C-v
 @code{cmacs-tallow-check}.
 @item C-c C-e
@@ -14409,6 +14411,13 @@ Evaluate the region, the definition, or the buffer in the REPL.
 
 @noindent
 @kbd{M-x cmacs-tallow-new} creates a project.
+
+Code that calls C gets its include directories, packages and flags from
+@code{cmacs-tallow-c-dependencies}, a plist (@code{:include},
+@code{:pkg}, @code{:cflags}, @code{:libs}) passed to build, run, test
+and fuzz as @option{--c-include}, @option{--pkg}, @option{--cflags} and
+@option{--libs}.  It is usually set in @file{.dir-locals.el}, and is
+marked risky, so such a value is asked about first.
 
 @node Tallow REPL
 @section The REPL

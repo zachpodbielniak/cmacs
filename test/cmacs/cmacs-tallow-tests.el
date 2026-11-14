@@ -51,6 +51,18 @@
     (should (equal (plist-get (cdr (assq 'tallow-suet cfgs)) :backend) "suet"))
     (should (equal (plist-get (cdr (assq 'tallow cfgs)) 'command-args) '("dap")))))
 
+(ert-deftest cmacs-tallow-c-dependency-args ()
+  "`cmacs-tallow-c-dependencies' becomes tallow's four C options."
+  (skip-unless (fboundp 'cmacs-tallow--c-dep-args))
+  (let ((cmacs-tallow-c-dependencies
+         '(:include ("csrc" "inc") :pkg ("glib-2.0") :cflags "-DX=2" :libs "csrc/a.c")))
+    (should (equal (cmacs-tallow--c-dep-args)
+                   '("--c-include" "csrc" "--c-include" "inc" "--pkg" "glib-2.0"
+                     "--cflags" "-DX=2" "--libs" "csrc/a.c"))))
+  (let ((cmacs-tallow-c-dependencies nil))
+    (should-not (cmacs-tallow--c-dep-args)))
+  (should (get 'cmacs-tallow-c-dependencies 'risky-local-variable)))
+
 (ert-deftest cmacs-tallow-repl-renders-protocol ()
   "JSON lines from `tallow repl --json' become prompt-terminated text;
 responses a synchronous caller waits for are kept out of the buffer."

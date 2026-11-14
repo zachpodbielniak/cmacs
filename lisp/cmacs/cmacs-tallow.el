@@ -169,21 +169,73 @@ compiler needed) runs `tallow-suet repl --json'; \"tallow\" runs
     (compile (mapconcat #'shell-quote-argument
                         (cons (cmacs-tallow--ensure-program) args) " "))))
 
+(defcustom cmacs-tallow-c-dependencies nil
+  "C dependencies of Tallow code that calls C, for build, run, test and fuzz.
+
+A plist, the four settings a project's tallow.yaml gives (tallow 0.32.3+
+passes them for a single FILE too; in a project they come after the
+manifest's):
+
+  :include  list of directories      --c-include DIR (-IDIR)
+  :pkg      list of pkg-config names --pkg NAME
+  :cflags   string                   --cflags FLAGS
+  :libs     string                   --libs FLAGS (-lfoo, -Ldir, a .a or .c)
+
+Usually set per directory, e.g. in .dir-locals.el:
+
+  ((tallow-mode . ((cmacs-tallow-c-dependencies
+                    . (:include (\"csrc\") :libs \"csrc/twice.c\")))))
+
+These become compiler and linker flags, so a value from a
+.dir-locals.el is asked about before it is used."
+  :type '(plist :options ((:include (repeat directory))
+                          (:pkg (repeat string))
+                          (:cflags string)
+                          (:libs string))))
+(put 'cmacs-tallow-c-dependencies 'risky-local-variable t)
+
+(defun cmacs-tallow--c-dep-args ()
+  "Command-line options for `cmacs-tallow-c-dependencies'."
+  (let ((deps cmacs-tallow-c-dependencies))
+    (append (mapcan (lambda (d) (list "--c-include" d)) (plist-get deps :include))
+            (mapcan (lambda (p) (list "--pkg" p)) (plist-get deps :pkg))
+            (and (plist-get deps :cflags) (list "--cflags" (plist-get deps :cflags)))
+            (and (plist-get deps :libs) (list "--libs" (plist-get deps :libs))))))
+
+(defun cmacs-tallow--file-arg ()
+  "The current file as a FILE argument, unless it is part of a project."
+  (and buffer-file-name (not (cmacs-tallow--project-root)) (list buffer-file-name)))
+
 (defun cmacs-tallow-run (&optional args)
   "Run the current Tallow file (or project) with `tallow run'.
 With a prefix argument, read extra program ARGS."
   (interactive (list (and current-prefix-arg
                           (split-string-and-unquote (read-string "Arguments: ")))))
   (cmacs-tallow--compile (append (list "run")
-                                 (and buffer-file-name (not (cmacs-tallow--project-root))
-                                      (list buffer-file-name))
+                                 (cmacs-tallow--c-dep-args)
+                                 (cmacs-tallow--file-arg)
                                  (and args (cons "--" args)))
                          "*tallow run*"))
 
 (defun cmacs-tallow-test ()
-  "Run the project's tests with `tallow test'."
+  "Run the tests of the project, or of the current file, with `tallow test'."
   (interactive)
-  (cmacs-tallow--compile '("test") "*tallow test*"))
+  (cmacs-tallow--compile (append '("test") (cmacs-tallow--c-dep-args)
+                                 (cmacs-tallow--file-arg))
+                         "*tallow test*"))
+
+;;;###autoload
+(defun cmacs-tallow-fuzz (&optional seed)
+  "Fuzz the contracts of the current file (or project) with `tallow fuzz'.
+Every function with a contract gets generated inputs; a failure is
+shrunk to a minimal call with a reproduce: line.  With a prefix
+argument, read the SEED to replay."
+  (interactive (list (and current-prefix-arg (read-number "Seed: "))))
+  (cmacs-tallow--compile (append '("fuzz")
+                                 (and seed (list "--seed" (number-to-string seed)))
+                                 (cmacs-tallow--c-dep-args)
+                                 (cmacs-tallow--file-arg))
+                         "*tallow fuzz*"))
 
 (defun cmacs-tallow-check ()
   "Type-check the current file (or project) with `tallow check'."
@@ -495,6 +547,7 @@ debugger, which can step backwards."
     (define-key tallow-mode-map (kbd "C-c C-c") #'cmacs-tallow-run)
     (define-key tallow-mode-map (kbd "C-c C-t") #'cmacs-tallow-test)
     (define-key tallow-mode-map (kbd "C-c C-v") #'cmacs-tallow-check)
+    (define-key tallow-mode-map (kbd "C-c C-u") #'cmacs-tallow-fuzz)
     (define-key tallow-mode-map (kbd "C-c C-e") #'cmacs-tallow-explain)
     (define-key tallow-mode-map (kbd "C-c C-d") #'cmacs-tallow-debug)
     (add-hook 'tallow-mode-hook #'cmacs-tallow--mode-setup)
