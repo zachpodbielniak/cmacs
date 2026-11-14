@@ -32,6 +32,10 @@ Nothing is linked into Emacs.  Every tool is a subprocess, so a panicking progra
 
 =src/Makefile.in= builds the submodule as part of =all= (=cmacs-tallow-toolchain=): the three-stage bootstrap from =bootstrap/tallowc.c=, the runtime, libtallow, and suet.  The top-level =make install= runs tallow's own =install= with cmacs's prefix, because an installed =tallow= needs its runtime library, std sources and pkg-config files beside it.  It also installs =tallow-mode.el= and =ob-tallow.el= into the standard site-lisp.
 
+*Built for the directories it is installed in.*  tallow compiles its std and gdb directories into the binaries and writes its =.pc= files when it *builds*, and its =install= never rebuilds (it depends on =all=, which is already up to date).  So =cmacs-tallow-toolchain= passes tallow the same =PREFIX=, =BINDIR=, =LIBDIR= and =DATADIR= that =make install= later does.  Before that, an image configured =--prefix=/usr= shipped binaries built for tallow's default =/usr/local=: every installed program looked for its prelude in =/usr/local/share/tallow/std= (=error[E0303]: module `tallow.prelude` not found= in the REPL), and =tallow-rt-1.0.pc= sent gcc to =/usr/local/include=.
+
+tallow's make does not notice a changed =-D=, so the directories a tree was built for are recorded in =deps/tallow/build/cmacs-install-dirs=.  A tree built for others, or built before the record existed, is cleaned once (=tallow: built for other install directories; cleaning once=, about half a minute to rebuild).  =cmacs-tallow-built-for-its-install-directories= fails the suite if the build and install rules stop passing the same four directories.
+
 =cmacs-tallow-program= finds a program in this order:
 
 1. =$CMACS_TALLOW_DIR=;

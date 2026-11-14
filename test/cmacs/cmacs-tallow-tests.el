@@ -63,6 +63,39 @@
     (should-not (cmacs-tallow--c-dep-args)))
   (should (get 'cmacs-tallow-c-dependencies 'risky-local-variable)))
 
+(defconst cmacs-tallow-tests--root
+  (expand-file-name "../.." (file-name-directory
+                             (or load-file-name buffer-file-name default-directory)))
+  "The source tree this file was loaded from (captured at load time).")
+
+(ert-deftest cmacs-tallow-built-for-its-install-directories ()
+  "tallow is BUILT for the directories it is installed in.
+tallow bakes its std/gdb paths into the binaries and writes its .pc
+files at build time, and its `install' never rebuilds -- so a build for
+/usr/local installed under /usr looked for its prelude where nothing
+is (E0303 in the REPL) and sent gcc to /usr/local/include.  The build
+rule and the install rule must hand tallow the same four directories."
+  (let* ((root cmacs-tallow-tests--root)
+         (src (expand-file-name "src/Makefile.in" root))
+         (top (expand-file-name "Makefile.in" root)))
+    (skip-unless (and (file-readable-p src) (file-readable-p top)))
+    (with-temp-buffer
+      (insert-file-contents src)
+      (should (re-search-forward "^cmacs-tallow-toolchain:" nil t))
+      (should (re-search-forward "\\$(CMACS_TALLOW_DIRS)[ \t\\\n]*-C [^ ]*deps/tallow all" nil t))
+      (goto-char (point-min))
+      (dolist (v '("PREFIX=\"$(prefix)\"" "BINDIR=\"$(bindir)\""
+                   "LIBDIR=\"$(libdir)\"" "DATADIR=\"$(datadir)\""))
+        (should (search-forward v nil t))
+        (goto-char (point-min))))
+    (with-temp-buffer
+      (insert-file-contents top)
+      (should (re-search-forward "deps/tallow install" nil t))
+      (let ((end (save-excursion (re-search-forward "^\t@" nil t))))
+        (dolist (v '("PREFIX=\"${prefix}\"" "BINDIR=\"${bindir}\""
+                     "LIBDIR=\"${libdir}\"" "DATADIR=\"${datadir}\""))
+          (save-excursion (should (search-forward v end t))))))))
+
 (ert-deftest cmacs-tallow-repl-renders-protocol ()
   "JSON lines from `tallow repl --json' become prompt-terminated text;
 responses a synchronous caller waits for are kept out of the buffer."

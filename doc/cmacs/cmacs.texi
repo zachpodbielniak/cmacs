@@ -14401,6 +14401,16 @@ the editor (or the gowl session) down.  The full manual is
 @node Tallow Editing
 @section Editing, the Language Server and Commands
 
+The toolchain is built for the directories @samp{make install} puts it
+in.  Tallow bakes its std and gdb directories into the binaries and
+writes its @file{.pc} files at build time, and its @code{install} never
+rebuilds, so @code{cmacs-tallow-toolchain} passes it cmacs's
+@code{PREFIX}, @code{BINDIR}, @code{LIBDIR} and @code{DATADIR}.  A tree
+built for other directories is cleaned once (recorded in
+@file{deps/tallow/build/cmacs-install-dirs}).  Without this, a
+@option{--prefix=/usr} image looked for the prelude under
+@file{/usr/local} (E0303 in the REPL).
+
 @code{tallow-mode} is upstream's (@file{deps/tallow/editors/emacs}).
 eglot runs @samp{tallow lsp} through
 @code{cmacs-tallow-server-contact}.  It provides completion, types on

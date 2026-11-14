@@ -1655,10 +1655,42 @@ endif
 ## Nothing is linked into Emacs -- cmacs-tallow.el runs them -- so this
 ## hangs off `all', not temacs.  FORCE for the usual reason; tallow's own
 ## make decides what the three-stage bootstrap needs to redo.
+##
+## Built for cmacs's OWN install directories, the ones the top-level
+## `make install' later hands tallow's `install'.  tallow compiles its
+## std and gdb directories into the binaries and writes its .pc files at
+## BUILD time; `install' depends on `all', which is already up to date,
+## so it never rebuilds.  Built with tallow's default /usr/local and
+## installed under /usr, every installed program looked for its prelude
+## in a directory that does not exist (E0303 in the REPL) and its .pc
+## sent the C backend to /usr/local/include for tallow-rt.h.
+##
+## tallow's make does not notice a changed -D, so the directories it was
+## built for are recorded beside its build, and a tree built for others
+## (or before the record existed) is cleaned once first.
 ifeq ($(HAVE_CMACS_TALLOW),yes)
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+datarootdir = @datarootdir@
+datadir = @datadir@
+bindir = @bindir@
+libdir = @libdir@
+CMACS_TALLOW_DIRS = PREFIX="$(prefix)" BINDIR="$(bindir)" \
+  LIBDIR="$(libdir)" DATADIR="$(datadir)"
+CMACS_TALLOW_STAMP = $(srcdir)/../deps/tallow/build/cmacs-install-dirs
 .PHONY: cmacs-tallow-toolchain
 cmacs-tallow-toolchain:
-	$(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/tallow all
+	@want='$(CMACS_TALLOW_DIRS) $(CMACS_DEP_MAKEFLAGS)'; \
+	if test -d $(srcdir)/../deps/tallow/build && \
+	   test "$$(cat $(CMACS_TALLOW_STAMP) 2>/dev/null)" != "$$want"; then \
+	  echo "tallow: built for other install directories; cleaning once"; \
+	  $(MAKE) $(CMACS_DEP_MAKEFLAGS) -C $(srcdir)/../deps/tallow clean; \
+	fi
+	$(MAKE) $(CMACS_DEP_MAKEFLAGS) $(CMACS_TALLOW_DIRS) \
+	  -C $(srcdir)/../deps/tallow all
+	@mkdir -p $(srcdir)/../deps/tallow/build && \
+	printf '%s\n' '$(CMACS_TALLOW_DIRS) $(CMACS_DEP_MAKEFLAGS)' \
+	  > $(CMACS_TALLOW_STAMP)
 all: cmacs-tallow-toolchain
 endif
 

@@ -325,7 +325,12 @@ embedded Doom config.
   objects before that directory exists and warns =-Wmissing-include-dirs=
   once per object.  Order-only so an LQL rebuild does not make every
   object out of date.  Tallow is a separate =all: cmacs-tallow-toolchain=
-  edge: nothing of it is linked.
+  edge: nothing of it is linked.  Inside that block (=ifeq
+  ($(HAVE_CMACS_TALLOW),yes)=) =src/Makefile.in= defines =prefix=,
+  =exec_prefix=, =datarootdir=, =datadir=, =bindir= and =libdir= from
+  configure, which upstream's =src/Makefile.in= never does.  They hand
+  tallow the install directories at build time, because its binaries and
+  =.pc= files bake them in.
 - *Submodule build rules*: recipes build the vendored deps before linking.
   The =deps/libregnum= rule passes =CRISPY=1 HAS_GI=1= +
   =GI_RUNTIME_{CFLAGS,LIBS}= (so crispy + the gjs/PyGObject scripting backends
