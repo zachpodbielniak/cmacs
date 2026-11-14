@@ -13749,7 +13749,7 @@ A reset is not a restart.  A restart brings the same conversation back;
 a reset drops the session, and is what makes an identity change take.
 
 @node Clawtilla Work Pages
-@section Work: Decisions, Activity and Fleet
+@section Work: Decisions, Activity, Fleet and Grok
 
 @cindex clawtilla activity
 @cindex clawtilla fleet spending
@@ -13808,6 +13808,26 @@ the library's list, @kbd{s} stops the agent at point (its process and
 its computer), and @kbd{X} stops every agent the library offers Stop on
 --- running, and idle or never used --- after naming them.
 
+@subheading Grok
+
+The Grok page hands an agent's work to a Grok bot and shows what came
+back.  At the top is the daemon's own answer to whether a job can be
+sent right now (@code{grok.bots}: @code{reachable},
+@code{unreachable_reason}).  Below it are the bots: who may reach each,
+whether it has a routine key, and whether it can report over MCP or only
+HTTP.  On a bot, @kbd{R} shows its routine's standing prompt
+(@code{grok.routine_prompt}), and @kbd{Y} mints its MCP key
+(@code{grok.mcp_key}; shown once, and minting another replaces it).
+Then come every job, newest first (@code{grok.jobs}), with libclawt's
+label and colour for its state (the @code{"grok-job-state"} enum
+family), and the bot's result or note folded under it as plain text.
+@kbd{i} picks a bot and an agent it is shared with, then opens a
+composer: @kbd{C-c C-c} sends (@code{grok.send}; with @kbd{C-u}, it
+also asks for context), and @kbd{C-c C-k} abandons it.  The tab reads
+@samp{Grok (N)} when N jobs need somebody: the daemon's
+@code{attention} count, kept current by @code{grok.job_updated} and
+@code{grok.bots_changed}.
+
 @subheading Routines
 
 In Automation, @kbd{A} adds a routine, and with a prefix argument also
@@ -13819,7 +13839,11 @@ number.  @emph{read_only} runs it unable to change anything,
 @emph{locked} keeps the agent itself from editing or removing it.  The
 flags travel as JSON @code{true} and @code{false}, never as strings: a
 string that is not a boolean reads as the default, and the request
-succeeds and does the other thing.
+succeeds and does the other thing.  @kbd{E} on a trigger follows the
+same rule.  A whole number is sent as one (@code{organization_id},
+@code{rate_limit}), and @samp{true}/@samp{false} as a boolean.  That is
+how VENTURE's @code{ignore_actors}, @code{replay_connector} and
+@code{organization_id} are set.
 
 @node Clawtilla Agent Page
 @section An agent's page

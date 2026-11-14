@@ -856,6 +856,35 @@ cmacs_clawt_enum_decision_states (JsonBuilder *builder)
     }
 }
 
+/* A Grok job's state: libclawt's own nick, label, tone and whether it
+   needs somebody -- the badge, its colour and the page's count are the
+   library's answers, never a table written here.  */
+static void
+cmacs_clawt_enum_grok_job_states (JsonBuilder *builder)
+{
+  guint n;
+
+  for (n = 0; n < clawt_grok_job_state_count (); n++)
+    {
+      ClawtGrokJobState state = clawt_grok_job_state_nth (n);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder,
+                                     clawt_grok_job_state_nth_nick (n));
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder,
+                                     clawt_grok_job_state_label (state));
+      json_builder_set_member_name (builder, "tone");
+      json_builder_add_string_value (builder,
+                                     clawt_grok_job_state_tone (state));
+      json_builder_set_member_name (builder, "attention");
+      json_builder_add_boolean_value (
+        builder, clawt_grok_job_state_needs_attention (state));
+      json_builder_end_object (builder);
+    }
+}
+
 char *
 cmacs_clawt_enum_json (const char *family)
 {
@@ -902,6 +931,8 @@ cmacs_clawt_enum_json (const char *family)
     cmacs_clawt_enum_usage_periods (builder);
   else if (g_str_equal (family, "decision-state"))
     cmacs_clawt_enum_decision_states (builder);
+  else if (g_str_equal (family, "grok-job-state"))
+    cmacs_clawt_enum_grok_job_states (builder);
   else
     return NULL;
 

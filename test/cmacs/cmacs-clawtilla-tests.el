@@ -832,6 +832,78 @@ accepts."
   (dolist (entry (cmacs-clawtilla-enum "decision-state"))
     (should (integerp (alist-get 'value entry)))))
 
+(ert-deftest cmacs-clawtilla-grok-job-states-are-the-librarys ()
+  "Grok job states come from libclawt: nick, label, tone and attention."
+  (skip-unless (cmacs-clawtilla-tests--available-p))
+  (let ((states (cmacs-clawtilla-enum "grok-job-state")))
+    (should (>= (length states) 8))
+    (dolist (s states)
+      (should (stringp (alist-get 'nick s)))
+      (should (stringp (alist-get 'label s)))
+      (should (member (alist-get 'tone s) '("good" "bad" "warn" "info" "neutral")))
+      (should (memq (alist-get 'attention s) '(t nil))))
+    ;; The badge count is the library's rule: a failed job needs somebody,
+    ;; a finished one does not.
+    (should (eq t (alist-get 'attention
+                             (seq-find (lambda (s) (equal (alist-get 'nick s) "failed"))
+                                       states))))
+    (should-not (alist-get 'attention
+                           (seq-find (lambda (s) (equal (alist-get 'nick s) "done"))
+                                     states)))))
+
+(ert-deftest cmacs-clawtilla-grok-page-draws ()
+  "The Grok page draws reachability, bots, jobs and the bot's own text."
+  (skip-unless (and (cmacs-clawtilla-tests--available-p)
+                    (require 'cmacs-clawtilla-section nil t)))
+  (with-temp-buffer
+    (cmacs-clawtilla-section-mode)
+    (setq-local cmacs-clawtilla-section--page "grok")
+    (setq-local cmacs-clawtilla-section--reply
+                `((bots . ((reachable . nil)
+                           (unreachable_reason . "tailscale is not up")
+                           (bots . (((name . "scout") (description . "x")
+                                     (agents . ("ada" "bob"))
+                                     (key_configured . t) (mcp_key . nil))))))
+                  (jobs . ((attention . 1)
+                           (jobs . (((id . "gj-1") (bot . "scout") (agent . "ada")
+                                     (state . "failed") (instructions . "find it")
+                                     (created_at . 0)
+                                     (note . "<b>could not</b>"))))))))
+    (let ((inhibit-read-only t))
+      (cmacs-clawtilla-grok-draw))
+    (let ((text (buffer-string)))
+      (should (string-match-p "No job can be sent right now: tailscale is not up" text))
+      (should (string-match-p "scout" text))
+      (should (string-match-p "reachable by ada, bob" text))
+      (should (string-match-p "HTTP only" text))
+      (should (string-match-p "1 need you" text))
+      (should (string-match-p "gj-1 for ada" text))
+      ;; The bot's text is drawn as text.
+      (should (string-match-p "<b>could not</b>" text)))))
+
+(ert-deftest cmacs-clawtilla-trigger-update-types-values ()
+  "trigger.update sends integers and booleans as JSON, not strings."
+  (skip-unless (require 'cmacs-clawtilla-section nil t))
+  (let (sent)
+    (cl-letf (((symbol-function 'cmacs-clawtilla-section--row-id) (lambda () "t1"))
+              ((symbol-function 'cmacs-clawtilla-section--send)
+               (lambda (_kind payload) (setq sent payload))))
+      (cl-letf (((symbol-function 'read-string)
+                 (let ((answers (list "organization_id" "42")))
+                   (lambda (&rest _) (pop answers)))))
+        (cmacs-clawtilla-section-trigger-update))
+      (should (equal (alist-get 'organization_id sent) 42))
+      (cl-letf (((symbol-function 'read-string)
+                 (let ((answers (list "ignore_actors" "bot1,bot2")))
+                   (lambda (&rest _) (pop answers)))))
+        (cmacs-clawtilla-section-trigger-update))
+      (should (equal (alist-get 'ignore_actors sent) "bot1,bot2"))
+      (cl-letf (((symbol-function 'read-string)
+                 (let ((answers (list "enabled" "false")))
+                   (lambda (&rest _) (pop answers)))))
+        (cmacs-clawtilla-section-trigger-update))
+      (should (eq (alist-get 'enabled sent) :false)))))
+
 (ert-deftest cmacs-clawtilla-sparkline-is-the-librarys ()
   "One character per day, a gap for a day that cost nothing."
   (skip-unless (and (cmacs-clawtilla-tests--available-p)

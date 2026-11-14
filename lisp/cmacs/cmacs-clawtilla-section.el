@@ -50,6 +50,7 @@
 (require 'transient)
 (require 'cmacs-clawtilla)
 (require 'cmacs-clawtilla-ui)
+(require 'cmacs-clawtilla-grok)
 
 (declare-function cmacs-clawtilla--time-label "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--activity-elapsed "cmacs-clawtilla-defuns.c")
@@ -166,6 +167,11 @@ daemon's \"which agent?\" back at somebody who never chose."
      :list "usage.summary" :type fleet-agent
      :load ,#'cmacs-clawtilla-section--load-fleet
      :draw ,#'cmacs-clawtilla-section--draw-fleet)
+    ("grok"
+     ;; Two frames, bots and jobs, and a composer: cmacs-clawtilla-grok.el.
+     :list "grok.jobs" :type grok-job
+     :load ,#'cmacs-clawtilla-grok--load
+     :draw ,#'cmacs-clawtilla-grok-draw)
     ("flow"
      :list "room.history" :rows messages :type message
      :payload ((room . "flow") (as . "user"))
@@ -246,11 +252,18 @@ nothing, in the buffer.")
       (insert "\n"
               (mapconcat
                (lambda (page)
-                 (let ((nick (alist-get 'nick page)))
+                 (let* ((nick (alist-get 'nick page))
+                        ;; The Grok tab carries the daemon's count of
+                        ;; jobs that need somebody, like the GTK badge.
+                        (count (and (equal nick "grok")
+                                    (cmacs-clawtilla-grok-attention
+                                     cmacs-clawtilla-connection)))
+                        (label (concat (alist-get 'label page)
+                                       (if (and count (> count 0))
+                                           (format " (%d)" count) ""))))
                    (if (equal nick cmacs-clawtilla-section--page)
-                       (propertize (alist-get 'label page)
-                                   'face 'cmacs-clawtilla-heading)
-                     (cmacs-clawtilla-dim (alist-get 'label page)))))
+                       (propertize label 'face 'cmacs-clawtilla-heading)
+                     (cmacs-clawtilla-dim label))))
                pages "  |  ")
               "\n\n")
       (let ((spec (cmacs-clawtilla-section--spec
@@ -1101,8 +1114,19 @@ and the three flags (read-only, proactive, locked) are asked for too."
   (let* ((id (cmacs-clawtilla-section--row-id))
          (field (read-string "Field: "))
          (value (read-string (format "%s: " field))))
+    ;; The daemon reads each field by the type its schema gives it: an
+    ;; integer (`organization_id', `rate_limit') sent as a string reads
+    ;; as 0, and a boolean as false.  A list (`ignore_actors') may stay a
+    ;; comma-separated string -- the daemon splits that itself.
     (cmacs-clawtilla-section--send
-     "trigger.update" (list (cons 'id id) (cons field value)))))
+     "trigger.update"
+     (list (cons 'id id)
+           (cons (intern field)
+                 (cond ((string-match-p "\\`-?[0-9]+\\'" value)
+                        (string-to-number value))
+                       ((member value '("true" "yes" "on")) t)
+                       ((member value '("false" "no" "off")) :false)
+                       (t value)))))))
 
 (defun cmacs-clawtilla-section-trigger-capture ()
   "Capture the next event this trigger would match, without acting."
@@ -1283,6 +1307,10 @@ command whose name comes from a skill exists in no client's source."
   ["Fleet"
    [("p" "period" cmacs-clawtilla-section-fleet-period)
     ("X" "stop the idle ones" cmacs-clawtilla-section-fleet-stop-idle)]]
+  ["Grok"
+   [("i" "hand a bot some work" cmacs-clawtilla-grok-send)
+    ("R" "routine prompt" cmacs-clawtilla-grok-routine-prompt)
+    ("Y" "mint MCP key" cmacs-clawtilla-grok-mint-key)]]
   ["Decisions"
    [("o" "show settled too" cmacs-clawtilla-section-toggle-settled)
     ("x" "delete for good" cmacs-clawtilla-section-delete-decision)]]
@@ -1321,6 +1349,9 @@ command whose name comes from a skill exists in no client's source."
     (define-key map (kbd "X") #'cmacs-clawtilla-section-fleet-stop-idle)
     (define-key map (kbd "o") #'cmacs-clawtilla-section-toggle-settled)
     (define-key map (kbd "x") #'cmacs-clawtilla-section-delete-decision)
+    (define-key map (kbd "i") #'cmacs-clawtilla-grok-send)
+    (define-key map (kbd "R") #'cmacs-clawtilla-grok-routine-prompt)
+    (define-key map (kbd "Y") #'cmacs-clawtilla-grok-mint-key)
     (define-key map (kbd "?") #'cmacs-clawtilla-section-menu)
     map)
   "Keymap for `cmacs-clawtilla-section-mode'.")
@@ -1360,7 +1391,7 @@ command whose name comes from a skill exists in no client's source."
 
 ;;;###autoload
 (defun cmacs-clawtilla-work (&optional conn)
-  "Show tasks, decisions, flow, activity and the fleet's spending."
+  "Show tasks, decisions, flow, activity, the fleet's spending and Grok."
   (interactive)
   (cmacs-clawtilla-section (or conn (cmacs-clawtilla-current)) "work"))
 

@@ -395,8 +395,9 @@ DEFUN ("cmacs-clawtilla--enum", Fcmacs_clawtilla__enum,
 FAMILY is one of "section", "computer-type", "computer-view",
 "import-mode", "measure-unit", "memory-scope", "appearance-scheme",
 "appearance-theme", "relabel", "browser-mode", "policy-mode",
-"action-class", "usage-period" or "decision-state"; nil for anything
-else.  The three
+"action-class", "usage-period", "decision-state" or "grok-job-state";
+nil for anything else.  A Grok job state carries libclawt's `label',
+`tone' and `attention' (whether the page's badge counts it).  The three
 before the last are walked off their GTypes -- libclawt has no label
 table for them -- so their labels are the nicks made readable.  A
 usage period's nick is its index, which is what the Fleet page's

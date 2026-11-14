@@ -70,7 +70,7 @@ address*, and is never the default.
 | =*clawtilla: AGENT*= | one conversation |
 | =*clawtilla agent: ID*= | Overview and Mailbox |
 | =*clawtilla computer: ID*= | Shell, Screen, Mounts, Exchange, Browser |
-| =*clawtilla work*= | Tasks, Decisions, Flow, Activity, Fleet |
+| =*clawtilla work*= | Tasks, Decisions, Flow, Activity, Fleet, Grok |
 | =*clawtilla automation*= | Routines, Triggers |
 | =*clawtilla library*= | Skills, Memory |
 | =*clawtilla settings*= | eight panels |
@@ -287,7 +287,7 @@ never on a timer from a buffer nobody is reading.  A daemon built
 without =GSURF=1= answers =available: false=, and the view says that
 rather than drawing an empty frame.
 
-*** Work: Tasks, Decisions, Flow, Activity and Fleet
+*** Work: Tasks, Decisions, Flow, Activity, Fleet and Grok
 
 The pages and their order are the library's (=clawt_section_page_count=);
 =TAB= moves between them.
@@ -345,6 +345,18 @@ agent at point (=agent.stop=: its process and its computer), and =X=
 stops every agent the library offers Stop on --- running, and idle or
 never used --- after naming them.
 
+**** Grok
+
+clawtilla 0.10 hands an agent's work to a *Grok bot*: a routine in Grok with a webhook trigger, given a job by a POST and asked to report back to an address minted for that one job, over the tailnet.  The Grok page (=cmacs-clawtilla-grok.el=, the cmacs side of the GTK client's =gtk-grok.c=) shows three things, top to bottom.
+
+- *Whether a job could be sent at all right now.*  This is the daemon's own answer (=reachable= / =unreachable_reason= from =grok.bots=), the same check a send makes; for example "No job can be sent right now: tailscale is not up".
+- *The bots.*  Each row shows who may reach the bot, whether it has a routine key (=no key= otherwise), and whether it can report over MCP or only over HTTP.  =R= shows the standing prompt to paste into the bot's routine once (=grok.routine_prompt=).  =Y= mints the bot's MCP key (=grok.mcp_key=) after a confirmation: the key is shown once, and minting another stops the old one at once.
+- *Every job*, newest first (=grok.jobs=).  The badge's label and colour are libclawt's (the ="grok-job-state"= enum family: nick, label, tone, and whether it needs somebody), never a table in this client.  The bot's result, or its note, folds under the row and is inserted as plain text, because it was written outside the fleet.
+
+=i= hands a bot some work.  It picks the bot (the one at point, or asks), then the agent the answer goes to; only agents the bot is shared with are offered.  You write the instructions in a composer buffer: =C-c C-c= sends (=grok.send=), =C-u C-c C-c= also asks for context, and =C-c C-k= abandons it.
+
+The tab says =Grok (N)= when N jobs need somebody: failed, unanswered, refused, or back with a question.  That is the daemon's =attention= count, refreshed on =grok.job_updated= and =grok.bots_changed=, so it goes down as well as up, and it is fetched even while the page is not open.
+
 *** Automation: Routines and Triggers
 
 =A= adds a routine; with a prefix argument it also asks for the routine's
@@ -361,6 +373,14 @@ point: schedule, prompt, agent, model, or one of the flags.
 The flags travel as JSON =true= and =false=, never as a string: a string
 that is not a boolean is read as the default, and the request succeeds
 and does the other thing.
+
+=E= changes one field of the trigger at point, and the same rule applies.  A value that is a whole number is sent as one (=organization_id=, =rate_limit=), and =true=/=false= (or =yes=/=no=, =on=/=off=) as a boolean; anything else is a string.  clawtilla 0.9.3's VENTURE fields are set this way:
+
+- =ignore_actors=: a comma-separated list of actors whose changes never wake the agent;
+- =replay_connector=: the binding whose business events are replayed through the trigger;
+- =organization_id=: the VENTURE organization every request is scoped by.
+
+A string where the daemon's schema says integer reads as 0, which is how a venture trigger would silently lose its organization.
 
 *** Settings
 
