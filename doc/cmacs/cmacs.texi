@@ -14083,6 +14083,7 @@ fetch buffers
 * LQL Results Grid::
 * LQL REPL::
 * LQL Editor Sources::
+* LQL Notes::
 * LQL Language Server::
 * LQL Surfaces::
 * LQL Customization::
@@ -14237,6 +14238,73 @@ The column types are @code{string}, @code{int}, @code{double},
 @code{nil} in a boolean column is false; elsewhere it is NULL.  A time
 value or @code{float-time} seconds becomes a Timestamp.  A name that
 collides with a built-in source is refused.
+
+@node LQL Notes
+@section Notes Sources: Your PARA Repository
+
+@cindex notes, LQL
+@cindex PARA, LQL
+
+@file{cmacs-lql-notes.el} makes your org notes repository four sources:
+
+@example
+fetch notes | filter para == "inbox" | sort modified DESC
+@end example
+
+The notes directory is @code{cmacs-para-roots}, whose default is
+@code{("~/Documents/notes")}.  That setting is shared with roamgraph,
+secondbrain and the brigade memory index.  To point only these sources
+elsewhere, set @code{cmacs-lql-notes-directories}; nil means the same as
+@code{cmacs-para-roots}.
+
+@table @code
+@item notes
+One row per @file{.org} file.  The columns are:
+@itemize @bullet
+@item location: @code{file}, @code{path}, @code{root}, @code{dir}, @code{name};
+@item PARA place: @code{para} (inbox, projects, areas, resources, archives, root), @code{scope} (personal/work), @code{area};
+@item header keywords: @code{title}, @code{description}, @code{authors}, @code{categories}, @code{tags} (filetags), @code{created}, @code{updated}, @code{version}, @code{id};
+@item dates: @code{modified}, @code{age_days}, @code{date} (from a @samp{YYYY-MM-DD} file name);
+@item sizes: @code{size}, @code{lines}, @code{words};
+@item counts: @code{headings}, @code{todos}, @code{done}, @code{links}, @code{backlinks};
+@item flags: @code{index}, @code{daily}, @code{has_header}, @code{open}, @code{unsaved}.
+@end itemize
+@item note_headings
+One row per heading: @code{line}, @code{level}, @code{heading},
+@code{todo}, @code{done}, @code{priority}, @code{tags},
+@code{scheduled}, @code{deadline}, @code{closed}, @code{id} and
+@code{olpath}.  TODO keywords come from the file's own @samp{#+TODO:}
+lines when it has them, otherwise from
+@code{cmacs-lql-notes-todo-keywords} and
+@code{cmacs-lql-notes-done-keywords}.
+@item note_links
+One row per link: @code{type}, @code{target}, @code{description},
+@code{resolved} (the file an @code{id:} or @code{file:} link points at)
+and @code{exists}.  Remote targets are never checked.
+@item note_properties
+One row per property-drawer entry: @code{heading}, @code{key},
+@code{value}.
+@end table
+
+@kbd{M-x cmacs-lql-notes} offers named queries from
+@code{cmacs-lql-notes-queries}: inbox triage, recently updated, stale
+projects, open TODOs, due within a week, missing header keywords,
+orphans, broken links, notes per area, tags and unsaved notes.
+@code{cmacs-lql-notes-backlinks} and @code{cmacs-lql-notes-outgoing}
+show a note's incoming and outgoing links.
+
+NULL is three-valued: @code{x != null} is never true, so test presence
+with @code{is_not_null(x)}.
+
+Files are parsed with regexps and cached by modification time and size;
+an open buffer is read live.  Snapshot JSON is reused through
+@code{cmacs-lql-set-source-generation} while nothing changed.  The cache
+warms in idle time (@code{cmacs-lql-notes-warm-in-idle},
+@code{cmacs-lql-notes-warm-batch}).  The other options are
+@code{cmacs-lql-notes-include-archives},
+@code{cmacs-lql-notes-exclude-regexp},
+@code{cmacs-lql-notes-max-file-size} and
+@code{cmacs-lql-notes-stale-days}.
 
 @node LQL Language Server
 @section The Language Server

@@ -537,7 +537,27 @@ cmacs_lql_env_run (const gchar *text, GPtrArray *snapshots, guint max_rows,
       out->n_rows = lql_table_get_n_rows (table);
       out->json = table_to_json (table, max_rows);
       if (text_width > 0)
-        out->text = lql_table_to_text_wrapped (table, text_width);
+        {
+          /* The text shows what the JSON shows: at most MAX_ROWS rows. */
+          if (max_rows > 0 && out->n_rows > max_rows)
+            {
+              g_autoptr (LqlTable) head = lql_table_new ();
+              guint c, r;
+
+              for (c = 0; c < lql_table_get_n_columns (table); c++)
+                {
+                  LqlColumn *col = lql_table_get_column (table, c);
+
+                  lql_table_add_column (head, lql_column_get_name (col),
+                                        lql_column_get_column_type (col));
+                }
+              for (r = 0; r < max_rows; r++)
+                lql_table_add_row (head, lql_table_get_row (table, r));
+              out->text = lql_table_to_text_wrapped (head, text_width);
+            }
+          else
+            out->text = lql_table_to_text_wrapped (table, text_width);
+        }
     }
   g_mutex_unlock (&env_lock);
   return table != NULL;

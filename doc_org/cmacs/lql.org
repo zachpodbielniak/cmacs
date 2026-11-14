@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs subsystem lql query data lsp repl
 #+created: 2026-11-14T00:00:00-05:00
-#+updated: 2026-11-14T00:00:00-05:00
-#+version: 0.1
+#+updated: 2026-11-14T01:00:00-05:00
+#+version: 0.2
 
 * Overview
 
@@ -23,6 +23,7 @@ What you get:
 
 - *Every source the =lql= program has*: files of any format (JSON, JSON Lines, CSV, TSV, YAML, TOML, INI, XML, systemd units, logs in many dialects, compressed with gzip/zstd/xz/bzip2), =git_log= and the other git sources, =exec= and the command definitions (built-in plus =~/.config/lql/commands=), the systemd journal, coredumps, Kubernetes, and SQLite/PostgreSQL through =sql=.
 - *The editor as data*: =buffers=, =windows=, =processes=, =recentf=, =kill_ring=, =bookmarks=, =org_headings=, =gowl_clients=, and anything you add with =cmacs-lql-define-source=.
+- *Your notes as data*: =notes=, =note_headings=, =note_links= and =note_properties= over your PARA repository (=~/Documents/notes= by default), with named queries for inbox triage, stale projects, open TODOs, orphans, broken links and header lint (=M-x cmacs-lql-notes=).
 - *A results grid* (=cmacs-lql-results-mode=), shared with the libresearch client: sort, narrow, refine locally, mark, copy, export, and =RET= to visit whatever a row names.
 - *An async REPL* (=M-x cmacs-lql-repl=) with liblql's own completion and signature help.
 - *=.lql= files that just work*: =lql-mode= (font-lock and indentation from upstream), eglot running the tree's =lql-language-server= against an environment file cmacs writes, and =C-c C-c= to run the query at point.
@@ -244,6 +245,123 @@ A source's function runs on the editor thread only when a query names that sourc
 - A row is a plist (=:col VALUE ...=) or an alist.  Columns a row leaves out are =NULL=, and fields beyond the declared columns come along untyped.
 - Conversion: =nil= in a boolean column is false and elsewhere =NULL=.  A Lisp time value or =float-time= seconds becomes a Timestamp, and a number in a duration column is seconds.  A list becomes an Array, a keyword plist a Record, a buffer its name.
 - A function that signals costs that source's rows (a message says why); the query still runs.
+
+* Notes sources: your PARA repository
+
+=lisp/cmacs/cmacs-lql-notes.el= makes your org notes repository four LQL sources:
+
+#+begin_src lql
+fetch notes | filter para == "inbox" | sort modified DESC
+#+end_src
+
+** Where your notes are
+
+The notes directory is =cmacs-para-roots=, whose default is =("~/Documents/notes")=.  That one setting is shared with roamgraph, secondbrain and the brigade memory index, so moving your notes moves all of them:
+
+#+begin_src emacs-lisp
+(setq cmacs-para-roots '("~/notes"))
+#+end_src
+
+To point only the LQL sources somewhere else, set =cmacs-lql-notes-directories= (nil means "same as =cmacs-para-roots="):
+
+#+begin_src emacs-lisp
+(setq cmacs-lql-notes-directories '("~/work-notes" "~/Documents/notes"))
+#+end_src
+
+PARA classification (=para=, =scope=, =area=) is made against whichever directory holds the file.  Several directories are fine; the longest match wins.
+
+** The sources
+
+*** =notes= --- one row per =.org= file
+
+| Column        | Type      | Meaning                                                              |
+|---------------+-----------+----------------------------------------------------------------------|
+| =file=        | String    | Absolute path (=RET= in a grid visits it)                            |
+| =path=        | String    | Relative to its notes directory                                      |
+| =root=, =dir=, =name= | String | The notes directory; the relative directory; the base name       |
+| =para=        | String    | =inbox=, =projects=, =areas=, =resources=, =archives=, or =root=     |
+| =scope=       | String    | =personal= / =work= (archives keep the original path's scope)        |
+| =area=        | String    | The first directory under the category and scope (=02_areas/personal/finance/x.org= → =finance=) |
+| =title=, =description=, =version= | String | =#+title:=, =#+description:=, =#+version:=           |
+| =authors=, =categories=, =tags= | Array | =#+authors:= (comma split), =#+categories:= (space/comma), =#+filetags:= |
+| =created=, =updated= | Timestamp | From the header; =updated= falls back to the file's mtime      |
+| =modified=    | Timestamp | The file's mtime                                                     |
+| =age_days=    | Double    | Days since =updated=                                                 |
+| =id=          | String    | The file-level =:ID:=                                                |
+| =date=        | Timestamp | A =YYYY-MM-DD= at the start of the file name (dailies, dated notes)  |
+| =size=, =lines=, =words= | Int | Bytes, lines, words                                             |
+| =headings=, =todos=, =done= | Int | Headings; open TODO headings; done headings                   |
+| =links=, =backlinks= | Int  | Links out; distinct notes linking here (through =id:= and =file:=)   |
+| =index=, =daily= | Boolean | A =00_index.org=; a file under =02_areas/dailies=                  |
+| =has_header=  | Boolean   | Has =#+title=, =#+created= and =#+updated=                           |
+| =open=, =unsaved= | Boolean | Visited in a buffer; with unsaved changes                          |
+
+*** =note_headings= --- one row per heading
+
+=file=, =path=, =para=, =scope=, =area=, =line=, =level=, =heading= (without keyword, priority or tags), =todo=, =done=, =priority=, =tags=, =scheduled=, =deadline=, =closed= (Timestamps), =id=, =olpath= (=Parent / Child=).
+
+TODO keywords come from the file's own =#+TODO:= / =#+SEQ_TODO:= / =#+TYP_TODO:= lines when it has them.  Otherwise they come from =cmacs-lql-notes-todo-keywords= and =cmacs-lql-notes-done-keywords=.
+
+*** =note_links= --- one row per =[[link]]=
+
+=file=, =path=, =para=, =line=, =type= (=id=, =file=, =https=, ..., or =fuzzy= for an internal link), =target=, =description=, =resolved= (the file an =id:= or =file:= link points at), =exists=.
+
+A remote (Tramp) target is never checked, because a query must not open SSH connections.  Its =exists= is false.
+
+*** =note_properties= --- one row per property-drawer entry
+
+=file=, =path=, =para=, =line=, =heading= (NULL for the file-level drawer), =key=, =value=.
+
+** Queries worth keeping
+
+=M-x cmacs-lql-notes= offers these by name (=cmacs-lql-notes-queries=, an alist you can extend), or runs whatever LQL you type:
+
+| Name                         | Query (abridged)                                                          |
+|------------------------------+---------------------------------------------------------------------------|
+| Inbox triage                 | =fetch notes \vert{} filter para == "inbox" \vert{} sort modified DESC=   |
+| Recently updated (7 days)    | =filter updated > now() - 7d=                                             |
+| Stale projects               | projects, not indexes, =age_days > cmacs-lql-notes-stale-days=            |
+| Open TODOs                   | =fetch note_headings \vert{} filter is_not_null(todo) and not done=       |
+| Due within a week            | =filter not done and is_not_null(deadline) and deadline < now() + 7d=     |
+| Missing header keywords      | =filter not has_header=                                                   |
+| Orphans (nothing links here) | =filter backlinks == 0 and not index and not daily=                       |
+| Broken links                 | =fetch note_links \vert{} filter (type == "id" or type == "file") and not exists= |
+| Notes per area               | =summarize notes = count(), words = sum(words), by: {para, area}=         |
+| Tags                         | =expand tags, as: tag \vert{} filter is_not_null(tag) \vert{} summarize ...= |
+| Unsaved notes                | =filter unsaved=                                                          |
+
+In a note:
+
+| Command                      | Shows                                    |
+|------------------------------+------------------------------------------|
+| =cmacs-lql-notes-backlinks=  | Every link anywhere pointing at this note |
+| =cmacs-lql-notes-outgoing=   | Every link this note makes               |
+
+*NULL is three-valued in LQL.*  =x != null= is NULL, never true, so =filter todo != null= keeps nothing.  Test presence with =is_not_null(x)= / =is_null(x)=.
+
+** How it stays fast
+
+- Files are parsed with plain regexps (no =org-mode= per file) and cached by modification time and size.  Only files that changed since the last query are read again.  A note open in a buffer is read from the buffer, unsaved edits included.
+- Each source has a generation function (=cmacs-lql-set-source-generation=), so while nothing changed a query reuses the last snapshot's JSON instead of re-serialising every row.  The hour is part of the key because =age_days= moves with the clock.
+- With =cmacs-lql-notes-warm-in-idle= (default =t=), the cache warms in idle time, =cmacs-lql-notes-warm-batch= files per step, and stops at the first input.  A cold first query over about 3,500 notes takes several seconds; a warm one takes a fraction of a second.
+- Files larger than =cmacs-lql-notes-max-file-size= contribute only their header.  =cmacs-lql-notes-exclude-regexp= skips =.git=, =.stversions=, =node_modules= and =.trash=.  =cmacs-lql-notes-include-archives= nil leaves =04_archives= out.
+- =M-x cmacs-lql-notes-clear-cache= forgets everything.
+
+** Customization
+
+| Variable                              | Default                         |
+|---------------------------------------+---------------------------------|
+| =cmacs-para-roots=                    | =("~/Documents/notes")=         |
+| =cmacs-lql-notes-directories=         | nil (use =cmacs-para-roots=)    |
+| =cmacs-lql-notes-include-archives=    | =t=                             |
+| =cmacs-lql-notes-exclude-regexp=      | =.git=, =.stversions=, =node_modules=, =.trash= |
+| =cmacs-lql-notes-max-file-size=       | 4 MiB                           |
+| =cmacs-lql-notes-todo-keywords=       | TODO NEXT STARTED WAITING HOLD  |
+| =cmacs-lql-notes-done-keywords=       | DONE CANCELLED CANCELED         |
+| =cmacs-lql-notes-stale-days=          | 30                              |
+| =cmacs-lql-notes-warm-in-idle=        | =t=                             |
+| =cmacs-lql-notes-warm-batch=          | 25                              |
+| =cmacs-lql-notes-queries=             | the named queries above         |
 
 * The language server and =lql-mode=
 

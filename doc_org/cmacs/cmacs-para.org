@@ -8,7 +8,7 @@
 
 * Why this exists
 
-PARA — Projects, Areas, Resources, Archives, plus an Inbox — is how the notes tree is organised, and more than one subsystem needs to agree about it: [[file:cmacs-roamgraph.org][roamgraph]] colours nodes by bucket, and [[file:cmacs-secondbrain.org][secondbrain]] groups its Memory ring by department.
+PARA — Projects, Areas, Resources, Archives, plus an Inbox — is how the notes tree is organised, and more than one subsystem needs to agree about it: [[file:cmacs-roamgraph.org][roamgraph]] colours nodes by bucket, [[file:cmacs-secondbrain.org][secondbrain]] groups its Memory ring by department, and the [[file:lql.org][LQL notes sources]] (=fetch notes | filter para == "inbox"=) report each note's =para=, =scope= and =area= from it.
 
 Two independent answers to "which bucket is this file in?" would disagree at the edges, so there is one.
 

@@ -14,6 +14,10 @@ about it: @ref{CMacs Roamgraph} colours nodes by bucket, and
 Two independent answers to ``which bucket is this file in?'' would
 disagree at the edges, so there is one, in @file{lisp/cmacs/cmacs-para.el}.
 
+The LQL notes sources (@pxref{LQL Notes}) classify every note through
+this file too, so @code{fetch notes | filter para == "inbox"} agrees
+with roamgraph and secondbrain about where a note lives.
+
 It also resolves a live bug.  @code{cmacs-roamgraph-directory} defaulted
 to @code{org-roam-directory} (often @file{~/org}) while
 @code{cmacs-brigade-memory-roots} defaulted to @file{~/Documents/notes}.

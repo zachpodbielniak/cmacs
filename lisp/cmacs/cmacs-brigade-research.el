@@ -109,7 +109,11 @@ fields a, b | sort a DESC | summarize n = count(), by: {a} | limit N'.
 Sources include files of any format (read \"path\"), git_log and the
 other git_* sources, exec, journal, coredumps, sql, Kubernetes, and the
 editor's own state: buffers, windows, processes, recentf, kill_ring,
-bookmarks, org_headings.  Call lql_sources for the full list.  Read-only."
+bookmarks, org_headings, and the user's org notes repository: notes
+(one row per file: para, scope, area, title, tags, created/updated,
+todos, backlinks), note_headings, note_links and note_properties.  NULL
+is three-valued: test presence with is_not_null(x), never x != null.
+Call lql_sources for the full list.  Read-only."
   ((query string "The LQL query")
    (max_rows integer "Most rows to return (default 100)" :optional t))
   :group 'data

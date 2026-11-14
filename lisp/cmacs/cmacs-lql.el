@@ -289,10 +289,36 @@ shown by completion and hover.  Redefining NAME replaces it.
            when (string-match-p (concat "\\_<" (regexp-quote name) "\\_>") query)
            collect name))
 
+(defvar cmacs-lql--snapshot-cache (make-hash-table :test #'equal)
+  "Source name -> (KEY . JSON) for sources with a generation function.")
+
+(defun cmacs-lql-set-source-generation (name function)
+  "Give Elisp source NAME a generation FUNCTION, to reuse its snapshot.
+FUNCTION takes no arguments and returns a value that changes (under
+`equal') whenever the source's rows would.  While it returns the same
+value, a query reuses the last snapshot's JSON instead of calling the
+source function and serialising every row again -- worth it for a
+source with thousands of rows, like `notes'."
+  (let ((spec (or (gethash name cmacs-lql--sources)
+                  (error "cmacs-lql: no source %s" name))))
+    (puthash name (plist-put spec :generation function) cmacs-lql--sources)
+    (remhash name cmacs-lql--snapshot-cache)))
+
 (defun cmacs-lql--snapshot (name)
   "Rows of Elisp source NAME as a JSON array string."
   (let* ((spec (gethash name cmacs-lql--sources))
-         (columns (plist-get spec :columns))
+         (gen-fn (plist-get spec :generation))
+         (key (and gen-fn (funcall gen-fn)))
+         (hit (and gen-fn (gethash name cmacs-lql--snapshot-cache))))
+    (if (and hit (equal (car hit) key))
+        (cdr hit)
+      (let ((json (cmacs-lql--snapshot-1 name spec)))
+        (when gen-fn (puthash name (cons key json) cmacs-lql--snapshot-cache))
+        json))))
+
+(defun cmacs-lql--snapshot-1 (name spec)
+  "Serialise the rows of Elisp source NAME (its SPEC) to a JSON array."
+  (let* ((columns (plist-get spec :columns))
          (rows (condition-case err
                    (funcall (plist-get spec :function))
                  (error
@@ -772,5 +798,10 @@ on the libresearch server instead."
   (cmacs-lql--define-shipped-sources))
 
 (provide 'cmacs-lql)
+
+;; The notes sources (your PARA repo).  After `provide': cmacs-lql-notes
+;; requires this file.
+(when (cmacs-lql-available-p)
+  (require 'cmacs-lql-notes nil t))
 
 ;;; cmacs-lql.el ends here
