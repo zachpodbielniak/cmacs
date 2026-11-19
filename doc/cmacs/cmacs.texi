@@ -9929,6 +9929,8 @@ with its headers as @option{-isystem}.
 @file{/usr/share/cmacs/speech-models/sherpa/} (Silero VAD, a keyword
 spotter, a streaming recognizer, pyannote segmentation and a speaker
 embedding); the @code{CMACS_SPEECH_MODELS} build argument lists them.
+An image built without sherpa (no onnxruntime, as on Ubuntu 24.04)
+ships none.
 
 @node Cintrospect
 @chapter Cintrospect: Runtime C Self-Introspection
@@ -14890,6 +14892,13 @@ The Lisp API is @code{cmacs-lql-run}, @code{cmacs-lql-run-sync},
 Emacs; every tool is a subprocess, so a panicking program cannot take
 the editor (or the gowl session) down.  The full manual is
 @file{doc_org/cmacs/tallow.org}.
+
+The toolchain needs GLib 2.86 or newer: it binds GLib through its GIR
+files, and older @file{GLibUnix-2.0.gir} does not mark
+@code{signal_add_full} as shadowing @code{signal_add}.  On older GLib
+(Ubuntu 24.04, Debian 13) @command{configure} skips it with a notice
+(@samp{cmacs-tallow disabled: ...}) and @code{IS-CMACS-TALLOW} is
+@code{nil}; @code{--with-cmacs-tallow=required} makes that an error.
 
 @menu
 * Tallow Editing::

@@ -791,7 +791,10 @@ ifeq (${ns_self_contained},no)
 	## own install -- an installed `tallow' needs its runtime, std and
 	## pkg-config files next to it, which is exactly what that installs.
 	## Same build type as the tree was built with, or it would rebuild.
-	@if test -f $(srcdir)/deps/tallow/build/$(CMACS_DEP_BUILDTYPE)/tallow; then \
+	## Only when configure enabled it: GLib < 2.86 switches it off, and a
+	## stale binary in the tree must not bring the toolchain back.
+	@if test "@HAVE_CMACS_TALLOW@" = yes \
+	    && test -f $(srcdir)/deps/tallow/build/$(CMACS_DEP_BUILDTYPE)/tallow; then \
 		$(MAKE) -C $(srcdir)/deps/tallow install \
 			$(if $(filter debug,$(CMACS_DEP_BUILDTYPE)),DEBUG=1) \
 			PREFIX="${prefix}" BINDIR="${bindir}" LIBDIR="${libdir}" \

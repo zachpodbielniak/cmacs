@@ -1505,10 +1505,27 @@ dnl and REPL are all the `tallow' program (and `tallow-suet'), run as
 dnl subprocesses so a crashing program can never take the editor (or,
 dnl under --gowl, the session) with it.  src/Makefile.in builds the
 dnl submodule; `make install' installs it alongside cmacs.
+dnl
+dnl The toolchain binds GLib through its GIR files and needs GLib >= 2.86:
+dnl before that GLibUnix-2.0.gir does not mark signal_add_full as
+dnl `shadows="signal_add"' (checked on 2.80 and 2.84), so tallow-watch's
+dnl GLibUnix.signal_add does not resolve, and the generated C includes
+dnl <gio/gdesktopappinfo.h> without the gio-unix-2.0 path.  Older GLib
+dnl (Ubuntu 24.04, Debian 13) skips the toolchain with a NOTICE, as
+dnl sherpa does without onnxruntime; =required makes that an error.
 HAVE_CMACS_TALLOW=no
 if test "$with_cmacs_tallow" != "no"; then
-  HAVE_CMACS_TALLOW=yes
-  AC_DEFINE([HAVE_CMACS_TALLOW], 1, [CMacs Tallow language support])
+  if $PKG_CONFIG --atleast-version=2.86 glib-2.0 2>/dev/null; then
+    HAVE_CMACS_TALLOW=yes
+    AC_DEFINE([HAVE_CMACS_TALLOW], 1, [CMacs Tallow language support])
+  else
+    cmacs_tallow_why="GLib `$PKG_CONFIG --modversion glib-2.0 2>/dev/null` is older than 2.86, which the tallow toolchain's GIR bindings need"
+    if test "$with_cmacs_tallow" = "required"; then
+      AC_MSG_ERROR([--with-cmacs-tallow=required: $cmacs_tallow_why])
+    else
+      AC_MSG_NOTICE([cmacs-tallow disabled: $cmacs_tallow_why])
+    fi
+  fi
 fi
 AC_SUBST(HAVE_CMACS_TALLOW)
 

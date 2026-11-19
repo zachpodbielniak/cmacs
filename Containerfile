@@ -790,7 +790,13 @@ RUN install -d -m 0755 \
 # placed in <id>/ named after the file.  Set it empty to ship none.
 # ---------------------------------------------------------------------
 ARG CMACS_SPEECH_MODELS="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
+# Skipped when configure left sherpa out (no onnxruntime, e.g. Ubuntu
+# 24.04): the models would be ~100 MB nothing can load.
 RUN dest=/build/stage/usr/share/cmacs/speech-models/sherpa \
+ && if ! grep -q '^#define HAVE_CMACS_SHERPA 1' src/config.h; then \
+        echo "==> sherpa not compiled in; shipping no sherpa models"; \
+        exit 0; \
+    fi \
  && install -d -m 0755 "${dest}" \
  && for url in ${CMACS_SPEECH_MODELS}; do \
         file="${url##*/}"; \

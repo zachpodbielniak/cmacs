@@ -149,7 +149,7 @@ sherpa's cmake fetches about fifteen third-party tarballs (kaldi-native-fbank, k
 
 ** Models in the container image
 
-=./build-container= stages a small default set under =/usr/share/cmacs/speech-models/sherpa/=: Silero VAD, the gigaspeech keyword spotter, the 20M streaming zipformer (int8 only), pyannote segmentation 3.0 and the 3D-Speaker CAM++ English embedding -- about 160 MB, enough that =vad=, =wake=, =stt-stream=, =diarize= and =speaker-id= work out of the box.  The =CMACS_SPEECH_MODELS= build argument is the list of release URLs; set it empty to ship none.
+=./build-container= stages a small default set under =/usr/share/cmacs/speech-models/sherpa/=: Silero VAD, the gigaspeech keyword spotter, the 20M streaming zipformer (int8 only), pyannote segmentation 3.0 and the 3D-Speaker CAM++ English embedding -- about 100 MB, enough that =vad=, =wake=, =stt-stream=, =diarize= and =speaker-id= work out of the box.  The =CMACS_SPEECH_MODELS= build argument is the list of release URLs (=build-container= passes it through from the environment when set); set it empty to ship none.  An image whose configure left sherpa out -- no onnxruntime, as on Ubuntu 24.04 -- ships none either, since nothing could load them.
 
 * Troubleshooting
 

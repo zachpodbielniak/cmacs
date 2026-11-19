@@ -39,6 +39,10 @@ deps/whisper.cpp/build
 # and its build/ also holds the staged third-party tarballs and an
 # install/ prefix with host paths in sherpa-onnx.pc.
 deps/sherpa-onnx/build
+# tallow's too: `make install' installs tallow whenever its binary
+# exists, so a leaked host build/<type>/tallow made the image try to
+# install (and rebuild) a toolchain configure had switched off.
+deps/tallow/build
 **/CMakeCache.txt
 # gcc -MMD dependency files record ABSOLUTE paths to the headers of the
 # machine that compiled them.  Leaking a host .d into the context makes
