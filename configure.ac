@@ -1458,7 +1458,16 @@ if test "$with_cmacs_lql" != "no"; then
   fi
   PKG_CHECK_MODULES([CMACS_LQL_DEPS],
     [glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0 yaml-0.1
-     libxml-2.0 libzstd liblzma bzip2])
+     libxml-2.0 libzstd liblzma])
+  dnl bzip2: only Fedora's bzip2-devel ships a bzip2.pc; upstream 1.0.x
+  dnl and Debian/Ubuntu's libbz2-dev do not.  Use the module when it
+  dnl exists, else <bzlib.h> + bare -lbz2 (LQL's config.mk does the same).
+  PKG_CHECK_EXISTS([bzip2],
+    [CMACS_LQL_DEPS_CFLAGS="$CMACS_LQL_DEPS_CFLAGS `$PKG_CONFIG --cflags bzip2`"
+     CMACS_LQL_DEPS_LIBS="$CMACS_LQL_DEPS_LIBS `$PKG_CONFIG --libs bzip2`"],
+    [AC_CHECK_HEADER([bzlib.h],
+       [CMACS_LQL_DEPS_LIBS="$CMACS_LQL_DEPS_LIBS -lbz2"],
+       [AC_MSG_ERROR([--with-cmacs-lql needs bzip2: no pkg-config module 'bzip2' and no <bzlib.h> (Fedora bzip2-devel, Debian/Ubuntu libbz2-dev)])])])
   cmacs_lql_journal=no
   cmacs_lql_sqlite=no
   cmacs_lql_postgres=no
