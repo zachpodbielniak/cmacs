@@ -61,6 +61,15 @@ ARG CMACS_RELEASE=44
 # build-container exposes this as --jobs N.
 ARG CMACS_JOBS=
 
+# Ubuntu only: an archive mirror to use instead of archive.ubuntu.com
+# and security.ubuntu.com, e.g.
+#   http://mirror.math.princeton.edu/pub/ubuntu
+# Empty (the default) leaves the base image's sources alone.  When
+# Canonical's servers are unreachable the whole image fails at its
+# first `apt-get update', so this is the way past an outage.
+# build-container exposes it as UBUNTU_MIRROR=.
+ARG UBUNTU_MIRROR=
+
 ARG WHISPER_MODEL_NAME=ggml-base.en.bin
 ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 ARG PIPER_VOICE_NAME=en_US-amy-low.onnx
@@ -202,6 +211,10 @@ RUN set -eux; \
         ;; \
     ubuntu|debian) \
         export DEBIAN_FRONTEND=noninteractive; \
+        if [ -n "${UBUNTU_MIRROR}" ]; then \
+            sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#${UBUNTU_MIRROR%/}/#g" \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true; \
+        fi; \
         apt-get update; \
         apt-get install -y --no-install-recommends \
             autoconf automake gcc g++ make pkg-config texinfo \
