@@ -26,7 +26,7 @@ Nothing is linked into Emacs.  Every tool is a subprocess, so a panicking progra
 
 - Configure flag =--with-cmacs-tallow=, part of the default flag set.
 - Building: gcc, make, GLib.  =libffi= is needed for the suet VM (the REPL and the time-travel debugger).  =gdb= is needed for =tallow dap=.  Fedora: =glib2-devel libffi-devel gdb=, plus optionally =libgccjit-devel libdex-devel=.  =./install-deps= installs them.
-- GLib 2.86 or newer.  The toolchain binds GLib through its GIR files, and before 2.86 =GLibUnix-2.0.gir= does not mark =signal_add_full= as shadowing =signal_add= (checked on 2.80 and 2.84), so tallow's own =tallow-watch= does not compile.  On older GLib (Ubuntu 24.04, Debian 13) =configure= skips the toolchain with =cmacs-tallow disabled: GLib X is older than 2.86= and =IS-CMACS-TALLOW= is nil; =--with-cmacs-tallow=required= makes that an error instead.
+- GLib 2.80 or newer.  The toolchain binds GLib through its GIR files; GLib 2.80 to 2.84 lack the =shadows= annotation 2.86 added to =GLibUnix.signal_add_full=, and tallow 0.35.6 and later supply it themselves, so Ubuntu 24.04 builds the toolchain like any other target.
 - Debugging needs the =dape= package (GNU ELPA; Doom's =:tools debugger= uses it).
 
 * How cmacs finds the toolchain
@@ -148,6 +148,6 @@ gdb pretty-printers for Tallow values ship in the runtime (=tallow_gdb.py=) and 
 * Troubleshooting
 
 - *=.tlw= opens in =prog-mode= with a message* :: =tallow-mode= was not found.  Check that =deps/tallow/editors/emacs= exists in a dev tree, or that the installed site-lisp copy does.
-- *"no `tallow'"* :: The toolchain was not built (=--with-cmacs-tallow= off, or skipped because GLib is older than 2.86 -- look for =cmacs-tallow disabled= in the configure output), or is not on =PATH= for an installed cmacs.
+- *"no `tallow'"* :: The toolchain was not built (=--with-cmacs-tallow= off), or is not on =PATH= for an installed cmacs.
 - *The REPL prints raw JSON* :: The =tallow= on your =PATH= predates =repl --json=.  Use the tree's build, or update tallow.
 - *dape says the adapter exited* :: =tallow dap= needs =gdb=; the time-travel config needs =tallow-suet= (built with libffi).

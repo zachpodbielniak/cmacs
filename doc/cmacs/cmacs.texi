@@ -14893,12 +14893,10 @@ Emacs; every tool is a subprocess, so a panicking program cannot take
 the editor (or the gowl session) down.  The full manual is
 @file{doc_org/cmacs/tallow.org}.
 
-The toolchain needs GLib 2.86 or newer: it binds GLib through its GIR
-files, and older @file{GLibUnix-2.0.gir} does not mark
-@code{signal_add_full} as shadowing @code{signal_add}.  On older GLib
-(Ubuntu 24.04, Debian 13) @command{configure} skips it with a notice
-(@samp{cmacs-tallow disabled: ...}) and @code{IS-CMACS-TALLOW} is
-@code{nil}; @code{--with-cmacs-tallow=required} makes that an error.
+The toolchain binds GLib through its GIR files.  GLib 2.80 to 2.84
+lack the @code{shadows} annotation 2.86 added to
+@code{GLibUnix.signal_add_full}; tallow 0.35.6 and later supply it
+themselves, so Ubuntu 24.04 builds the toolchain too.
 
 @menu
 * Tallow Editing::
