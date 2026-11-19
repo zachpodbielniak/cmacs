@@ -156,10 +156,10 @@ liblql uses byte offsets into UTF-8.  A multibyte Lisp string's data is UTF-8 fo
 |-----------+---------------------------------------------------------------------------------|
 | =RET=     | Visit what the row names (see below); otherwise show the row                    |
 | =v=       | Show the whole row as a record                                                  |
-| =/=       | Narrow: append =| filter EXPR= and run again against the source (offers =column == value= from point) |
+| =F=       | Narrow: append =| filter EXPR= and run again against the source (offers =column == value= from point) |
 | =R=       | Refine locally: run =fetch results \vert{} PIPELINE= over the rows shown, without fetching again |
 | =e=       | Edit the query and run it again                                                 |
-| =g=       | Run it again                                                                    |
+| =g r=     | Run it again (=revert-buffer= also does)                                         |
 | =S=       | Sort by the column at point (=tabulated-list=), on the typed value              |
 | =c=       | Hide or show a column                                                           |
 | =m= =u= =U= | Mark, unmark, unmark all                                                      |
@@ -169,6 +169,8 @@ liblql uses byte offsets into UTF-8.  A multibyte Lisp string's data is UTF-8 fo
 | =x=       | Explain the plan                                                                |
 | =t=       | Switch the target (=local= / =libresearch=) and run again                       |
 | =C-c C-k= | Cancel the running query                                                        |
+
+No key here is =/=, =n=, =N=, =j=, =k= or a bare =g=: the map is promoted above Evil's (=cmacs-evil-setup-mode-map=), so it must leave search, motion and the =g= prefix to Evil.
 
 The mode line shows rows (=shown/total= when truncated), the time the run took, and the target when it is not local.
 

@@ -59,16 +59,16 @@ The grid shows title, URL, engines and score.  =snippet=, =author= and =category
 | =i=       | Ingest the marked results into the second brain (=cmacs-secondbrain-ingest=)       |
 | =E=       | Write the marked results to an org note in your inbox                             |
 | =l=       | Copy org links to the marked results                                              |
-| =/=       | Refine locally with LQL (see below)                                               |
+| =R=       | Refine locally with LQL (see below)                                               |
 | =s=       | Search again                                                                      |
 | =S=       | Next page of results                                                              |
-| =m= =u= =U= =v= =w= =W= =c= =g= | As in any results grid ([[file:lql.org][LQL]])                  |
+| =m= =u= =U= =v= =w= =W= =c= =F= =g r= | As in any results grid ([[file:lql.org][LQL]])                  |
 
 "Marked" means the marked rows, or the row at point when none are marked.
 
 ** Refining locally
 
-=/= runs LQL *in cmacs* over the rows already in the grid.  They become the source =results=, so nothing is fetched again:
+=R= runs LQL *in cmacs* over the rows already in the grid.  They become the source =results=, so nothing is fetched again:
 
 #+begin_example
 fetch results | filter score > 1.5 and url ~ "github.com" | sort score DESC
@@ -118,4 +118,4 @@ The AI tools share the same resolver:
 - *Searches go to localhost* :: No entry was found.  =M-x cmacs-libresearch-server= says =default=.  Check that the entry's =login= is =libresearch= (or set =cmacs-ai-libresearch-login=) and that =auth-sources= includes the file.  =auth-source-forget-all-cached= after editing it.
 - *401 Unauthorized* :: The server wants a token and none matched.  =cmacs-libresearch-server= says =no token=.
 - *web_search still uses DuckDuckGo* :: The provider was set before the entry existed.  Chats pick it up when they are created; open a new chat.
-- *=/= in a search grid says LQL is unavailable* :: cmacs was built without =--with-cmacs-lql=.
+- *=R= in a search grid says LQL is unavailable* :: cmacs was built without =--with-cmacs-lql=.

@@ -240,10 +240,13 @@ value, not its text -- is found by the entry's id."
   :parent tabulated-list-mode-map
   "RET" #'cmacs-lql-results-visit
   "v"   #'cmacs-lql-results-show-row
-  "/"   #'cmacs-lql-results-narrow
+  ;; No `/' or bare `g': promoted to Evil intercept precedence, this map
+  ;; would take search and the `g' prefix away.  `g r' is the refresh
+  ;; key every other cmacs grid uses, after `evil-collection-magit'.
+  "F"   #'cmacs-lql-results-narrow
   "R"   #'cmacs-lql-results-refine
   "e"   #'cmacs-lql-results-edit-query
-  "g"   #'cmacs-lql-results-rerun
+  "g r" #'cmacs-lql-results-rerun
   "m"   #'cmacs-lql-results-mark
   "u"   #'cmacs-lql-results-unmark
   "U"   #'cmacs-lql-results-unmark-all

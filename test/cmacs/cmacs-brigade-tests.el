@@ -536,10 +536,18 @@ those are all guarded at their call sites."
                ;; into a chat buffer, and a chat is something a user
                ;; reaches interactively even though nothing loads it
                ;; eagerly.
-               cmacs-ai-chat))
+               cmacs-ai-chat
+               ;; The lql_query/lql_sources tools in
+               ;; cmacs-brigade-research.el require it on first call.
+               ;; It is plain Elisp, so it loads in any build.
+               cmacs-lql))
     (require f nil 'noerror))
   (let ((optional '("piper" "whisper" "audio" "libregnum" "imgedit"
-                    "vidstudio" "transcribe" "mu4e" "libreclaw"))
+                    "vidstudio" "transcribe" "mu4e" "libreclaw"
+                    ;; `cmacs-lql--*' are the C DEFUNs, bound only
+                    ;; --with-cmacs-lql; callers check
+                    ;; `cmacs-lql-available-p' first.
+                    "\\`cmacs-lql--"))
         bad)
     (dolist (file (cmacs-brigade-tests--elisp-files))
       (with-temp-buffer

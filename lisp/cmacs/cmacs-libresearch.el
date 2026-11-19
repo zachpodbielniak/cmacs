@@ -125,7 +125,6 @@ Nil means 00_inbox/personal under the first of `cmacs-para-roots'."
   "i" #'cmacs-libresearch-ingest-marked
   "E" #'cmacs-libresearch-export-to-inbox
   "l" #'cmacs-libresearch-copy-org-link
-  "/" #'cmacs-lql-results-refine
   "s" #'cmacs-libresearch-search
   "S" #'cmacs-libresearch-next-page)
 
