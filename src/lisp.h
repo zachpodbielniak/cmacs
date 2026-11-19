@@ -5549,6 +5549,11 @@ extern void init_cmacs_whisper (void);
 extern void syms_of_cmacs_piper (void);
 extern void init_cmacs_piper (void);
 #endif
+/* CMACS: sherpa-onnx speech engine (cmacs/sherpa).  */
+#ifdef HAVE_CMACS_SHERPA
+extern void syms_of_cmacs_sherpa (void);
+extern void init_cmacs_sherpa (void);
+#endif
 #ifdef HAVE_CMACS_AI
 extern void syms_of_cmacs_ai (void);
 extern void init_cmacs_ai (void);

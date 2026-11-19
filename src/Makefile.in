@@ -497,6 +497,11 @@ CMACS_WHISPER_BUNDLED = @CMACS_WHISPER_BUNDLED@
 CMACS_PIPER_OBJ = @CMACS_PIPER_OBJ@
 CMACS_PIPER_CFLAGS = @CMACS_PIPER_CFLAGS@
 CMACS_PIPER_LIBS = @CMACS_PIPER_LIBS@
+CMACS_SHERPA_OBJ = @CMACS_SHERPA_OBJ@
+CMACS_SHERPA_CFLAGS = @CMACS_SHERPA_CFLAGS@
+CMACS_SHERPA_LIBS = @CMACS_SHERPA_LIBS@
+CMACS_SHERPA_ORT_INCDIR = @CMACS_SHERPA_ORT_INCDIR@
+CMACS_SHERPA_ORT_LIBDIR = @CMACS_SHERPA_ORT_LIBDIR@
 CMACS_API_DIR = @CMACS_API_DIR@
 CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/core \
                         -I$(srcdir)/../cmacs/glib -I$(srcdir)/../cmacs/gobject \
@@ -513,6 +518,7 @@ CMACS_INTERNAL_CFLAGS = -I$(srcdir)/../cmacs/core \
                         -I$(srcdir)/../cmacs/audio \
                         -I$(srcdir)/../cmacs/whisper \
                         -I$(srcdir)/../cmacs/piper \
+                        -I$(srcdir)/../cmacs/sherpa \
                         -I$(srcdir)/../cmacs/ai \
                         -I$(srcdir)/../cmacs/libregnum \
                         -I$(srcdir)/../cmacs/gnuseye \
@@ -551,6 +557,7 @@ CMACS_CFLAGS = $(CMACS_INTERNAL_CFLAGS) \
                $(CMACS_AUDIO_CFLAGS) \
                $(CMACS_WHISPER_CFLAGS) \
                $(CMACS_PIPER_CFLAGS) \
+               $(CMACS_SHERPA_CFLAGS) \
                $(CMACS_AI_CFLAGS) \
                $(CMACS_LIBREGNUM_CFLAGS) \
                $(CMACS_GNUSEYE_CFLAGS) \
@@ -714,7 +721,7 @@ base_obj = dispnew.o frame.o scroll.o xdisp.o menu.o $(XMENU_OBJ) window.o     \
 	$(MSDOS_OBJ) $(MSDOS_X_OBJ) $(NS_OBJ) $(CYGWIN_OBJ) $(FONT_OBJ)        \
 	$(W32_OBJ) $(WINDOW_SYSTEM_OBJ) $(XGSELOBJ)			       \
 	$(HAIKU_OBJ) $(PGTK_OBJ) $(ANDROID_OBJ) \
-	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_GRAPHCORE_OBJ) $(CMACS_ROAMGRAPH_OBJ) $(CMACS_SECONDBRAIN_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) $(CMACS_LSP_OBJ) $(CMACS_OFFICE_OBJ) $(CMACS_DBEXPLORER_OBJ) $(CMACS_LQL_OBJ) $(CMACS_CLAWTILLA_OBJ) $(CMACS_SPACEMOUSE_OBJ) $(CMACS_CAMERA_OBJ) $(CMACS_HANDTRACK_OBJ) $(CMACS_GESTURE_OBJ) $(CMACS_AI_BRIGADE_OBJ)
+	$(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) $(CMACS_CRISPY_OBJ) $(CMACS_BACON_OBJ) $(CMACS_GOWL_OBJ) $(CMACS_PODOMATION_OBJ) $(CMACS_LIBRECLAW_OBJ) $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_SHERPA_OBJ) $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) $(CMACS_GNUSEYE_OBJ) $(CMACS_GRAPHCORE_OBJ) $(CMACS_ROAMGRAPH_OBJ) $(CMACS_SECONDBRAIN_OBJ) $(CMACS_LRGSCRIPT_OBJ) $(CMACS_CAD_OBJ) $(CMACS_SCREENSAVER_OBJ) $(CMACS_GSURF_OBJ) $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) $(CMACS_LSP_OBJ) $(CMACS_OFFICE_OBJ) $(CMACS_DBEXPLORER_OBJ) $(CMACS_LQL_OBJ) $(CMACS_CLAWTILLA_OBJ) $(CMACS_SPACEMOUSE_OBJ) $(CMACS_CAMERA_OBJ) $(CMACS_HANDTRACK_OBJ) $(CMACS_GESTURE_OBJ) $(CMACS_AI_BRIGADE_OBJ)
 doc_obj = $(base_obj) $(NS_OBJC_OBJ)
 obj = $(doc_obj) $(HAIKU_CXX_OBJ)
 
@@ -850,7 +857,7 @@ LIBES = $(LIBS) $(W32_LIBS) $(LIBS_GNUSTEP) $(PGTK_LIBS) $(LIBX_BASE) $(LIBIMAGE
    $(CMACS_LIBRECLAW_LIBS) $(CMACS_ORG_EX_LIBS) $(CMACS_MCP_LIBS) \
    $(CMACS_CINTROSPECT_LIBS) $(CMACS_CPATCH_LIBS) \
    $(CMACS_VIDEO_LIBS) $(CMACS_AUDIO_LIBS) \
-   $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS) \
+   $(CMACS_WHISPER_LIBS) $(CMACS_PIPER_LIBS) $(CMACS_SHERPA_LIBS) $(CMACS_AI_LIBS) $(CMACS_LIBREGNUM_LIBS) \
    $(CMACS_CLAWTILLA_LIBS) $(CMACS_GNUSEYE_LIBS) $(CMACS_ROAMGRAPH_LIBS) $(CMACS_SECONDBRAIN_LIBS) $(CMACS_LRGSCRIPT_LIBS) $(CMACS_CAD_LIBS) $(CMACS_SCREENSAVER_LIBS) $(CMACS_GSURF_LIBS) $(CMACS_LRGTERM_LIBS) $(CMACS_IMGEDIT_LIBS) $(CMACS_VIDSTUDIO_LIBS) $(CMACS_LSP_LIBS) $(CMACS_OFFICE_LIBS) $(CMACS_DBEXPLORER_LIBS) $(CMACS_LQL_LIBS) $(CMACS_SPACEMOUSE_LIBS) $(CMACS_CAMERA_LIBS) $(CMACS_HANDTRACK_LIBS) $(CMACS_AI_BRIGADE_LIBS)
 
 ## FORCE it so that admin/unidata can decide whether this file is
@@ -954,7 +961,7 @@ CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_ORG_EX_OBJ) $(CMACS_MCP_OBJ) \
                 $(CMACS_CINTROSPECT_OBJ) $(CMACS_CPATCH_OBJ) \
                 $(CMACS_VIDEO_OBJ) $(CMACS_AUDIO_OBJ) \
-                $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) \
+                $(CMACS_WHISPER_OBJ) $(CMACS_PIPER_OBJ) $(CMACS_SHERPA_OBJ) \
                 $(CMACS_AI_OBJ) $(CMACS_LIBREGNUM_OBJ) \
                 $(CMACS_GNUSEYE_OBJ) $(CMACS_GRAPHCORE_OBJ) $(CMACS_ROAMGRAPH_OBJ) \
                 $(CMACS_SECONDBRAIN_OBJ) \
@@ -967,7 +974,7 @@ CMACS_ALL_OBJ = $(CMACS_CORE_OBJ) $(CMACS_GLIB_OBJ) $(CMACS_GI_OBJ) \
                 $(CMACS_LRGTERM_OBJ) $(CMACS_IMGEDIT_OBJ) \
                 $(CMACS_VIDSTUDIO_OBJ) $(CMACS_CALCULATOR_OBJ) \
                 $(CMACS_LSP_OBJ) $(CMACS_AI_BRIGADE_OBJ)
-CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw clawtilla org-ex mcp cintrospect cpatch video audio whisper piper ai ai-brigade libregnum gnuseye graphcore roamgraph secondbrain office lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator lsp dbexplorer lql spacemouse camera handtrack gesture
+CMACS_DIRS = core glib gobject dbus gi crispy bacon gowl podomation libreclaw clawtilla org-ex mcp cintrospect cpatch video audio whisper piper sherpa ai ai-brigade libregnum gnuseye graphcore roamgraph secondbrain office lrgscript cad screensaver gsurf lrgterm imgedit vidstudio calculator lsp dbexplorer lql spacemouse camera handtrack gesture
 cmacs-symlinks:
 	$(AM_V_at)for f in $(CMACS_ALL_OBJ:.o=.c); do \
 	  test -e "$(srcdir)/$$f" && continue; \
@@ -1202,6 +1209,61 @@ $(CMACS_WHISPER_STATIC_LIB): FORCE
 # detection table that doesn't yet know about GCC 16; setting the
 # standards explicitly makes target_compile_features a no-op.
 $(CMACS_WHISPER_OBJ): $(CMACS_WHISPER_STATIC_LIB)
+endif
+
+## Bundled sherpa-onnx (cmacs/sherpa).  CMake builds static archives,
+## installed under deps/sherpa-onnx/build/install; onnxruntime is the
+## system one, found through pkg-config by configure and handed to
+## sherpa's cmake as SHERPA_ONNXRUNTIME_{INCLUDE,LIB}_DIR, so cmake never
+## downloads its own.  The ~12 third-party sources sherpa fetches with
+## FetchContent are pre-staged into the build dir by
+## admin/cmacs-sherpa-thirdparty.sh (download once, sha256-checked, into
+## $XDG_CACHE_HOME), which is one of the places sherpa's own cmake looks
+## first -- so configuring sherpa never touches the network.
+##
+## FORCE, like whisper above: the archives must track the submodule,
+## and `cmake --build' is a fast no-op when nothing changed.
+ifneq ($(CMACS_SHERPA_OBJ),)
+CMACS_SHERPA_DIR = $(srcdir)/../deps/sherpa-onnx
+CMACS_SHERPA_STATIC_LIB = $(CMACS_SHERPA_DIR)/build/install/lib/libsherpa-onnx-c-api.a
+CMACS_SHERPA_TABLES = $(srcdir)/../cmacs/sherpa/cmacs-sherpa-config-tables.h
+$(CMACS_SHERPA_STATIC_LIB): FORCE
+	cd $(CMACS_SHERPA_DIR) && \
+	  { test -f build/CMakeCache.txt || \
+	  { $(abs_top_srcdir)/admin/cmacs-sherpa-thirdparty.sh \
+	      --source . --build build && \
+	    SHERPA_ONNXRUNTIME_INCLUDE_DIR='$(CMACS_SHERPA_ORT_INCDIR)' \
+	    SHERPA_ONNXRUNTIME_LIB_DIR='$(CMACS_SHERPA_ORT_LIBDIR)' \
+	    cmake -B build -DCMAKE_BUILD_TYPE=Release \
+	      -DCMAKE_INSTALL_PREFIX="$$PWD/build/install" \
+	      -DBUILD_SHARED_LIBS=OFF \
+	      -DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=ON \
+	      -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+	      -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \
+	      -DSHERPA_ONNX_ENABLE_BINARY=OFF \
+	      -DSHERPA_ONNX_ENABLE_PYTHON=OFF \
+	      -DSHERPA_ONNX_ENABLE_TESTS=OFF \
+	      -DSHERPA_ONNX_ENABLE_JNI=OFF \
+	      -DSHERPA_ONNX_ENABLE_GPU=OFF \
+	      -DSHERPA_ONNX_BUILD_C_API_EXAMPLES=OFF \
+	      -DSHERPA_ONNX_ENABLE_TTS=ON \
+	      -DSHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION=ON \
+	      -DSHERPA_ONNX_LINK_LIBSTDCPP_STATICALLY=OFF ; } ; } && \
+	  SHERPA_ONNXRUNTIME_INCLUDE_DIR='$(CMACS_SHERPA_ORT_INCDIR)' \
+	  SHERPA_ONNXRUNTIME_LIB_DIR='$(CMACS_SHERPA_ORT_LIBDIR)' \
+	    cmake --build build --config Release --parallel && \
+	  cmake --install build >/dev/null
+## The plist -> struct field tables are generated from c-api.h, so a
+## submodule bump that renames a field is a compile error here, not a
+## silently ignored config key.  The script moves the file only when its
+## content changes, so an unchanged header recompiles nothing.
+$(CMACS_SHERPA_TABLES): $(CMACS_SHERPA_DIR)/sherpa-onnx/c-api/c-api.h \
+		$(top_srcdir)/admin/cmacs-sherpa-gen-config.sh
+	$(top_srcdir)/admin/cmacs-sherpa-gen-config.sh \
+	  --source $(CMACS_SHERPA_DIR) --cc '$(CC)' --output $@
+	touch $@
+$(CMACS_SHERPA_OBJ): $(CMACS_SHERPA_STATIC_LIB)
+cmacs-sherpa-config.o: $(CMACS_SHERPA_TABLES)
 endif
 
 ## ai-glib is the canonical AI-provider library shared by cmacs-ai

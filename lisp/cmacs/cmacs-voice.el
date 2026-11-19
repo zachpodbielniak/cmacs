@@ -45,6 +45,9 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+;; The engine-neutral speech layer: which engine transcribes, detects
+;; voice activity and speaks is decided there, per feature.
+(require 'cmacs-speech)
 
 (declare-function cmacs-audio--capture-open-1 "cmacs-audio-defuns.c" (&rest plist))
 (declare-function cmacs-audio-start "cmacs-audio-defuns.c" (handle))
@@ -160,19 +163,22 @@ Owners are the symbols clients acquire with; nil means nobody.")
 ;;;; Availability
 
 (defun cmacs-voice-available-p ()
-  "Non-nil when this build can capture and transcribe speech."
+  "Non-nil when this build can capture and transcribe speech.
+Any engine will do: whisper, or whatever `cmacs-speech' resolves
+`stt-live' to (sherpa-onnx with a recognizer installed)."
   (and (fboundp 'cmacs-audio--capture-open-1)
-       (fboundp 'cmacs-whisper-supported-p)
-       (cmacs-whisper-supported-p)
-       (or (fboundp 'cmacs-whisper-model-path) (require 'cmacs-whisper nil t))
        (or (boundp 'cmacs-audio-capture-source) (require 'cmacs-audio nil t))
+       (or (and (fboundp 'cmacs-whisper-supported-p)
+                (cmacs-whisper-supported-p)
+                (or (fboundp 'cmacs-whisper-model-path) (require 'cmacs-whisper nil t)))
+           (and (require 'cmacs-speech nil t)
+                (cmacs-speech-can-p 'stt-live nil :transcribe)))
        t))
 
 (defun cmacs-voice-speech-available-p ()
-  "Non-nil when piper can speak."
-  (and (fboundp 'cmacs-piper-supported-p)
-       (cmacs-piper-supported-p)
-       (or (fboundp 'cmacs-piper-voice-path) (require 'cmacs-piper nil t))
+  "Non-nil when some engine can speak (`cmacs-speech' `tts')."
+  (and (require 'cmacs-speech nil t)
+       (cmacs-speech-tts-available-p)
        t))
 
 
@@ -480,22 +486,32 @@ wipes it).  Returns nil when ID was not recording."
 
 ;;;; Transcription
 
-(cl-defun cmacs-voice-transcribe (pcm callback &key model threads language)
-  "Transcribe PCM asynchronously; CALLBACK gets whisper's result alist.
-MODEL is a model file (default: `cmacs-whisper-model-path').  THREADS
+(cl-defun cmacs-voice-transcribe (pcm callback &key model threads language feature)
+  "Transcribe PCM asynchronously; CALLBACK gets the result alist.
+The engine and model are whatever `cmacs-speech' resolves `stt-live' to
+for FEATURE (a symbol from `cmacs-speech-features', e.g. `dictate'):
+whisper by default, sherpa-onnx when chosen in \[cmacs-speech] or
+init.el.  MODEL, a whisper model FILE, forces whisper with that model,
+as callers that pick their own whisper model did before.  THREADS
 defaults to `cmacs-voice-threads', LANGUAGE to `cmacs-whisper-language'.
-PCM is wiped once whisper has its copy.  A failure to start reaches
-CALLBACK as ((:error . MESSAGE)), never as a signal."
-  (condition-case err
-      (progn
-        (unless (fboundp 'cmacs-whisper-model-path) (require 'cmacs-whisper))
-        (cmacs-whisper-transcribe-pcm-async
-         (or model (cmacs-whisper-model-path)) pcm callback
-         (or language (and (boundp 'cmacs-whisper-language) cmacs-whisper-language))
-         (or threads cmacs-voice-threads)))
-    (error (funcall callback (list (cons :error (error-message-string err))))))
-  ;; The C side converted the samples to floats before returning.
-  (fillarray pcm 0))
+PCM is wiped once the result is in (an engine still loading its model
+holds on to it until then).  A failure to start reaches CALLBACK as
+\((:error . MESSAGE)), never as a signal."
+  (require 'cmacs-speech)
+  (let ((wipe (lambda (result) (fillarray pcm 0) (funcall callback result))))
+    (condition-case err
+        (if model
+            (progn
+              (unless (fboundp 'cmacs-whisper-model-path) (require 'cmacs-whisper))
+              (cmacs-whisper-transcribe-pcm-async
+               model pcm wipe
+               (or language (and (boundp 'cmacs-whisper-language) cmacs-whisper-language))
+               (or threads cmacs-voice-threads)))
+          (cmacs-speech-with-config
+              (and threads `((stt-live whisper :threads ,threads ,@(and feature (list :feature feature)))))
+            (cmacs-speech-transcribe pcm wipe :feature feature :component 'stt-live
+                                     :language language)))
+      (error (funcall wipe (list (cons :error (error-message-string err))))))))
 
 
 ;;;; Text
@@ -587,19 +603,28 @@ least THRESHOLD wins."
 
 (defun cmacs-voice-detector-start (frame-fn &optional energy-only)
   "Start detection, calling FRAME-FN with (FRAME PROB) for each frame.
-Uses the Silero VAD when its model is installed (and ENERGY-ONLY is
-nil), else the energy detector.  Returns `vad' or `energy'."
+Uses the VAD `cmacs-speech' resolves (whisper.cpp's Silero by default,
+sherpa-onnx's Silero or TEN-VAD when chosen) when a model is installed
+and ENERGY-ONLY is nil, else the energy detector.  Returns `vad' or
+`energy'."
   (cmacs-voice-detector-stop)
   (setq cmacs-voice--frame-fn frame-fn)
-  (let ((model (and (not energy-only) (cmacs-voice-vad-model-path))))
-    (setq cmacs-voice--vad (and model (ignore-errors (cmacs-whisper-vad-open model)))))
+  (unless energy-only
+    (require 'cmacs-speech)
+    (setq cmacs-voice--vad
+          (or (cmacs-speech-vad-open :feature 'voice-loop)
+              ;; `cmacs-voice-vad-model' names a whisper VAD file that
+              ;; the speech layer may not know as a default.
+              (when-let* ((model (cmacs-voice-vad-model-path))
+                          (h (ignore-errors (cmacs-whisper-vad-open model))))
+                (cons (list :backend 'whisper :component 'vad) h)))))
   (if cmacs-voice--vad 'vad 'energy))
 
 (defun cmacs-voice-detector-stop ()
   "Stop detection and release the VAD."
   (cl-incf cmacs-voice--detect-session)
   (when cmacs-voice--vad
-    (ignore-errors (cmacs-whisper-vad-close cmacs-voice--vad)))
+    (cmacs-speech-vad-close cmacs-voice--vad))
   (setq cmacs-voice--vad nil
         cmacs-voice--frame-fn nil)
   (cmacs-voice-detector-reset))
@@ -654,7 +679,7 @@ nil), else the energy detector.  Returns `vad' or `energy'."
                 backlog)))
     (let ((session cmacs-voice--detect-session))
       (setq cmacs-voice--vad-busy t)
-      (cmacs-whisper-vad-feed
+      (cmacs-speech-vad-feed
        cmacs-voice--vad pcm
        (lambda (result)
          (if (/= session cmacs-voice--detect-session)
@@ -665,7 +690,7 @@ nil), else the energy detector.  Returns `vad' or `energy'."
              ;; No usable model after all: carry on by energy.
              (message "Voice: VAD failed (%s); using the energy detector"
                       (cdr (assq :error result)))
-             (ignore-errors (cmacs-whisper-vad-close cmacs-voice--vad))
+             (cmacs-speech-vad-close cmacs-voice--vad)
              (setq cmacs-voice--vad nil)
              (cmacs-voice--energy-frames pcm))
            (let ((next cmacs-voice--vad-backlog))
@@ -716,47 +741,64 @@ a time so they play in the order queued.  Returns non-nil when queued."
       (cmacs-voice--tts-pump)
       t)))
 
+(defvar cmacs-voice--tts-token nil "The `cmacs-speech' synthesis in flight.")
+
 (defun cmacs-voice--tts-pump ()
-  "Synthesise the next queued sentence."
+  "Synthesise the next queued sentence through `cmacs-speech'.
+Engines that stream (sherpa-onnx) start playing a sentence while the
+next is still being generated; piper plays each one when it is done."
   (when (and cmacs-voice--tts-queue (not cmacs-voice--tts-synth))
     (let* ((item (pop cmacs-voice--tts-queue))
            (gen cmacs-voice--tts-gen)
-           (voice (cmacs-piper-voice-path (cdr item))))
+           (text (car item))
+           (secs 0.0))
       (setq cmacs-voice--tts-synth t)
-      (condition-case err
-          (cmacs-piper--synth-async-1
-           voice (car item)
-           (lambda (result)
-             (when (= gen cmacs-voice--tts-gen)
-               (setq cmacs-voice--tts-synth nil)
-               (if (stringp result)
-                   (cmacs-voice--tts-play result voice (car item))
-                 (message "Voice: %s" (or (cdr-safe (car-safe result))
-                                          "speech synthesis failed")))
-               (cmacs-voice--tts-pump))))
-        (error
-         (setq cmacs-voice--tts-synth nil
-               cmacs-voice--tts-queue nil)
-         (message "Voice: %s" (error-message-string err)))))))
+      (setq cmacs-voice--tts-token
+            (cmacs-speech-synthesize
+             text
+             (lambda (result)
+               (when (= gen cmacs-voice--tts-gen)
+                 (setq cmacs-voice--tts-synth nil
+                       cmacs-voice--tts-token nil)
+                 (cond
+                  ((assq :error result)
+                   (message "Voice: %s" (alist-get :error result)))
+                  ((alist-get :pcm result)
+                   (cl-incf secs (cmacs-voice--tts-play (alist-get :pcm result)
+                                                        (alist-get :sample-rate result)))))
+                 (when (> secs 0)
+                   (run-hook-with-args 'cmacs-voice-speech-functions text secs))
+                 (cmacs-voice--tts-pump)))
+             :feature 'voice-loop :voice (cdr item)
+             :stream (lambda (chunk)
+                       (when (= gen cmacs-voice--tts-gen)
+                         (cl-incf secs (cmacs-voice--tts-play
+                                        (alist-get :pcm chunk)
+                                        (alist-get :sample-rate chunk)))))))
+      (unless cmacs-voice--tts-token
+        (setq cmacs-voice--tts-synth nil
+              cmacs-voice--tts-queue nil)))))
 
-(defun cmacs-voice--tts-play (pcm voice text)
-  "Play PCM synthesised from TEXT with VOICE; note when it will be done."
-  (let* ((rate (cmacs-piper--voice-sample-rate voice))
-         (h (cmacs-piper--ensure-playback rate))
-         (secs (/ (length pcm) (* 2.0 rate))))
-    (cmacs-audio-push-pcm h pcm)
+(defun cmacs-voice--tts-play (pcm rate)
+  "Play PCM at RATE; note when it will be done; return its seconds."
+  (let ((secs (cmacs-speech-play-pcm pcm rate)))
     (setq cmacs-voice--tts-until
           (+ (max (float-time) cmacs-voice--tts-until) secs))
-    (run-hook-with-args 'cmacs-voice-speech-functions text secs)))
+    secs))
 
 (defun cmacs-voice-stop-speaking ()
   "Stop speaking now, dropping everything queued.
 A sentence still being synthesised is dropped when it arrives."
   (interactive)
   (cl-incf cmacs-voice--tts-gen)
+  (when cmacs-voice--tts-token
+    (cmacs-speech-cancel cmacs-voice--tts-token))
   (setq cmacs-voice--tts-queue nil
         cmacs-voice--tts-synth nil
+        cmacs-voice--tts-token nil
         cmacs-voice--tts-until 0.0)
+  (when (fboundp 'cmacs-speech-stop-speaking)
+    (cmacs-speech-stop-speaking))
   (when (fboundp 'cmacs-piper-stop)
     (ignore-errors (cmacs-piper-stop))))
 

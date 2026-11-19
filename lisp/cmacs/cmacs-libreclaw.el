@@ -1090,17 +1090,22 @@ If CHANNEL is non-nil, filter to that channel."
        (cmacs-voice-write-wav pcm wav)
        (fillarray pcm 0))
      (setq cmacs-libreclaw--pending-voice nil)
-     (let ((body (cond
-                  ((and (featurep 'cmacs-whisper)
-                        (fboundp 'cmacs-whisper-transcribe-file))
-                   (let* ((res (cmacs-whisper-transcribe-file
-                                (cmacs-whisper-model-path) wav
-                                (or (bound-and-true-p cmacs-whisper-language) "en")))
-                          (text (cdr (assq :text res))))
-                     (or text "(voice transcription unavailable)")))
-                  (t (format "[voice message: %s]" (file-name-nondirectory wav))))))
-       (cmacs-libreclaw-send-message channel room-id (string-trim body))
-       (message "cmacs-libreclaw: voice message sent")))
+     (cl-flet ((send (body)
+                 (cmacs-libreclaw-send-message channel room-id (string-trim body))
+                 (message "cmacs-libreclaw: voice message sent")))
+       (if (and (require 'cmacs-speech nil t)
+                (cmacs-speech-can-p 'stt-live 'libreclaw :transcribe))
+           ;; Asynchronous: transcribing used to block the editor (and
+           ;; under --gowl the desktop) for the whole message.
+           (progn
+             (message "cmacs-libreclaw: transcribing voice message...")
+             (cmacs-speech-transcribe-file
+              wav
+              (lambda (res)
+                (send (or (cdr (assq :text res)) "(voice transcription unavailable)")))
+              :feature 'libreclaw :component 'stt-live
+              :language (or (bound-and-true-p cmacs-whisper-language) "en")))
+         (send (format "[voice message: %s]" (file-name-nondirectory wav))))))
     (_ (user-error "cmacs-libreclaw: no voice recording in progress"))))
 
 (provide 'cmacs-libreclaw)

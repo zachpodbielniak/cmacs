@@ -366,7 +366,8 @@ set_packages_fedora () {
 	# cmacs-camera + cmacs-handtrack: the camera sources GStreamer picks at
 	# run time (pipewiresrc, v4l2src) and onnxruntime for the hand models.
 	# onnxruntime is optional at build: without it hand tracking builds
-	# with no inference and says so.
+	# with no inference and says so, and cmacs-sherpa (which also needs
+	# the cmake + gcc-c++ above, and espeak-ng at run time) is skipped.
 	PKGS_CAMERA=(pipewire-gstreamer gstreamer1-plugins-good onnxruntime-devel)
 	PKG_CMD="${SUDO} dnf install -y"
 }

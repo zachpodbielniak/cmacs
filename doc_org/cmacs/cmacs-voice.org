@@ -52,13 +52,22 @@ So holding A in VR while the loop is on pauses the loop for exactly the length o
 
 * Transcription
 
+Transcription goes through [[file:cmacs-speech.org][cmacs-speech]]: ~cmacs-voice-transcribe~ takes =:feature= and uses the =stt-live= engine chosen for it (an explicit =:model= keeps whisper, as before).  The PCM is wiped once the result arrives.
+
+
 ~(cmacs-voice-transcribe PCM CALLBACK &key model threads language)~ starts async whisper (~cmacs-whisper-transcribe-pcm-async~) and overwrites PCM once whisper has copied it.  A failure to start reaches CALLBACK as ~((:error . MSG))~ rather than signalling.  ~cmacs-voice-threads~ is the default thread count.
 
 * Detection
 
+The detector asks cmacs-speech for a =vad=: whisper's Silero, sherpa's Silero or TEN VAD, or the energy detector when there is none.
+
+
 One detector, because there is one mic: ~(cmacs-voice-detector-start FRAME-FN)~ opens the Silero VAD (~cmacs-voice-vad-model~, default ~cmacs-whisper-default-vad-model~) when installed and the energy detector otherwise; ~(cmacs-voice-detect PCM)~ cuts PCM into 512-sample frames (a ragged tail waits for the next call) and calls ~(FRAME-FN FRAME PROB)~ for each, in order — later, when the VAD's worker answers.  A VAD that fails to load falls back to energy.  The energy detector maps RMS onto the same probability scale (0.5 at ~cmacs-voice-energy-margin-db~ above an adaptive noise floor, never speech below ~cmacs-voice-energy-floor-db~).  Details: [[file:cmacs-voice-loop.org][cmacs-voice-loop.org]].
 
 * Speech
+
+The TTS queue speaks through the =tts= engine.  An engine that streams (sherpa) hands back sentences while it generates, so playback starts after the first one; barge-in cancels the generation itself, not only the playback.
+
 
 ~(cmacs-voice-speak TEXT &optional VOICE)~ queues TEXT for piper (~cmacs-voice-voice~ by default).  Sentences are synthesised strictly one at a time, so they play in the order queued, whoever queued them.  ~cmacs-voice-stop-speaking~ flushes playback and drops the queue; a sentence still being synthesised is dropped when it arrives (a generation counter).  ~cmacs-voice-speaking-p~ is true while anything is queued, synthesising, or (by the PCM length) still playing; ~cmacs-voice-speech-functions~ runs with ~(TEXT SECONDS)~ as each sentence starts.
 

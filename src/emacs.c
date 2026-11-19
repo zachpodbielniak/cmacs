@@ -2944,6 +2944,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_CMACS_PIPER
       syms_of_cmacs_piper ();
 #endif
+#ifdef HAVE_CMACS_SHERPA
+      syms_of_cmacs_sherpa ();   /* CMACS: sherpa-onnx speech engine */
+#endif
 #ifdef HAVE_CMACS_AI
       syms_of_cmacs_ai ();
 #endif
@@ -3118,6 +3121,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #endif
 #ifdef HAVE_CMACS_PIPER
   init_cmacs_piper ();
+#endif
+#ifdef HAVE_CMACS_SHERPA
+  init_cmacs_sherpa ();   /* CMACS: sherpa-onnx speech engine */
 #endif
 #ifdef HAVE_CMACS_AI
   init_cmacs_ai ();

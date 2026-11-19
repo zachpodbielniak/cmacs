@@ -433,3 +433,6 @@ exec/*.s.s
 
 # cmacs: writable XDG_CACHE_HOME for the test harness (crispy gcc cache)
 /test/cmacs-test-cache/
+
+# cmacs-sherpa: plist -> struct tables generated from c-api.h at build time
+/cmacs/sherpa/cmacs-sherpa-config-tables.h

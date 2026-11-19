@@ -102,7 +102,9 @@ Anything after `--' is passed straight to buildah, e.g.
 
 Override bundled models via env vars:
   WHISPER_MODEL_NAME, WHISPER_MODEL_URL,
-  PIPER_VOICE_NAME, PIPER_VOICE_DIR, PIPER_VOICE_BASE_URL
+  PIPER_VOICE_NAME, PIPER_VOICE_DIR, PIPER_VOICE_BASE_URL,
+  CMACS_SPEECH_MODELS (space-separated sherpa-onnx model URLs;
+  empty ships none; unset keeps the Containerfile default)
 
 Override the registry with REGISTRY= (default quay.io/zachpodbielniak/cmacs).
 EOF
@@ -215,6 +217,14 @@ then
 			./admin/cmacs-submodules.sh
 		fi
 	fi
+	# The sherpa speech-model list is passed only when set, so the
+	# Containerfile's default stays the single source of truth; an
+	# empty CMACS_SPEECH_MODELS ships no sherpa models at all.
+	SPEECH_ARGS=()
+	if [[ -n "${CMACS_SPEECH_MODELS+set}" ]]
+	then
+		SPEECH_ARGS+=(--build-arg=CMACS_SPEECH_MODELS="${CMACS_SPEECH_MODELS}")
+	fi
 	buildah build \
 		--no-cache \
 		--ignorefile .containerignore \
@@ -227,6 +237,7 @@ then
 		--build-arg=PIPER_VOICE_NAME="${PIPER_VOICE_NAME}" \
 		--build-arg=PIPER_VOICE_DIR="${PIPER_VOICE_DIR}" \
 		--build-arg=PIPER_VOICE_BASE_URL="${PIPER_VOICE_BASE_URL}" \
+		${SPEECH_ARGS[@]+"${SPEECH_ARGS[@]}"} \
 		${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
 		-t "${IMAGE}" \
 		-f "${CONTAINERFILE}" .

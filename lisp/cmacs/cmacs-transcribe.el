@@ -226,6 +226,13 @@ Defaults to `base' (\"talk.srt\") so video players auto-load them."
                  (const :tag "Append (talk.mp4.srt)" append))
   :safe #'symbolp)
 
+(defcustom cmacs-transcribe-diarize nil
+  "If non-nil, also write a speaker-labelled transcript (\".speakers.org\").
+Who spoke when comes from the `diarize' component of \\[cmacs-speech]
+\(sherpa-onnx); it runs after the transcript, on the input file, and is
+skipped when no diarization model is installed."
+  :type 'boolean :safe #'booleanp)
+
 (defcustom cmacs-transcribe-emit-srt nil
   "If non-nil, also write a SubRip \".srt\" subtitle file per transcript."
   :type 'boolean :safe #'booleanp)
@@ -905,12 +912,23 @@ copy-back to the local engine)."
         (cmacs-transcribe--transcribe-remote buffer job wav exec-dir)))
     (cmacs-transcribe--render buffer)))
 
+(defun cmacs-transcribe--engine ()
+  "The `cmacs-speech' backend chosen for batch transcription."
+  (and (require 'cmacs-speech nil t)
+       (plist-get (cmacs-speech-resolve 'stt 'transcribe) :backend)))
+
 (defun cmacs-transcribe--transcribe-embedded (buffer job wav)
-  "Transcribe the local WAV with the embedded whisper engine."
-  (cmacs-whisper-transcribe-async
-   (cmacs-transcribe--model) wav
-   (lambda (result) (cmacs-transcribe--on-transcribed buffer job result))
-   (cmacs-transcribe--language) (cmacs-transcribe--threads)))
+  "Transcribe the local WAV with the engine chosen in \[cmacs-speech].
+whisper keeps this file's own model and thread settings; another engine
+\(sherpa-onnx) gets the same result shape through `cmacs-speech'."
+  (let ((done (lambda (result) (cmacs-transcribe--on-transcribed buffer job result)))
+        (engine (cmacs-transcribe--engine)))
+    (if (memq engine '(nil whisper))
+        (cmacs-whisper-transcribe-async
+         (cmacs-transcribe--model) wav done
+         (cmacs-transcribe--language) (cmacs-transcribe--threads))
+      (cmacs-speech-transcribe-file wav done :feature 'transcribe :component 'stt
+                                    :language (cmacs-transcribe--language)))))
 
 (defun cmacs-transcribe--transcribe-remote (buffer job wav exec-dir)
   "Transcribe the remote WAV on EXEC-DIR's host, mode from `remote-stt'."
@@ -1055,6 +1073,24 @@ Emits JSON, reads it back, and hands the parsed result to
             ;; Primary transcript.
             (cmacs-transcribe--write-string (cmacs-transcribe-job-txt job)
                                             (concat text "\n"))
+            ;; Who spoke when: asynchronous, beside the transcript.
+            (when (and cmacs-transcribe-diarize segments
+                       (require 'cmacs-speech nil t)
+                       (cmacs-speech-can-p 'diarize 'transcribe :run))
+              (let ((dest (cmacs-transcribe--dest in ".speakers.org" (plist-get opts :naming)
+                                                  (plist-get opts :output-dir))))
+                (cmacs-speech-diarize-file
+                 in (lambda (d)
+                      (if (assq :error d)
+                          (cmacs-transcribe--log "diarize %s: %s"
+                                                 (file-name-nondirectory in) (alist-get :error d))
+                        (cmacs-transcribe--write-string
+                         dest (format "#+title: Who spoke in %s\n\n%s\n"
+                                      (file-name-nondirectory in)
+                                      (cmacs-speech-label-speakers (alist-get :segments d)
+                                                                   segments)))
+                        (cmacs-transcribe--log "speakers -> %s" dest)))
+                 :feature 'transcribe)))
             ;; Optional extra outputs from the timestamped segments.
             (when (and (plist-get opts :emit-srt) segments)
               (setf (cmacs-transcribe-job-srt job) (cmacs-transcribe--sub-for in ".srt"))

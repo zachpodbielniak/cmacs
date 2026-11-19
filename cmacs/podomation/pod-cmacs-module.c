@@ -52,11 +52,15 @@ static const gchar *source_events[] = {
   "on_region_change",
   "on_compile_finish",
   "on_hook",
-  /* cmacs-audio + cmacs-whisper voice events.  Fired by the Elisp
-   * `cmacs-audio-voice-event-functions' hook in `cmacs-audio.el' when
-   * a transcript or matched keyword is available. */
+  /* Speech events, fired from `cmacs-speech-event-functions'
+   * (cmacs-speech.el) whatever engine produced them: a finished
+   * transcript (text, feature, backend, model), a voice command that ran
+   * (text, command), a wake keyword the spotter heard (keyword,
+   * feature), an enrolled speaker recognised (name, score). */
   "on_transcription_ready",
   "on_voice_command",
+  "on_keyword",
+  "on_speaker",
   /* cmacs-gsurf browser events.  Fired by the Elisp page-event hook
    * handlers in `cmacs-gsurf.el' / `cmacs-gsurf-downloads.el'. */
   "on_gsurf_navigate",
@@ -777,17 +781,19 @@ cmacs_handle_event (PodEventHandler *handler,
   if (g_strcmp0 (event_name, "notify") == 0)
     return handle_notify (params);
 
-  /* ── cmacs-piper speak (routes through Elisp via eval) ─────── */
+  /* ── speak: whichever TTS engine M-x cmacs-speech chose ─────── */
 
   if (g_strcmp0 (event_name, "speak") == 0)
     {
       const gchar *text = get_param_string (params, 0);
       if (!text) return FALSE;
-      g_autofree gchar *quoted = g_strdup_printf ("\"%s\"", text);
+      /* Escaped for a Lisp string literal: a `"' or `\' in the text
+         used to end the string and splice the rest into the form.  */
+      g_autofree gchar *escaped = cmacs_dispatch_lisp_escape (text);
       g_autofree gchar *expr =
-        g_strdup_printf ("(progn (require 'cmacs-piper) "
-                         "(cmacs-piper-speak-async %s))",
-                         quoted);
+        g_strdup_printf ("(progn (require 'cmacs-speech) "
+                         "(cmacs-speech-speak \"%s\" :feature 'reader))",
+                         escaped);
       g_autoptr (GError) err = NULL;
       g_autofree gchar *r = cmacs_dispatch_eval (expr, &err);
       return r != NULL;

@@ -64,6 +64,11 @@ state change (newest first), `stopped' whether piper was stopped."
   `(let ((sent nil) (transcribed nil) (states nil) (stopped nil)
          (cmacs-voice-loop-mode t)
          (cmacs-voice-loop-wake-phrase "jarvis")
+         ;; Whatever is installed on this machine, these tests drive
+         ;; the whisper path (stubbed below); the spotter has its own.
+         (cmacs-speech-override '((stt-live whisper)))
+         (cmacs-voice-loop--wake nil)
+         (cmacs-voice-loop--kws-hits nil)
          (cmacs-voice-loop-partial-interval nil)
          (cmacs-voice-loop-partial-display nil)
          (cmacs-voice-loop-save-directory nil)
@@ -198,6 +203,51 @@ state change (newest first), `stopped' whether piper was stopped."
     ;; listening -- with the follow-up window open.
     (should (eq (car states) 'listening))
     (should (cmacs-voice-loop--armed-p))))
+
+(ert-deftest cmacs-voice-loop-test-keyword-spotter-addresses ()
+  "With a spotter, a hit during an utterance sends its final transcript,
+and the wake model never runs."
+  (skip-unless (cmacs-voice-loop-tests--available-p))
+  (cmacs-voice-loop-tests--with-loop '((final . "Jarvis, what time is it?"))
+    (let ((cmacs-voice-loop--wake 'fake-spotter)
+          (cmacs-voice-loop-kws-grace 0.05)
+          (fed 0))
+      (cl-letf (((symbol-function 'cmacs-speech-wake-feed)
+                 (lambda (_w _pcm) (cl-incf fed))))
+        (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 400))
+        (cmacs-voice-loop--on-keyword "jarvis")
+        (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 400)
+                                      (cmacs-voice-loop-tests--silence 1000))
+        (should (cmacs-voice-loop-tests--wait (lambda () sent) 5))
+        (should (> fed 0))
+        (should (equal sent '("what time is it?")))
+        (should (equal transcribed '(final)))))))
+
+(ert-deftest cmacs-voice-loop-test-keyword-spotter-drops-unaddressed ()
+  "With a spotter, speech without a hit is dropped without transcribing."
+  (skip-unless (cmacs-voice-loop-tests--available-p))
+  (cmacs-voice-loop-tests--with-loop '((wake . "jarvis") (final . "jarvis hi"))
+    (let ((cmacs-voice-loop--wake 'fake-spotter)
+          (cmacs-voice-loop-kws-grace 0.05))
+      (cl-letf (((symbol-function 'cmacs-speech-wake-feed) #'ignore))
+        (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 800)
+                                      (cmacs-voice-loop-tests--silence 1000))
+        (cmacs-voice-loop-tests--wait (lambda () (zerop cmacs-voice-loop--finals)) 2)
+        (accept-process-output nil 0.2)
+        (should-not sent)
+        (should-not transcribed)
+        (should (zerop cmacs-voice-loop--finals))))))
+
+(ert-deftest cmacs-voice-loop-test-keyword-alone-arms ()
+  "A hit between utterances arms the loop for the next one."
+  (skip-unless (cmacs-voice-loop-tests--available-p))
+  (cmacs-voice-loop-tests--with-loop nil
+    (let ((cmacs-voice-loop--wake 'fake-spotter)
+          (cmacs-voice-loop-wake-acknowledgement nil)
+          (inhibit-message t))
+      (should-not (cmacs-voice-loop--armed-p))
+      (cmacs-voice-loop--on-keyword "jarvis")
+      (should (cmacs-voice-loop--armed-p)))))
 
 (ert-deftest cmacs-voice-loop-test-no-wake-is-dropped ()
   "Speech without the wake phrase is transcribed once, then forgotten."
@@ -347,9 +397,13 @@ state change (newest first), `stopped' whether piper was stopped."
         (cmacs-voice--tts-until 0.0)
         (cmacs-voice-loop--tts-tail "")
         (cmacs-voice-speech-functions '(cmacs-voice-loop--on-speech))
+        ;; Speech goes through `cmacs-speech'; pin it to piper, whose
+        ;; synthesis this test controls.
+        (cmacs-speech-override '((tts piper)))
         (buf (generate-new-buffer " *voice-chat*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'cmacs-piper-supported-p) (lambda () t))
+        (cl-letf (((symbol-function 'cmacs-speech--ensure-playback) (lambda (_) 1))
+                  ((symbol-function 'cmacs-piper-supported-p) (lambda () t))
                   ((symbol-function 'cmacs-piper-voice-path) (lambda (&rest _) "v"))
                   ((symbol-function 'cmacs-piper--voice-sample-rate) (lambda (_) 16000))
                   ((symbol-function 'cmacs-piper--ensure-playback) (lambda (_) 1))
@@ -454,7 +508,10 @@ energy detector rather than going deaf."
           (should-error (cmacs-whisper-vad-feed h "" #'ignore))
           ;; The loop: a VAD that fails hands its audio to the energy path.
           (cmacs-voice-loop-tests--with-loop '((final . " still hears you"))
-            (setq cmacs-voice--vad (cmacs-whisper-vad-open f))
+            ;; The detector holds (RESOLVED . ENGINE-OBJECT) since VADs
+            ;; come from `cmacs-speech'.
+            (setq cmacs-voice--vad (cons (list :backend 'whisper :component 'vad)
+                                         (cmacs-whisper-vad-open f)))
             (cmacs-voice-loop--arm 30)
             (cmacs-voice-loop-tests--feed (cmacs-voice-loop-tests--tone 700))
             (should (cmacs-voice-loop-tests--wait

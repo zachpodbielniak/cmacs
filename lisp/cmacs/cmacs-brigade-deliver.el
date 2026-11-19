@@ -272,8 +272,9 @@ as more trustworthy and is worse."
   (let ((turns (cmacs-brigade-deliver--pod-turns
                 (cmacs-brigade-deliver--as-buffer source))))
     (cond ((null turns) (list "no turns with any text"))
-          ((not (fboundp 'cmacs-piper-synthesize-to-file))
-           (list "cmacs-piper is not available in this build"))
+          ((not (and (require 'cmacs-speech nil t)
+                     (cmacs-speech-tts-available-p 'brigade)))
+           (list "no text-to-speech engine is available (M-x cmacs-speech)"))
           (t nil))))
 
 (defun cmacs-brigade-deliver--render-pod (source &rest _)
@@ -297,6 +298,7 @@ as more trustworthy and is worse."
             (let* ((which (if (member (car turn) '("b" "B" "2")) 1 0))
                    (voice (or (nth which voices) (car voices)))
                    (wav (expand-file-name (format "%03d.wav" i) work)))
+              (require 'cmacs-piper nil t)
               (cmacs-piper-synthesize-to-file (cdr turn) wav voice)
               (push wav parts)
               (setq i (1+ i))))

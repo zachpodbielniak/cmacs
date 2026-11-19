@@ -126,6 +126,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-spacemouse=    | SpaceMouse / 6DOF input via spacenavd (libspnav when found): orbit/pan/zoom libregnum scenes, the 3D lrg frame and the VR viewer; buttons as =<spacemouse-N>= (requires glib) |
 | =--with-cmacs-lql=           | LQL linked in (liblql + liblql-tools): files/git/journal/SQL plus editor-state sources, results grid, async REPL, language server with cmacs's environment, =emacsctl lql= (requires glib) |
 | =--with-cmacs-tallow=        | Tallow toolchain built and installed with cmacs; =tallow-mode=, eglot on =tallow lsp=, JSON REPL, dape debugging (gdb + suet time travel) |
+| =--with-cmacs-sherpa=        | sherpa-onnx speech engine beside whisper.cpp and piper: streaming STT, keyword wake words, in-process TTS (Piper voices, Kokoro, ...), diarization, speaker ID, punctuation, language ID, audio tagging, denoising.  Vendored =deps/sherpa-onnx=, system onnxruntime (=onnxruntime-devel=); skipped with a NOTICE when onnxruntime is absent (requires audio) |
 | =--with-cmacs-libresearch=   | libresearch client: search results grid, server LQL, research, fetch; server + token from authinfo, shared with the AI tools (requires ai) |
 | =--with-cmacs-ai-brigade=     | AI fabric: multi-agent orchestration, notes memory index, extensible tool bus.  *Requires* =--with-cmacs-ai= |
 | =--enable-cmacs-cpatch=       | Runtime C hot-patching (DANGEROUS)      |
@@ -194,6 +195,7 @@ Example with explicit flags:
   --with-cmacs-lql \
   --with-cmacs-tallow \
   --with-cmacs-libresearch \
+  --with-cmacs-sherpa \
   --with-cmacs-ai-brigade \
   --enable-cmacs-cpatch \
   --enable-cmacs-deps-debug   # in-house deps -O0 -g3 (DWARF): gdb + runtime cintrospection
@@ -1225,6 +1227,34 @@ just perf-suite --baseline ../cmacs-base/src/emacs --samples 9 --cpu 3
 Gate on cycles, read instructions beside them, and treat wall time as a
 hint.  The full story -- the gate, the workloads, reading a comparison,
 writing a workload -- is in [[file:perf.org][perf.org]].
+
+** Headless runs
+
+GUI behaviour -- a settings buffer, a right-click menu, a streaming overlay -- has to be seen to be checked, and it must never be checked on the desktop it is developed on: that is the user's live session, and under =emacs --gowl= it is the compositor itself.  =admin/cmacs-headless.sh= starts this tree's gowl with the headless wlroots backend (GLES on the render node, nothing on any screen), runs a freshly built cmacs into it, and lets a scenario take screenshots with =grim= on the private display.
+
+#+begin_src bash
+admin/cmacs-headless.sh -o /tmp/shots test/cmacs/headless/speech-settings.el
+admin/cmacs-headless.sh -k -t 120 test/cmacs/headless/speech-menu.el -- --eval '(setq speech-menu-shot (quote dired))'
+#+end_src
+
+| Option         | Meaning                                                     |
+|----------------+-------------------------------------------------------------|
+| =-o DIR=       | where screenshots go (default =./headless-shots=)            |
+| =-s WxH=       | output size (default 1920x1080)                             |
+| =-t SECS=      | kill the run after SECS (default 300)                       |
+| =-e PATH=      | the emacs to run (default =src/emacs=)                       |
+| =-k=           | keep the runtime directory: compositor and Emacs logs       |
+| =-- ARGS=      | extra Emacs arguments after the scenario                    |
+
+A scenario is an Elisp file loaded after =test/cmacs/headless/cmacs-headless-driver.el=.  It queues steps with ~cmacs-headless-steps~ (each runs in the selected window's buffer, after a redisplay), takes pictures with ~cmacs-headless-shot~, and ends with ~cmacs-headless-done~.  Driver output goes to stderr so it lands in the run's log.
+
+Things the harness has to work around, so a scenario does not:
+
+- pgtk presents asynchronously, so a shot first =sit-for='s until the frame is on screen; without it =grim= captures the previous frame.
+- Every process is signalled by the PID the script started, never by name, and the runtime directory sits under =$XDG_RUNTIME_DIR= because a Wayland socket path must fit in 108 bytes.
+- A pgtk popup menu anchors on the last real click and grabs the pointer, and headless there is no real click: synthetic keys never reach it and it cannot be closed.  ~cmacs-headless-shot-menu-final~ pops the menu as the run's last act: it writes a marker (=.final-ok=), takes the shot, and ends Emacs from outside.  One menu per run; a submenu is shown by popping its keymap directly.
+
+The scenarios in =test/cmacs/headless/= are the speech ones (=speech-engine.el=, =speech-settings.el=, =speech-menu.el=); copy one to start another.
 
 ** Expected failure: =emacs-tests/seccomp/allows-stdout=
 

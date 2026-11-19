@@ -345,7 +345,7 @@ and never reaches a chat model.  Also stops on its own after 15 s."
                (cond (err (message "Voice: %s" err))
                      ((string-empty-p text) (message "Voice: heard nothing"))
                      (t (cmacs-voice-run-later
-                         (lambda () (cmacs-voice-command-run text))))))))))
+                         (lambda () (cmacs-voice-command-run text))))))) :feature 'voice-commands)))
     (unless (cmacs-voice-available-p)
       (user-error "Voice commands need audio and whisper in this build"))
     (cmacs-voice-ptt-start 'command :max-seconds 15

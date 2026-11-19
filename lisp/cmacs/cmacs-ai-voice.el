@@ -129,7 +129,7 @@
             ((string-empty-p text) (message "Voice: heard nothing"))
             ((not (buffer-live-p buf)) (message "Voice: the chat is gone"))
             (t (message "%s" text)
-               (cmacs-ai-voice-send text buf)))))))))
+               (cmacs-ai-voice-send text buf))))) :feature 'ai-voice))))
 
 (defun cmacs-ai-voice-dictate ()
   "Record a voice prompt via whisper, then send it as a chat turn.

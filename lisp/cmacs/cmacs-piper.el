@@ -19,6 +19,8 @@
 (require 'cl-lib)
 (require 'cmacs-audio)
 
+(declare-function cmacs-speech-model-dirs "cmacs-speech" (backend))
+
 (defgroup cmacs-piper nil
   "Offline text-to-speech via Piper."
   :group 'cmacs
@@ -109,13 +111,22 @@ match.  Falls back to the user dir (download target) if absent."
          (lambda (dir)
            (let ((p (expand-file-name basename dir)))
              (and (file-exists-p p) p)))
-         cmacs-piper-voices-search-path)
+         (cmacs-piper--search-path))
         (expand-file-name basename cmacs-piper-voices-directory))))
+
+(defun cmacs-piper--search-path ()
+  "Every directory piper voices are looked for in, first match wins:
+the speech model store (and its extra trees), then
+`cmacs-piper-voices-search-path', then the system store."
+  (let ((store (and (require 'cmacs-speech nil t)
+                    (cmacs-speech-model-dirs 'piper))))
+    (delete-dups (append (butlast store) cmacs-piper-voices-search-path
+                         (last store)))))
 
 (defun cmacs-piper-list-voices ()
   "Return basenames of every .onnx voice visible via the search path."
   (let ((seen (make-hash-table :test 'equal)))
-    (dolist (dir cmacs-piper-voices-search-path)
+    (dolist (dir (cmacs-piper--search-path))
       (when (file-directory-p dir)
         (dolist (f (directory-files dir))
           (when (string-match-p "\\.onnx\\'" f)
@@ -224,6 +235,18 @@ utterance."
 ;; so this require chain is just to make customize-group RET cmacs-piper
 ;; surface those defcustoms together with the rest.
 (require 'cmacs-piper-context-menu nil 'noerror)
+
+;;;###autoload
+(defun cmacs-piper-synthesize-to-file (text file &optional voice)
+  "Speak TEXT into WAV FILE and return FILE when it is written.
+VOICE is a piper voice (\"en_US-amy-low.onnx\"), which pins the piper
+engine, or any voice the \\[cmacs-speech] TTS engine knows, or nil for
+the configured one.  Waits for the file: brigade's podcast renderer
+builds its episode one turn after another."
+  (require 'cmacs-speech)
+  (cmacs-speech-synthesize-to-file-wait
+   text file :voice voice :feature 'brigade
+   :backend (and voice (string-suffix-p ".onnx" voice) 'piper)))
 
 (provide 'cmacs-piper)
 

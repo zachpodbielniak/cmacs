@@ -826,7 +826,7 @@ max-seconds, last-heard, last-error, phrases."
       (setq cmacs-gowl-macro--voice (list :state 'transcribing))
       (cmacs-gowl-macro--toast "Voice" "transcribing...")
       (cmacs-voice-transcribe pcm #'cmacs-gowl-macro--voice-heard
-                              :model (cmacs-whisper-model-path)
+                              :feature 'gowl-macro
                               :language cmacs-whisper-language))))
 
 (defun cmacs-gowl-macro--voice-cancel ()

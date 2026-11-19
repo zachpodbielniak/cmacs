@@ -17,12 +17,23 @@
 (require 'cmacs)
 (require 'cmacs-voice-commands)
 
+(defvar cmacs-speech-event-functions)
+
 (defmacro cmacs-voice-commands-tests--with-desktop (&rest body)
   "Run BODY against a fake gowl desktop.
 `calls' collects (FUNCTION . ARGS) for every compositor, macro and
 podomation call; two windows exist, a terminal (focused) and firefox."
   (declare (indent 0))
   `(let ((calls nil)
+         ;; The speech layer forwards every command that ran (and every
+         ;; transcription) to podomation; on_voice_command has its own
+         ;; test below, and here they would interleave with the calls
+         ;; under test.
+         (cmacs-voice-command-functions
+          (remq 'cmacs-speech--podomation-command cmacs-voice-command-functions))
+         (cmacs-speech-event-functions
+          (and (boundp 'cmacs-speech-event-functions)
+               (remq 'cmacs-speech--podomation cmacs-speech-event-functions)))
          (cmacs-voice--confirm nil)
          (cmacs-voice-confirm-destructive t)
          (cmacs-voice-commands-speak-feedback nil))
@@ -176,6 +187,18 @@ podomation call; two windows exist, a terminal (focused) and firefox."
     (should (equal (reverse calls)
                    '((event "backup_now" (("source" . "voice")))
                      (event "voice_rule" (("name" . "standup") ("source" . "voice"))))))))
+
+(ert-deftest cmacs-voice-commands-test-on-voice-command-event ()
+  "A command that ran reaches podomation as on_voice_command."
+  (skip-unless (require 'cmacs-speech nil t))
+  (cmacs-voice-commands-tests--with-desktop
+    (let ((cmacs-voice-command-functions '(cmacs-speech--podomation-command)))
+      (cmacs-voice-command-run "Workspace three." :context 'desktop)
+      (let ((ev (assoc "on_voice_command" (mapcar #'cdr (cl-remove-if-not
+                                                        (lambda (c) (eq (car c) 'event))
+                                                        calls)))))
+        (should ev)
+        (should (equal (cdr (assoc "text" (cadr ev))) "Workspace three."))))))
 
 (ert-deftest cmacs-voice-commands-test-brigade-tools ()
   "Tools run by name with a spoken argument; destructive ones ask."

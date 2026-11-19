@@ -182,6 +182,8 @@ conditionally based on which subsystems are built:
 
 ** With cmacs-whisper
 
+=#+BEGIN_AUDIO= transcription goes through [[file:cmacs-speech.org][cmacs-speech]] (the =audio-org= feature), so it uses whichever recognizer is chosen there, and the transcript is inserted into the buffer that asked even when you have moved on.
+
 The 16 kHz/mono/S16LE capture caps mean drained PCM is whisper-ready
 with no resample.  See [[file:cmacs-whisper.org][cmacs-whisper.org]].
 

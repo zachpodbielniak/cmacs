@@ -31,7 +31,8 @@
 #include <string.h>
 
 #if defined(HAVE_CMACS_VIDEO) || defined(HAVE_CMACS_AUDIO) \
-  || defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+  || defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
 
 /* Eval EXPR (already fully built) and reply with the raw string. */
 static void
@@ -213,7 +214,8 @@ cmacs_dbus_iface_audio_unregister (GDBusConnection *conn, guint id)
 
 /* ── org.cmacs.Editor1.Speech (whisper STT + piper TTS) ─────────────── */
 
-#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
 
 static const gchar *speech_xml =
   "<node>"
@@ -233,6 +235,23 @@ static const gchar *speech_xml =
   "    </method>"
   "    <method name='ListVoices'>"
   "      <arg type='s' name='voices' direction='out'/>"
+  "    </method>"
+  "    <method name='Components'>"
+  "      <arg type='s' name='table' direction='out'/>"
+  "    </method>"
+  "    <method name='SetComponent'>"
+  "      <arg type='s' name='component' direction='in'/>"
+  "      <arg type='s' name='backend' direction='in'/>"
+  "      <arg type='s' name='model' direction='in'/>"
+  "      <arg type='s' name='resolved' direction='out'/>"
+  "    </method>"
+  "    <method name='Models'>"
+  "      <arg type='s' name='component' direction='in'/>"
+  "      <arg type='s' name='table' direction='out'/>"
+  "    </method>"
+  "    <method name='WhoSpoke'>"
+  "      <arg type='s' name='audio_path' direction='in'/>"
+  "      <arg type='s' name='transcript' direction='out'/>"
   "    </method>"
   "  </interface>"
   "</node>";
@@ -264,21 +283,19 @@ speech_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 
   if (g_strcmp0 (m, "Transcribe") == 0)
     {
-#ifdef HAVE_CMACS_WHISPER
+      /* Through cmacs-speech: whisper.cpp or sherpa-onnx, as chosen in
+         M-x cmacs-speech; any audio or video format ffmpeg reads.  */
       const gchar *path, *lang;
       const gchar *args[2];
       g_variant_get (p, "(&s&s)", &path, &lang);
       args[0] = path;
-      args[1] = (*lang != '\0') ? lang : "en";
+      args[1] = lang;
       cmacs_dbus_eval_to_reply_string (iv,
-        "(progn (require 'cmacs-whisper)"
-        " (cdr (assq :text (cmacs-whisper-transcribe-file"
-        " (cmacs-whisper-model-path) \"%s\" \"%s\"))))",
+        "(progn (require 'cmacs-speech)"
+        " (let ((r (cmacs-speech-transcribe-file-now \"%s\" :feature 'rpc"
+        " :language (let ((l \"%s\")) (and (> (length l) 0) l)))))"
+        " (or (cdr (assq :text r)) (error \"%%s\" (cdr (assq :error r))))))",
         args, 2);
-#else
-      (void) p;
-      speech_unsupported (iv, "whisper (STT)");
-#endif
     }
   else if (g_strcmp0 (m, "ListWhisperModels") == 0)
     {
@@ -292,33 +309,75 @@ speech_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
     }
   else if (g_strcmp0 (m, "Synthesize") == 0)
     {
-#ifdef HAVE_CMACS_PIPER
+      /* Through cmacs-speech; with FILE, a real WAV (header and rate),
+         not the raw PCM this used to write.  */
       const gchar *text, *file;
-      const gchar *args[3];
+      const gchar *args[2];
       g_variant_get (p, "(&s&s)", &text, &file);
+      args[0] = text;
+      args[1] = file;
       if (*file != '\0')
-        {
-          args[0] = text; args[1] = file; args[2] = file;
-          cmacs_dbus_eval_to_reply_string (iv,
-            "(progn (require 'cmacs-piper)"
-            " (let* ((pcm (cmacs-piper--synth-sync-1"
-            " (cmacs-piper-voice-path) \"%s\")))"
-            " (with-temp-file \"%s\""
-            " (set-buffer-multibyte nil) (insert pcm)) \"%s\"))",
-            args, 3);
-        }
+        cmacs_dbus_eval_to_reply_string (iv,
+          "(progn (require 'cmacs-speech)"
+          " (let ((r (cmacs-speech-synthesize-now \"%s\" :feature 'rpc)))"
+          " (when (assq :error r) (error \"%%s\" (cdr (assq :error r))))"
+          " (cmacs-speech-write-wav \"%s\" (cdr (assq :pcm r))"
+          " (cdr (assq :sample-rate r)))))",
+          args, 2);
       else
-        {
-          args[0] = text;
-          cmacs_dbus_eval_to_reply_string (iv,
-            "(progn (require 'cmacs-piper)"
-            " (cmacs-piper-speak-async \"%s\") \"ok\")",
-            args, 1);
-        }
-#else
-      (void) p;
-      speech_unsupported (iv, "piper (TTS)");
-#endif
+        cmacs_dbus_eval_to_reply_string (iv,
+          "(progn (require 'cmacs-speech)"
+          " (cmacs-speech-speak \"%s\" :feature 'rpc) \"ok\")",
+          args, 1);
+    }
+  else if (g_strcmp0 (m, "Components") == 0)
+    cmacs_dbus_eval_to_reply_string (iv,
+      "(progn (require 'cmacs-speech)"
+      " (mapconcat (lambda (r) (format \"%%s%%s\\t%%s\\t%%s\\t%%s\""
+      " (plist-get r :component)"
+      " (if (plist-get r :feature) (format \"/%%s\" (plist-get r :feature)) \"\")"
+      " (or (plist-get r :backend) \"-\") (or (plist-get r :model) \"-\")"
+      " (plist-get r :source)))"
+      " (cmacs-speech-describe-resolution) \"\\n\"))", NULL, 0);
+  else if (g_strcmp0 (m, "SetComponent") == 0)
+    {
+      /* Session only: a remote caller never rewrites saved choices.  */
+      const gchar *comp, *backend, *model;
+      const gchar *args[4];
+      g_variant_get (p, "(&s&s&s)", &comp, &backend, &model);
+      args[0] = comp; args[1] = backend; args[2] = model; args[3] = comp;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (require 'cmacs-speech)"
+        " (cmacs-speech-session-set (intern \"%s\") (intern \"%s\")"
+        " :model (let ((m \"%s\")) (and (> (length m) 0) m)))"
+        " (format \"%%S\" (cmacs-speech-resolve (intern \"%s\"))))",
+        args, 4);
+    }
+  else if (g_strcmp0 (m, "Models") == 0)
+    {
+      const gchar *comp;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &comp);
+      args[0] = comp;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (require 'cmacs-speech-models)"
+        " (mapconcat (lambda (m) (format \"%%s\\t%%s\\t%%s\\t%%s\""
+        " (if (plist-get m :installed) \"installed\" \"available\")"
+        " (plist-get m :backend) (plist-get m :id)"
+        " (mapconcat #'symbol-name (plist-get m :components) \",\")))"
+        " (cmacs-speech-models :component (let ((c \"%s\"))"
+        " (and (> (length c) 0) (intern c)))) \"\\n\"))",
+        args, 1);
+    }
+  else if (g_strcmp0 (m, "WhoSpoke") == 0)
+    {
+      const gchar *path;
+      const gchar *args[1];
+      g_variant_get (p, "(&s)", &path);
+      args[0] = path;
+      cmacs_dbus_eval_to_reply_string (iv,
+        "(progn (require 'cmacs-speech) (cmacs-speech-who-spoke-now \"%s\"))",
+        args, 1);
     }
   else if (g_strcmp0 (m, "ListVoices") == 0)
     {
@@ -358,6 +417,6 @@ cmacs_dbus_iface_speech_unregister (GDBusConnection *conn, guint id)
     { g_dbus_node_info_unref (speech_info); speech_info = NULL; }
 }
 
-#endif /* HAVE_CMACS_WHISPER || HAVE_CMACS_PIPER */
+#endif /* HAVE_CMACS_WHISPER || HAVE_CMACS_PIPER || HAVE_CMACS_SHERPA */
 
 #endif /* HAVE_CMACS_GLIB */

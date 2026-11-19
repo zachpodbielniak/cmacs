@@ -567,6 +567,7 @@ RUN ./autogen.sh \
         --with-cmacs-audio \
         --with-cmacs-whisper \
         --with-cmacs-piper \
+        --with-cmacs-sherpa \
         --with-cmacs-cintrospect \
         --with-cmacs-libregnum \
         --with-cmacs-gnuseye \
@@ -758,6 +759,42 @@ RUN install -d -m 0755 \
         "/build/stage/usr/share/cmacs/whisper-models/${WHISPER_MODEL_NAME}" \
         "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}" \
         "/build/stage/usr/share/cmacs/piper-voices/${PIPER_VOICE_NAME}.json"
+
+# ---------------------------------------------------------------------
+# cmacs-sherpa / cmacs-speech: a small default set of sherpa-onnx
+# models, so the components whisper and piper cannot serve work out of
+# the box -- the voice activity detector, the wake-word spotter, live
+# dictation words, and who-spoke-when.  ~160 MB unpacked after the
+# streaming recognizer's fp32 duplicates are pruned.
+#
+# Staged layout, the system tree of the speech model store
+# (cmacs-speech-system-models-directory):
+#   /usr/share/cmacs/speech-models/sherpa/<id>/...
+#
+# The store under ~/.local/share/cmacs/speech-models/ is searched
+# first.  CMACS_SPEECH_MODELS is a space-separated list of release
+# URLs: a .tar.bz2 unpacks to its own <id>/ directory, a bare .onnx is
+# placed in <id>/ named after the file.  Set it empty to ship none.
+# ---------------------------------------------------------------------
+ARG CMACS_SPEECH_MODELS="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
+RUN dest=/build/stage/usr/share/cmacs/speech-models/sherpa \
+ && install -d -m 0755 "${dest}" \
+ && for url in ${CMACS_SPEECH_MODELS}; do \
+        file="${url##*/}"; \
+        echo "==> Downloading speech model: ${file}"; \
+        case "${file}" in \
+            *.tar.bz2) \
+                curl -fsSL "${url}" | tar -xj -C "${dest}" || exit 1 ;; \
+            *.onnx) \
+                install -d -m 0755 "${dest}/${file%.onnx}" \
+                && curl -fsSL -o "${dest}/${file%.onnx}/${file}" "${url}" || exit 1 ;; \
+            *) echo "unknown model archive: ${file}" >&2; exit 1 ;; \
+        esac; \
+    done \
+ && find "${dest}" -path '*streaming-zipformer*' -name '*.onnx' ! -name '*int8*' -delete \
+ && find "${dest}" \( -name test_wavs -o -name '*.sh' -o -name '*.py' \) -prune -exec rm -rf {} + \
+ && find "${dest}" -type d -exec chmod 0755 {} + \
+ && find "${dest}" -type f -exec chmod 0644 {} +
 
 # ---------------------------------------------------------------------
 # D-Bus session-bus activation file.  Stages

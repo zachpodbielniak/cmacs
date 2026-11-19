@@ -1398,15 +1398,22 @@ graph.  EXCLUDE is a list of paths to leave out (the note itself, indices)."
         job (cmacs-secondbrain-ingest--transcript-doc job file meta segments 'ffmpeg+whisper))))))
 
 (defun cmacs-secondbrain-ingest--transcribe (job file on-segments)
-  "Convert FILE to WAV, run whisper, call ON-SEGMENTS with the segments."
-  (require 'cmacs-whisper)
+  "Convert FILE to WAV, transcribe it, call ON-SEGMENTS with the segments.
+The engine is the one \[cmacs-speech] picks for the `secondbrain'
+feature: whisper (with this file's model setting) or sherpa-onnx."
+  (require 'cmacs-whisper nil t)
   (let* ((wav (expand-file-name "audio.wav" (cmacs-secondbrain-ingest--tmpdir job)))
-         (model (or (cmacs-secondbrain-ingest--opt job :whisper-model)
-                    cmacs-secondbrain-ingest-whisper-model
-                    (cmacs-whisper-model-path)))
+         (engine (and (require 'cmacs-speech nil t)
+                      (not (cmacs-secondbrain-ingest--opt job :whisper-model))
+                      (plist-get (cmacs-speech-resolve 'stt 'secondbrain) :backend)))
+         (engine (and (not (memq engine '(nil whisper))) engine))
+         (model (and (not engine)
+                     (or (cmacs-secondbrain-ingest--opt job :whisper-model)
+                         cmacs-secondbrain-ingest-whisper-model
+                         (cmacs-whisper-model-path))))
          (lang (or (cmacs-secondbrain-ingest--opt job :language)
                    (and (boundp 'cmacs-whisper-language) cmacs-whisper-language))))
-    (unless (file-exists-p model)
+    (unless (or engine (file-exists-p model))
       (error "whisper model %s is missing (M-x cmacs-whisper-download-model)" model))
     (setf (cmacs-secondbrain-ingest-job-progress job) "extracting audio")
     (cmacs-secondbrain-ingest--render)
@@ -1417,10 +1424,18 @@ graph.  EXCLUDE is a list of paths to leave out (the note itself, indices)."
          (error "ffmpeg could not decode %s: %s" (file-name-nondirectory file)
                 (string-trim (cmacs-secondbrain-ingest-sample out 400))))
        (setf (cmacs-secondbrain-ingest-job-progress job)
-             (format "transcribing with %s" (file-name-nondirectory model)))
+             (format "transcribing with %s"
+                     (if engine (cmacs-speech-backend-label engine)
+                       (file-name-nondirectory model))))
        (cmacs-secondbrain-ingest--render)
-       (cmacs-whisper-transcribe-async
-        model wav
+       (funcall
+        (if engine
+            (lambda (wav cb lang _threads)
+              (cmacs-speech-transcribe-file wav cb :feature 'secondbrain
+                                            :component 'stt :language lang))
+          (lambda (wav cb lang threads)
+            (cmacs-whisper-transcribe-async model wav cb lang threads)))
+        wav
         (lambda (result)
           (unless (cmacs-secondbrain-ingest-job-cancelled job)
             (cmacs-secondbrain-ingest--guard job

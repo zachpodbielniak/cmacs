@@ -105,7 +105,7 @@ missing subsystem maps to exit code 3 with a clear message.
 | =pod=       | =status=, =pods=, =modules=, =stats=, =emit=, =eval=, =repl-eval=, =load=, =reload=, =set-context= |
 | =video=     | =list=, =snapshot=                                          |
 | =audio=     | =record=                                                    |
-| =speech=    | =transcribe=, =models=, =say=, =voices=                     |
+| =speech=    | =transcribe=, =who=, =say=, =components=, =set=, =models=, =whisper-models=, =voices= |
 | =lrg=       | =open=, =play=, =stop=, =save=, =tree=, =select=, =move=, =delete=, =add-primitive=, =add-visual= |
 | =calc=      | =eval=, =symbolic=, =units=, =list=, =describe= (also =eval -l calc= / =repl -l calc=) |
 | =lql=       | =query= (table text), =json= (={columns, rows, total}=; =-o table= renders it), =explain=, =sources= --- LQL linked into the target cmacs, read-only ([[file:../lql.org][LQL]]) |

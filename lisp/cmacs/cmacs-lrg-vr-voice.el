@@ -236,7 +236,7 @@ text, from the command loop (`cmacs-lrg-vr-run-later')."
       (cmacs-lrg-vr-voice--light "#ffb020")
       (message "Voice: transcribing...")
       (cmacs-voice-transcribe pcm (cmacs-lrg-vr-voice--finish cb)
-                              :threads cmacs-lrg-vr-voice-threads))))
+                              :threads cmacs-lrg-vr-voice-threads :feature 'vr))))
 
 (defun cmacs-lrg-vr-voice-cancel ()
   "Stop recording and throw the audio away."

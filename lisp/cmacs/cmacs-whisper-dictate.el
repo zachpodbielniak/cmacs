@@ -93,6 +93,46 @@ microphone now and this is just the engine client id.")
 (defvar cmacs-whisper-dictate--partial-at 0.0 "When the last partial started.")
 (defvar cmacs-whisper-dictate--overlay nil "Overlay showing the partial text.")
 (defvar cmacs-whisper-dictate--gen 0 "Bumped per final window; stale partials drop.")
+(defvar cmacs-whisper-dictate--stream nil
+  "The `cmacs-speech' streaming recognizer while dictating with one.")
+
+(defcustom cmacs-whisper-dictate-streaming t
+  "Dictate through a streaming recognizer when \\[cmacs-speech] has one.
+Words then appear while you speak and each utterance is final the moment
+you pause, instead of whisper transcribing fixed windows.  nil always
+uses the windowed whisper path."
+  :type 'boolean
+  :group 'cmacs-whisper)
+
+(defun cmacs-whisper-dictate--tidy (text)
+  "TEXT in sentence case when a recognizer gave it in capitals.
+Streaming English models emit upper case without punctuation."
+  (if (and (string-match-p "[[:alpha:]]" text)
+           (not (string-match-p "[[:lower:]]" text)))
+      (let ((s (downcase text)))
+        (concat (upcase (substring s 0 1)) (substring s 1)))
+    text))
+
+(defun cmacs-whisper-dictate--stream-final (alist)
+  "A streamed utterance ended: punctuate if possible, then insert it."
+  (let ((text (cmacs-voice-clean (alist-get :text alist))))
+    (cmacs-whisper-dictate--clear-partial)
+    (unless (or (string-empty-p text) (cmacs-whisper-dictate--maybe-command text))
+      (if (and cmacs-whisper-dictate-auto-punctuate
+               (cmacs-speech-can-p 'punctuate 'dictate :run))
+          (cmacs-speech-punctuate
+           (downcase text)
+           (lambda (r)
+             (cmacs-whisper-dictate--insert
+              (or (and (not (assq :error r)) (alist-get :text r))
+                  (cmacs-whisper-dictate--tidy text))))
+           :feature 'dictate)
+        (cmacs-whisper-dictate--insert (cmacs-whisper-dictate--tidy text))))))
+
+(defun cmacs-whisper-dictate--stream-ingest (pcm)
+  "Engine consumer while streaming: hand PCM to the recognizer."
+  (when cmacs-whisper-dictate--stream
+    (cmacs-speech-stream-feed cmacs-whisper-dictate--stream pcm)))
 
 (defun cmacs-whisper-dictate--active-p ()
   "Non-nil while dictation holds the microphone."
@@ -207,7 +247,7 @@ microphone now and this is just the engine client id.")
            (cmacs-whisper-dictate--set-state
             (if (cmacs-whisper-dictate--active-p) 'recording
               (if cmacs-whisper-dictate--queue 'thinking 'idle)))
-           (cmacs-whisper-dictate--pump)))))))
+           (cmacs-whisper-dictate--pump)) :feature 'dictate)))))
 
 (defun cmacs-whisper-dictate--cut ()
   "Close the window in progress and queue it."
@@ -231,6 +271,7 @@ microphone now and this is just the engine client id.")
 (defun cmacs-whisper-dictate--tick ()
   "Engine tick: show a partial of the window in progress when one is due."
   (when (and cmacs-whisper-dictate-partial-interval
+             (null cmacs-whisper-dictate--stream)
              (cmacs-whisper-dictate--active-p)
              (not cmacs-whisper-dictate--busy)
              (null cmacs-whisper-dictate--queue)
@@ -251,13 +292,26 @@ microphone now and this is just the engine client id.")
                         (cmacs-whisper-dictate--active-p)
                         (not (string-empty-p text)))
                (cmacs-whisper-dictate--show-partial text)))
-           (cmacs-whisper-dictate--pump)))))))
+           (cmacs-whisper-dictate--pump)) :feature 'dictate)))))
 
 (defun cmacs-whisper-dictate--start ()
   "Start dictating into the current buffer at point."
-  (unless (file-exists-p (cmacs-whisper-model-path))
-    (user-error "Whisper model not found: %s.  Run M-x cmacs-whisper-download-model"
-                (cmacs-whisper-model-path)))
+  (require 'cmacs-speech)
+  (setq cmacs-whisper-dictate--stream
+        (and cmacs-whisper-dictate-streaming
+             (cmacs-speech-stream-available-p 'dictate)
+             (cmacs-speech-stream-open
+              :feature 'dictate
+              :on-partial (lambda (p)
+                            (unless (string-empty-p p)
+                              (cmacs-whisper-dictate--show-partial
+                               (cmacs-whisper-dictate--tidy p))))
+              :on-final #'cmacs-whisper-dictate--stream-final
+              :on-error (lambda (e) (message "cmacs-whisper-dictate: %s" e)))))
+  (unless (or cmacs-whisper-dictate--stream
+              (file-exists-p (cmacs-whisper-model-path))
+              (cmacs-speech-can-p 'stt-live 'dictate :transcribe))
+    (user-error "No speech model installed: M-x cmacs-speech to get one"))
   (setq cmacs-whisper-dictate--buffer (current-buffer)
         cmacs-whisper-dictate--chunks nil
         cmacs-whisper-dictate--bytes 0
@@ -267,7 +321,9 @@ microphone now and this is just the engine client id.")
   (set-marker-insertion-type cmacs-whisper-dictate--target-marker t)
   (condition-case err
       (cmacs-voice-acquire 'dictate :exclusive t
-                           :consumer #'cmacs-whisper-dictate--ingest
+                           :consumer (if cmacs-whisper-dictate--stream
+                                         #'cmacs-whisper-dictate--stream-ingest
+                                       #'cmacs-whisper-dictate--ingest)
                            :preempt #'cmacs-whisper-dictate--stop)
     (error (setq cmacs-whisper-dictate--buffer nil)
            (signal (car err) (cdr err))))
@@ -276,7 +332,8 @@ microphone now and this is just the engine client id.")
   (cmacs-whisper-dictate--set-state 'recording)
   (add-to-list 'mode-line-misc-info
                '(:eval (cmacs-whisper-dictate--mode-line-glyph)) t)
-  (message "cmacs-whisper-dictate: recording (C-c v d to stop)"))
+  (message "cmacs-whisper-dictate: recording%s (C-c v d to stop)"
+           (if cmacs-whisper-dictate--stream ", streaming" "")))
 
 (defun cmacs-whisper-dictate--stop ()
   "Stop dictating; what is left of the last window is still transcribed."
@@ -284,6 +341,12 @@ microphone now and this is just the engine client id.")
     (remove-hook 'cmacs-voice-tick-functions #'cmacs-whisper-dictate--tick)
     (cmacs-voice--drain)
     (cmacs-voice-release 'dictate)
+    (when cmacs-whisper-dictate--stream
+      ;; Flush the last utterance, then let it go once that has landed.
+      (let ((s cmacs-whisper-dictate--stream))
+        (setq cmacs-whisper-dictate--stream nil)
+        (cmacs-speech-stream-finish s)
+        (run-at-time 3 nil #'cmacs-speech-stream-close s)))
     (if (>= cmacs-whisper-dictate--bytes cmacs-voice-rate)
         (cmacs-whisper-dictate--cut)
       (cmacs-voice-wipe cmacs-whisper-dictate--chunks)

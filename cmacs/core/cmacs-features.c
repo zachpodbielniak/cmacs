@@ -148,6 +148,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_PIPER
   "piper",
 #endif
+#ifdef HAVE_CMACS_SHERPA
+  "sherpa",
+#endif
 #ifdef HAVE_CMACS_GSURF
   "gsurf",
 #endif
@@ -436,6 +439,12 @@ The networks also need onnxruntime: see `cmacs-handtrack-available-p'.  */);
   is_cmacs_piper = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-SHERPA", is_cmacs_sherpa,
+    doc: /* Non-nil if this build was configured --with-cmacs-sherpa.  */);
+#ifdef HAVE_CMACS_SHERPA
+  is_cmacs_sherpa = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-GSURF", is_cmacs_gsurf,
     doc: /* Non-nil if this build was configured --with-cmacs-gsurf.  */);
 #ifdef HAVE_CMACS_GSURF
@@ -512,6 +521,7 @@ The networks also need onnxruntime: see `cmacs-handtrack-available-p'.  */);
   cmacs_features__alias ("is-cmacs-audio",       "IS-CMACS-AUDIO");
   cmacs_features__alias ("is-cmacs-whisper",     "IS-CMACS-WHISPER");
   cmacs_features__alias ("is-cmacs-piper",       "IS-CMACS-PIPER");
+  cmacs_features__alias ("is-cmacs-sherpa",      "IS-CMACS-SHERPA");
   cmacs_features__alias ("is-cmacs-gsurf",       "IS-CMACS-GSURF");
   cmacs_features__alias ("is-cmacs-gsurf-lrg",   "IS-CMACS-GSURF-LRG");
   cmacs_features__alias ("is-cmacs-emacsctl",    "IS-CMACS-EMACSCTL");

@@ -386,6 +386,13 @@ vf_register_classes () {
 		'make -j"$(nproc)"' \
 		'whisper.cpp / ggml archives (cmake)'
 
+	# cmake: sherpa-onnx.  Its archives land in build/lib (checked) and
+	# are installed to build/install/lib, which temacs links; the
+	# top-level make FORCEs the build and the install.
+	vf_class dep-sherpa cmake deps/sherpa-onnx/build '' \
+		'make -j"$(nproc)"' \
+		'sherpa-onnx archives (cmake)'
+
 	# Lisp: Emacs loads a stale .elc rather than its newer .el, and the
 	# .eln is found only through the .elc being loaded (its name carries
 	# the md5 of the source, so it cannot be stale by itself).
@@ -1167,6 +1174,7 @@ vf_edges_cmake () {
 	local lib
 	local name
 	local obj
+	local tdir
 
 	: >"${out}"
 	if [[ ! -f ${dir}/CMakeCache.txt ]]
@@ -1183,16 +1191,33 @@ vf_edges_cmake () {
 		-v DIRABS="${dir}" -v CANDS="${cands}" "${VF_AWK_PARSE}" "${cands}" >>"${out}"
 
 	# Archives against the objects of their own CMakeFiles/<T>.dir.
+	# That directory sits beside the archive unless the project sets an
+	# archive output directory (sherpa-onnx: build/lib); then it is
+	# wherever the target was defined in the tree.  Installed copies
+	# (build/install/) are skipped: `cmake --install' stamps them with
+	# the source's mtime TRUNCATED to whole seconds, so a copy of an
+	# archive made in the same second as its objects reads as older than
+	# them.  The build-tree archive it was copied from is checked instead,
+	# and temacs's link edge still covers the copy itself.
 	while IFS= read -r -d '' lib
 	do
 		name="${lib##*/lib}"
 		name="${name%.a}"
+		tdir="${lib%/*}/CMakeFiles/${name}.dir"
+		if [[ ! -d ${tdir} ]]
+		then
+			tdir="$(find "${dir}" -type d -path "*/CMakeFiles/${name}.dir" -print -quit 2>/dev/null)"
+		fi
 		printf 'A\t%s\n' "${lib#"${vf_root}"/}" >>"${out}"
+		if [[ -z ${tdir} ]]
+		then
+			continue
+		fi
 		while IFS= read -r -d '' obj
 		do
 			printf 'E\t%s\t%s\n' "${lib#"${vf_root}"/}" "${obj#"${vf_root}"/}" >>"${out}"
-		done < <(find "${lib%/*}/CMakeFiles/${name}.dir" -name '*.o' -type f -print0 2>/dev/null)
-	done < <(find "${dir}" -name 'lib*.a' -type f -print0 2>/dev/null)
+		done < <(find "${tdir}" -name '*.o' -type f -print0 2>/dev/null)
+	done < <(find "${dir}" -path "${dir}/install" -prune -o -name 'lib*.a' -type f -print0 2>/dev/null)
 	return 0
 }
 

@@ -1,0 +1,168 @@
+#+TITLE: cmacs-sherpa — the sherpa-onnx speech engine
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+=cmacs/sherpa/= links [[https://github.com/k2-fsa/sherpa-onnx][sherpa-onnx]] (=deps/sherpa-onnx=, pinned at =v2.0.1=) into cmacs as a second speech engine beside whisper.cpp and piper -- not instead of them.  It runs every model on the *system* onnxruntime, the one handtrack already links, never the prebuilt one sherpa's cmake would download.
+
+Most code should not call it directly: [[file:cmacs-speech.org][cmacs-speech]] chooses an engine per component and feature, and its =sherpa= backend (=lisp/cmacs/cmacs-speech-sherpa.el=) is the adapter onto this layer.  The C layer is a small, generic surface -- handles of a *kind*, operations on them -- so that adding a sherpa capability is a kind file in C and a few lines in the adapter.
+
+Configure flag: =--with-cmacs-sherpa= (in the default set).  Without onnxruntime headers it disables itself with a NOTICE, as handtrack does; =--with-cmacs-sherpa=required= makes that an error.  Feature flag: =IS-CMACS-SHERPA=.
+
+* Kinds
+
+| Kind             | Engine                                                                 | =run= returns                                            |
+|------------------+------------------------------------------------------------------------+----------------------------------------------------------|
+| =asr=            | non-streaming recognizer: whisper, moonshine, parakeet / NeMo, SenseVoice, paraformer, transducer, CTC, ... | =(:text :segments :tokens :timestamps :lang ...)=        |
+| =stream-asr=     | streaming recognizer (zipformer transducer / CTC, paraformer)          | parent of =stream= handles                               |
+| =stream=         | one stream of a =stream-asr=: =feed=, =finish=, =reset=                | =(:text :partial :endpoint)= per feed                    |
+| =kws=            | keyword spotter                                                        | parent of =kws-stream= handles                           |
+| =kws-stream=     | one spotter stream with its own keyword list                           | =(:keyword :start)= on a hit                             |
+| =vad=            | Silero or TEN VAD                                                      | =(:probs [..] :segments ...)= per feed                   |
+| =tts=            | VITS / Piper, Kokoro, Matcha, Kitten                                   | =(:pcm :sample-rate)=; chunks while generating           |
+| =diarize=        | pyannote segmentation + speaker embeddings + clustering                | =(:segments ((:start :end :speaker)...) :num-speakers)=  |
+| =speaker=        | speaker-embedding extractor plus an enrolled-speaker manager           | =embed=; =enroll= / =identify= / =verify= / ...          |
+| =punct=          | offline punctuation (CT-Transformer)                                   | =(:text)=                                                |
+| =punct-online=   | cased punctuation (CNN-BiLSTM)                                         | =(:text)=                                                |
+| =lid=            | spoken language ID (whisper encoder)                                   | =(:lang)=                                                |
+| =tag=            | audio tagging (CED / zipformer AudioSet)                               | =(:events ((:name :prob :index)...))=                    |
+| =denoise=        | speech enhancement (GTCRN)                                             | =(:pcm :sample-rate)=                                    |
+| =denoise-stream= | streaming speech enhancement                                           | =(:pcm :sample-rate)= per feed                           |
+| =separate=       | source separation (Spleeter, UVR)                                      | =(:stems ((NAME . PCM)...) :sample-rate)=                |
+
+=(cmacs-sherpa-kinds)= lists them.
+
+* Lisp interface
+
+| Function                                                        | What                                                                                   |
+|-----------------------------------------------------------------+----------------------------------------------------------------------------------------|
+| ~cmacs-sherpa-supported-p~                                      | t when compiled in                                                                     |
+| ~cmacs-sherpa-version~, ~cmacs-sherpa-onnxruntime-version~       | versions linked                                                                        |
+| ~cmacs-sherpa-kinds~                                            | the kinds above                                                                        |
+| ~cmacs-sherpa-config-keys~ KIND                                 | every config key KIND accepts, as =(KEY . TYPE)=                                       |
+| ~cmacs-sherpa-open~ KIND CONFIG =&optional= PARENT              | load an engine, blocking; returns a handle (an integer)                                |
+| ~cmacs-sherpa-open-async~ KIND CONFIG CALLBACK =&optional= PARENT | load on a loader thread; CALLBACK gets =((:handle . H))= or =((:error . M))=         |
+| ~cmacs-sherpa-close~ HANDLE                                     | free it; queued jobs complete as cancelled                                             |
+| ~cmacs-sherpa-submit~ HANDLE OP CALLBACK =&optional= PCM TEXT PARAMS CHUNK-FN SAMPLE-RATE | queue an operation; returns a job id                          |
+| ~cmacs-sherpa-run~ HANDLE OP =&optional= PCM TEXT PARAMS SAMPLE-RATE | the same, on this thread, returning the result (for RPC)                         |
+| ~cmacs-sherpa-cancel~ JOB                                       | cancel; the callback still runs, with =((:cancelled . t))=                            |
+| ~cmacs-sherpa-info~ HANDLE                                      | static facts: sample rate, speakers, vocabulary, ...                                  |
+| ~cmacs-sherpa-loaded~                                           | one alist per open handle (kind, model, jobs, last use)                                |
+| ~cmacs-sherpa-read-wav~ FILE                                    | =(PCM . RATE)=                                                                         |
+| ~cmacs-sherpa-kws-tokenize~ TOKENS PHRASE =&optional= CJK     | spell a wake phrase the way the keyword model was trained (reads =bpe.model= beside TOKENS) |
+
+OP is =run=; =feed=, =finish=, =reset= for streaming kinds; and for =speaker=: =enroll=, =add-embedding=, =identify=, =verify=, =remove=, =list=.  PCM is a unibyte S16LE mono string (16 kHz unless SAMPLE-RATE says otherwise).  TEXT is what to speak or punctuate, or a speaker name.  PARAMS is a plist of per-job options (=:sid= and =:speed= for TTS, =:hotwords= for =asr=, =:keywords= for a =kws-stream=, =:num-speakers= / =:threshold= for =diarize=, ...).  CHUNK-FN gets partial results: TTS audio as it is generated, diarization progress.
+
+#+begin_src emacs-lisp
+(let ((h (cmacs-sherpa-open 'asr
+          '(:moonshine.preprocessor "/m/preprocess.onnx"
+            :moonshine.encoder "/m/encode.int8.onnx"
+            :moonshine.uncached-decoder "/m/uncached_decode.int8.onnx"
+            :moonshine.cached-decoder "/m/cached_decode.int8.onnx"
+            :tokens "/m/tokens.txt" :num-threads 4))))
+  (cmacs-sherpa-submit h 'run (lambda (r) (message "%s" (alist-get :text r)))
+                       (car (cmacs-sherpa-read-wav "/tmp/hello.wav"))))
+#+end_src
+
+** Config keys
+
+A config key is the path of a field in the sherpa-onnx C config struct for that kind, with =-= for =_=: =model-config.transducer.encoder=, =feat-config.sample-rate=, =max-active-paths=.  The leading =model-config.= / =model.= may be left out, so =:transducer.encoder= works.  Values are strings, integers, floats or t/nil, converted to the field's type.
+
+The key→field tables are *generated* from =c-api.h= at build time by =admin/cmacs-sherpa-gen-config.sh= into =cmacs/sherpa/cmacs-sherpa-config-tables.h= (=offsetof= per field, 316 of them).  A field sherpa renames is therefore a compile error, never a key that is silently ignored, and a new sherpa field is available without touching cmacs.  The generator fails if a root struct it expects is gone.
+
+A few keys are cmacs's own rather than sherpa's: =espeak-data-dir= on a =tts= handle (below), and the per-kind options under PARAMS.
+
+** Model directories
+
+The adapter turns an installed model directory into a config by its files, so a model you unpack into =~/.local/share/cmacs/speech-models/sherpa/= is used with no catalog entry:
+
+| Files                                                       | Detected as                       |
+|-------------------------------------------------------------+-----------------------------------|
+| =encoder*.onnx=, =decoder*.onnx=, =joiner*.onnx=, =tokens.txt= | transducer (streaming if the name says so, =kws= if it says kws) |
+| =*-encoder.onnx=, =*-decoder.onnx= (whisper names)          | whisper                           |
+| =preprocess.onnx=, =encode*.onnx=, =*decode*.onnx=          | moonshine                         |
+| =model*.onnx= + =tokens.txt=                                | CTC / SenseVoice / NeMo / paraformer, by name |
+| =*.onnx= + =tokens.txt= + =espeak-ng-data/=                 | a Piper / VITS voice              |
+| =voices.bin= + =model.onnx=                                 | Kokoro                            |
+| =silero_vad*.onnx=, =ten-vad*.onnx=                         | VAD                               |
+| a =segmentation= model                                      | diarization (pyannote)            |
+| a speaker-embedding =.onnx= (3dspeaker, wespeaker, nemo)    | =speaker=, and diarization's embedding model |
+
+~cmacs-speech-sherpa-prefer-int8~ picks the int8 files where both exist.
+
+* Threading
+
+The rule is the same as whisper's: nothing touches Lisp off the main thread.
+
+- Each handle owns a one-thread =GThreadPool=, so a handle's jobs run in order -- a stream's feeds are never reordered -- while different handles run in parallel.
+- Every job takes its *root* handle's lock, so two =stream= handles of one =stream-asr= never decode on one recognizer at the same time.
+- Models load on a separate loader pool (=open-async=), so a 600 MB recognizer never stalls the editor or, under =--gowl=, the desktop.
+- Results are =GVariant a{sv}= dictionaries, delivered on the cmacs GLib context, i.e. on Emacs's thread during =pselect=, where they become alists.  Lisp callbacks live in a =staticpro='d hash keyed by an integer cookie, so a GLib structure never holds a =Lisp_Object=.
+- Cancellation is an atomic flag checked between chunks; for TTS the progress callback returns 0, which stops sherpa mid-generation (barge-in).
+- PCM is wiped before it is freed.
+
+=cmacs-sherpa-run= is the exception: it runs the job on the calling thread, for MCP and D-Bus, which have to answer with the result.
+
+** Translation-unit split
+
+The engine files (=-engine.c=, =-config.c=, =-asr.c=, =-audio.c=, =-tts.c=, =-analysis.c=, =-kws-tokens.c=, =-phonemize.c=) include =c-api.h= and never =lisp.h=; =-defuns.c= includes =lisp.h= and never =c-api.h=.  They meet through strings, =GBytes=, integer handles and =GVariant= -- the same firewall as office and lql.
+
+* Text to speech without espeak in sherpa
+
+sherpa-onnx 2.0 dropped its built-in espeak-ng, so Piper and Kokoro voices need phonemes from somewhere else.  =cmacs-sherpa-phonemize.c= =dlopen='s the system =libespeak-ng.so.1= (Fedora =espeak-ng=), splits text into clauses the way Piper does, and hands sherpa phoneme strings.  The voice's own =espeak-ng-data/= is used when it ships one, else ~espeak-data-dir~ from the config, else the system's.
+
+It is opened with =RTLD_DEEPBIND=.  raylib (linked via libregnum) exports =GetFileLength=, and so does espeak-ng internally; without deep binding espeak's calls resolve to raylib's, which reads the wrong thing, and espeak reports its voice as missing (=rc=2=).  If phonemization ever fails with "voice not found" while the files are plainly there, look for another exported symbol of the same name in =src/emacs= first.
+
+* Wake words: spelling keywords the model's way
+
+sherpa's keyword spotter does not take text: each keyword is a sequence of the model's own tokens, and it only fires if that sequence is how the model was trained to segment the word.  A naive greedy longest-match over =tokens.txt= produces spellings the model never saw, and the spotter simply never fires.
+
+=cmacs-sherpa-kws-tokens.c= reads the model's =bpe.model= (a SentencePiece protobuf: pieces, scores, model type) with a small hand-written protobuf reader and segments the phrase the way SentencePiece would -- Viterbi for Unigram models, best-score merges for BPE, id-rank merges when there is no =bpe.model=.  For the gigaspeech KWS model it matches SentencePiece's own output exactly.  ~cmacs-sherpa-kws-tokenize~ exposes it.
+
+Two more rules learned the hard way:
+
+- A display name containing a space breaks sherpa's keyword parser; cmacs writes =hey_cmacs= and maps hits back.
+- sherpa answers an invalid keyword list with a null stream inside a non-null wrapper, which crashes on the first feed.  cmacs validates every token against the vocabulary first and refuses the list with a message instead.
+
+* Building
+
+** Dependencies
+
+| Fedora package     | Why                                            |
+|--------------------+------------------------------------------------|
+| =onnxruntime-devel= | headers and =libonnxruntime.pc=               |
+| =cmake=            | sherpa-onnx builds with it                     |
+| =gcc-c++=          | sherpa-onnx is C++                             |
+| =bzip2=, =curl=    | the third-party stager, model archives         |
+| =espeak-ng=        | phonemes for Piper / Kokoro voices (runtime)   |
+
+Debian/Ubuntu: =libonnxruntime-dev=; Arch: =onnxruntime-cpu=.  =./install-deps --check= reports them.
+
+** No network at build time
+
+sherpa's cmake fetches about fifteen third-party tarballs (kaldi-native-fbank, kaldi-decoder, openfst, kissfft, simple-sentencepiece, ...).  =admin/cmacs-sherpa-thirdparty.sh= reads every =URL= / =URL_HASH= out of =deps/sherpa-onnx/cmake/*.cmake= -- and out of the fetched tarballs' own cmake files, since some of those fetch again -- downloads each once into =$XDG_CACHE_HOME/cmacs/sherpa-thirdparty/=, verifies its hash, and copies it into =deps/sherpa-onnx/build/=, one of the places sherpa looks before going to the network.  =--list= prints the work list; =--offline= fails instead of downloading.  It runs only when the build has no =CMakeCache.txt= yet.
+
+** The build
+
+=src/Makefile.in= builds sherpa as static archives (=-DBUILD_SHARED_LIBS=OFF=, no binaries, Python, JNI, websocket, portaudio or GPU), pointed at the system onnxruntime through =SHERPA_ONNXRUNTIME_LIB_DIR= / =_INCLUDE_DIR=, and links its archives into =temacs=.  The rule depends on =FORCE= and lets cmake decide what is out of date, like every bundled dependency.  sherpa's headers are =-isystem=.
+
+** Models in the container image
+
+=./build-container= stages a small default set under =/usr/share/cmacs/speech-models/sherpa/=: Silero VAD, the gigaspeech keyword spotter, the 20M streaming zipformer (int8 only), pyannote segmentation 3.0 and the 3D-Speaker CAM++ English embedding -- about 160 MB, enough that =vad=, =wake=, =stt-stream=, =diarize= and =speaker-id= work out of the box.  The =CMACS_SPEECH_MODELS= build argument is the list of release URLs; set it empty to ship none.
+
+* Troubleshooting
+
+| Symptom                                                    | Cause                                                                                     |
+|------------------------------------------------------------+-------------------------------------------------------------------------------------------|
+| =IS-CMACS-SHERPA= is nil after a build                     | configure found no onnxruntime; see the NOTICE in =config.log=, install =onnxruntime-devel= |
+| TTS: "no frontend"                                         | the voice needs espeak-ng: install it, or the voice's =espeak-ng-data/= is missing         |
+| TTS: espeak "voice not found" with the data present        | symbol interposition: =RTLD_DEEPBIND= lost, or a new symbol clash                          |
+| wake word never fires                                      | keyword spelled differently from training; check =(cmacs-sherpa-kws-tokenize ...)=         |
+| "keyword contains tokens not in the vocabulary"            | the phrase cannot be spelled with this model; choose another phrase or model              |
+| cmake tries to reach GitHub                                | the stager has not run, or sherpa was bumped and a new URL needs caching: run it by hand  |
+| a model loads but every result is empty                    | wrong sample rate; feed 16 kHz or pass SAMPLE-RATE                                         |
+
+* Testing
+
+=test/cmacs/cmacs-sherpa-tests.el= covers the generic surface (kinds, config keys, bad configs, handle life cycle, cancellation) everywhere, and every kind against real models when they are installed under the store -- a test whose model is absent skips with the model's id, so the log says what to download for full coverage.  TTS output is fed back through recognition to check the round trip.

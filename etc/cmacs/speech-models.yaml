@@ -1,0 +1,408 @@
+# speech-models.yaml --- the curated speech model catalog (seed)
+#
+# Copyright (C) 2026 Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The models M-x cmacs-speech offers to download.  This file is the
+# hand-edited source; admin/cmacs-speech-catalog.sh resolves every entry
+# to a URL, checks it exists, adds its size and SHA-256 (GitHub release
+# digests, Hugging Face's x-linked-etag) and writes speech-models.eld,
+# which is what Emacs reads (it has no YAML reader).  Regenerate after
+# editing:  admin/cmacs-speech-catalog.sh
+#
+# Fields:
+#   id          install name (a directory for sherpa, a file otherwise)
+#   backend     whisper | sherpa | piper
+#   components  which cmacs-speech components it serves
+#   source      sherpa: "<release-tag>/<asset>"; whisper / piper: a
+#               Hugging Face "<repo>/<path>" (piper: the .onnx; its
+#               .onnx.json comes along)
+#   languages   ISO codes, "multi" for many
+#   quality / speed   1-5 stars, a rough guide for the settings buffer
+#   sample      a listenable sample for TTS voices (optional)
+#   description one line
+
+models:
+  # ---------------------------------------------------------------- VAD
+  - id: silero_vad
+    backend: sherpa
+    components: [vad]
+    source: asr-models/silero_vad.onnx
+    languages: [multi]
+    quality: 4
+    speed: 5
+    description: "Silero VAD v5: the standard voice activity detector, 2 MB."
+  - id: ten-vad
+    backend: sherpa
+    components: [vad]
+    source: asr-models/ten-vad.onnx
+    languages: [multi]
+    quality: 5
+    speed: 5
+    description: "TEN-VAD: lower latency and fewer false starts than Silero."
+  - id: ggml-silero-v6.2.0.bin
+    backend: whisper
+    components: [vad]
+    source: ggml-org/whisper-vad/ggml-silero-v6.2.0.bin
+    languages: [multi]
+    quality: 4
+    speed: 5
+    description: "Silero VAD for whisper.cpp (what the voice loop used before)."
+
+  # ------------------------------------------------- streaming (stt-stream)
+  - id: sherpa-onnx-streaming-zipformer-en-20M-2023-02-17
+    backend: sherpa
+    components: [stt-stream]
+    source: asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2
+    languages: [en]
+    quality: 3
+    speed: 5
+    description: "Tiny streaming English recognizer: live words as you speak, any CPU."
+  - id: sherpa-onnx-streaming-zipformer-en-2023-06-26
+    backend: sherpa
+    components: [stt-stream]
+    source: asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    description: "Streaming English zipformer trained on LibriSpeech: better accuracy."
+  - id: sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+    backend: sherpa
+    components: [stt-stream]
+    source: asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2
+    languages: [zh, en]
+    quality: 4
+    speed: 4
+    description: "Streaming Chinese + English, code-switching."
+  - id: sherpa-onnx-streaming-paraformer-bilingual-zh-en
+    backend: sherpa
+    components: [stt-stream]
+    source: asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2
+    languages: [zh, en]
+    quality: 4
+    speed: 4
+    description: "Streaming Paraformer, Chinese + English."
+
+  # ---------------------------------------------------- offline (stt, stt-live)
+  - id: sherpa-onnx-moonshine-tiny-en-int8
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2
+    languages: [en]
+    quality: 3
+    speed: 5
+    description: "Moonshine tiny: whisper-tiny accuracy, several times faster on short clips."
+  - id: sherpa-onnx-moonshine-base-en-int8
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    description: "Moonshine base: whisper-base accuracy at a fraction of the latency."
+  - id: sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2
+    languages: [en]
+    quality: 5
+    speed: 4
+    description: "NVIDIA Parakeet TDT 0.6B v2: top English accuracy, punctuated, timestamped."
+  - id: sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2
+    languages: [multi]
+    quality: 5
+    speed: 4
+    description: "Parakeet TDT 0.6B v3: 25 European languages."
+  - id: sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+    languages: [zh, en, ja, ko, yue]
+    quality: 4
+    speed: 5
+    description: "SenseVoice: five languages, plus the speaker's emotion and sound events."
+  - id: sherpa-onnx-whisper-tiny.en
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2
+    languages: [en]
+    quality: 2
+    speed: 4
+    description: "Whisper tiny.en on onnxruntime."
+  - id: sherpa-onnx-whisper-base.en
+    backend: sherpa
+    components: [stt, stt-live]
+    source: asr-models/sherpa-onnx-whisper-base.en.tar.bz2
+    languages: [en]
+    quality: 3
+    speed: 3
+    description: "Whisper base.en on onnxruntime."
+  - id: sherpa-onnx-whisper-tiny
+    backend: sherpa
+    components: [stt, stt-live, lang-id]
+    source: asr-models/sherpa-onnx-whisper-tiny.tar.bz2
+    languages: [multi]
+    quality: 2
+    speed: 4
+    description: "Multilingual whisper tiny: also spoken-language identification."
+  - id: sherpa-onnx-whisper-turbo
+    backend: sherpa
+    components: [stt]
+    source: asr-models/sherpa-onnx-whisper-turbo.tar.bz2
+    languages: [multi]
+    quality: 5
+    speed: 2
+    description: "Whisper large-v3-turbo on onnxruntime (big; batch work)."
+
+  # whisper.cpp (ggml)
+  - id: ggml-tiny.en.bin
+    backend: whisper
+    components: [stt, stt-live]
+    source: ggerganov/whisper.cpp/ggml-tiny.en.bin
+    languages: [en]
+    quality: 2
+    speed: 5
+    description: "whisper.cpp tiny.en: the voice loop's wake model."
+  - id: ggml-base.en.bin
+    backend: whisper
+    components: [stt, stt-live]
+    source: ggerganov/whisper.cpp/ggml-base.en.bin
+    languages: [en]
+    quality: 3
+    speed: 4
+    description: "whisper.cpp base.en: cmacs's default recognizer."
+  - id: ggml-small.en.bin
+    backend: whisper
+    components: [stt, stt-live]
+    source: ggerganov/whisper.cpp/ggml-small.en.bin
+    languages: [en]
+    quality: 4
+    speed: 3
+    description: "whisper.cpp small.en."
+  - id: ggml-base.bin
+    backend: whisper
+    components: [stt, stt-live]
+    source: ggerganov/whisper.cpp/ggml-base.bin
+    languages: [multi]
+    quality: 3
+    speed: 4
+    description: "whisper.cpp base, multilingual."
+  - id: ggml-large-v3-turbo-q5_0.bin
+    backend: whisper
+    components: [stt]
+    source: ggerganov/whisper.cpp/ggml-large-v3-turbo-q5_0.bin
+    languages: [multi]
+    quality: 5
+    speed: 2
+    description: "whisper.cpp large-v3-turbo, 5-bit: best batch transcripts and subtitles."
+  - id: ggml-large-v3-turbo.bin
+    backend: whisper
+    components: [stt]
+    source: ggerganov/whisper.cpp/ggml-large-v3-turbo.bin
+    languages: [multi]
+    quality: 5
+    speed: 1
+    description: "whisper.cpp large-v3-turbo, full precision."
+
+  # ---------------------------------------------------------- wake (kws)
+  - id: sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
+    backend: sherpa
+    components: [wake]
+    source: kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 5
+    description: "English keyword spotter, 3.3M params: any wake phrase, always on."
+  - id: sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01
+    backend: sherpa
+    components: [wake]
+    source: kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
+    languages: [zh]
+    quality: 4
+    speed: 5
+    description: "Chinese keyword spotter."
+
+  # ---------------------------------------------------------------- TTS
+  - id: vits-piper-en_US-amy-low
+    backend: sherpa
+    components: [tts]
+    source: tts-models/vits-piper-en_US-amy-low.tar.bz2
+    languages: [en]
+    quality: 2
+    speed: 5
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_US/amy/low/speaker_0.mp3
+    description: "Piper Amy (US), low: cmacs's default voice, in-process and streamed."
+  - id: vits-piper-en_US-lessac-medium
+    backend: sherpa
+    components: [tts]
+    source: tts-models/vits-piper-en_US-lessac-medium.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_US/lessac/medium/speaker_0.mp3
+    description: "Piper Lessac (US), medium: clear and natural."
+  - id: vits-piper-en_US-ryan-high
+    backend: sherpa
+    components: [tts]
+    source: tts-models/vits-piper-en_US-ryan-high.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 3
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_US/ryan/high/speaker_0.mp3
+    description: "Piper Ryan (US), high."
+  - id: vits-piper-en_GB-alan-medium
+    backend: sherpa
+    components: [tts]
+    source: tts-models/vits-piper-en_GB-alan-medium.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_GB/alan/medium/speaker_0.mp3
+    description: "Piper Alan (GB), medium."
+  - id: vits-piper-en_US-libritts_r-medium
+    backend: sherpa
+    components: [tts]
+    source: tts-models/vits-piper-en_US-libritts_r-medium.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    description: "Piper LibriTTS-R: 900+ speakers in one model (pick with :speaker)."
+  - id: kokoro-en-v0_19
+    backend: sherpa
+    components: [tts]
+    source: tts-models/kokoro-en-v0_19.tar.bz2
+    languages: [en]
+    quality: 5
+    speed: 3
+    description: "Kokoro 82M: near-human English, 11 voices."
+  - id: kokoro-multi-lang-v1_0
+    backend: sherpa
+    components: [tts]
+    source: tts-models/kokoro-multi-lang-v1_0.tar.bz2
+    languages: [multi]
+    quality: 5
+    speed: 3
+    description: "Kokoro v1.0: 53 voices across English, Chinese, Japanese, French, ..."
+  - id: matcha-icefall-en_US-ljspeech
+    backend: sherpa
+    components: [tts]
+    source: tts-models/matcha-icefall-en_US-ljspeech.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 4
+    description: "Matcha-TTS LJSpeech."
+  - id: kitten-nano-en-v0_1-fp16
+    backend: sherpa
+    components: [tts]
+    source: tts-models/kitten-nano-en-v0_1-fp16.tar.bz2
+    languages: [en]
+    quality: 3
+    speed: 5
+    description: "KittenTTS nano: 15M params, 8 voices, tiny and fast."
+  - id: en_US-amy-low.onnx
+    backend: piper
+    components: [tts]
+    source: rhasspy/piper-voices/en/en_US/amy/low/en_US-amy-low.onnx
+    languages: [en]
+    quality: 2
+    speed: 5
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_US/amy/low/speaker_0.mp3
+    description: "Piper Amy (US), for the piper subprocess."
+  - id: en_US-lessac-medium.onnx
+    backend: piper
+    components: [tts]
+    source: rhasspy/piper-voices/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+    languages: [en]
+    quality: 4
+    speed: 4
+    sample: https://rhasspy.github.io/piper-samples/samples/en/en_US/lessac/medium/speaker_0.mp3
+    description: "Piper Lessac (US), for the piper subprocess."
+
+  # ----------------------------------------------------- who spoke / who is it
+  - id: sherpa-onnx-pyannote-segmentation-3-0
+    backend: sherpa
+    components: [diarize]
+    source: speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+    languages: [multi]
+    quality: 4
+    speed: 4
+    description: "pyannote segmentation 3.0: speaker turns (needs a speaker-embedding model)."
+  - id: sherpa-onnx-reverb-diarization-v1
+    backend: sherpa
+    components: [diarize]
+    source: speaker-segmentation-models/sherpa-onnx-reverb-diarization-v1.tar.bz2
+    languages: [multi]
+    quality: 5
+    speed: 3
+    description: "Rev's reverb diarization v1: better on meetings."
+  - id: 3dspeaker_speech_campplus_sv_en_voxceleb_16k
+    backend: sherpa
+    components: [speaker-id]
+    source: speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+    languages: [multi]
+    quality: 4
+    speed: 5
+    description: "CAM++ speaker embeddings (VoxCeleb): enrollment, identification, diarization."
+  - id: nemo_en_titanet_small
+    backend: sherpa
+    components: [speaker-id]
+    source: speaker-recongition-models/nemo_en_titanet_small.onnx
+    languages: [en]
+    quality: 4
+    speed: 4
+    description: "NVIDIA TitaNet small speaker embeddings."
+
+  # ---------------------------------------------------------- text helpers
+  - id: sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12
+    backend: sherpa
+    components: [punctuate]
+    source: punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2
+    languages: [zh, en]
+    quality: 4
+    speed: 3
+    description: "CT-Transformer punctuation for raw recognizer text."
+  - id: sherpa-onnx-online-punct-en-2024-08-06
+    backend: sherpa
+    components: [punctuate]
+    source: punctuation-models/sherpa-onnx-online-punct-en-2024-08-06.tar.bz2
+    languages: [en]
+    quality: 4
+    speed: 5
+    description: "English punctuation and casing, light enough for streaming output."
+
+  # ------------------------------------------------------- sound and cleanup
+  - id: sherpa-onnx-zipformer-small-audio-tagging-2024-04-15
+    backend: sherpa
+    components: [audio-tag]
+    source: audio-tagging-models/sherpa-onnx-zipformer-small-audio-tagging-2024-04-15.tar.bz2
+    languages: [multi]
+    quality: 4
+    speed: 4
+    description: "AudioSet tagging, 527 classes: speech, music, laughter, a dog..."
+  - id: sherpa-onnx-ced-mini-audio-tagging-2024-04-19
+    backend: sherpa
+    components: [audio-tag]
+    source: audio-tagging-models/sherpa-onnx-ced-mini-audio-tagging-2024-04-19.tar.bz2
+    languages: [multi]
+    quality: 4
+    speed: 5
+    description: "CED mini AudioSet tagger: small and quick."
+  - id: gtcrn_simple
+    backend: sherpa
+    components: [denoise]
+    source: speech-enhancement-models/gtcrn_simple.onnx
+    languages: [multi]
+    quality: 3
+    speed: 5
+    description: "GTCRN speech enhancement: cleans a noisy mic, 0.5 MB."
+  - id: sherpa-onnx-spleeter-2stems-fp16
+    backend: sherpa
+    components: [separate]
+    source: source-separation-models/sherpa-onnx-spleeter-2stems-fp16.tar.bz2
+    languages: [multi]
+    quality: 3
+    speed: 4
+    description: "Spleeter 2-stem: vocals and accompaniment."

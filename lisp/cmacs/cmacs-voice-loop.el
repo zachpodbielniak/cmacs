@@ -338,6 +338,28 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 (defvar cmacs-voice-loop--silence 0 "Trailing silent frames in the open segment.")
 (defvar cmacs-voice-loop--seg-id 0 "Id of the newest segment.")
 (defvar cmacs-voice-loop--addressed nil "Non-nil when the open segment is for us.")
+(defvar cmacs-voice-loop--wake nil
+  "The keyword spotter from `cmacs-speech-wake-open', or nil.
+With one, wake phrases are heard by a small always-on model and only
+addressed speech is transcribed; without, every segment goes through
+the wake model's transcript.")
+(defvar cmacs-voice-loop--kws-hits nil "(TIME . PHRASE) of recent keyword hits.")
+(defvar cmacs-voice-loop--seg-start-time 0.0 "When the open segment began.")
+
+(defcustom cmacs-voice-loop-use-keyword-spotter t
+  "Hear wake phrases with a keyword spotter when one is installed.
+The spotter (sherpa-onnx, chosen for the `wake' component in
+\[cmacs-speech]) is a small always-on model: speech that is not
+addressed to the loop is never transcribed at all, which saves the
+CPU the wake model spends on every overheard sentence.  nil keeps the
+whisper wake model."
+  :type 'boolean)
+
+(defcustom cmacs-voice-loop-kws-grace 0.6
+  "Seconds after a segment ends that a keyword hit still addresses it.
+The spotter runs on its own worker, so its answer for the last words of
+an utterance can arrive just after the segmenter has closed it."
+  :type 'number)
 (defvar cmacs-voice-loop--barged nil "Non-nil once the open segment barged in.")
 (defvar cmacs-voice-loop--armed-until 0.0
   "Until this `float-time', speech needs no wake phrase.")
@@ -588,7 +610,10 @@ call, which a callback wrapped at send time would miss."
                  cmacs-voice-loop-partial-interval)
              ;; While a reply plays, a partial would only transcribe the
              ;; echo; wait for the barge-in to decide it is really you.
-             (or (not (cmacs-voice-loop--busy-p)) cmacs-voice-loop--barged))
+             (or (not (cmacs-voice-loop--busy-p)) cmacs-voice-loop--barged)
+             ;; With a keyword spotter the wake phrase is not looked for
+             ;; in partials: unaddressed speech is never transcribed.
+             (or cmacs-voice-loop--addressed (not cmacs-voice-loop--wake)))
     (let ((pcm (cmacs-voice-loop--recent-pcm
                 cmacs-voice-loop-partial-window-seconds))
           (seg cmacs-voice-loop--seg-id)
@@ -630,11 +655,20 @@ call, which a callback wrapped at send time would miss."
          (path (cmacs-whisper-model-path name)))
     (if (file-exists-p path) path (cmacs-whisper-model-path default))))
 
+(defun cmacs-voice-loop--engine-p ()
+  "Non-nil when `cmacs-speech' gives the loop a non-whisper recognizer.
+Then that engine transcribes every segment; with whisper the loop keeps
+its own small wake model and larger final model."
+  (let ((b (plist-get (cmacs-speech-resolve 'stt-live 'voice-loop) :backend)))
+    (and b (not (eq b 'whisper)))))
+
 (defun cmacs-voice-loop--transcribe (pcm which callback)
   "Transcribe PCM with the model for WHICH; CALLBACK gets the result alist.
-PCM is wiped once whisper has its copy."
-  (cmacs-voice-transcribe pcm callback
-                          :model (cmacs-voice-loop--model-path which)))
+PCM is wiped once the result is in."
+  (if (cmacs-voice-loop--engine-p)
+      (cmacs-voice-transcribe pcm callback :feature 'voice-loop)
+    (cmacs-voice-transcribe pcm callback
+                            :model (cmacs-voice-loop--model-path which))))
 
 
 ;;;; Utterances
@@ -784,10 +818,33 @@ wake model heard it, or nil when the segment needed no phrase."
           (cmacs-voice-loop--set-state 'thinking))
         (cmacs-voice-loop--transcribe
          pcm 'final (finish (lambda (r) (cmacs-voice-loop--on-final r seg nil)))))
+       (cmacs-voice-loop--wake
+        ;; A keyword spotter decides.  Its answer for the last words can
+        ;; trail the segmenter, so wait a moment before dropping.
+        (let ((start cmacs-voice-loop--seg-start-time)
+              (end (float-time)))
+          (cl-incf cmacs-voice-loop--finals)
+          (run-at-time
+           cmacs-voice-loop-kws-grace nil
+           (lambda ()
+             (when (= session cmacs-voice-loop--session)
+               (if-let* ((hit (cmacs-voice-loop--kws-hit-between
+                               (- start 0.3) (+ end cmacs-voice-loop-kws-grace))))
+                   (progn
+                     (cmacs-voice-loop--note-phrase (list nil nil 1.0 (cdr hit)) seg)
+                     (cmacs-voice-loop--maybe-save pcm)
+                     (cmacs-voice-loop--set-state 'thinking)
+                     (cmacs-voice-loop--transcribe
+                      pcm 'final (finish (lambda (r) (cmacs-voice-loop--on-final r seg nil)))))
+                 (fillarray pcm 0)
+                 (cl-decf cmacs-voice-loop--finals)
+                 (cmacs-voice-loop--clear-partial)
+                 (cmacs-voice-loop--settle)))))))
        (t
         ;; Not (yet) known to be for us: the wake model decides.  A copy
         ;; is kept for the final model only when the two differ.
-        (let ((keep (and (not (equal (cmacs-voice-loop--model-path 'wake)
+        (let ((keep (and (not (cmacs-voice-loop--engine-p))
+                         (not (equal (cmacs-voice-loop--model-path 'wake)
                                      (cmacs-voice-loop--model-path 'final)))
                          (copy-sequence pcm))))
           (cl-incf cmacs-voice-loop--finals)
@@ -818,6 +875,56 @@ wake model heard it, or nil when the segment needed no phrase."
                    (finish (lambda (r2)
                              (cmacs-voice-loop--on-final
                               r2 seg (nth 1 m)))))))))))))))))
+
+
+;;;; Keyword spotting
+
+(defun cmacs-voice-loop--kws-hit-between (from to)
+  "The latest keyword hit (TIME . PHRASE) between FROM and TO, if any."
+  (cl-find-if (lambda (h) (and (>= (car h) from) (<= (car h) to)))
+              cmacs-voice-loop--kws-hits))
+
+(defun cmacs-voice-loop--on-keyword (phrase)
+  "The spotter heard wake PHRASE."
+  (push (cons (float-time) phrase) cmacs-voice-loop--kws-hits)
+  (when (> (length cmacs-voice-loop--kws-hits) 8)
+    (setcdr (nthcdr 7 cmacs-voice-loop--kws-hits) nil))
+  (setq cmacs-voice-loop--last-target (cmacs-voice-loop-route-target phrase))
+  (if cmacs-voice-loop--in-speech
+      ;; Mid-utterance: this segment is for us; partials start showing.
+      (unless cmacs-voice-loop--addressed
+        (setq cmacs-voice-loop--addressed t)
+        (cmacs-voice-loop--note-phrase (list nil nil 1.0 phrase)
+                                       cmacs-voice-loop--seg-id)
+        (cmacs-voice-loop--show-partial "..."))
+    ;; Just the phrase: listen for the request.
+    (cmacs-voice-loop--arm cmacs-voice-loop-armed-seconds)
+    (when cmacs-voice-loop-wake-acknowledgement
+      (cmacs-voice-loop-speak cmacs-voice-loop-wake-acknowledgement))
+    (message "Voice: listening...")))
+
+(defun cmacs-voice-loop--wake-start ()
+  "Open the keyword spotter `cmacs-speech' resolves, if there is one."
+  (cmacs-voice-loop--wake-stop)
+  (when (and cmacs-voice-loop-use-keyword-spotter
+             (cmacs-voice-loop--phrases)
+             (cmacs-speech-wake-available-p 'voice-loop))
+    (setq cmacs-voice-loop--wake
+          (condition-case err
+              (cmacs-speech-wake-open (cmacs-voice-loop--phrases)
+                                      #'cmacs-voice-loop--on-keyword
+                                      :feature 'voice-loop)
+            (error
+             (message "Voice: keyword spotter unavailable (%s); using the wake model"
+                      (error-message-string err))
+             nil)))))
+
+(defun cmacs-voice-loop--wake-stop ()
+  "Close the keyword spotter."
+  (when cmacs-voice-loop--wake
+    (ignore-errors (cmacs-speech-wake-close cmacs-voice-loop--wake)))
+  (setq cmacs-voice-loop--wake nil
+        cmacs-voice-loop--kws-hits nil))
 
 
 ;;;; Frames: the segmenter
@@ -861,6 +968,7 @@ wake model heard it, or nil when the segment needed no phrase."
         cmacs-voice-loop--silence 0
         cmacs-voice-loop--barged nil
         cmacs-voice-loop--addressed (cmacs-voice-loop--armed-p)
+        cmacs-voice-loop--seg-start-time (float-time)
         cmacs-voice-loop--partial-at (float-time))
   (unless (cmacs-voice-loop--busy-p)
     (cmacs-voice-loop--set-state 'hearing)))
@@ -950,6 +1058,9 @@ wake model heard it, or nil when the segment needed no phrase."
 The engine's detector splits it into frames and calls
 `cmacs-voice-loop--frame' with each.  The test suite drives the loop
 through here with synthetic audio."
+  (when (and cmacs-voice-loop--wake (not (cmacs-voice-loop--ignore-mic-p)))
+    ;; The spotter copies the samples before this returns.
+    (cmacs-speech-wake-feed cmacs-voice-loop--wake pcm))
   (cmacs-voice-detect pcm))
 
 (defun cmacs-voice-loop--housekeeping ()
@@ -993,7 +1104,8 @@ through here with synthetic audio."
   "Signal a `user-error' naming what this build or machine lacks."
   (unless (and (cmacs-voice-available-p) (fboundp 'cmacs-whisper-pcm-levels))
     (user-error "The voice loop needs cmacs built with audio and whisper"))
-  (unless (file-exists-p (cmacs-voice-loop--model-path 'final))
+  (unless (or (cmacs-voice-loop--engine-p)
+              (file-exists-p (cmacs-voice-loop--model-path 'final)))
     (user-error "No whisper model at %s: M-x cmacs-whisper-download-model"
                 (abbreviate-file-name (cmacs-voice-loop--model-path 'final)))))
 
@@ -1022,6 +1134,7 @@ through here with synthetic audio."
   (when (eq (cmacs-voice-detector-start #'cmacs-voice-loop--frame) 'energy)
     (message "Voice: no VAD model, using the energy detector (%s)"
              (substitute-command-keys "\\[cmacs-whisper-download-vad-model]")))
+  (cmacs-voice-loop--wake-start)
   (when (and (derived-mode-p 'cmacs-ai-chat-mode)
              (not (buffer-live-p cmacs-voice-loop--chat-buffer)))
     (setq cmacs-voice-loop--chat-buffer (current-buffer)))
@@ -1036,6 +1149,7 @@ through here with synthetic audio."
   (remove-hook 'cmacs-voice-tick-functions #'cmacs-voice-loop--housekeeping)
   (remove-hook 'cmacs-voice-speech-functions #'cmacs-voice-loop--on-speech)
   (cmacs-voice-release 'loop)
+  (cmacs-voice-loop--wake-stop)
   (cmacs-voice-detector-stop)
   (cmacs-voice-loop-stop-speaking)
   (cmacs-voice-loop--reset-state)

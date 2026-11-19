@@ -183,6 +183,16 @@ subsystem.
 | =podomation_repl_eval=    | podomation | Evaluate a line in the persistent REPL |
 | =video_list=              | video      | List live video stream handles         |
 | =video_snapshot=          | video      | Capture a video frame as a PNG image    |
+| =transcribe=              | whisper / sherpa | Transcribe a file (=backend=, =model=, =language=, =diarize=) |
+| =synthesize_speech=       | piper / sherpa | Speak text, or write a WAV with =output_path= (=voice=, =backend=) |
+| =speech_components=       | whisper / sherpa | Every speech component: engine, model, where the choice came from |
+| =speech_set=              | whisper / sherpa | Choose an engine for a component, this session only |
+| =speech_models=           | whisper / sherpa | Installed and downloadable models |
+| =speech_diarize=          | sherpa     | Who spoke when, as a labelled transcript |
+| =speech_tag_audio=        | sherpa     | Sound events in a clip                  |
+| =speech_identify_speaker= | sherpa     | Match a clip against enrolled speakers  |
+
+The speech tools route through [[file:cmacs-speech.org][cmacs-speech]] (the =rpc= feature).  =speech_set= never rewrites saved choices, and no tool downloads a model.
 
 ** ai --- Image Generation (optional)
 

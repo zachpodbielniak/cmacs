@@ -691,6 +691,8 @@ OPTION_DEFAULT_OFF([cmacs-whisper],
   [CMacs offline speech-to-text via vendored whisper.cpp])
 OPTION_DEFAULT_OFF([cmacs-piper],
   [CMacs offline text-to-speech via Piper])
+OPTION_DEFAULT_OFF([cmacs-sherpa],
+  [CMacs sherpa-onnx speech engine: streaming STT, keyword spotting, in-process TTS, diarization, speaker ID (vendored deps/sherpa-onnx on the system onnxruntime; requires --with-cmacs-audio)])
 OPTION_DEFAULT_OFF([cmacs-gsurf],
   [CMacs gsurf embedded web browser (WebKitGTK buffers, modules, MCP)])
 OPTION_DEFAULT_OFF([cmacs-gsurf-lrg],
@@ -2128,6 +2130,85 @@ AC_SUBST(CMACS_PIPER_BINARY)
 AC_SUBST(CMACS_PIPER_OBJ)
 AC_SUBST(CMACS_PIPER_CFLAGS)
 AC_SUBST(CMACS_PIPER_LIBS)
+
+# CMACS Sherpa: the sherpa-onnx speech engine (streaming STT, keyword
+# spotting, VAD, in-process TTS, diarization, speaker ID, punctuation,
+# language ID, audio tagging, denoising, source separation), built from
+# the vendored deps/sherpa-onnx submodule as static archives.
+#
+# onnxruntime always comes from the SYSTEM (pkg-config libonnxruntime:
+# Fedora onnxruntime-devel, Debian libonnxruntime-dev, Arch
+# onnxruntime-cpu) -- never sherpa's own prebuilt download, which would
+# be a network fetch at cmake time and a second onnxruntime next to the
+# one cmacs-handtrack links.  Without it the default build skips this
+# subsystem with a NOTICE (as handtrack degrades), so a machine without
+# the package still builds; --with-cmacs-sherpa=required makes it fatal.
+# pkg-config, not AC_CHECK_HEADER: this block runs before AC_PROG_CC.
+HAVE_CMACS_SHERPA=no
+if test "$with_cmacs_sherpa" != "no"; then
+  if test "$with_cmacs_audio" = "no"; then
+    AC_MSG_ERROR([--with-cmacs-sherpa requires --with-cmacs-audio (PCM capture and playback)])
+  fi
+  cmacs_sherpa_ok=yes
+  if test ! -f "$srcdir/deps/sherpa-onnx/sherpa-onnx/c-api/c-api.h"; then
+    cmacs_sherpa_ok=no
+    cmacs_sherpa_why="deps/sherpa-onnx absent (run: admin/cmacs-submodules.sh)"
+  fi
+  if test "$cmacs_sherpa_ok" = "yes"; then
+    PKG_CHECK_EXISTS([libonnxruntime], [],
+      [cmacs_sherpa_ok=no
+       cmacs_sherpa_why="onnxruntime development files not found (Fedora: onnxruntime-devel)"])
+  fi
+  if test "$cmacs_sherpa_ok" = "yes"; then
+    PKG_CHECK_MODULES([CMACS_SHERPA_DEPS], [glib-2.0 gobject-2.0 gio-2.0])
+    CMACS_SHERPA_ORT_CFLAGS="`$PKG_CONFIG --cflags libonnxruntime`"
+    CMACS_SHERPA_ORT_LIBS="`$PKG_CONFIG --libs libonnxruntime`"
+    dnl Where sherpa's cmake finds onnxruntime: the include dir and the
+    dnl lib dir, which it wants as SHERPA_ONNXRUNTIME_*_DIR in its env.
+    CMACS_SHERPA_ORT_INCDIR="`$PKG_CONFIG --variable=includedir libonnxruntime`"
+    CMACS_SHERPA_ORT_LIBDIR="`$PKG_CONFIG --variable=libdir libonnxruntime`"
+    dnl -isystem: sherpa's header is third-party, so cmacs's warning
+    dnl set must not land on it (the -I -> -isystem rewrite below only
+    dnl handles absolute paths; this one is srcdir-relative).
+    CMACS_SHERPA_CFLAGS="-isystem \$(abs_top_srcdir)/deps/sherpa-onnx \
+      $CMACS_SHERPA_DEPS_CFLAGS"
+    dnl Link order from sherpa's installed sherpa-onnx.pc.  libstdc++ is
+    dnl linked dynamically (SHERPA_ONNX_LINK_LIBSTDCPP_STATICALLY=OFF in
+    dnl the build rule): whisper.cpp already brings -lstdc++, and two
+    dnl copies of the C++ runtime in one process is the static-dedup
+    dnl problem AGENTS.md warns about.
+    cmacs_sherpa_lib="\$(abs_top_srcdir)/deps/sherpa-onnx/build/install/lib"
+    CMACS_SHERPA_LIBS="$cmacs_sherpa_lib/libsherpa-onnx-c-api.a \
+      $cmacs_sherpa_lib/libsherpa-onnx-core.a \
+      $cmacs_sherpa_lib/libkaldi-decoder-core.a \
+      $cmacs_sherpa_lib/libsherpa-onnx-kaldifst-core.a \
+      $cmacs_sherpa_lib/libsherpa-onnx-fstfar.a \
+      $cmacs_sherpa_lib/libsherpa-onnx-fst.a \
+      $cmacs_sherpa_lib/libkaldi-native-fbank-core.a \
+      $cmacs_sherpa_lib/libkissfft-float.a \
+      $cmacs_sherpa_lib/libssentencepiece_core.a \
+      $cmacs_sherpa_lib/libutf8proc.a \
+      $CMACS_SHERPA_ORT_LIBS -lstdc++ -lm -lpthread -ldl \
+      $CMACS_SHERPA_DEPS_LIBS"
+    AC_DEFINE([HAVE_CMACS_SHERPA], 1, [CMacs sherpa-onnx speech engine])
+    HAVE_CMACS_SHERPA=yes
+    CMACS_SHERPA_OBJ="cmacs-sherpa-config.o cmacs-sherpa-engine.o \
+      cmacs-sherpa-asr.o cmacs-sherpa-audio.o cmacs-sherpa-tts.o \
+      cmacs-sherpa-analysis.o cmacs-sherpa-kws-tokens.o \
+      cmacs-sherpa-phonemize.o \
+      cmacs-sherpa-defuns.o cmacs-sherpa-init.o"
+  elif test "$with_cmacs_sherpa" = "required"; then
+    AC_MSG_ERROR([--with-cmacs-sherpa=required: $cmacs_sherpa_why])
+  else
+    AC_MSG_NOTICE([cmacs-sherpa disabled: $cmacs_sherpa_why])
+  fi
+fi
+AC_SUBST(HAVE_CMACS_SHERPA)
+AC_SUBST(CMACS_SHERPA_OBJ)
+AC_SUBST(CMACS_SHERPA_CFLAGS)
+AC_SUBST(CMACS_SHERPA_LIBS)
+AC_SUBST(CMACS_SHERPA_ORT_INCDIR)
+AC_SUBST(CMACS_SHERPA_ORT_LIBDIR)
 
 # CMACS Cintrospect: runtime C self-introspection (DWARF reader + JIT).
 # Default-on.  Probes for libdw + libelf via pkg-config, optional

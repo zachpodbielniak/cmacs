@@ -17,6 +17,10 @@ a WAV via ~with-temp-file~ for archival.  Spawning uses
 ~g_subprocess_communicate_async~ so polling happens on the cmacs
 ~GMainContext~ — no extra thread.
 
+piper is the fallback TTS engine: [[file:cmacs-speech.org][cmacs-speech]]'s =auto= prefers [[file:cmacs-sherpa.org][sherpa-onnx]], which runs the same Piper voices in-process and streams them sentence by sentence, and uses piper when sherpa has no voice installed.  Pin it with ~(cmacs-speech-set 'tts 'piper)~ or in ~M-x cmacs-speech~.  Voices are looked up in the speech model store (=~/.local/share/cmacs/speech-models/piper/=) first, then ~cmacs-piper-voices-search-path~, then =/usr/share/cmacs/speech-models/piper/=.
+
+~cmacs-piper-synthesize-to-file~ TEXT FILE =&optional= VOICE writes a WAV and returns FILE once it exists; a VOICE ending in =.onnx= pins piper, anything else goes to the configured TTS engine.  Brigade's podcast deliverable uses it.
+
 * Requirements
 
 ** Build flags
@@ -122,6 +126,8 @@ M-x cmacs-piper-stop           ;; C-c v S
 #+end_src
 
 * PGTK right-click context menu
+
+When ~cmacs-speech-menu-mode~ is on (the default) these entries step aside for the *Speech* menu, which offers the same actions on any TTS engine plus voice choice, punctuation and file actions ([[file:cmacs-speech.org::*The right-click Speech menu][cmacs-speech: the Speech menu]]).  What follows applies when it is off.
 
 ~lisp/cmacs/cmacs-piper-context-menu.el~ adds an entry to
 ~context-menu-functions~ (the standard Emacs 28+ hook used by PGTK's

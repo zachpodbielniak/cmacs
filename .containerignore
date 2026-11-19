@@ -35,6 +35,10 @@ tools/cmacs-mcp/cmacs-mcp
 # configured+built by the cmacs `make' via CMake, so never copy its host
 # build tree (and drop any stray CMake cache).
 deps/whisper.cpp/build
+# sherpa-onnx is configured the same way (cmake, from the cmacs make),
+# and its build/ also holds the staged third-party tarballs and an
+# install/ prefix with host paths in sherpa-onnx.pc.
+deps/sherpa-onnx/build
 **/CMakeCache.txt
 # gcc -MMD dependency files record ABSOLUTE paths to the headers of the
 # machine that compiled them.  Leaking a host .d into the context makes

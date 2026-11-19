@@ -73,6 +73,9 @@ Two consecutive frames at or above ~cmacs-voice-loop-vad-threshold~ (0.5) open a
 
 ** The wake phrase
 
+*With a keyword spotter.*  When =wake= resolves to sherpa (a KWS model installed) and ~cmacs-voice-loop-use-keyword-spotter~ is non-nil, every wake phrase and route name is spelled for the spotter ([[file:cmacs-sherpa.org::*Wake words: spelling keywords the model's way][cmacs-sherpa: wake words]]) and heard by a 3 MB always-on model.  An utterance is transcribed only when the spotter fired inside it, or within ~cmacs-voice-loop-kws-grace~ seconds after it ended; everything else is dropped unheard, which is both cheaper and more private than transcribing everything to look for the name.  A phrase on its own arms the loop as before.  Without a spotter the text match below is used.
+
+
 There is no separate hotword engine: the wake phrase is whisper on the speech itself, with a small model (~cmacs-voice-loop-wake-model~, default ~ggml-tiny.en.bin~, falling back to the default model).  A heard word matches when its similarity to the phrase — 1 minus the Levenshtein distance over the longer length, on lower-cased words without punctuation — reaches ~cmacs-voice-loop-wake-threshold~ (0.75).  So "Jarvis," "jarvis." and "Jervis" match; "Travis" (0.67) does not.  A phrase of N words is compared against each run of N words, and against each run of N+1 words glued together, so "jar vis" still matches.  ~cmacs-voice-loop-wake-match~ is a public function if you want the same matching elsewhere.
 
 A segment is /addressed/ when one of these holds:
@@ -187,6 +190,9 @@ The config uses ~monitor.mode = true~, so the canceller takes the default sink's
 |           | ~cmacs-whisper-download-vad-model~    | Fetch the Silero VAD model                                |
 
 * Customization
+
+- ~cmacs-voice-loop-use-keyword-spotter~ (t) :: wake through the keyword spotter when =wake= has one.
+- ~cmacs-voice-loop-kws-grace~ (0.6) :: seconds after an utterance ends that a spotter hit still addresses it.
 
 | Variable                                     | Default                  | Purpose                                              |
 |----------------------------------------------+--------------------------+------------------------------------------------------|

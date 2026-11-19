@@ -139,7 +139,8 @@ CMACS_DBUS_IFACE_DECL (video)
 #ifdef HAVE_CMACS_AUDIO
 CMACS_DBUS_IFACE_DECL (audio)
 #endif
-#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
 CMACS_DBUS_IFACE_DECL (speech)
 #endif
 #ifdef HAVE_CMACS_LIBREGNUM

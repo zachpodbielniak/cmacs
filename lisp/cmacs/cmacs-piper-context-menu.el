@@ -59,8 +59,11 @@ Set to nil if you want to keep your existing mouse-3 binding.")
 ;; ── Menu entry ─────────────────────────────────────────────────────
 
 (defun cmacs-piper-context-menu-entry (menu _click)
-  "Append cmacs-piper TTS entries to MENU based on current context."
-  (when (display-graphic-p)
+  "Append cmacs-piper TTS entries to MENU based on current context.
+Steps aside when `cmacs-speech-menu-mode' is on: its Speech menu offers
+the same actions on whichever engine \\[cmacs-speech] chose."
+  (when (and (display-graphic-p)
+             (not (bound-and-true-p cmacs-speech-menu-mode)))
     (define-key-after menu [separator-cmacs-piper] menu-bar-separator)
     (cond
      ((use-region-p)

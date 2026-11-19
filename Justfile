@@ -111,6 +111,7 @@ configure_flags := """
     --with-cmacs-audio
     --with-cmacs-whisper
     --with-cmacs-piper
+    --with-cmacs-sherpa
     --with-cmacs-cintrospect
     --with-cmacs-libregnum
     --with-cmacs-gnuseye

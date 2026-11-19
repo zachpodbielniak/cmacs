@@ -20,6 +20,11 @@
 (require 'cl-lib)
 (require 'url-handlers nil 'noerror)
 
+(declare-function cmacs-speech-model-dirs "cmacs-speech" (backend))
+(declare-function cmacs-speech-models-catalog "cmacs-speech-models" (&rest keys))
+(declare-function cmacs-speech-models-entry "cmacs-speech-models" (backend id))
+(declare-function cmacs-speech-models-download "cmacs-speech-models" (entry &rest keys))
+
 (defgroup cmacs-whisper nil
   "Offline speech-to-text via whisper.cpp."
   :group 'cmacs
@@ -27,10 +32,11 @@
 
 (defcustom cmacs-whisper-models-directory
   (expand-file-name ".local/share/cmacs/whisper-models/" "~")
-  "Directory where `cmacs-whisper-download-model' writes new models.
-This is the user-writable location; system-installed models under
-`cmacs-whisper-system-models-directory' are also searched (see
-`cmacs-whisper-models-search-path')."
+  "The older per-user whisper model directory, still searched.
+New downloads go to the speech model store (`cmacs-speech-models-directory',
+whisper/ inside it) through `cmacs-whisper-download-model'.  System
+models under `cmacs-whisper-system-models-directory' are searched too
+\(see `cmacs-whisper--search-path')."
   :type 'directory
   :group 'cmacs-whisper)
 
@@ -86,23 +92,38 @@ The VAD models live in a different repository from the whisper models
   :type 'string
   :group 'cmacs-whisper)
 
+(defun cmacs-whisper--search-path ()
+  "Every directory whisper models are looked for in, first match wins:
+the speech model store (and its extra trees), then
+`cmacs-whisper-models-search-path', then the system store."
+  (let ((store (and (require 'cmacs-speech nil t)
+                    (cmacs-speech-model-dirs 'whisper))))
+    (delete-dups (append (butlast store) cmacs-whisper-models-search-path
+                         (last store)))))
+
+(defun cmacs-whisper--download-dir ()
+  "Where downloaded whisper models go: the speech model store."
+  (if (require 'cmacs-speech nil t)
+      (car (cmacs-speech-model-dirs 'whisper))
+    cmacs-whisper-models-directory))
+
 (defun cmacs-whisper-model-path (&optional name)
   "Resolve NAME (or `cmacs-whisper-default-model') to an absolute path.
-Walks `cmacs-whisper-models-search-path' and returns the first
-existing match.  If none is found, returns the path under
-`cmacs-whisper-models-directory' (the download target)."
+Walks `cmacs-whisper--search-path' and returns the first existing
+match.  If none is found, returns the path in the store, where a
+download would put it."
   (let ((basename (or name cmacs-whisper-default-model)))
     (or (cl-some
          (lambda (dir)
            (let ((p (expand-file-name basename dir)))
              (and (file-exists-p p) p)))
-         cmacs-whisper-models-search-path)
-        (expand-file-name basename cmacs-whisper-models-directory))))
+         (cmacs-whisper--search-path))
+        (expand-file-name basename (cmacs-whisper--download-dir)))))
 
 (defun cmacs-whisper-list-models ()
   "Return basenames of every .bin model visible via the search path."
   (let ((seen (make-hash-table :test 'equal)))
-    (dolist (dir cmacs-whisper-models-search-path)
+    (dolist (dir (cmacs-whisper--search-path))
       (when (file-directory-p dir)
         (dolist (f (directory-files dir))
           (when (string-match-p "\\.bin\\'" f)
@@ -111,20 +132,28 @@ existing match.  If none is found, returns the path under
 
 ;;;###autoload
 (defun cmacs-whisper-download-model (model &optional base-url)
-  "Download MODEL (basename) from `cmacs-whisper-download-base-url'.
-Optional BASE-URL fetches from somewhere else instead."
+  "Download MODEL (basename) into the speech model store.
+Goes through `cmacs-speech-models-download': in the background with
+progress and a checksum when called interactively, and waiting for the
+file (while Emacs keeps redisplaying) when called from Lisp, which is
+what callers that use the model straight after expect.  Optional
+BASE-URL fetches from somewhere other than the catalog's source.
+Returns the installed path."
   (interactive
-   (list (read-string "Model basename (e.g. ggml-base.en.bin): "
-                      cmacs-whisper-default-model)))
-  (unless (file-directory-p cmacs-whisper-models-directory)
-    (make-directory cmacs-whisper-models-directory t))
-  (let* ((url  (concat (or base-url cmacs-whisper-download-base-url) model))
-         (dest (expand-file-name model cmacs-whisper-models-directory)))
+   (list (completing-read "Model: "
+                          (and (require 'cmacs-speech-models nil t)
+                               (mapcar (lambda (m) (plist-get m :id))
+                                       (cmacs-speech-models-catalog :backend 'whisper)))
+                          nil nil cmacs-whisper-default-model)))
+  (require 'cmacs-speech-models)
+  (let ((dest (expand-file-name model (cmacs-whisper--download-dir))))
     (when (file-exists-p dest)
       (user-error "Model already present: %s" dest))
-    (message "cmacs-whisper: downloading %s ..." url)
-    (url-copy-file url dest)
-    (message "cmacs-whisper: wrote %s" dest)
+    (cmacs-speech-models-download
+     (or (and (null base-url) (cmacs-speech-models-entry 'whisper model))
+         (list :id model :backend 'whisper
+               :url (concat (or base-url cmacs-whisper-download-base-url) model)))
+     :wait (not (called-interactively-p 'any)))
     dest))
 
 ;;;###autoload

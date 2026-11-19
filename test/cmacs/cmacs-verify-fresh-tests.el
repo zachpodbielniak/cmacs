@@ -134,6 +134,15 @@ build/release/obj/%.o: src/%.c
      "src/CMakeFiles/whisper.dir/whisper.cpp.o: \\\n @ROOT@/deps/whisper.cpp/include/whisper.h\n")
     ("deps/whisper.cpp/build/src/CMakeFiles/whisper.dir/whisper.cpp.o" 150 "")
     ("deps/whisper.cpp/build/src/libwhisper.a" 100 "")
+    ;; cmake with an archive output directory and an install step
+    ;; (sherpa-onnx): build/lib/libX.a is made from a CMakeFiles/X.dir
+    ;; elsewhere in the tree.  The installed copy carries a whole-second
+    ;; mtime (`cmake --install' truncates), so it looks older than the
+    ;; object here and must not be reported.
+    ("deps/sherpa-onnx/build/CMakeCache.txt" 300 "")
+    ("deps/sherpa-onnx/build/sherpa-onnx/c-api/CMakeFiles/sherpa-onnx-c-api.dir/c-api.cc.o" 150 "")
+    ("deps/sherpa-onnx/build/lib/libsherpa-onnx-c-api.a" 100 "")
+    ("deps/sherpa-onnx/build/install/lib/libsherpa-onnx-c-api.a" 200 "")
     ;; Lisp.  lisp/Makefile is the stand-in --fix rebuilds through.
     ("lisp/Makefile" 300 "%.elc: %.el\n\ttouch $@\n")
     ("lisp/cmacs/cmacs-foo.el" 300 "")
@@ -209,7 +218,7 @@ younger than everything it is built from, so the tree is fresh.")
       (should (equal (car res) 0))
       (should (string-match-p "fresh (" (cdr res)))
       (dolist (class '("src-link" "api-so" "bacon-modules" "gowl-release"
-                       "gowl-modules-release" "dep-bacon" "dep-whisper"
+                       "gowl-modules-release" "dep-bacon" "dep-whisper" "dep-sherpa"
                        "lisp-elc" "test-elc"))
         (should (string-match-p
                  (format "^fresh %s: [1-9]" (regexp-quote class))
@@ -246,6 +255,9 @@ younger than everything it is built from, so the tree is fresh.")
 (cmacs-verify-fresh-tests--deftouch cmake-object "dep-whisper"
                                     "deps/whisper.cpp/build/src/CMakeFiles/whisper.dir/whisper.cpp.o"
                                     "deps/whisper.cpp/build/src/libwhisper.a")
+(cmacs-verify-fresh-tests--deftouch cmake-output-dir "dep-sherpa"
+                                    "deps/sherpa-onnx/build/sherpa-onnx/c-api/CMakeFiles/sherpa-onnx-c-api.dir/c-api.cc.o"
+                                    "deps/sherpa-onnx/build/lib/libsherpa-onnx-c-api.a")
 (cmacs-verify-fresh-tests--deftouch lisp-elc "lisp-elc" "lisp/cmacs/cmacs-foo.el"
                                     "lisp/cmacs/cmacs-foo.elc")
 

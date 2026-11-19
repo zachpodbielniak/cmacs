@@ -11,6 +11,8 @@ worker so the Emacs main thread never blocks.  Completion is
 delivered back to the main thread via
 ~g_main_context_invoke (cmacs_glib_get_context())~.
 
+whisper.cpp is one of three speech engines; [[file:cmacs-speech.org][cmacs-speech]] decides, per component and per feature, whether recognition and voice activity go to whisper or to [[file:cmacs-sherpa.org][sherpa-onnx]].  With nothing configured, =auto= keeps everything that used whisper on whisper -- it is still the best engine for batch transcription (exact segment timestamps, context carried past 30 s).  whisper has no streaming recognizer or keyword spotter, so =stt-stream= and =wake= are only ever sherpa; where they are not available, dictation and the voice loop fall back to their whisper behaviour.
+
 * Requirements
 
 ** Build flags
@@ -57,15 +59,13 @@ Debian).  ~install-deps~ pulls it in via ~PKGS_AUDIO~.
 
 ** Models
 
-Models are looked up via ~cmacs-whisper-models-search-path~:
+Models are looked up, first match wins, in:
 
-1. ~~/.local/share/cmacs/whisper-models/~ — user dir, writable by
-   ~M-x cmacs-whisper-download-model~.
-2. ~/usr/share/cmacs/whisper-models/~ — system dir, populated by
-   container image builds (see ~build-container~).  The bundled
-   default English model (~ggml-base.en.bin~, 142 MB) lands here.
+1. the speech model store, =~/.local/share/cmacs/speech-models/whisper/= (~cmacs-speech-models-directory~), and the trees in ~cmacs-speech-models-extra-directories~ — where ~M-x cmacs-whisper-download-model~ and ~M-x cmacs-speech~ put new models;
+2. ~cmacs-whisper-models-search-path~: the older =~/.local/share/cmacs/whisper-models/= and =/usr/share/cmacs/whisper-models/= (populated by container image builds; the bundled =ggml-base.en.bin=, 142 MB, lands there);
+3. the system store, =/usr/share/cmacs/speech-models/whisper/=.
 
-User-installed models take precedence.  Override the bundled model
+User-installed models take precedence.  ~cmacs-whisper-download-model~ goes through the store's downloader ([[file:cmacs-speech.org::*Downloads][cmacs-speech: downloads]]): resumable, checksummed, in the background when called interactively, and waiting for the file when called from Lisp.  Override the bundled model
 at image-build time:
 
 #+begin_src bash
@@ -182,7 +182,11 @@ The full arities are:
 
 * Live dictation (cmacs-whisper-dictate)
 
-~M-x cmacs-whisper-dictate~ (bound to ~C-c v d~) toggles dictation into the current buffer.  Speech is cut into ~cmacs-whisper-dictate-window-seconds~ (3 s) windows; each is transcribed and inserted at point with ~undo-boundary~ between windows.  Windows go to whisper one at a time, so text lands in the order it was said, and a window with nothing above the energy floor is not sent at all (no ~[BLANK_AUDIO]~ in your prose).
+~M-x cmacs-whisper-dictate~ (bound to ~C-c v d~) toggles dictation into the current buffer.
+
+*With a streaming recognizer.*  When =stt-stream= resolves to an engine for =dictate= (a sherpa streaming zipformer installed, or chosen in ~M-x cmacs-speech~) and ~cmacs-whisper-dictate-streaming~ is non-nil (the default), there are no windows: the words appear dimmed while you speak, each utterance becomes final the moment the recognizer sees you pause, and the final text is punctuated by the =punctuate= component when there is one, else put in sentence case.  The rest of this section describes the whisper path, which is what you get otherwise.
+
+Speech is cut into ~cmacs-whisper-dictate-window-seconds~ (3 s) windows; each is transcribed and inserted at point with ~undo-boundary~ between windows.  Windows go to whisper one at a time, so text lands in the order it was said, and a window with nothing above the energy floor is not sent at all (no ~[BLANK_AUDIO]~ in your prose).
 
 *Insert as you talk.*  Every ~cmacs-whisper-dictate-partial-interval~ (1 s; nil to turn off) the window in progress is re-transcribed and shown, dimmed, at the insertion point as an overlay ~after-string~ — nothing reaches the buffer or its undo list until the window is final, when the real text replaces it.
 
@@ -216,6 +220,7 @@ Add your own by ~customize-variable~ or via DSL.
 | ~cmacs-whisper-dictate-window-seconds~ | 3.0 | Sliding window length |
 | ~cmacs-whisper-dictate-auto-punctuate~ | t   | Capitalise + spacing |
 | ~cmacs-whisper-dictate-command-words~ | (see above) | Voice command map |
+| ~cmacs-whisper-dictate-streaming~ | t | Use a streaming recognizer when one is configured |
 
 * Defcustoms (general)
 
@@ -242,6 +247,8 @@ and ~--with-cmacs-whisper~ are built.
 
 Returns the transcript text in the result content block.  Related
 read-only tools: ~list_whisper_models~, ~list_voices~.
+
+The tool goes through [[file:cmacs-speech.org::*RPC surfaces][cmacs-speech]], so it uses whichever engine is chosen for the =rpc= feature, and takes =backend=, =model= and =diarize= besides.
 
 * Troubleshooting
 

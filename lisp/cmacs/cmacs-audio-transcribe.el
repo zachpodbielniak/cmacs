@@ -20,25 +20,33 @@
   :group 'cmacs-audio)
 
 (defun cmacs-audio-transcribe-block-at (beg path)
-  "Transcribe WAV at PATH and insert a folded transcript block after BEG."
-  (when (and (featurep 'cmacs-whisper)
-             cmacs-audio-transcribe-auto
-             (fboundp 'cmacs-whisper-transcribe-async))
-    (cmacs-whisper-transcribe-async
-     (cmacs-whisper-model-path) path
-     (lambda (result)
-       (let ((text (cdr (assq :text result))))
-         (when text
-           (save-excursion
-             (goto-char beg)
-             (forward-line)
-             (insert
-              (format "#+BEGIN_AUDIO_TRANSCRIPT\n%s\n#+END_AUDIO_TRANSCRIPT\n"
-                      text))
-             (when (derived-mode-p 'org-mode)
-               (forward-line -2)
-               (when (fboundp 'org-cycle) (org-cycle)))))))
-     cmacs-whisper-language)))
+  "Transcribe WAV at PATH and insert a folded transcript block after BEG.
+The engine is the one \[cmacs-speech] picks for `audio-org'."
+  (when (and cmacs-audio-transcribe-auto
+             (require 'cmacs-speech nil t)
+             (cmacs-speech-can-p 'stt 'audio-org :transcribe))
+    (let ((buf (current-buffer))
+          (beg (copy-marker beg)))
+      (cmacs-speech-transcribe-file
+       path
+       (lambda (result)
+         (let ((text (cdr (assq :text result))))
+           ;; The answer arrives later, from a timer: insert into the
+           ;; buffer that asked, wherever the user is now.
+           (when (and text (buffer-live-p buf))
+             (with-current-buffer buf
+               (save-excursion
+                 (goto-char beg)
+                 (forward-line)
+                 (insert
+                  (format "#+BEGIN_AUDIO_TRANSCRIPT\n%s\n#+END_AUDIO_TRANSCRIPT\n"
+                          text))
+                 (when (derived-mode-p 'org-mode)
+                   (forward-line -2)
+                   (when (fboundp 'org-cycle) (org-cycle))))))
+           (set-marker beg nil)))
+       :feature 'audio-org :component 'stt
+       :language (bound-and-true-p cmacs-whisper-language)))))
 
 (provide 'cmacs-audio-transcribe)
 

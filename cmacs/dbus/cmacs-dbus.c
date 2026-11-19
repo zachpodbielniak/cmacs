@@ -121,7 +121,8 @@ static guint reg_iface_video    = 0;
 #ifdef HAVE_CMACS_AUDIO
 static guint reg_iface_audio    = 0;
 #endif
-#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
 static guint reg_iface_speech   = 0;
 #endif
 #ifdef HAVE_CMACS_LIBREGNUM
@@ -419,7 +420,8 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_audio == 0) return FALSE;
 #endif
 
-#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
   reg_iface_speech = cmacs_dbus_iface_speech_register (
     conn, CMACS_DBUS_ROOT_PATH, error);
   if (reg_iface_speech == 0) return FALSE;
@@ -498,7 +500,8 @@ unregister_modules (GDBusConnection *conn)
     { cmacs_dbus_iface_lrg_unregister (conn, reg_iface_lrg);
       reg_iface_lrg = 0; }
 #endif
-#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER)
+#if defined(HAVE_CMACS_WHISPER) || defined(HAVE_CMACS_PIPER) \
+  || defined(HAVE_CMACS_SHERPA)
   if (reg_iface_speech)
     { cmacs_dbus_iface_speech_unregister (conn, reg_iface_speech);
       reg_iface_speech = 0; }

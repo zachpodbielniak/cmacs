@@ -168,8 +168,12 @@ sent to whisper and `whisper-reply' is the text it answers with."
   "Sentences are synthesised one at a time and a stop drops late ones."
   (let ((pending nil) (played nil)
         (cmacs-voice--tts-queue nil) (cmacs-voice--tts-synth nil)
-        (cmacs-voice--tts-until 0.0) (cmacs-voice-speech-functions nil))
-    (cl-letf (((symbol-function 'cmacs-piper-supported-p) (lambda (&rest _) t))
+        (cmacs-voice--tts-until 0.0) (cmacs-voice-speech-functions nil)
+        ;; Speech goes through `cmacs-speech'; pin it to piper, whose
+        ;; synthesis this test controls.
+        (cmacs-speech-override '((tts piper))))
+    (cl-letf (((symbol-function 'cmacs-speech--ensure-playback) (lambda (_) 1))
+              ((symbol-function 'cmacs-piper-supported-p) (lambda (&rest _) t))
               ((symbol-function 'cmacs-piper-voice-path) (lambda (&rest v) (car v)))
               ((symbol-function 'cmacs-piper--voice-sample-rate) (lambda (_) 16000))
               ((symbol-function 'cmacs-piper--ensure-playback) (lambda (_) 1))

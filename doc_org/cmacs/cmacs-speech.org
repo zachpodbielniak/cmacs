@@ -1,0 +1,304 @@
+#+TITLE: cmacs-speech — one speech layer over whisper.cpp, sherpa-onnx and piper
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+cmacs has three speech engines:
+
+| Engine      | What it does                                                                                                   | Where             |
+|-------------+----------------------------------------------------------------------------------------------------------------+-------------------|
+| whisper.cpp | speech to text (exact segment timestamps, context past 30 s), Silero VAD                                      | [[file:cmacs-whisper.org][cmacs-whisper]]     |
+| sherpa-onnx | streaming recognition, many offline recognizers, keyword spotting, VAD, in-process TTS, diarization, speaker ID, punctuation, language ID, audio tagging, denoising, source separation | [[file:cmacs-sherpa.org][cmacs-sherpa]]      |
+| piper       | text to speech (subprocess)                                                                                    | [[file:cmacs-piper.org][cmacs-piper]]       |
+
+=cmacs-speech= is the layer that decides which engine and which model does each job, so no feature names an engine.  Every voice feature -- the voice loop, dictation, voice commands, AI and brigade voice, VR, macro voice matching, batch transcription, second-brain ingest, the meeting recorder, libreclaw, =#+BEGIN_AUDIO=, MCP, D-Bus, emacsctl, podomation -- goes through it.
+
+Nothing changes until you choose something or install a model: =auto= keeps whisper for recognition and the VAD, and only picks sherpa-onnx for a component once a sherpa model for it is installed.
+
+* Vocabulary
+
+** Components
+
+A *component* is a capability.
+
+| Component    | Meaning                                                   |
+|--------------+-----------------------------------------------------------|
+| =stt=        | speech to text for files and recordings                   |
+| =stt-live=   | speech to text for push-to-talk utterances                |
+| =stt-stream= | streaming recognition: words while you speak              |
+| =wake=       | always-on wake word (keyword spotting)                    |
+| =vad=        | voice activity: when speech starts and stops              |
+| =tts=        | text to speech                                            |
+| =diarize=    | who spoke when                                            |
+| =speaker-id= | enrolled voices: "is this me?"                            |
+| =punctuate=  | punctuation and casing for raw recognizer text            |
+| =lang-id=    | which language is spoken                                  |
+| =audio-tag=  | what sounds are in a clip (speech, music, a dog, ...)     |
+| =denoise=    | speech enhancement                                        |
+| =separate=   | vocals from accompaniment                                 |
+
+** Features
+
+A *feature* is a consumer: =voice-loop=, =dictate=, =voice-commands=, =ai-voice=, =brigade=, =vr=, =gowl-macro=, =transcribe=, =secondbrain=, =meeting=, =libreclaw=, =audio-org=, =rpc= (MCP, D-Bus, emacsctl) and =reader= (read aloud).  A feature uses its component's choice unless it has one of its own -- "dictation uses Parakeet, but batch transcription uses whisper large-v3".
+
+** Backends
+
+An engine adapter registered with ~cmacs-speech-define-backend~: =whisper=, =sherpa=, =piper= ship with cmacs, and anything else can register the same way.
+
+* Where a choice comes from
+
+Highest first:
+
+1. ~cmacs-speech-with-config~ around a call -- programmatic and scoped.
+2. A *session override* made in the settings buffer (=o=); never saved.
+3. *init.el*: ~cmacs-speech-config~ and ~cmacs-speech-set~.
+4. The settings buffer's state file, ~cmacs-speech-state-file~ (=~/.config/cmacs/speech.eld=).
+5. *auto*: the first backend in ~cmacs-speech-auto-preference~ that is built in and has a model installed.
+
+A feature-specific entry beats a component-wide one wherever it was set, so choosing "dictation uses sherpa" in the buffer is honoured even when init.el sets the =stt-live= default -- but anything init.el names explicitly (the same component *and* feature) always wins over the buffer.  The buffer shows those rows locked (🔒) and never writes them.
+
+=M-x cmacs-speech-describe= and every row of the settings buffer say which layer answered.
+
+** Configuring from init.el
+
+#+begin_src emacs-lisp
+;; Batch transcripts and subtitles: whisper large-v3-turbo.
+(cmacs-speech-set 'stt 'whisper :model "ggml-large-v3-turbo-q5_0.bin")
+;; Live words while dictating.
+(cmacs-speech-set 'stt-stream 'sherpa :model "sherpa-onnx-streaming-zipformer-en-2023-06-26")
+;; Wake on two phrases with the keyword spotter.
+(cmacs-speech-set 'wake 'sherpa :model "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
+                  :phrases '("jarvis" "hey cmacs"))
+;; Kokoro voice 3, a little faster.
+(cmacs-speech-set 'tts 'sherpa :model "kokoro-en-v0_19" :speaker 3 :speed 1.1)
+;; Dictation only: Parakeet for push-to-talk utterances.
+(cmacs-speech-set 'stt-live 'sherpa :model "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+                  :feature 'dictate)
+;; One call, one voice:
+(cmacs-speech-with-config '((tts sherpa :model "vits-piper-en_GB-alan-medium"))
+  (cmacs-speech-speak "Cheerio"))
+#+end_src
+
+=:model= is an installed model id (a whisper =.bin=, a piper =.onnx=, or a sherpa model directory name -- see [[*The model store][the model store]]).  Other keys are options the backend reads:
+
+| Option                                | Backend           | Meaning                                       |
+|---------------------------------------+-------------------+-----------------------------------------------|
+| =:language=                           | whisper, sherpa   | language hint                                 |
+| =:threads=                            | whisper           | inference threads                             |
+| =:hotwords=                           | sherpa            | words to bias recognition towards             |
+| =:phrases=                            | sherpa (=wake=)   | wake phrases                                  |
+| =:keyword-score= / =:keyword-threshold= | sherpa (=wake=) | spotter boost and trigger threshold           |
+| =:speaker=                            | sherpa (=tts=)    | speaker id of a multi-speaker voice           |
+| =:speed=                              | sherpa (=tts=)    | 1.0 is normal                                 |
+| =:embedding=                          | sherpa (=diarize=)| which speaker-embedding model clusters turns  |
+| =:num-speakers= / =:threshold=        | sherpa (=diarize=)| known speaker count, or clustering threshold  |
+
+~cmacs-speech-unset~ forgets an init.el choice.
+
+* M-x cmacs-speech (=C-c v ,=)
+
+One buffer for everything speech.  Sections fold with =TAB=; =C-j= / =C-k= move between them; =gr= refreshes; =q= quits; =?= lists every command.
+
+- *Header* :: each engine's version and runtime, the store's size, active downloads.
+- *Components* :: one row per component: engine, model, where the choice came from (=auto → sherpa=, =chosen here=, =🔒 init.el=, =session=) and whether it is ready.  A component with no model shows the smallest good one to download.
+- *Features* :: per-feature choices; rows that inherit are dimmed.
+- *Models* :: the catalog and everything installed, grouped by component: size, languages, a quality and speed rating, live download progress.
+- *Speakers* :: enrolled voices.
+- *Loaded engines* :: sherpa models in memory right now.
+- *Bench* :: the last benchmark.
+
+** Keys
+
+| Key   | Command                              | What it does                                                                                     |
+|-------+--------------------------------------+--------------------------------------------------------------------------------------------------|
+| =RET= | ~cmacs-speech-ui-act~                | on a component: choose engine and model; on a model: use it (installed) or download it          |
+| =s=   | ~cmacs-speech-ui-choose-backend~     | choose the engine (and model); =C-u= for this session only                                       |
+| =m=   | ~cmacs-speech-ui-choose-model~       | choose the model, keeping the engine                                                             |
+| =o=   | ~cmacs-speech-ui-override~           | override for this session only -- works on 🔒 rows                                              |
+| =u=   | ~cmacs-speech-ui-unset-at-point~     | drop the session override, else the saved choice                                                 |
+| =d=   | ~cmacs-speech-ui-download~           | download the model at point                                                                      |
+| =D=   | ~cmacs-speech-ui-delete~             | move an installed model to the trash                                                             |
+| =c=   | ~cmacs-speech-ui-cancel~             | cancel a download (the =.part= stays, so =d= resumes)                                           |
+| =a=   | ~cmacs-speech-ui-audition~           | hear a voice: itself when installed, its published sample when not                               |
+| =x=   | ~cmacs-speech-ui-try~                | try the row -- no microphone needed (below)                                                      |
+| =R=   | ~cmacs-speech-ui-bench~              | run every installed recognizer on one clip; rank by word error rate, show speed                  |
+| =p=   | ~cmacs-speech-ui-enroll~             | enroll a speaker: 8 s from the mic, or =C-u= for a file                                          |
+| =P=   | ~cmacs-speech-ui-forget~             | forget a speaker                                                                                 |
+| ===   | ~cmacs-speech-ui-filter~             | filter models by id, description or language                                                    |
+| =I=   | ~cmacs-speech-ui-toggle-installed~   | installed models only                                                                            |
+| =U=   | ~cmacs-speech-ui-unload~             | unload every sherpa model                                                                        |
+| =i=   | ~cmacs-speech-ui-export~             | the buffer's choices as ~cmacs-speech-set~ forms, to paste into init.el                         |
+
+None of these is an Evil motion; under Doom the buffer starts in motion state with its keys at intercept precedence, like every cmacs dashboard.
+
+** Trying rows without a microphone
+
+=x= is a round trip: the TTS voice says ~cmacs-speech-ui-test-sentence~, and the row under test listens to that audio.
+
+- =stt=, =stt-live= :: shows what it heard, the time it took and the real-time factor.
+- =stt-stream= :: streams the clip in 100 ms pieces; partials go to the echo area, the final lands in the row.
+- =wake= :: says "Jarvis, what time is it?" and reports when the spotter fired.
+- =tts= :: speaks the sentence.
+
+** The bench
+
+=R= synthesises one clip and transcribes it with every installed recognizer of every engine, one at a time so they do not fight for the CPU, then ranks them by word error rate against the sentence that was spoken.  Seconds and RTF (seconds of work per second of audio) show the speed side of the trade.
+
+* The model store
+
+** Where models live
+
+| Path                                                   | What                                                        |
+|--------------------------------------------------------+-------------------------------------------------------------|
+| ~cmacs-speech-models-directory~ (=~/.local/share/cmacs/speech-models/=) | the store: =whisper/=, =piper/=, =sherpa/<id>/= |
+| ~cmacs-speech-models-extra-directories~                | more trees laid out the same way, searched after the store  |
+| =~/.local/share/cmacs/whisper-models/=, =piper-voices/= | the older per-engine directories, still searched           |
+| ~cmacs-speech-system-models-directory~ (=/usr/share/cmacs/speech-models/=) and the older =/usr/share/cmacs/whisper-models/=, =piper-voices/= | what an image ships, searched last |
+
+Downloads go to the store.
+
+** Drop-in models
+
+A model you put there yourself shows up without a catalog entry, marked =local=.  sherpa models are recognised from their files (see [[file:cmacs-sherpa.org::*Model directories][cmacs-sherpa: model directories]]): a transducer's =encoder= / =decoder= / =joiner=, whisper's =encoder= / =decoder=, moonshine's =preprocess.onnx=, a Piper voice's =.onnx= + =tokens.txt= + =espeak-ng-data/=, Kokoro's =voices.bin=, a Silero or TEN VAD file, a pyannote segmentation model, a speaker-embedding =.onnx=, and so on.
+
+** The catalog
+
+=etc/cmacs/speech-models.yaml= is the curated list: id, backend, components, languages, a quality and speed rating, a description, and for voices a listenable sample.  =admin/cmacs-speech-catalog.sh= turns it into =etc/cmacs/speech-models.eld= (Emacs reads that; it has no YAML reader), resolving each entry to its URL, checking it still exists and attaching its byte size and SHA-256 (GitHub release digests for sherpa-onnx; Hugging Face's LFS headers for whisper and piper).  An entry whose source vanished is dropped with a warning rather than shipped as a dead download.  Older sherpa release assets predate GitHub's digests; for those the size is checked and =tar= rejects a truncated archive.
+
+** Downloads
+
+Never automatic -- only =d=, =M-x cmacs-speech-models-get=, or a command you run start one.  Each download is a pipeline of plain processes:
+
+1. =curl -L --fail -C -= into =<dest>.part= (resumable; progress is the =.part='s size)
+2. size and =sha256sum= against the catalog (a mismatch deletes the =.part=)
+3. =tar -x= into =<dest>.staging=
+4. an atomic rename into place
+
+so a crash or a cancel never leaves a half-model where an engine would load it.  ~cmacs-speech-models-download-parallel~ (2) run at once; the rest queue; failures retry ~cmacs-speech-models-retries~ times with back-off, resuming.  Progress shows in the buffer, the mode line (=⬇2 41%=) and, under gowl, a bar toast when one finishes.  ~cmacs-speech-models-url-rewrites~ points downloads at a mirror.
+
+~cmacs-whisper-download-model~ and ~cmacs-whisper-download-vad-model~ go through the store too: in the background when called interactively, waiting for the file when called from Lisp.
+
+** Hooks
+
+- ~cmacs-speech-model-progress-functions~ :: =(ID JOB)= whenever a download changes state.
+- ~cmacs-speech-model-installed-functions~ :: =(ID PATH)= when a model is installed.
+
+* The right-click Speech menu
+
+~cmacs-speech-menu-mode~ (on at startup unless ~cmacs-speech-menu-auto-enable~ is nil) puts one *Speech* entry on the right-click menu.  Its contents depend on what was clicked, and an item is shown only when something can run it now.
+
+- *Text* (a region, or the sentence at point in prose) :: Speak selection / sentence, Speak with voice ▸, Read aloud from here, Save speech as WAV…, Add punctuation, Stop speaking.
+- *An audio or video file* -- in dired, an org =file:= link, a file name at point, the file a buffer visits :: Transcribe ▸ (into a buffer, as an org note, as =.txt=, as =.srt= subtitles, with model ▸), Who spoke? (a speaker-labelled transcript), Identify speaker, Detect language, What's in this audio?, Clean up noise → new file, Split vocals / accompaniment, Ingest into the second brain.
+- *Anywhere* :: Dictate here, Start / Stop the voice loop, Speech settings….
+
+=M-x cmacs-speech-menu= opens it from the keyboard.  It renders as a GTK menu under pgtk and in the engine under =--lrg=.  Add items with ~add-hook~ on ~cmacs-speech-context-menu-functions~; each function gets the click context =(:buffer :point :region :text :file)= and returns [[file:cmacs-imgedit.org][cmacs-media-menu]] item plists.  The older Piper-only entries step aside while it is on.
+
+* What changed in the features
+
+- *Voice loop* :: with a keyword spotter installed (=wake= resolves to sherpa) wake phrases are heard by a 3 MB always-on model, and speech that is not addressed to the loop is never transcribed at all.  A hit during an utterance addresses it; a phrase on its own arms the loop.  ~cmacs-voice-loop-use-keyword-spotter~ turns it off; ~cmacs-voice-loop-kws-grace~ is how late a hit may arrive for the utterance it ended.  Utterances use the =stt-live= engine chosen for =voice-loop= (the loop's own whisper wake and final models when that is whisper).
+- *Dictation* (=C-c v d=) :: with a streaming recognizer (=stt-stream=), words appear while you speak and each utterance is final the moment you pause, then punctuated (=punctuate=) or put in sentence case.  ~cmacs-whisper-dictate-streaming~ nil keeps whisper's windows.
+- *Spoken replies* :: the voice queue speaks through the =tts= engine; sherpa voices stream, so a reply starts after its first sentence instead of the whole paragraph.  Barge-in cancels generation.
+- *Batch transcription* :: ~cmacs-transcribe-diarize~ adds a speaker-labelled =<input>.speakers.org=.  The engine is the =stt= choice for =transcribe=.
+- *libreclaw voice messages* :: transcribed asynchronously (it used to block the editor for the whole message).
+- *=#+BEGIN_AUDIO= transcripts* :: inserted into the buffer that asked, wherever you are when the answer arrives.
+- *Brigade podcasts* :: ~cmacs-piper-synthesize-to-file~ exists now (it was called but never defined), on any TTS engine.
+
+* Programming interface
+
+All asynchronous; callbacks run on the main thread; none signals -- a failure reaches the callback as =((:error . MESSAGE))=.
+
+| Function                                            | Result                                                         |
+|-----------------------------------------------------+----------------------------------------------------------------|
+| ~cmacs-speech-transcribe~ PCM CB =&key= feature component backend model language rate | =((:text . S) (:segments ((:start . MS) (:end . MS) (:text . S)) ...) (:backend . B) (:model . M))= |
+| ~cmacs-speech-transcribe-file~ FILE CB =&rest= keys | the same, for any file ffmpeg reads                             |
+| ~cmacs-speech-stream-open~ =&key= feature on-partial on-final on-error | a stream for ~cmacs-speech-stream-feed~, ~-finish~, ~-close~; nil without a streaming engine |
+| ~cmacs-speech-wake-open~ PHRASES ON-HIT =&key= feature | a spotter for ~cmacs-speech-wake-feed~ / ~-close~, or nil      |
+| ~cmacs-speech-vad-open~ =&key= feature              | a VAD for ~cmacs-speech-vad-feed~ (a speech probability per 512-sample frame) |
+| ~cmacs-speech-synthesize~ TEXT CB =&key= voice backend speed speaker stream feature | =((:pcm . S) (:sample-rate . R))=; STREAM gets sentences as they are made; returns a token for ~cmacs-speech-cancel~ |
+| ~cmacs-speech-speak~ TEXT =&key= voice speed speaker feature | plays it (streamed); ~cmacs-speech-stop-speaking~ stops      |
+| ~cmacs-speech-synthesize-to-file~ TEXT FILE =&optional= CB | a WAV file                                                   |
+| ~cmacs-speech-diarize~ / ~-diarize-file~            | =((:segments ((:start . MS) (:end . MS) (:speaker . N)) ...) (:num-speakers . N))= |
+| ~cmacs-speech-identify-speaker~ / ~-enroll-speaker~ | best matches / the enrollment (persisted)                      |
+| ~cmacs-speech-punctuate~ TEXT CB                    | =((:text . PUNCTUATED))=                                        |
+| ~cmacs-speech-detect-language~, ~-tag-audio~, ~-denoise~, ~-separate~ | language; events; PCM; stems                     |
+| ~cmacs-speech-label-speakers~ TURNS SEGMENTS        | org lines "- *Speaker N* [time] text"                          |
+
+PCM is a unibyte string of S16LE mono samples (16 kHz unless =:rate= says otherwise).  ~cmacs-speech-read-wav~, ~cmacs-speech-write-wav~ and ~cmacs-speech-file-pcm~ convert.
+
+** Synchronous variants
+
+MCP and D-Bus answer a call with its result, on the editor's thread (the compositor's, under =--gowl=).  Waiting there for an asynchronous engine would need a nested main loop inside an RPC dispatch, so ~cmacs-speech-transcribe-now~, ~-transcribe-file-now~, ~-synthesize-now~, ~-run-now~, ~-who-spoke-now~ and ~-synthesize-to-file-wait~ run the engine on the calling thread instead -- what the whisper sync transcription these surfaces always used did.  Interactive code should not use them.
+
+** Events
+
+~cmacs-speech-event-functions~ is called as =(EVENT PLIST)=: =transcription= (=:text :feature :backend :model=), =keyword= (=:keyword :feature=), =speaker= (=:name :score=), =synthesis=.  podomation receives them as =on_transcription_ready=, =on_keyword= and =on_speaker=, and voice commands as =on_voice_command=.
+
+** Writing a backend
+
+#+begin_src emacs-lisp
+(cmacs-speech-define-backend 'my-engine
+  :label "My engine"
+  :components '(stt stt-live)
+  :available-p (lambda (_component) (executable-find "my-asr"))
+  :models (lambda (_component) '("small" "large"))
+  :default-model (lambda (_component) "small")
+  :describe (lambda () "my-asr 1.2")
+  :transcribe (lambda (resolved pcm rate callback)
+                ;; Call CALLBACK with ((:text . S) (:segments ...)).
+                (my-asr-async (plist-get resolved :model) pcm rate callback))
+  :transcribe-now (lambda (resolved pcm rate)
+                    (my-asr-sync (plist-get resolved :model) pcm rate)))
+#+end_src
+
+It then appears in the settings buffer, in =auto= (add it to ~cmacs-speech-auto-preference~), in the menus and on every RPC surface.  The keys a backend may provide are listed in ~cmacs-speech-define-backend~'s docstring.
+
+* RPC surfaces
+
+| Surface                         | Speech                                                                                                       |
+|---------------------------------+--------------------------------------------------------------------------------------------------------------|
+| MCP                             | =transcribe= (=backend=, =model=, =language=, =diarize=), =synthesize_speech= (=voice=, =backend=; =output_path= writes a WAV), =speech_components=, =speech_set=, =speech_models=, =speech_diarize=, =speech_tag_audio=, =speech_identify_speaker=, =list_whisper_models=, =list_voices= |
+| D-Bus =org.cmacs.Editor1.Speech= | =Transcribe=, =Synthesize=, =Components=, =SetComponent=, =Models=, =WhoSpoke=, =ListWhisperModels=, =ListVoices= |
+| emacsctl                        | =speech transcribe|who|say|components|set|models|whisper-models|voices=                                      |
+| brigade tools                   | =speech-transcribe=, =speech-who-spoke= (both also on a dired audio file's right-click), =speech-say=        |
+| podomation                      | the =speak= action; =on_transcription_ready=, =on_voice_command=, =on_keyword=, =on_speaker= events         |
+
+A remote caller can choose engines for the session (=speech_set=, =SetComponent=) but never rewrites saved choices, and cannot start downloads.
+
+* Customization
+
+Choices are made with ~cmacs-speech-set~ and the settings buffer; these are the knobs around them.
+
+| Option                                    | Default                                    | Meaning                                                    |
+|-------------------------------------------+--------------------------------------------+------------------------------------------------------------|
+| ~cmacs-speech-config~                     | nil                                        | init.el choices, as ~cmacs-speech-set~ writes them          |
+| ~cmacs-speech-auto-preference~            | per component                              | backend order =auto= tries                                  |
+| ~cmacs-speech-state-file~                 | =~/.config/cmacs/speech.eld=               | the settings buffer's saved choices                         |
+| ~cmacs-speech-ffmpeg-program~             | =ffmpeg=                                   | turns any audio/video file into 16 kHz mono                 |
+| ~cmacs-speech-models-catalog-file~        | =etc/cmacs/speech-models.eld=              | the generated catalog                                      |
+| ~cmacs-speech-models-curl-program~        | =curl=                                     | downloads                                                  |
+| ~cmacs-speech-models-gowl-toast~          | t                                          | a gowl bar toast when a download finishes                  |
+| ~cmacs-speech-sherpa-models-directories~  | nil                                        | more directories of sherpa models, one model per entry     |
+| ~cmacs-speech-sherpa-default-models~      | nil                                        | preferred sherpa model per component, =((COMPONENT . ID))= |
+| ~cmacs-speech-sherpa-prefer-int8~         | t                                          | int8 model files where both exist                          |
+| ~cmacs-speech-sherpa-threads~             | nil (half the cores, at most 4)            | inference threads per model                                |
+| ~cmacs-speech-sherpa-provider~            | ="cpu"=                                    | onnxruntime execution provider                             |
+| ~cmacs-speech-sherpa-cache-limit~         | 6                                          | sherpa models kept loaded; the least recently used idle one goes |
+| ~cmacs-speech-sherpa-speakers-file~       | =~/.local/share/cmacs/speech/speakers.eld= | enrolled voiceprints                                       |
+| ~cmacs-speech-ui-folded~                  | features, speakers, engines, bench         | sections folded when the buffer opens                      |
+| ~cmacs-speech-menu-media-extensions~      | common audio and video                     | what the Speech menu treats as a media file                |
+
+Commands outside the buffer: ~cmacs-speech-models-get~ (download a catalog model), ~cmacs-speech-models-cancel~, ~cmacs-speech-sherpa-unload-all~, ~cmacs-speech-describe~, ~cmacs-speech-menu~, and the transient ~cmacs-speech-ui-dispatch~ (=?= in the buffer).
+
+* Testing
+
+| Suite                                           | Covers                                                                        |
+|-------------------------------------------------+-------------------------------------------------------------------------------|
+| =test/cmacs/cmacs-speech-tests.el=              | resolution and precedence, the state file, dispatch, the synchronous layer, voice and dictation routing |
+| =test/cmacs/cmacs-speech-models-tests.el=       | the catalog (and its drift against the seed), downloads end to end over =file://= |
+| =test/cmacs/cmacs-speech-ui-tests.el=           | the settings buffer, its Evil key rules, export                              |
+| =test/cmacs/cmacs-speech-menu-tests.el=         | menu contents per context, speaker labelling                                  |
+| =test/cmacs/cmacs-sherpa-tests.el=              | the engine, on real models when installed                                    |
+| =test/cmacs/cmacs-speech-doc-tests.el=          | every public symbol is documented in both manuals                             |
+
+=admin/cmacs-headless.sh= runs a scenario in a private, invisible gowl and screenshots it -- =test/cmacs/headless/speech-settings.el= and =speech-menu.el= drive the settings buffer and the menus; see [[file:build.org::*Headless runs][build.org: headless runs]].

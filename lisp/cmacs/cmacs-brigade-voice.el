@@ -237,7 +237,7 @@ to reach for when adding your own."
             (err (message "cmacs-brigade-voice: %s" err))
             ((string-empty-p text)
              (message "cmacs-brigade-voice: heard nothing"))
-            (t (funcall cb text)))))))))
+            (t (funcall cb text))))) :feature 'brigade))))
 
 
 ;;;; Dictating a task

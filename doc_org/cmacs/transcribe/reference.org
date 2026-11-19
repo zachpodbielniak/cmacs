@@ -22,6 +22,9 @@ them per session without mutating the customs.
 | =cmacs-transcribe-ffmpeg-extra-args= | =nil=  | Extra ffmpeg args for the extraction command.              |
 | =cmacs-transcribe-sha256-program=   | =sha256sum= | Streaming SHA-256 program for =:file-hash=.            |
 | =cmacs-transcribe-compute-file-hash= | =t=    | Compute a per-input SHA-256 for the hook plist.            |
+| =cmacs-transcribe-diarize=          | =nil=   | Also write =<input>.speakers.org=: who spoke when, labelled. |
+
+*Engine.*  The recognizer is the =stt= choice for the =transcribe= feature in [[file:../cmacs-speech.org][cmacs-speech]].  When that is whisper (the =auto= default) the model, language and thread options above apply exactly as before; another engine (a sherpa recognizer) gets the same result shape, with =cmacs-transcribe-language= passed through.  =cmacs-transcribe-diarize= needs a =diarize= model (sherpa: a pyannote segmentation model plus a speaker-embedding model) and is skipped silently without one; the speaker labels are matched to the transcript's segments by overlap and numbered by first appearance.
 
 The ffmpeg *backend* (podman / docker / host, the container image, hwaccel
 device) is not re-declared here: the conversion pre-pass reuses =cmacs-transcode='s
