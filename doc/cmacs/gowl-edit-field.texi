@@ -1,0 +1,464 @@
+@c gowl-edit-field.texi --- the Edit Any Text Field chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node Gowl Edit Field
+@chapter Gowl Edit Field: Edit Any Text Field in Emacs
+
+@cindex edit field
+@cindex text field, editing in Emacs
+@cindex text-input-v3
+@cindex gowl, text fields
+@findex cmacs-gowl-edit-field
+
+With the keyboard in a text field of @emph{any} window---a browser's
+comment box, a chat client, a form in some settings dialog---one key
+pops that field's text into an Emacs buffer.  @kbd{C-c C-c} puts the
+edited text back in the field; @kbd{C-c C-k} gives up.  In between, all
+of cmacs applies to text that lives in somebody else's program: evil,
+snippets, spell checking, the AI region commands.
+
+It needs @command{cmacs --gowl}.  Emacs has to @emph{be} the
+compositor, because only the compositor sits between an application and
+its input method, and that is where the text is read and written.
+Under plain pgtk the command says so and does nothing.
+
+@lisp
+(add-hook 'cmacs-gowl-mode-hook #'cmacs-gowl-edit-field-setup)
+@end lisp
+
+@vindex cmacs-gowl-edit-field-key
+@findex cmacs-gowl-edit-field-setup
+That binds @code{cmacs-gowl-edit-field-key} (@kbd{Super+Ctrl+e}) in the
+compositor.  Nothing is bound until @code{cmacs-gowl-edit-field-setup}
+is called.  (@kbd{Super+e} is the bar's AI rewrite and
+@kbd{Super+Alt+e} is gabbrev's search, hence the chord.)
+
+Three things about it, stated plainly:
+
+@itemize @bullet
+@item
+@strong{It only ever replaces what it read.}  The edit sent back is
+``delete these bytes around the cursor, insert this'', measured against
+the text the application reported.  Text Emacs never saw cannot be
+damaged by a commit.
+@item
+@strong{It cannot always see the whole field.}  The protocol caps what
+an application reports, and some widgets report less than that.  The
+header line says how much you are editing before you type anything.
+@item
+@strong{It leaves password fields alone.}  A field the application
+marks as a password or a PIN is refused; so is every window on
+@code{cmacs-gowl-edit-field-deny}.
+@end itemize
+
+@section Using it
+
+@enumerate
+@item
+Put the keyboard in a text field in any window.
+@item
+Press @kbd{Super+Ctrl+e}.  A small floating Emacs frame opens over that
+window with the field's text in it, point where the field's cursor was,
+and the field's selection as the region.
+@item
+Edit.
+@item
+@kbd{C-c C-c} (or @kbd{C-x #}, as for @code{server-edit}) commits;
+@kbd{C-c C-k} aborts.
+@end enumerate
+
+@table @kbd
+@item C-c C-c
+@itemx C-x #
+@findex cmacs-gowl-edit-field-finish
+@code{cmacs-gowl-edit-field-finish}: put the text back in the field and
+close the editor.
+@item C-c C-k
+@findex cmacs-gowl-edit-field-abort
+@code{cmacs-gowl-edit-field-abort}: close the editor and leave the
+field as it was (asks first if there are edits).
+@item C-c M-w
+@findex cmacs-gowl-edit-field-copy
+@code{cmacs-gowl-edit-field-copy}: copy the text to the kill ring and
+close---for when it cannot go back.
+@item C-c C-w
+@findex cmacs-gowl-edit-field-fetch-whole
+@code{cmacs-gowl-edit-field-fetch-whole}: fetch the @emph{whole} field
+through the clipboard, replacing the buffer.
+@end table
+
+@vindex cmacs-gowl-edit-field-major-mode
+@vindex cmacs-gowl-edit-field-mode-alist
+The buffer is named @file{*edit-field: @var{title}*} after the window.
+Its major mode is @code{cmacs-gowl-edit-field-major-mode}
+(@code{text-mode}), unless @code{cmacs-gowl-edit-field-mode-alist}
+names another for the application: by default chat clients get
+@code{markdown-mode} when that is installed.
+@code{cmacs-gowl-edit-field-mode} is the minor mode that carries the
+keys, with the usual hook.
+
+Pressing the key again in a window that is already being edited shows
+that editor rather than starting a second one.
+
+@section The editor window
+
+The buffer is shown in a frame of its own, not in a window of the main
+frame, and that frame @strong{floats}: the tiled layout does not reflow
+when the editor opens and does not reflow when it closes.  Toggling
+layouts does not tile it either.
+
+@vindex cmacs-gowl-edit-field-frame-name
+This is done with a gowl window rule, not from Lisp.  The frame is
+named @code{cmacs-gowl-edit-field-frame-name}
+(@samp{cmacs-edit-field}), which is its window title, and before the
+frame is made a rule is installed that floats and centres windows with
+exactly that title.  Window rules are applied by the
+compositor @emph{before} a window's first placement.  The Lisp hook
+@code{cmacs-gowl-client-pre-map-functions} cannot do this: it runs on
+the Lisp thread, after the window has been placed once, so a window it
+floats visibly jumps and the tiles shuffle twice.
+
+Once the window exists the frame is centred over the window it is
+editing, kept inside the output's usable area, and given the keyboard.
+If the rule did not apply (an old build, or a title the toolkit set
+late) the window is floated at that point instead---one visible jump
+rather than none.
+
+The rule is reinstalled each time an editor opens, removing any earlier
+copy first: @code{cmacs-gowl-float-rules} clears every rule when it is
+reapplied.
+
+@table @code
+@item cmacs-gowl-edit-field-frame-width
+Columns (default 100).
+@item cmacs-gowl-edit-field-frame-height
+Lines (default 24).
+@item cmacs-gowl-edit-field-frame-minibuffer
+@code{t} (the default): a minibuffer of its own.  @code{nil}: the main
+frame's.
+@item cmacs-gowl-edit-field-frame-parameters
+Extra frame parameters; they win over the defaults, except @code{name}.
+@item cmacs-gowl-edit-field-frame-name
+The frame's name and title, which the float rule matches (default
+@samp{cmacs-edit-field}).
+@item cmacs-gowl-edit-field-evil-insert
+Start in evil's insert state (default @code{t}).
+@end table
+
+The frame has no tab bar, tool bar or menu bar, and carries the frame
+parameter @code{cmacs-edit-field}, so other code can tell it from a
+real frame.
+
+Closing the editor window by hand counts as giving up on the commit,
+but not on the text: a buffer with edits in it is kept, and a message
+names it.
+
+@section How the text travels
+
+An application with a text field describes it to the compositor over
+the @code{text-input-v3} protocol, so that an input method can work:
+the text around the cursor, where the cursor is, what is selected.
+gowl already relays this between applications and input methods.
+Editing a field in Emacs uses the same state:
+
+@itemize @bullet
+@item
+@strong{Reading} (@code{gowl-text-field-read}) takes the surrounding
+text the application reported, with the cursor and the other end of the
+selection.
+@item
+@strong{Writing} (@code{gowl-text-field-replace}) answers the way an
+input method does: one @code{delete_surrounding_text} reaching both
+ways from the cursor and one @code{commit_string}, applied by the
+application together.
+@end itemize
+
+No keys are typed and the clipboard is not touched.  Any character
+arrives intact, whatever the keyboard layout, and the application sees
+one edit it can undo as one.
+
+When no input method (fcitx5, ibus) is running, an application's text
+input is not active: gowl only enters text inputs when there is an
+input method behind them.  For a read or an edit it @emph{borrows} one:
+it enters the focused window's text input, the application answers by
+enabling it and describing its field, gowl reads or edits, and leaves
+again.  An application that has not answered within 250 ms had no text
+field with the focus.
+
+@vindex cmacs-gowl-edit-field-focus-timeout
+Because an edit is measured from the cursor, the commit first gives the
+keyboard back to the window being edited and waits for the focus to
+land---with the compositor's focus hook and a deadline
+(@code{cmacs-gowl-edit-field-focus-timeout}, one second), never by
+blocking.
+
+@subsection Only the difference is sent
+
+The edit is the smallest one that turns the old text into the new: text
+the two share at the start and at the end is left alone, as far as the
+cursor allows (a deletion is counted from the cursor, so the kept head
+cannot reach past it nor the kept tail start before it).  Changing one
+word of a long comment sends one word.
+
+@subsection A field that changed while you were editing
+
+@vindex cmacs-gowl-edit-field-verify
+With @code{cmacs-gowl-edit-field-verify} (the default) the field is
+read again just before it is written.  If it still holds what was read,
+the edit is measured from wherever its cursor is @emph{now}.  If it
+changed---you typed in it, the page rewrote it---nothing is sent: the
+header line says the field changed, and a second @kbd{C-c C-c}
+overwrites what is there now, knowingly.
+
+@subsection When the commit does not arrive
+
+If the application does not take the edit, or the window will not take
+the keyboard, the editor stays open with the reason in its header line,
+and the keyboard comes back to it.  Nothing is lost; @kbd{C-c M-w} puts
+the text on the kill ring.
+
+If the window being edited disappears, the buffer is kept, the header
+line says the window is gone, and committing offers to copy the text to
+the kill ring.
+
+@section How much of the field you get
+
+Two limits, neither of which cmacs can lift:
+
+@itemize @bullet
+@item
+@strong{The protocol's cap.}  text-input-v3 limits surrounding text to
+4000 bytes.  An application with more in its field sends a window
+around the cursor.  Text of 3900 bytes or more is therefore treated as
+a window, and the header line says @samp{editing the @var{n} bytes
+around the cursor, not the whole field}.  Committing replaces that
+window and nothing else.
+@item
+@strong{The widget's choice.}  Text under the cap is ``all the
+application chose to send''.  For a single-line entry that is the
+field.  Some multi-line widgets report only the paragraph around the
+cursor.  The header line then reads @samp{the text the application
+reported}: it is sound to edit and commit, it is just not the whole
+field.
+@end itemize
+
+@vindex cmacs-gowl-edit-field-partial-action
+In both cases @kbd{C-c C-w} fetches the whole field through the
+clipboard instead (see below), and
+@code{cmacs-gowl-edit-field-partial-action} set to @code{fallback} does
+that automatically for a read that hit the cap.
+
+@section The clipboard fallback
+
+@vindex cmacs-gowl-edit-field-fallback
+Windows with no text-input-v3 at all---X11 programs under Xwayland,
+some toolkits---cannot be read as above.  With
+@code{cmacs-gowl-edit-field-fallback} set to @code{clipboard} (the
+default) they are reached this way instead:
+
+@enumerate
+@item
+The user's clipboard is remembered, and a marker is put on it.
+@item
+@kbd{Ctrl+A} and @kbd{Ctrl+C} are sent to the window
+(@code{gowl-text-field-send-key}: by keysym, so they are those chords
+in any keyboard layout).
+@item
+If the clipboard holds something other than the marker a moment later,
+that is the field's text, and the editor opens on it.  The clipboard is
+put back.
+@item
+On commit: the new text goes on the clipboard, @kbd{Ctrl+A} and
+@kbd{Ctrl+V} are sent, and the clipboard is put back once the
+application has had time to paste.
+@end enumerate
+
+It is @strong{best effort}, and the header line says @samp{through the
+clipboard (best effort)}:
+
+@itemize @bullet
+@item
+It trusts the application to treat those three chords the usual way.
+@item
+The selection is visible in the application, and stays selected while
+you edit.
+@item
+Where the cursor was is not known; point starts at the end of the text.
+@item
+An empty field cannot be told from ``no text field'': both copy
+nothing, and both are reported rather than guessed at.
+@item
+Whether the paste happened cannot be confirmed.
+@item
+Text put on the clipboard @emph{from here} is marked transient (the
+@code{x-kde-passwordManagerHint} MIME type, via
+@code{gowl-clipboard-set-transient}), which gowl's clipboard history
+and the kill-ring sync both skip.  The application's own @kbd{Ctrl+C}
+is an ordinary copy and does pass through them.
+@item
+A clipboard that held something other than text (an image) cannot be
+put back.
+@end itemize
+
+@vindex cmacs-gowl-edit-field-fallback-deny
+It is @strong{never} used on a terminal, where @kbd{Ctrl+C} interrupts
+the running program: @code{cmacs-gowl-edit-field-fallback-deny} lists
+terminal app-ids.  Set @code{cmacs-gowl-edit-field-fallback} to
+@code{nil} to have no fallback at all.
+
+@section What is never read
+
+@itemize @bullet
+@item
+@vindex cmacs-gowl-edit-field-deny
+Windows matching @code{cmacs-gowl-edit-field-deny}, a list of regexps
+tried against the app-id and the title, ignoring case.  The default
+covers password managers (KeePassXC, Bitwarden, 1Password, @dots{}),
+password and authentication prompts (pinentry, polkit), the lock
+screen, and any window with ``password'' in its title.  The list
+applies to the text-input path and to the clipboard fallback alike, and
+a denied window is not asked anything.
+@item
+Fields the application itself marks as secret: content purpose
+@code{password} or @code{pin}, or the @code{hidden_text} /
+@code{sensitive_data} hint.  This is checked on what the application
+reports, whatever the deny list says, and such a field is not passed to
+the clipboard fallback either.
+@item
+Emacs's own frames.  There is nothing to pop out of Emacs into Emacs.
+@end itemize
+
+gowl cannot recognise a password field that does not declare itself; a
+window with no text-input-v3 says nothing about its fields.  For those
+the deny list is the only guard, which is why it errs wide.
+
+@section Options
+
+@table @code
+@item cmacs-gowl-edit-field-key
+The compositor key (default @samp{Super+Ctrl+e}); @code{nil} for none.
+@item cmacs-gowl-edit-field-major-mode
+Mode of the editor buffer (default @code{text-mode}).
+@item cmacs-gowl-edit-field-mode-alist
+@code{(@var{app-id-regexp} . @var{mode})}; the first match whose mode
+exists wins.  By default chat clients get @code{markdown-mode}.
+@item cmacs-gowl-edit-field-deny
+Windows never read or written.
+@item cmacs-gowl-edit-field-fallback
+@code{clipboard} (the default) or @code{nil}.
+@item cmacs-gowl-edit-field-fallback-deny
+App-ids the fallback is never used on (terminals).
+@item cmacs-gowl-edit-field-partial-action
+A read that hit the cap: edit the @code{window} (the default), or use
+the @code{fallback}.
+@item cmacs-gowl-edit-field-verify
+Read the field again before writing it (default @code{t}).
+@item cmacs-gowl-edit-field-focus-timeout
+Seconds to wait for a window to take the keyboard (default 1.0).
+@item cmacs-gowl-edit-field-key-delay
+Seconds the fallback gives the application to act on a key (default
+0.15).
+@end table
+
+@section Primitives
+
+Defined in @file{cmacs/gowl/cmacs-gowl-textfield.c}.  Each takes the
+gowl lock for the length of the call.  Offsets and counts are
+@strong{bytes of UTF-8}, because that is what the protocol carries;
+@code{cmacs-gowl-edit-field--byte-to-char} and @code{--char-to-byte}
+convert.
+
+@defun gowl-client-has-text-input-p client
+Non-@code{nil} if @var{client} has a text input enabled, or one that
+can be borrowed (no input method running, @var{client} focused).  The
+second is a promise of an attempt, not of a text field.
+@end defun
+
+@defun gowl-text-field-read client callback
+Read the focused field of @var{client}, which must hold the keyboard.
+Return @code{nil} when no text input reaches @var{client}
+(@var{callback} is then never called), else @code{sent} or
+@code{pending}, and call @var{callback} exactly once, later, with a
+plist: @code{:status} (@code{ok}, @code{no-field},
+@code{no-surrounding}), @code{:text}, @code{:cursor}, @code{:anchor},
+@code{:complete}, @code{:hint}, @code{:purpose}.
+@end defun
+
+@defun gowl-text-field-replace client delete-before delete-after text &optional callback
+Delete that many bytes before and after the cursor and insert
+@var{text}, as one edit.  Return @code{nil}, @code{sent} or
+@code{pending} the same way; @var{callback} gets @code{t} when the edit
+was delivered and @code{nil} when the application did not take it.
+Long @var{text} is sent in pieces.
+@end defun
+
+@defun gowl-text-field-send-key client key &optional modifiers
+Press and release the key that produces the keysym @var{key} in the
+current layout, with @var{modifiers} (@code{control}, @code{shift},
+@code{alt}, @code{super}) held.  Synthetic: no keybind sees it.
+@end defun
+
+@defun gowl-clipboard-set-transient text
+@code{gowl-clipboard-set}, marked ``paste me, do not keep me''.
+@end defun
+
+@subsection Threads and callbacks
+
+gowl answers a read or an edit on its dispatch thread, where Lisp must
+never run (two threads winding one @code{specpdl} is a crash).  So the
+C callback only copies the answer into C strings and queues it for
+Emacs's thread with @code{cmacs_glib_invoke_on_main}.  The Lisp
+callback therefore always runs later, from the main loop---including
+when gowl could answer at once---and never before the primitive
+returns.
+
+Between the call and its answer the Lisp callback lives in a
+@code{staticpro}'d hash table keyed by an integer; that integer is the
+only thing handed to gowl.  A callback leaves the table exactly once:
+when its answer is delivered, when gowl refuses the request, or when
+the compositor stops (@code{gowl-stop} empties the table, since a
+compositor being torn down drops its waiting operations without
+answering).  Ids are never reused, so a late answer finds nothing
+rather than somebody else's callback.
+
+@section Limitations
+
+@itemize @bullet
+@item
+The application must speak text-input-v3 for the direct path: GTK 3 and
+4, Qt 5 and 6, Firefox, Chromium and Electron with Wayland IME enabled.
+Others get the clipboard fallback.
+@item
+With an input method running, a field is only reachable while the
+application has its text input enabled, which is whenever a text field
+has the focus.
+@item
+Only one read or edit waits on a window at a time.
+@item
+A long commit goes in several messages (a Wayland message is at most
+4096 bytes), each after the application has acknowledged the last.  An
+application that stops answering part way has part of the text; the
+editor stays open and says so.
+@item
+While an editor frame is open it is one of Emacs's own top-level
+windows.  Code that looks for ``the Emacs window'' as the first
+non-embedded client (@code{gowl-embed--find-emacs-client}) can find the
+editor instead.
+@end itemize
+
+@section Files
+
+@table @file
+@item lisp/cmacs/cmacs-gowl-edit-field.el
+The command, the editor buffer and frame, the fallback.
+@item cmacs/gowl/cmacs-gowl-textfield.c
+The primitives and the callback table.
+@item deps/gowl/src/core/gowl-text-input.c
+@code{gowl_compositor_read_text_field()} and
+@code{gowl_compositor_replace_text()}.
+@item deps/gowl/docs/text-field.org
+The compositor side.
+@item test/cmacs/cmacs-gowl-edit-field-tests.el
+The tests.
+@end table
