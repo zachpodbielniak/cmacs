@@ -185,6 +185,103 @@ build_segments (const SherpaOnnxOfflineRecognizerResult *r,
   return g_variant_builder_end (&b);
 }
 
+/* --- word times --- */
+
+/* Whether TOKEN begins a new word: SentencePiece's marker (U+2581) or
+   the leading space BPE vocabularies use instead.  */
+static gboolean
+token_starts_word (const char *token)
+{
+  return token[0] == ' ' || strncmp (token, "\xe2\x96\x81", 3) == 0;
+}
+
+/* Whether TOKEN is a word by itself: scripts written without spaces
+   (CJK and their neighbours, from U+2E80 up) come one character to a
+   token and carry no word marker.  */
+static gboolean
+token_is_ideograph (const char *token)
+{
+  gunichar c = g_utf8_get_char_validated (token, -1);
+  return c != (gunichar) -1 && c != (gunichar) -2
+    && c >= 0x2E80 && c != 0x2581;
+}
+
+/* Add the word in TEXT, spoken from START_S and whose last token was
+   emitted at LAST_S, to B.  A token's timestamp is when it began, so
+   the word's end is that plus the token's duration when the model gives
+   one, else a typical 300 ms -- and never past the next word's start
+   (NEXT_S, negative: none).  LIMIT_MS, when positive, is the end of the
+   audio on the same axis as the token times; OFFSET_MS then moves the
+   result onto the caller's axis.  */
+static void
+add_word (GVariantBuilder *b, GString *text, float start_s, float last_s,
+          float last_dur_s, float next_s, gint64 offset_ms, gint64 limit_ms)
+{
+  g_autofree char *w = g_strdup (text->str);
+  float end_s = last_s + (last_dur_s > 0.0f ? last_dur_s : 0.3f);
+  gint64 start_ms, end_ms;
+
+  g_string_truncate (text, 0);
+  if (!*tidy (w))
+    return;
+  if (next_s >= 0.0f && end_s > next_s)
+    end_s = next_s;
+  if (end_s < start_s)
+    end_s = start_s;
+  start_ms = (gint64) (start_s * 1000.0f);
+  end_ms = (gint64) (end_s * 1000.0f);
+  if (limit_ms > 0 && end_ms > limit_ms)
+    end_ms = limit_ms;
+  if (end_ms < start_ms)
+    end_ms = start_ms;
+  g_variant_builder_add (b, "(sxx)", w, offset_ms + start_ms,
+                         offset_ms + end_ms);
+}
+
+/* The words of a token-level result with their times: an array of
+   (WORD, START-MS, END-MS), which reaches Lisp as a list of
+   (WORD START-MS END-MS).  Subword pieces are merged into words;
+   punctuation, having no word marker, stays on the word it follows.
+   NULL when the model gave no token timestamps -- the caller then
+   leaves the entry out and the result is exactly what it always was.
+
+   This is what lets a word be matched to something that happened while
+   it was being said (lisp/cmacs/cmacs-deixis.el).  */
+static GVariant *
+build_words (const char *const *tokens, const float *timestamps,
+             const float *durations, int count, gint64 offset_ms,
+             gint64 limit_ms)
+{
+  GVariantBuilder b;
+  g_autoptr (GString) word = NULL;
+  float start = 0.0f, last = 0.0f, last_dur = 0.0f;
+  gboolean prev_ideograph = FALSE;
+
+  if (!tokens || !timestamps || count <= 0)
+    return NULL;
+  word = g_string_new (NULL);
+  g_variant_builder_init (&b, G_VARIANT_TYPE ("a(sxx)"));
+  for (int i = 0; i < count; i++)
+    {
+      const char *tok = tokens[i] ? tokens[i] : "";
+      gboolean ideograph = token_is_ideograph (tok);
+
+      if (word->len
+          && (token_starts_word (tok) || ideograph || prev_ideograph))
+        add_word (&b, word, start, last, last_dur, timestamps[i],
+                  offset_ms, limit_ms);
+      if (word->len == 0)
+        start = timestamps[i];
+      append_token (word, tok);
+      last = timestamps[i];
+      last_dur = durations ? durations[i] : 0.0f;
+      prev_ideograph = ideograph;
+    }
+  if (word->len)
+    add_word (&b, word, start, last, last_dur, -1.0f, offset_ms, limit_ms);
+  return g_variant_builder_end (&b);
+}
+
 static void
 dict_insert_nonempty (GVariantDict *d, const char *key, const char *val)
 {
@@ -259,6 +356,14 @@ asr_run (CmacsSherpaJob *job, GError **error)
     {
       g_variant_dict_insert_value (&d, "segments",
                                    build_segments (r, duration_ms));
+      {
+        /* Optional: only token-level models with timestamps have it.  */
+        GVariant *words = build_words (r->tokens_arr, r->timestamps,
+                                       r->durations, r->count, 0,
+                                       duration_ms);
+        if (words)
+          g_variant_dict_insert_value (&d, "words", words);
+      }
       dict_insert_nonempty (&d, "lang", r->lang);
       dict_insert_nonempty (&d, "emotion", r->emotion);
       dict_insert_nonempty (&d, "event", r->event);
@@ -371,6 +476,26 @@ stream_text (Stream *s)
   return tidy (t);
 }
 
+/* The words of the segment S is in, on the stream's time axis (the one
+   "start" and "end" are on): the recognizer's token times count from
+   the segment's start, which is S->seg_start samples in.  NULL when the
+   model gives no token timestamps.  */
+static GVariant *
+stream_words (Stream *s, int rate)
+{
+  const SherpaOnnxOnlineRecognizerResult *r
+    = SherpaOnnxGetOnlineStreamResult (s->rec, s->st);
+  GVariant *words;
+
+  if (!r)
+    return NULL;
+  words = build_words (r->tokens_arr, r->timestamps, NULL, r->count,
+                       s->seg_start * 1000 / rate,
+                       (s->fed - s->seg_start) * 1000 / rate);
+  SherpaOnnxDestroyOnlineRecognizerResult (r);
+  return words;
+}
+
 static GVariant *
 stream_run (CmacsSherpaJob *job, GError **error)
 {
@@ -424,6 +549,11 @@ stream_run (CmacsSherpaJob *job, GError **error)
           g_variant_dict_insert (&d, "final", "s", text);
           g_variant_dict_insert (&d, "start", "x", s->seg_start * 1000 / rate);
           g_variant_dict_insert (&d, "end", "x", s->fed * 1000 / rate);
+          {
+            GVariant *words = stream_words (s, rate);
+            if (words)
+              g_variant_dict_insert_value (&d, "words", words);
+          }
           s->segment++;
         }
       /* Start the next utterance from here.  After FINISH this also

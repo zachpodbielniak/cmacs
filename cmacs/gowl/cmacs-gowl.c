@@ -20,6 +20,7 @@
 #include <epaths.h>
 #include "cmacs-gowl.h"
 #include "cmacs-gowl-pointer.h"
+#include "cmacs-gowl-pointer-history.h"
 #include "cmacs-gobject.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
@@ -1976,6 +1977,7 @@ cmacs_gowl_forget_compositor_state (void)
   cmacs_clipboard_handler_id = 0;
   cmacs_psel_handler_id = 0;
 
+  cmacs_gowl_pointer_history_forget ();
   cmacs_gowl_active_focus_token = NULL;
   cmacs_gowl_redirect_is_sticky = FALSE;
   cmacs_embed_pending_count = 0;
@@ -13156,6 +13158,7 @@ void
 syms_of_cmacs_gowl (void)
 {
   syms_of_cmacs_gowl_pointer ();   /* cmacs-gowl-pointer.c */
+  syms_of_cmacs_gowl_pointer_history ();
   DEFSYM (Qgowl_error, "gowl-error");
   DEFSYM (Qnormal, "normal");
   DEFSYM (Q90, "90");

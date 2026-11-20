@@ -302,6 +302,27 @@ States: `idle' (mode off), `listening', `hearing' (speech in progress),
 (defvar cmacs-voice-loop-utterance-functions nil
   "Abnormal hook run with each final utterance, before it is sent.")
 
+(defvar cmacs-voice-loop-segment-start-functions nil
+  "Abnormal hook run when a speech segment opens, with (SEG LEAD-MS).
+SEG is the segment's id.  LEAD-MS is how much audio the segment already
+holds at that moment -- the pre-roll and the onset frames -- so the
+first sample of the audio a recognizer will be handed was captured
+about LEAD-MS before the hook runs.  This is what lets a word's time
+inside the transcript be placed on a clock (see `cmacs-deixis').")
+
+(defvar cmacs-voice-loop-utterance-filter-function nil
+  "Function that may rewrite or take a final utterance before its route.
+Called with (TEXT SEG RESULT): the text about to be sent (wake phrase
+removed), the segment's id and the recognizer's whole result alist
+\(with :segments and, from engines that have them, :words).  It returns
+the text to send on -- TEXT itself, or TEXT annotated -- or nil when it
+has dealt with the utterance and nothing should be sent.  A pending
+yes/no confirmation is answered before the filter is asked.")
+
+(defvar cmacs-voice-loop--final-result nil
+  "The recognizer result of the utterance being dispatched, or nil.
+Bound around `cmacs-voice-loop--dispatch' by `cmacs-voice-loop--on-final'.")
+
 (defface cmacs-voice-loop-partial
   '((t :inherit shadow :slant italic))
   "Face for partial transcripts.")
@@ -748,14 +769,27 @@ A pending confirmation takes the text first, as its answer."
                    (cmacs-voice-loop--take-phrase seg))))
       (setq cmacs-voice-loop--last-target target
             cmacs-voice-loop--armed-until 0.0)
-      (if (and (fboundp 'cmacs-voice-confirm-answer)
-               (cmacs-voice-confirm-answer text))
-          nil
+      (cond
+       ((and (fboundp 'cmacs-voice-confirm-answer)
+             (cmacs-voice-confirm-answer text))
+        nil)
+       ;; The filter may take the utterance (nil) or hand back the text
+       ;; to send.  One that fails must not eat what was said.
+       ((and cmacs-voice-loop-utterance-filter-function
+             (null (setq text
+                         (condition-case err
+                             (funcall cmacs-voice-loop-utterance-filter-function
+                                      text seg cmacs-voice-loop--final-result)
+                           (error
+                            (message "Voice: filter: %s" (error-message-string err))
+                            text)))))
+        nil)
+       (t
         (run-hook-with-args 'cmacs-voice-loop-utterance-functions text)
         (cmacs-voice-loop--set-state 'thinking)
         (condition-case err
             (cmacs-voice-loop--deliver target text)
-          (error (message "Voice: %s" (error-message-string err))))))))
+          (error (message "Voice: %s" (error-message-string err)))))))))
 
 (defun cmacs-voice-loop--arm (seconds)
   "Need no wake phrase for the next SECONDS."
@@ -799,7 +833,8 @@ wake model heard it, or nil when the segment needed no phrase."
       (when cmacs-voice-loop-wake-acknowledgement
         (cmacs-voice-loop-speak cmacs-voice-loop-wake-acknowledgement))
       (message "Voice: listening..."))
-     (t (cmacs-voice-loop--dispatch rest seg)))))
+     (t (let ((cmacs-voice-loop--final-result result))
+          (cmacs-voice-loop--dispatch rest seg))))))
 
 (defun cmacs-voice-loop--segment-done (pcm addressed seg)
   "Speech segment SEG ended with audio PCM; ADDRESSED if it was for us."
@@ -970,6 +1005,9 @@ wake model heard it, or nil when the segment needed no phrase."
         cmacs-voice-loop--addressed (cmacs-voice-loop--armed-p)
         cmacs-voice-loop--seg-start-time (float-time)
         cmacs-voice-loop--partial-at (float-time))
+  (run-hook-with-args 'cmacs-voice-loop-segment-start-functions
+                      cmacs-voice-loop--seg-id
+                      (* cmacs-voice-loop--seg-frames cmacs-voice-loop--frame-ms))
   (unless (cmacs-voice-loop--busy-p)
     (cmacs-voice-loop--set-state 'hearing)))
 

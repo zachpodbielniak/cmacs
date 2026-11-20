@@ -726,9 +726,13 @@ ends; ON-ERROR gets a message.  Feed it with `cmacs-speech-stream-feed'."
                            :backend (plist-get (cmacs-speech-stream-resolved stream) :backend))
         (when (cmacs-speech-stream-on-final stream)
           (funcall (cmacs-speech-stream-on-final stream)
-                   (list (cons :text final)
-                         (cons :start (alist-get :start result))
-                         (cons :end (alist-get :end result))))))))))
+                   `((:text . ,final)
+                     (:start . ,(alist-get :start result))
+                     (:end . ,(alist-get :end result))
+                     ;; Word times, from engines that have them:
+                     ;; ((WORD START-MS END-MS) ...) on the same axis.
+                     ,@(when-let* ((words (alist-get :words result)))
+                         (list (cons :words words)))))))))))
 
 (defun cmacs-speech-stream-feed (stream pcm)
   "Give STREAM more S16LE 16 kHz mono PCM."

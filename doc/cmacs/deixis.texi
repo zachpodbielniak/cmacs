@@ -1,0 +1,466 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Deixis
+@chapter CMacs Deixis: ``move THAT over THERE''
+
+Deictic voice: you say ``move that over there'', ``summarise this'',
+``close that'' while pointing --- with the mouse, a VR laser or a
+tracked hand --- and each demonstrative is bound to what was being
+pointed at @emph{at the moment the word was spoken}.  Not at the moment
+the transcript arrives: by then, a second or two later, the pointer has
+moved on to the second thing, which is why ``move that there'' cannot be
+done by asking where the pointer is now.
+
+It is a fusion layer over three things that already existed:
+
+@table @asis
+@item Words with times
+The recognizers (sherpa-onnx, whisper), through
+@code{cmacs-deixis-result-words}: each word's offset inside the
+utterance's audio.
+@item A clock
+The voice loop's @code{cmacs-voice-loop-segment-start-functions}: when
+that audio began, on the pointer history's clock.
+@item Where the pointer was
+@file{cmacs/gowl/cmacs-gowl-pointer-history.c}, or another registered
+pointer: what was under the pointer at a past time.
+@end table
+
+Turn it on with @kbd{M-x cmacs-deixis-mode} (a global minor mode)
+alongside @code{cmacs-voice-loop-mode}.  There is no configure flag: the
+Lisp is always there, and the compositor's ring is part of
+@option{--with-cmacs-gowl}.
+
+@menu
+* Deixis Utterances::       What happens to what you say.
+* Deixis Word Times::       Where each word's time comes from.
+* Deixis Clock::            The clock, and how wrong it can be.
+* Deixis Pointers::         The gowl pointer history and other devices.
+* Deixis Commands::         Commands that run with no model.
+* Deixis Privacy::          What is kept, and for how long.
+* Deixis Customization::    The variables.
+@end menu
+
+@node Deixis Utterances
+@section What happens to an utterance
+
+With the mode on, the voice loop hands every final utterance to
+@code{cmacs-deixis-filter} before its route
+(@code{cmacs-voice-loop-utterance-filter-function}).  The filter takes
+the recognizer's words and their times, finds the demonstratives
+(@code{cmacs-deixis-find}), binds each to what the pointer rested on
+while it was spoken (@code{cmacs-deixis-resolve}), runs a local command
+if the utterance is one (@code{cmacs-deixis-run-command} --- no model
+involved, nothing sent anywhere), and otherwise sends the utterance on
+to the loop's route @emph{annotated} (@code{cmacs-deixis-annotate}).  An
+utterance with no demonstrative passes through untouched.  A pending
+yes/no confirmation is answered before the filter is asked.
+
+@example
+move that [that=①] over there [there=②]
+
+[Pointing: what each marked word referred to when it was spoken]
+① window: librewolf — 'wlroots docs' (client 12)
+② monitor 1 (DP-2) at 2900,400
+@end example
+
+The legend names things by id --- client id, buffer name and position,
+monitor index --- so a tool-capable model can act on ``that'' with the
+tools it already has.  Like @code{cmacs-ai-view} it is a pointer and
+never the thing: window titles and buffer names, never buffer text.  A
+demonstrative with nothing pointed at is marked @samp{[that=?]}, and a
+referent looked up against the screen as it is now is marked
+@samp{[approximate]}.  On the @code{commands} voice route the utterance
+is left plain; the bindings are in @code{cmacs-deixis-last-bindings}
+(see @code{cmacs-deixis-annotate-for-commands}).
+
+@code{cmacs-deixis-resolve} returns one plist per demonstrative, in
+spoken order: @code{:word}, @code{:token}, @code{:index}, @code{:role},
+@code{:time} (ms, or @code{nil}), @code{:approx}, @code{:referent} and
+@code{:marker} (words bound to the same thing share one).  A referent is
+a plist with @code{:kind} (@code{window}, @code{buffer-position},
+@code{region}, @code{point}, @code{file}, @code{url}, @code{monitor},
+@code{tag} or @code{place}), @code{:label}, @code{:confidence},
+@code{:device}, and the fields of its kind: @code{:client}
+@code{:client-id} @code{:app-id} @code{:title}; @code{:buffer}
+@code{:window} @code{:position}; @code{:beg} @code{:end};
+@code{:monitor} @code{:x} @code{:y}; @code{:path}; @code{:url};
+@code{:tag}.  @code{:stale} marks a window that closed between the word
+and the lookup (it has no @code{:client}); @code{:approximate} one
+resolved against the screen as it is now.
+
+The rules:
+
+@itemize
+@item
+@emph{Explicit state beats pointing.}  With the region active, an
+@code{object} word (``this'', ``that'') or ``it'' means the region ---
+unless the pointer clearly rested on a different window (confidence at
+least @code{cmacs-deixis-elsewhere-confidence}, default 0.8).  A
+@code{place} word is never the region.  The region is tested when the
+transcript arrives, not when the word was spoken.
+@item
+@emph{The longest rest wins.}  People point a little before or after the
+word, so the pointer is asked about a window from
+@code{cmacs-deixis-window-before-ms} (150) before the word starts to
+@code{cmacs-deixis-window-after-ms} (300) after it ends, and the answer
+is where it dwelt longest there.
+@item
+@emph{``It''} is bound only when it can refer to something: to what was
+pointed at while it was said, else to the @code{object} word before it
+in the same utterance.  ``It is raining'' is never a demonstrative
+(@code{cmacs-deixis-pronoun-blockers}).
+@item
+@emph{``That'' as a conjunction} (``I think that we should'') is skipped
+by looking at the next word (@code{cmacs-deixis-clause-followers}).
+This is a word list, not a parser; a wrong binding costs an extra marker
+in the annotation.
+@item
+@emph{Nothing pointed at}: ``this'' and ``here'' fall back to point in
+the selected window with confidence 0.3
+(@code{cmacs-deixis-fallback-to-point}).  ``It'' never falls back.
+@end itemize
+
+The vocabulary is @code{cmacs-deixis-words}, an alist of word to role
+(@code{object}, @code{place}, @code{pronoun}); replace it for another
+language.
+
+@node Deixis Word Times
+@section Word times
+
+@code{cmacs-deixis-result-words} returns @code{((WORD START-MS END-MS
+. FLAGS) ...)}, times counted from the start of the audio the recognizer
+was given.  In order of preference:
+
+@enumerate
+@item
+The result's own @code{:words}.  New: sherpa-onnx offline (@code{asr})
+and streaming (@code{stream}) results carry an optional @code{:words}
+entry, a list of @code{(WORD START-MS END-MS)}, whenever the model gives
+token timestamps.  It is built in C (@code{build_words} in
+@file{cmacs/sherpa/cmacs-sherpa-asr.c}) from the token array that used
+to be flattened into one segment: subword pieces are merged into words
+(a piece starting with SentencePiece's marker or a space starts a word;
+punctuation stays on the word it follows; a CJK character is a word by
+itself), and a word ends where the next begins and no later than its
+last piece's start plus the piece's duration (300 ms when the model
+gives none).  Existing keys are unchanged, and a model without
+timestamps simply has no @code{:words}.  For a stream the times are on
+the stream's axis, the one @code{:start} and @code{:end} are on, and
+@code{cmacs-speech}'s stream @code{on-final} alist passes @code{:words}
+through.
+@item
+@code{:tokens} with @code{:timestamps}, merged in Lisp by
+@code{cmacs-deixis-merge-tokens} (the same rules).
+@item
+@code{:segments} (whisper): each segment's words are spread across the
+segment's span in proportion to their length and flagged @code{:approx}
+(@code{cmacs-deixis-interpolate-words}).  Nothing changed in
+@file{cmacs/whisper/}.
+@item
+Only @code{:text}: @code{cmacs-deixis-fallback-word-ms} (350) per word,
+@code{:approx}.
+@end enumerate
+
+The text the loop sends has the wake phrase cut off the front, so its
+tokens are matched to the recognizer's words from the end; a token spelt
+differently (``21'' against ``twenty one'') takes a time interpolated
+from its neighbours.
+
+@node Deixis Clock
+@section The clock, and how wrong it can be
+
+A word's absolute time is the segment start, plus the word's offset,
+plus @code{cmacs-deixis-latency-ms}.  The segment start is taken when
+the voice loop opens a speech segment:
+@code{cmacs-voice-loop-segment-start-functions} runs with the segment id
+and the audio the segment already holds (pre-roll plus the onset
+frames), and deixis records now less that lead.  ``Now'' is
+@code{cmacs-deixis-now-ms}: @code{gowl-pointer-history-now}
+(@code{CLOCK_MONOTONIC} milliseconds, the clock the compositor's ring
+stamps samples with) when the compositor is built in, else wall time,
+which is then only ever compared with samples stamped by the same
+function.
+
+@strong{None of the following has been measured.}  It was not possible
+to run audio while this was written; the figures are reasoning about the
+code, and the first must be calibrated on real hardware.
+
+@table @asis
+@item Capture latency (microphone, PipeWire/GStreamer buffers, delivery in chunks)
+Tens of ms to about 100 ms, device dependent; words look later than they
+were.  Corrected by @code{cmacs-deixis-latency-ms} (default @minus{}60,
+an assumption).
+@item Frame quantisation of the segment start
+Up to one 32 ms frame, either way.  Absorbed by the window.
+@item Pre-roll accounting
+Should be exact: the frames are counted.
+@item Emacs busy when the frame arrives (GC, redisplay)
+Usually a few ms, occasionally over 100; words look later.  Not
+correctable.
+@item Token timestamps (sherpa)
+One encoder frame, 40--80 ms; a token's time is when it was emitted, and
+streaming models emit late.
+@item Interpolated word times (whisper)
+Hundreds of ms inside a long segment, either way.  Flagged
+@code{:approx}; use a token-timestamp model.
+@item Pointer sampling
+20 ms (gowl), 100 ms (pointers sampled from Lisp).
+@item The speaker
+People point 100--300 ms before or after the word.  This is what the
+window and the dwell are for.
+@end table
+
+With a whisper model the binding is only as good as the interpolation:
+fine for a short ``close that'', unreliable for two demonstratives close
+together in a long sentence.  A sherpa token-timestamp model is the
+right engine for this.  The streaming recognizer's assumption that token
+times count from the segment start was read from sherpa-onnx's sources,
+not observed.
+
+@kbd{M-x cmacs-deixis-calibrate}: say ``now'' to the voice loop and
+press a key at the same instant.  When the transcript arrives it reports
+the difference between the key's time and the word's, and the
+@code{cmacs-deixis-latency-ms} that would make it zero.  Your reaction
+time is in that number, so do it a few times and take the middle.
+
+@node Deixis Pointers
+@section Pointers
+
+``Motion never reaches Lisp'': the gowl pointer is sampled in C.
+@file{cmacs/gowl/cmacs-gowl-pointer-history.c} keeps a fixed ring of 512
+samples --- monotonic ms, layout x and y, the id of the client under the
+pointer (0: none), the monitor index --- filled by a 20 ms timer on
+gowl's own @code{wl_event_loop} (never GLib's default context, which
+under cmacs is Emacs's thread) and written under the gowl lock.  The
+timer exists only while the history is enabled.  A tick stores a sample
+only when something changed, so an entry means ``from this time on'';
+the ring covers about ten seconds of a pointer that never rests and far
+longer otherwise.  There is no allocation per sample, and nothing is
+sampled while the session is locked.
+
+@defun gowl-pointer-history-enable enable
+Start or stop sampling.  Returns non-@code{nil} when sampling is now on,
+@code{nil} with no compositor.  Turning it off empties the ring.
+@end defun
+
+@defun gowl-pointer-history-enabled-p
+Whether the history is sampling.
+@end defun
+
+@defun gowl-pointer-history-at ms
+A plist @code{(:time :x :y :client :client-id :monitor)} for the latest
+sample at or before @var{ms}; @code{nil} outside the ring.
+@end defun
+
+@defun gowl-pointer-history-dwell from-ms to-ms &optional radius
+The same plus @code{:duration}, for the run of samples (same window,
+within @var{radius} pixels, default 48) that lasted longest in the
+window; x and y are its time-weighted mean.
+@end defun
+
+@defun gowl-pointer-history-now
+The monotonic clock in milliseconds.
+@end defun
+
+Clients are stored by id, never by pointer.  A lookup turns an id back
+into an object only after finding it in the live client list, so
+@code{:client} is @code{nil} for a window that has closed and
+@code{:client-id} still says which it was.  The resolver turns that into
+a @code{:stale} referent: no command acts on it, and the legend reads
+``a window that has since closed (client 12)''.
+
+Every DEFUN that touches the ring takes @code{cmacs_gowl_lock_scoped ()}
+and returns through @code{unbind_to}.  @code{gowl-stop} must call
+@code{cmacs_gowl_pointer_history_forget ()} from
+@code{cmacs_gowl_forget_compositor_state} (the timer is a source on the
+compositor's loop); as a second line of defence the file remembers which
+compositor owns its timer and never removes a source from another one's
+loop.
+
+When the window under the pointer is Emacs's own frame, the referent is
+refined to the Emacs window and buffer position there with
+@code{posn-at-x-y}.  That lookup happens when the transcript arrives,
+against the windows as they are then, and assumes the frame's pixel
+coordinates are the layout position minus the client's origin (true for
+an undecorated frame at output scale 1; unverified at other scales).
+Such referents are flagged @code{:approximate}.
+
+The other pointers:
+
+@table @code
+@item emacs
+@code{mouse-pixel-position}, sampled by a timer every
+@code{cmacs-deixis-sample-interval} (0.1 s), only where no compositor is
+running.
+@item vr
+@code{cmacs-lrg-vr-pointed-window}, sampled by the same timer while a VR
+session is active.  Window granularity: the laser's accessor gives the
+window, so the position is that window's point.
+@item hand
+A stub with one real case: with @code{cmacs-handtrack-pointer-mode} the
+hand @emph{is} the gowl pointer and the ring already has it; otherwise
+handtrack exposes no aim point and the provider returns @code{nil}.
+@end table
+
+Order is @code{cmacs-deixis-pointer-order}; the first pointer with an
+answer wins.
+
+@defun cmacs-deixis-register-pointer name function &rest props
+Register pointing device @var{name}.  @var{function} is called with a
+time in ms and returns a referent plist or @code{nil};
+@code{cmacs-deixis-lookup-window} is bound to @code{(FROM-MS . TO-MS)}
+around the word.  @var{props} may give @code{:start} and @code{:stop},
+called when sampling begins and ends.  A pointer must hold positions
+only between the two, and only in memory.  One that signals costs its
+own answer, not the utterance.
+@end defun
+
+@lisp
+(cmacs-deixis-register-pointer
+ 'gaze
+ (lambda (ms)
+   (when-let* ((hit (my-gaze-history-at ms)))
+     (list :kind 'buffer-position :window (car hit)
+           :buffer (window-buffer (car hit))
+           :position (cdr hit) :confidence 0.7
+           :label (format "buffer: %s"
+                          (buffer-name (window-buffer (car hit)))))))
+ :start #'my-gaze-history-start
+ :stop #'my-gaze-history-stop)
+@end lisp
+
+@node Deixis Commands
+@section Commands
+
+Simple utterances run locally.  An utterance is reduced to a canonical
+form --- lower-cased, @code{cmacs-deixis-filler-words} dropped, each
+bound demonstrative replaced by @samp{<object>} or @samp{<place>} ---
+and matched against each command's regexp: ``Please move that window
+over there'' is @samp{move <object> <place>}.  A command runs only when
+every placeholder has a referent that still exists; otherwise the
+utterance goes on to the route, annotated, so a model can ask what was
+meant.
+
+@table @code
+@item move
+``move / put / send / bring / take that there''.  A desktop window: to
+the pointed tag; onto another window of the same screen (a swap, the
+only ``there'' a tiling layout has); else to the pointed monitor, and a
+floating window also takes the pointed half.  An Emacs buffer: into the
+pointed Emacs window.
+@item close
+``close / quit / delete / kill that''.  Closes the desktop window, or
+deletes the Emacs window (``kill'' kills the buffer).  Confirmed first.
+@item focus
+``focus / go / switch / select / jump there''.  Focuses the desktop
+window, or selects the Emacs window and goes to the position.
+@item swap
+``swap / exchange this and that''.  Two desktop windows
+(@code{gowl-swap-clients}) or two Emacs windows
+(@code{window-swap-states}).
+@item open
+``open / show / visit that here''.  The file or URL at the pointed
+buffer position, in the pointed Emacs window.
+@end table
+
+They use existing DEFUNs only (@code{gowl-move-client-to-monitor},
+@code{gowl-client-set-geometry}, @code{gowl-set-tags},
+@code{gowl-swap-clients}, @code{gowl-close-client},
+@code{gowl-focus-client}).  A window embedded in an Emacs window is not
+moved.  @code{open} reads the one file name or URL at the position,
+locally, to act on it; that is the only place buffer text is read, and
+it is not sent anywhere.
+
+Destructive commands ask first
+(@code{cmacs-deixis-confirm-destructive}): through
+@code{cmacs-voice-confirm} --- a spoken yes/no or y/n, with the loop
+armed so the answer needs no wake phrase --- when the voice commands are
+loaded, else @code{y-or-n-p}.
+
+@defmac cmacs-deixis-define-command name pattern arglist body@dots{}
+Define deictic command @var{name}.  @var{arglist} names the referents of
+the placeholders in spoken order.  @var{body} may start with a
+docstring, then @code{:confirm @var{form}} (non-@code{nil}: confirm
+first; a string is the question).  It reports a refusal with
+@code{user-error}, and can tell its verbs apart through
+@code{cmacs-deixis-command-words}.  Commands run from the command loop.
+@end defmac
+
+@lisp
+(cmacs-deixis-define-command pin
+    "\\`\\(?:pin\\|keep\\) <object>\\'" (that)
+  "\"Pin that\": make the pointed window sticky."
+  (unless (plist-get that :client)
+    (user-error "That is not a desktop window"))
+  (gowl-set-client-sticky (plist-get that :client) t))
+@end lisp
+
+@node Deixis Privacy
+@section Privacy
+
+@itemize
+@item
+The pointers are sampled only while @code{cmacs-deixis-mode} is on
+@emph{and} the voice loop is listening (its state is neither
+@code{idle} nor @code{paused}).
+@item
+Samples live in fixed rings in memory: the compositor's 512 entries, and
+at most 128 for each pointer sampled from Lisp.  Stopping empties them.
+@item
+Nothing is written to disk and nothing is sampled on a locked session.
+@item
+What reaches a model is the legend: ids, titles, buffer names and
+positions.  Never buffer text.
+@end itemize
+
+@node Deixis Customization
+@section Customization
+
+@table @code
+@item cmacs-deixis-latency-ms
+Added to a word's time before lookup (default @minus{}60); calibrate it.
+@item cmacs-deixis-window-before-ms
+@itemx cmacs-deixis-window-after-ms
+The window around a word (150, 300).
+@item cmacs-deixis-words
+Word to role.
+@item cmacs-deixis-clause-followers
+After these, ``that'' is a conjunction.
+@item cmacs-deixis-pronoun-blockers
+After these, ``it'' points at nothing.
+@item cmacs-deixis-filler-words
+Dropped before command matching.
+@item cmacs-deixis-pointer-order
+Which pointer is asked first (@code{(vr hand gowl emacs)}).
+@item cmacs-deixis-elsewhere-confidence
+Pointer confidence that overrides an active region (0.8).
+@item cmacs-deixis-fallback-to-point
+``This'' with nothing pointed at means point.
+@item cmacs-deixis-fallback-word-ms
+Per-word guess when a transcript has no times (350).
+@item cmacs-deixis-sample-interval
+Period of the pointers sampled from Lisp (0.1 s).
+@item cmacs-deixis-confirm-destructive
+Confirm ``close that''.
+@item cmacs-deixis-annotate-for-commands
+Annotate on the @code{commands} route too.
+@end table
+
+The hook @code{cmacs-deixis-resolved-functions} runs with @code{(TEXT
+BINDINGS)} after every resolved utterance.
+
+The voice loop gained three additive hooks, usable by anything:
+@code{cmacs-voice-loop-segment-start-functions} (@code{(SEG LEAD-MS)}
+when a speech segment opens), @code{cmacs-voice-loop-utterance-filter-function}
+(@code{(TEXT SEG RESULT)} before the route; returns the text to send, or
+@code{nil} when it took the utterance; a filter that signals does not
+eat the utterance) and @code{cmacs-voice-loop--final-result}.
+
+@file{test/cmacs/cmacs-deixis-tests.el} is pure ERT with stub pointers
+and synthetic word times.  Not covered, and needing a live session: the
+C ring against a real compositor, the C word builder against a real
+sherpa model, and every timing figure above.

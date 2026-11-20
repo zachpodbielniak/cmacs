@@ -1,0 +1,226 @@
+#+TITLE: cmacs-deixis — "move THAT over THERE"
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:t num:t
+
+* Overview
+
+Deictic voice: you say "move that over there", "summarise this", "close that" while pointing -- with the mouse, a VR laser or a tracked hand -- and each demonstrative is bound to what was being pointed at *at the moment the word was spoken*.  Not at the moment the transcript arrives: by then, a second or two later, the pointer has moved on to the second thing, which is exactly why "move that there" cannot be done by asking where the pointer is now.
+
+It is a fusion layer over three things that already existed, and it adds no engine of its own:
+
+| Piece                 | Where                                                             | What it gives                                                    |
+|-----------------------+-------------------------------------------------------------------+------------------------------------------------------------------|
+| Words with times      | the recognizers ([[file:cmacs-sherpa.org][cmacs-sherpa]], whisper), =cmacs-deixis-result-words= | each word's offset inside the utterance's audio                  |
+| A clock               | [[file:cmacs-voice-loop.org][cmacs-voice-loop]], =cmacs-voice-loop-segment-start-functions=      | when that audio began, on the pointer history's clock            |
+| Where the pointer was | =cmacs/gowl/cmacs-gowl-pointer-history.c=, or a registered pointer | what was under the pointer at a past time                        |
+
+Turn it on with =M-x cmacs-deixis-mode= (a global minor mode) alongside =cmacs-voice-loop-mode=.  There is no configure flag: the Lisp is always there, and the compositor's ring is part of =--with-cmacs-gowl=.
+
+* What happens to an utterance
+
+With the mode on, the voice loop hands every final utterance to =cmacs-deixis-filter= before its route (=cmacs-voice-loop-utterance-filter-function=).  The filter:
+
+1. takes the recognizer's words and their times (=cmacs-deixis-result-words=);
+2. finds the demonstratives (=cmacs-deixis-find=);
+3. binds each to what the pointer rested on while it was spoken (=cmacs-deixis-resolve=);
+4. runs a local command if the utterance is one (=cmacs-deixis-run-command=) -- no model involved, and nothing is sent anywhere;
+5. otherwise sends the utterance on to the loop's route *annotated* (=cmacs-deixis-annotate=).
+
+An utterance with no demonstrative passes through untouched.  A pending yes/no confirmation is answered before the filter is asked.
+
+** The annotated form
+
+#+begin_example
+move that [that=①] over there [there=②]
+
+[Pointing: what each marked word referred to when it was spoken]
+① window: librewolf — 'wlroots docs' (client 12)
+② monitor 1 (DP-2) at 2900,400
+#+end_example
+
+The legend names things by id -- client id, buffer name and position, monitor index -- so a tool-capable model can act on "that" with the tools it already has.  In keeping with [[file:cmacs-ai.org][cmacs-ai-view]] it is a pointer and never the thing: window titles and buffer names, never buffer text.  A demonstrative with nothing pointed at is marked =[that=?]= and the legend says so rather than inventing a referent.  A referent looked up against the screen as it is now (an Emacs buffer position, see below) is marked =[approximate]=.
+
+On the =commands= voice route the utterance is left plain (the command router matches words); the bindings are in =cmacs-deixis-last-bindings=.  Set =cmacs-deixis-annotate-for-commands= to change that.
+
+** Bindings and referents
+
+=cmacs-deixis-resolve= returns one plist per demonstrative, in spoken order: =:word=, =:token=, =:index=, =:role=, =:time= (ms, or nil when unknown), =:approx= (the time is an estimate), =:referent= and =:marker= (1, 2, ...; words bound to the same thing share one).
+
+A referent is a plist:
+
+| Key           | Meaning                                                                                              |
+|---------------+------------------------------------------------------------------------------------------------------|
+| =:kind=       | =window= (a desktop window), =buffer-position=, =region=, =point=, =file=, =url=, =monitor=, =tag=, =place= |
+| =:label=      | a short human description, by id                                                                     |
+| =:confidence= | 0..1                                                                                                 |
+| =:device=     | which pointer answered                                                                               |
+| by kind       | =:client= =:client-id= =:app-id= =:title=; =:buffer= =:window= =:position=; =:beg= =:end=; =:monitor= =:x= =:y=; =:path=; =:url=; =:tag= |
+| =:stale=      | the window closed between the word and the lookup; there is no =:client=                             |
+| =:approximate= | resolved against the screen as it is now, not as it was                                              |
+
+** Rules
+
+- *Explicit state beats pointing.*  With the region active, an =object= word ("this", "that") or "it" means the region -- unless the pointer clearly rested on a different window (confidence at least =cmacs-deixis-elsewhere-confidence=, default 0.8).  A =place= word is never the region.  The region is tested when the transcript arrives, not when the word was spoken.
+- *The longest rest wins.*  People point a little before or after the word, so the pointer is asked about a window from =cmacs-deixis-window-before-ms= (150) before the word starts to =cmacs-deixis-window-after-ms= (300) after it ends, and the answer is where it dwelt longest there, not where it was at one instant.
+- *"It"* is bound only when it can refer to something: to what was pointed at while it was said, else to the =object= word before it in the same utterance (same marker).  With neither, it is left alone.  "It is raining" is never a demonstrative (=cmacs-deixis-pronoun-blockers=).
+- *"That" as a conjunction* ("I think that we should") is skipped by looking at the next word (=cmacs-deixis-clause-followers=).  This is a word list, not a parser; it will be wrong sometimes, and the cost of a wrong binding is an extra marker in the annotation.
+- *Nothing pointed at*: "this" and "here" fall back to point in the selected window with confidence 0.3 (=cmacs-deixis-fallback-to-point=).  "It" never falls back.
+
+The vocabulary is =cmacs-deixis-words=, an alist of word to role (=object=, =place=, =pronoun=); replace it for another language.
+
+* Word times
+
+=cmacs-deixis-result-words RESULT= returns =((WORD START-MS END-MS . FLAGS) ...)=, times counted from the start of the audio the recognizer was given.  In order of preference:
+
+1. *The result's own =:words=.*  New: sherpa-onnx offline (=asr=) and streaming (=stream=) results carry an optional =:words= entry, a list of =(WORD START-MS END-MS)=, whenever the model gives token timestamps (transducers, CTC, paraformer).  It is built in C (=build_words= in =cmacs/sherpa/cmacs-sherpa-asr.c=) from the token array that used to be flattened into one segment: subword pieces are merged into words (a piece starting with SentencePiece's =▁= or a space starts a word; punctuation stays on the word it follows; a CJK character is a word by itself), a word ends where the next begins and no later than its last piece's start plus the piece's duration (300 ms when the model gives none).  Existing keys are unchanged, and a model without timestamps simply has no =:words=.  For a stream the times are on the stream's axis, the one =:start= and =:end= are on, and =cmacs-speech='s stream =on-final= alist now passes =:words= through.
+2. *=:tokens= with =:timestamps=*, merged in Lisp by =cmacs-deixis-merge-tokens= (the same rules).
+3. *=:segments=* (whisper): each segment's words are spread across the segment's span in proportion to their length, and flagged =:approx= (=cmacs-deixis-interpolate-words=).  No change was needed in =cmacs/whisper/=.
+4. *Only =:text=*: =cmacs-deixis-fallback-word-ms= (350) per word, =:approx=.
+
+The text the loop sends has the wake phrase cut off the front, so its tokens are matched to the recognizer's words from the end; a token spelt differently ("21" against "twenty one") takes a time interpolated from its neighbours.
+
+* The clock, and how wrong it can be
+
+A word's absolute time is
+
+: segment start + word offset + cmacs-deixis-latency-ms
+
+where the segment start is taken when the voice loop opens a speech segment: =cmacs-voice-loop-segment-start-functions= runs with the segment id and the audio the segment already holds (pre-roll plus the onset frames), and deixis records =now - lead=.  "Now" is =cmacs-deixis-now-ms=: =gowl-pointer-history-now= (CLOCK_MONOTONIC milliseconds, the clock the compositor's ring stamps samples with) when the compositor is built in, else wall time, which is then only ever compared with samples stamped by the same function.
+
+*None of the following has been measured.*  It was not possible to run audio while this was written; the figures are reasoning about the code, and the first one must be calibrated on real hardware.
+
+| Source of error                            | Expected size                                  | Direction                         | Handled by                         |
+|--------------------------------------------+------------------------------------------------+-----------------------------------+------------------------------------|
+| Capture latency: microphone, PipeWire/GStreamer buffers, delivery to Emacs in chunks | tens of ms to ~100 ms; depends on the device  | words look later than they were   | =cmacs-deixis-latency-ms= (default -60, an assumption) |
+| Frame quantisation of the segment start    | up to one 32 ms frame                          | either                            | the window                         |
+| Pre-roll accounting                        | should be exact (frames are counted)           | --                                | =LEAD-MS=                          |
+| Emacs busy when the frame arrives (GC, redisplay) | usually a few ms, occasionally 100+           | words look later                  | the window; not correctable        |
+| Token timestamps (sherpa)                  | one encoder frame, 40-80 ms; a token's time is when it was emitted, and streaming models emit late | usually later                     | the window; latency                |
+| Interpolated word times (whisper)          | hundreds of ms inside a long segment           | either                            | flagged =:approx=; use a token-timestamp model |
+| Pointer sampling                           | 20 ms (gowl), 100 ms (Lisp-sampled pointers)   | --                                | the window                         |
+| The speaker                                | people point 100-300 ms before or after the word | either                            | the window and the dwell           |
+
+Consequences worth knowing: with a whisper model the binding is only as good as the interpolation, which is fine for a short "close that" and unreliable for two demonstratives close together in a long sentence; a sherpa token-timestamp model is the right engine for this.  The streaming recognizer's assumption that token times count from the segment start (so the segment's start offset is added) was read from sherpa-onnx's sources, not observed.
+
+** Calibrating
+
+=M-x cmacs-deixis-calibrate=: say "now" to the voice loop and press a key at the same instant.  When the transcript arrives it reports the difference between the key's time and the word's, and the =cmacs-deixis-latency-ms= that would make it zero.  Your reaction time is in that number, so do it a few times and take the middle.  With a whisper model the message says the word time was itself an estimate.
+
+* Pointers
+
+** The gowl pointer history
+
+"Motion never reaches Lisp" is the rule here as elsewhere: the pointer is sampled in C.  =cmacs/gowl/cmacs-gowl-pointer-history.c= keeps a fixed ring of 512 samples -- monotonic ms, layout x and y, the id of the client under the pointer (0: none), the monitor index -- filled by a 20 ms timer on gowl's own =wl_event_loop= (never GLib's default context, which under cmacs is Emacs's thread) and written under the gowl lock.  The timer exists only while the history is enabled.  A tick stores a sample only when something changed, so an entry means "from this time on"; the ring covers about ten seconds of a pointer that never rests and far longer otherwise.  No allocation per sample.  Nothing is sampled while the session is locked.
+
+| DEFUN                                               | Returns                                                                                                         |
+|-----------------------------------------------------+-----------------------------------------------------------------------------------------------------------------|
+| =(gowl-pointer-history-enable BOOL)=                | non-nil when sampling is now on; nil with no compositor.  Turning it off empties the ring.                      |
+| =(gowl-pointer-history-enabled-p)=                  | whether it is sampling                                                                                          |
+| =(gowl-pointer-history-at MS)=                      | =(:time :x :y :client :client-id :monitor)= for the latest sample at or before MS; nil outside the ring         |
+| =(gowl-pointer-history-dwell FROM-MS TO-MS &optional RADIUS)= | the same plus =:duration=, for the run of samples (same window, within RADIUS px, default 48) that lasted longest in the window; x and y are its time-weighted mean |
+| =(gowl-pointer-history-now)=                        | the monotonic clock in ms                                                                                       |
+
+Clients are stored by id, never by pointer.  A lookup turns an id back into an object only after finding it in the live client list, so =:client= is nil for a window that has closed and =:client-id= still says which it was.  The resolver turns that into a =:stale= referent: no command acts on it, and the legend reads "a window that has since closed (client 12)".
+
+Every DEFUN that touches the ring takes =cmacs_gowl_lock_scoped ()= and returns through =unbind_to=.  =gowl-stop= must call =cmacs_gowl_pointer_history_forget ()= from =cmacs_gowl_forget_compositor_state= (the timer is a source on the compositor's loop); as a second line of defence the file remembers which compositor owns its timer and never removes a source from another one's loop.
+
+When the window under the pointer is Emacs's own frame, the referent is refined to the Emacs window and buffer position there with =posn-at-x-y=.  That lookup happens when the transcript arrives, against the windows as they are then, and assumes the frame's pixel coordinates are the layout position minus the client's origin (true for an undecorated frame at output scale 1; unverified at other scales).  Such referents are flagged =:approximate=.
+
+** Other pointers
+
+| Name    | Source                                                                                               | Status                                                                                              |
+|---------+------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------|
+| =gowl=  | the ring above                                                                                       | implemented; needs a live compositor to exercise                                                    |
+| =emacs= | =mouse-pixel-position=, sampled by a timer every =cmacs-deixis-sample-interval= (0.1 s), only where no compositor is running | implemented                                                                                         |
+| =vr=    | =cmacs-lrg-vr-pointed-window=, sampled by the same timer while a VR session is active                | implemented at window granularity: the laser's accessor gives the window, so the position is that window's point |
+| =hand=  | a camera-tracked hand                                                                                | a stub with one real case: with =cmacs-handtrack-pointer-mode= the hand /is/ the gowl pointer and the ring already has it; otherwise handtrack exposes no aim point and the provider returns nil |
+
+Order is =cmacs-deixis-pointer-order=; the first pointer with an answer wins.
+
+** Adding one
+
+#+begin_src emacs-lisp
+(cmacs-deixis-register-pointer
+ 'gaze
+ (lambda (ms)
+   ;; `cmacs-deixis-lookup-window' is (FROM-MS . TO-MS) around the word.
+   (when-let* ((hit (my-gaze-history-at ms)))
+     (list :kind 'buffer-position :window (car hit) :buffer (window-buffer (car hit))
+           :position (cdr hit) :confidence 0.7
+           :label (format "buffer: %s" (buffer-name (window-buffer (car hit)))))))
+ :start #'my-gaze-history-start
+ :stop #'my-gaze-history-stop)
+#+end_src
+
+=:start= and =:stop= are called when sampling begins and ends.  A pointer must hold positions only between the two, and only in memory.  One that signals costs its own answer, not the utterance.
+
+* Commands
+
+Simple utterances run locally.  An utterance is reduced to a canonical form -- lower-cased, =cmacs-deixis-filler-words= dropped, each bound demonstrative replaced by =<object>= or =<place>= -- and matched against each command's regexp: "Please move that window over there" is =move <object> <place>=.  A command runs only when every placeholder has a referent that still exists; otherwise the utterance goes on to the route, annotated, so a model can ask what was meant.
+
+| Command | Says                                         | Does                                                                                                                                         |
+|---------+----------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------|
+| =move=  | move / put / send / bring / take that there  | a desktop window: to the pointed tag; onto another window of the same screen (a swap, the only "there" a tiling layout has); else to the pointed monitor, and a floating window also takes the pointed half.  An Emacs buffer: into the pointed Emacs window |
+| =close= | close / quit / delete / kill that            | closes the desktop window, or deletes the Emacs window ("kill" kills the buffer).  Confirmed first                                           |
+| =focus= | focus / go / switch / select / jump there    | focuses the desktop window, or selects the Emacs window and goes to the position                                                             |
+| =swap=  | swap / exchange this and that                | two desktop windows (=gowl-swap-clients=), or two Emacs windows (=window-swap-states=)                                                       |
+| =open=  | open / show / visit that here                | the file or URL at the pointed buffer position, in the pointed Emacs window                                                                  |
+
+They use existing DEFUNs only (=gowl-move-client-to-monitor=, =gowl-client-set-geometry=, =gowl-set-tags=, =gowl-swap-clients=, =gowl-close-client=, =gowl-focus-client=).  A window embedded in an Emacs window is not moved (its place belongs to Emacs).  =open= reads the one file name or URL at the position, locally, to act on it; that is the only place buffer text is read, and it is not sent anywhere.
+
+Destructive commands ask first (=cmacs-deixis-confirm-destructive=): through =cmacs-voice-confirm= -- a spoken yes/no or y/n, with the loop armed so the answer needs no wake phrase -- when the voice commands are loaded, else =y-or-n-p=.
+
+** Defining one
+
+#+begin_src emacs-lisp
+(cmacs-deixis-define-command pin
+    "\\`\\(?:pin\\|keep\\) <object>\\'" (that)
+  "\"Pin that\": make the pointed window sticky."
+  (unless (plist-get that :client)
+    (user-error "That is not a desktop window"))
+  (gowl-set-client-sticky (plist-get that :client) t))
+#+end_src
+
+The argument list names the referents in spoken order.  The body may start with a docstring, then =:confirm FORM= (non-nil: confirm first; a string is the question).  It reports a refusal with =user-error=, and can tell its verbs apart through =cmacs-deixis-command-words= (the canonical form).  Commands run from the command loop (=cmacs-voice-run-later=), so they may select windows.
+
+* Privacy
+
+- The pointers are sampled only while =cmacs-deixis-mode= is on *and* the voice loop is listening (its state is neither =idle= nor =paused=).  The mode follows =cmacs-voice-loop-state-change-functions=.
+- Samples live in fixed rings in memory: the compositor's 512 entries, and at most 128 entries for each Lisp-sampled pointer.  Stopping empties them.
+- Nothing is written to disk and nothing is sampled on a locked session.
+- What reaches a model is the legend: ids, titles, buffer names and positions.  Never buffer text, never coordinates of anything but the pointed spot.
+
+* Customization
+
+| Variable                              | Default            | Meaning                                                    |
+|---------------------------------------+--------------------+------------------------------------------------------------|
+| =cmacs-deixis-latency-ms=             | -60                | added to a word's time before lookup; calibrate it         |
+| =cmacs-deixis-window-before-ms=       | 150                | window before the word                                     |
+| =cmacs-deixis-window-after-ms=        | 300                | window after the word                                      |
+| =cmacs-deixis-words=                  | this/that/these/those, it, here/there | word to role                                |
+| =cmacs-deixis-clause-followers=       | i, we, you, ...    | after these, "that" is a conjunction                       |
+| =cmacs-deixis-pronoun-blockers=       | is, was, will, ... | after these, "it" points at nothing                        |
+| =cmacs-deixis-filler-words=           | please, over, the, ... | dropped before command matching                        |
+| =cmacs-deixis-pointer-order=          | =(vr hand gowl emacs)= | which pointer is asked first                           |
+| =cmacs-deixis-elsewhere-confidence=   | 0.8                | pointer confidence that overrides an active region         |
+| =cmacs-deixis-fallback-to-point=      | t                  | "this" with nothing pointed at means point                 |
+| =cmacs-deixis-fallback-word-ms=       | 350                | per-word guess when a transcript has no times              |
+| =cmacs-deixis-sample-interval=        | 0.1                | Lisp-sampled pointers                                      |
+| =cmacs-deixis-confirm-destructive=    | t                  | confirm "close that"                                       |
+| =cmacs-deixis-annotate-for-commands=  | nil                | annotate on the =commands= route too                       |
+
+Hook: =cmacs-deixis-resolved-functions=, run with =(TEXT BINDINGS)= after every resolved utterance.
+
+* Voice-loop additions
+
+Three additive hooks in =lisp/cmacs/cmacs-voice-loop.el=, usable by anything:
+
+- =cmacs-voice-loop-segment-start-functions= -- =(SEG LEAD-MS)= when a speech segment opens; =LEAD-MS= is the audio already in it.
+- =cmacs-voice-loop-utterance-filter-function= -- =(TEXT SEG RESULT)= before the route; returns the text to send, or nil when it took the utterance.  A filter that signals does not eat the utterance.
+- =cmacs-voice-loop--final-result= -- the recognizer result of the utterance being dispatched.
+
+* Tests
+
+=test/cmacs/cmacs-deixis-tests.el= is pure ERT: stub pointers answering from a table of times, synthetic word times, every gowl DEFUN stubbed.  It covers token merging (=▁= pieces, leading spaces, punctuation, CJK), proportional interpolation, the wake-phrase-tolerant alignment, detection, two different referents in one utterance, the latency shift, window and dwell, the region rule, "it", the annotated format, the command matcher and each built-in, stale client ids, the filter, the segment clock, the Lisp rings, and that sampling follows the mode and the loop.
+
+Not covered by ERT, and needing a live session: the C ring against a real compositor, the C word builder against a real sherpa model, and every timing figure above.

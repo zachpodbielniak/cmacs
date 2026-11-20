@@ -77,6 +77,7 @@ interaction.
 * CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Journal::               Local activity journal with privacy filters.
+* CMacs Deixis::                Deictic voice: "move that there" bound to what was pointed at.
 * CMacs AI and ai-glib 0.13::   ACP agents, steering, limit notices, Codex transport.
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
@@ -13845,6 +13846,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include journal.texi
+
+@c ===================================================================
+@include deixis.texi
 
 @c ===================================================================
 @include ai-0.13.texi
