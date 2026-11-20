@@ -1,0 +1,339 @@
+#+title: Agent desktops
+#+description: A private, headless gowl for each brigade agent: lifecycle, isolation providers, tools, the relay, watching and taking over
+#+authors: Zach Podbielniak
+#+categories: cmacs ai-brigade gowl
+#+created: 2026-11-20T12:00:00-05:00
+#+updated: 2026-11-20T12:00:00-05:00
+#+version: 1
+
+* What it is
+
+An agent that drives GUI programs on the screen you are sitting at fights you for the pointer and the focus. An agent desktop gives it a screen nobody is sitting at: a private, headless gowl with its own Wayland socket, seat, focus and clipboard. The agent's programs open there, the agent looks at it and drives it through gowl's own MCP server, and you can watch it and take it over.
+
+It is clawtilla's "display computer" (=deps/clawtilla/docs/computers.org=, the =gowl= backend) restated in Elisp, so a brigade agent needs no clawtilla daemon. It is *not* isolation: the programs run as you, on your files. The screen is the safe part. Combine it with =worktree= or =podman= when you want the rest.
+
+| File | Holds |
+|------+-------|
+| =lisp/cmacs/cmacs-brigade-desktop.el= | lifecycle, the JSON-RPC client, the relay, the isolation providers, the agent's tools, the dashboard panel |
+| =lisp/cmacs/cmacs-brigade-desktop-view.el= | =M-x cmacs-brigade-desktop-view= |
+| =test/cmacs/cmacs-brigade-desktop-tests.el= | 24 ERT tests; one starts a real gowl and is opt-in |
+
+There is no C. Everything is processes, sentinels, timers and network processes with callbacks, because cmacs may itself be the compositor of the session (=emacs --gowl=), where a blocked Emacs is a frozen desktop.
+
+* Quick start
+
+#+begin_src elisp
+;; An agent with a desktop.
+(cmacs-brigade-register-agent
+ :name 'painter
+ :prompt "You drive GUI programs on your own desktop."
+ :isolation 'desktop
+ :tools '(desktop))
+
+;; Or by hand.
+(cmacs-brigade-desktop-start "scratch")
+(cmacs-brigade-desktop-view "scratch")   ; t takes control, l launches
+(cmacs-brigade-desktop-stop "scratch")
+#+end_src
+
+* Requirements
+
+A gowl built with its MCP module (=make MCP=1= in =deps/gowl=; Fedora build packages =libsoup3-devel=, =libdex-devel=, =libpng-devel=). The MCP module is where pictures and input come from, so a gowl without it cannot be looked at or driven and is passed over. =desktop_text= and gowl's =screen_text= need =tesseract= and =tesseract-langpack-eng=. =setpriv= (util-linux) is used when present.
+
+*The in-tree gowl that cmacs builds has no MCP module*, so on a development tree the search skips it and uses the installed one, and says so in the status:
+
+#+begin_example
+deps/gowl/build/release/gowl has no mcp module (built without MCP=1)
+#+end_example
+
+* Lifecycle
+
+| Function | Does |
+|----------+------|
+| =cmacs-brigade-desktop-start ID &optional CALLBACK= | starts a desktop keyed by an agent/task id; returns at once; CALLBACK gets =(ID OK)= |
+| =cmacs-brigade-desktop-stop ID= | stops it and every program on it; safe to call twice |
+| =cmacs-brigade-desktop-list= | the ids there are |
+| =cmacs-brigade-desktop-status ID= | a plist: =:state= (=locating=, =starting=, =ready=, =failed=, =stopped=), =:reason=, =:notes=, =:held=, =:program=, =:pid=, =:width=, =:height=, =:layout-width=, =:layout-height=, =:scale=, =:wayland=, =:relay=, =:directory=, =:log= |
+| =cmacs-brigade-desktop-take ID= / =-release ID= / =-held-p ID= | the takeover |
+
+** Finding a gowl
+
+With =cmacs-brigade-desktop-gowl-program= nil the candidates are, in order: =deps/gowl/build/release/gowl= and =deps/gowl/build/debug/gowl= under =cmacs-brigade-desktop-source-directory= (default =source-directory=), then every =gowl= on =exec-path=, then =/usr/bin= and =/usr/sbin=. Each is asked two things, asynchronously, with a five second limit each:
+
+1. =--version= must exit 0 and say something. A gowl that cannot load its wlroots fails here and nowhere earlier.
+2. =--list-modules-ex= must list an =mcp= module. A gowl too old to know the flag is given the benefit of the doubt.
+
+What was skipped is kept in =:notes=. A binary that answered is remembered with its modification time and not asked again until it changes. A pinned path is used instead of searching and must still answer =--version=.
+
+The standalone gowl finds its modules next to its own binary and then in its compiled-in module directory; it reads no environment variable for that (=CMACS_GOWL_MODULE_DIR= is read by cmacs's embedded gowl only), so nothing is exported.
+
+** How gowl is started
+
+=gowl --config DIR/gowl.yaml --no-c-config=, under =setpriv --pdeathsig SIGTERM= when =setpriv= exists (=cmacs-brigade-desktop-use-pdeathsig=), with =make-process= and an argument list, never a shell string. Its working directory is your home, because that is what its =spawn= hands to programs. Its environment is yours plus:
+
+#+begin_example
+XDG_RUNTIME_DIR=DIR/run            its sockets, not yours
+WLR_BACKENDS=headless              named outright: left to choose, wlroots
+WLR_HEADLESS_OUTPUTS=1             would find WAYLAND_DISPLAY and open a
+WLR_RENDERER=pixman                window on your screen
+WLR_LIBINPUT_NO_DEVICES=1
+GOWL_OUTPUT_SIZE=1280x800          cmacs-brigade-desktop-resolution
+GOWL_DISABLE_SYSTEMD=1             never touches your session's units
+#+end_example
+
+and with =WAYLAND_DISPLAY=, =WAYLAND_SOCKET=, =DISPLAY=, =GOWL_SOCKET= and =GOWL_MCP_SOCKET= removed.
+
+The generated =gowl.yaml= is exactly this, and none of your gowl configuration is read:
+
+#+begin_src yaml
+# Written by cmacs for an agent's headless desktop; rewritten at start.
+modules:
+  ipc:
+    enabled: true
+  mcp:
+    enabled: true
+    transport-stdio: true
+    transport-http: false
+#+end_src
+
+** Ready, failed, stopped
+
+A timer looks every tenth of a second. The desktop is =ready= when =gowl.sock=, =gowl-mcp.sock= and =wayland-0= exist in =run/=. It is =failed=, with gowl's last lines as the reason, when gowl exits first or =cmacs-brigade-desktop-start-timeout= (15 s) passes. Nothing waits: callers hand over a callback.
+
+The Wayland socket's name is known before gowl starts. =run/= is emptied at each start and holds only that gowl's files, so the first free name is always =wayland-0=; that is what lets the environment be handed to an agent while gowl is still coming up. A gowl that opened any other name is stopped and the start failed, since its programs were told =wayland-0=.
+
+Stopping sends SIGTERM to the process that was started, through its process object, and SIGKILL three seconds later if it is still there. Never a pattern: this machine runs other gowls, the session's among them. Every desktop is stopped from =kill-emacs-hook=; =setpriv --pdeathsig= covers a crash.
+
+** Files
+
+=cmacs-brigade-desktop-directory=, by default =$XDG_STATE_HOME/cmacs/brigade/desktops/=, one 0700 directory per desktop:
+
+| Path | What |
+|------+------|
+| =gowl.yaml= | the generated config (0600) |
+| =server.log= | gowl's output (0600). A log that is a symlink or not a plain file is refused at start |
+| =run/= | gowl's =XDG_RUNTIME_DIR=: =wayland-0=, =gowl.sock=, =gowl-mcp.sock=. Removed when the desktop stops |
+| =relay.sock= | the filtered relay (0600). Removed when the desktop stops |
+| =shots/screen.png= | the last picture taken for an agent (0600). Removed when the desktop stops |
+
+An id that is a plain file name is used as the directory name; anything else (a slash, a space, a leading dot) becomes a hash, because an id reaches here from a plan file and must not be able to name a path.
+
+A unix socket address holds 107 bytes. A directory deep enough that =run/gowl-mcp.sock= would not fit is refused at start, before anything is made, with the path named.
+
+* Options
+
+| Option | Default | |
+|--------+---------+-|
+| =cmacs-brigade-desktop-gowl-program= | nil (search) | pin a gowl |
+| =cmacs-brigade-desktop-source-directory= | nil (=source-directory=) | where the in-tree build is looked for |
+| =cmacs-brigade-desktop-relay-program= | nil (search) | the =gowl-mcp= named in an agent's MCP config |
+| =cmacs-brigade-desktop-resolution= | ="1280x800"= | each side 64 to 8192 |
+| =cmacs-brigade-desktop-scale= | =1.0= | applied over IPC =monitor.configure= once up; the layout is then resolution / scale |
+| =cmacs-brigade-desktop-directory= | =$XDG_STATE_HOME/cmacs/brigade/desktops= | keep it short |
+| =cmacs-brigade-desktop-start-timeout= | 15 | seconds |
+| =cmacs-brigade-desktop-call-timeout= | 30 | seconds per call |
+| =cmacs-brigade-desktop-use-pdeathsig= | t | |
+| =cmacs-brigade-desktop-grants= | =(look act spawn)= | the default grants |
+| =cmacs-brigade-desktop-agent-grants= | nil | =((AGENT . GRANTS) ...)= |
+| =cmacs-brigade-desktop-podman-args= | nil | extra =podman run= arguments for =desktop-podman= |
+| =cmacs-brigade-desktop-view-interval= | 1.0 | seconds between pictures in the viewer |
+
+Leave the scale at 1 unless the programs are unreadable: a model clicking on a screenshot expects the picture's pixels to be the coordinates.
+
+* Isolation providers
+
+Registered through the public =cmacs-brigade-register-isolation=, like the shipped three.
+
+| Kind | Is |
+|------+----|
+| =desktop= | =none= with a screen |
+| =desktop-worktree= | a desktop and the =worktree= provider's git worktree (its cwd, both environments) |
+| =desktop-podman= | a desktop and the =podman= provider's container, with the Wayland socket file mounted |
+
+The registry has no way to combine two providers, so the combinations are kinds of their own. They call the shipped providers' own prepare and teardown functions; if the second half fails, the first is torn down.
+
+** What prepare returns
+
+#+begin_src elisp
+(:cwd "/where/it/was/"
+ :env (("WAYLAND_DISPLAY" . "/…/desktops/task-1/run/wayland-0")   ; absolute
+       ("GDK_BACKEND" . "wayland")
+       ("QT_QPA_PLATFORM" . "wayland")
+       ("DISPLAY" . "")
+       ("CMACS_BRIGADE_DESKTOP" . "task-1"))
+ :desktop "task-1"
+ :mcp-servers ((:name "desktop"
+                :command "/usr/bin/gowl-mcp"
+                :args ("--socket" "/…/desktops/task-1/relay.sock"))))
+#+end_src
+
+=:cwd= and =:env= are the existing contract and reach every worker today, so a CLI agent's own shell opens programs on its desktop. =WAYLAND_DISPLAY= is the socket's absolute path, which libwayland takes as it is and which survives a sandbox replacing =XDG_RUNTIME_DIR=. =DISPLAY= is emptied rather than unset because a worker's environment is a list of =NAME=VALUE= and cannot unset; the nested gowl's XWayland display is known only to gowl, and a program started through gowl's own spawn (=desktop_launch=) inherits it.
+
+=:desktop= and =:mcp-servers= are *additions* to the contract. =:mcp-servers= is the MCP endpoint for gowl's own tools: the relay, never gowl's socket. A run hands it to =cmacs-brigade-host-provision=, which writes each server into the CLI agent's MCP config beside =cmacs=; see [[*CLI agents]].
+
+Prepare returns while gowl is still starting. The agent's desktop tools wait for the desktop themselves.
+
+** desktop-podman
+
+The container is given the Wayland socket *file*, at the same path, and the three variables. Never the directory: =gowl.sock= and =gowl-mcp.sock= sit beside it and both answer =spawn= by running a command on the host.
+
+This is the one place that waits. A container's mounts are fixed when it is created, and the mount is of a socket that does not exist until gowl has started. The wait is bounded by the start timeout and spent in =accept-process-output=; the =podman run= right after it blocks for longer.
+
+The mount is made through a new variable in =cmacs-brigade-isolation.el=, =cmacs-brigade-isolation-podman-extra-args=, bound around the shipped prepare function.
+
+With SELinux enforcing, a container is normally denied a connection to a socket owned by an unconfined process. =cmacs-brigade-desktop-podman-args= is where you decide what to do about that (=("--security-opt" "label=disable")= is the usual way). It is empty by default because that is a decision, not a default. *Not verified on a real container.*
+
+* What the agent may do
+
+Three grants, clawtilla's split:
+
+| Grant | gowl's tools | The brigade's tools |
+|-------+--------------+---------------------|
+| =look= | =list_clients=, =list_monitors=, =get_tag_state=, =get_config=, =list_keybinds=, =list_modules=, =get_focused_client=, =describe_desktop=, =find_window=, =get_client_process_info=, =screenshot_client=, =screenshot_monitor=, =screenshot_region=, =screen_text=, =pick_color= | =desktop_screenshot=, =desktop_windows=, =desktop_text= |
+| =act= | =focus_client=, =close_client=, =move_client_to_tag=, =set_client_state=, =resize_client=, =move_client=, =swap_clients=, =zoom_client=, =view_tag=, =toggle_tag_view=, =set_client_tags=, =set_mfact=, =set_nmaster=, =send_key=, =send_text=, =send_mouse=, =send_mouse_move=, =send_scroll= | =desktop_key=, =desktop_type=, =desktop_click=, =desktop_scroll= |
+| =spawn= | =spawn= | =desktop_launch= |
+| never | =start_recording=, =drain_recording=, =stop_recording=, =recording_status=, =macro_record= | |
+
+All three are on by default because the screen is private. Recording is granted by nothing, whatever is written in the option. A tool in no class is not relayed: gowl's server also has =compositor_quit=, =signal_client=, =add_keybind=, the clipboard history and the macro, broadcast and input-remap tools, and a tool gowl gains later has to be put in a class by somebody before an agent can call it.
+
+#+begin_src elisp
+(setq cmacs-brigade-desktop-agent-grants '((reviewer look)))
+#+end_src
+
+* The agent's tools
+
+Defined with =cmacs-brigade-deftool=, group =desktop=, all asynchronous. The acting ones are marked destructive, so a read-only agent only looks.
+
+| Tool | Does | Needs |
+|------+------+-------|
+| =desktop_screenshot= | a picture; returns the PNG's path and size | =look= |
+| =desktop_windows= | the windows open, as JSON | =look= |
+| =desktop_text= | the text on screen, or in =x=, =y=, =width=, =height= (OCR) | =look= |
+| =desktop_launch= | start =command=; returns at once | =spawn= |
+| =desktop_key= | one key (=Return=) or a combination (=Ctrl+s=) | =act= |
+| =desktop_type= | type =text= into the focused window | =act= |
+| =desktop_click= | click =button= at =x=, =y= | =act= |
+| =desktop_scroll= | scroll =direction= by =amount= at =x=, =y= | =act= |
+
+*None of them takes a desktop.* The desktop is the calling task's, and the task is what the brigade says it is, not what the model writes. An agent that could name a desktop could name another agent's; one that could name a socket could name the session's. A call from no task (a chat buffer, an external MCP client) and a task with no desktop are both refused in a sentence.
+
+A tool's handler is not told who is calling. =cmacs-brigade-before-tool-call-functions= is, and runs immediately before the handler, so the caller is noted there and taken by the handler as its first act.
+
+Tool results are text, so =desktop_screenshot= writes the picture to =shots/screen.png= in the desktop's own directory (one file, replaced each time, removed with the desktop) and returns its path. An agent whose MCP client shows images gets real ones from gowl's own =screenshot_monitor= through the relay.
+
+How each reaches gowl:
+
+- A click is =send_mouse_move= then =send_mouse=; a scroll is a move then =send_scroll=. gowl's tools act where the pointer already is.
+- One key is the MCP =send_key=, which takes exactly one XKB key name. A combination goes to the IPC socket's =window.send_key=, the one that understands modifiers.
+- =desktop_launch= is the IPC socket's =spawn= (it returns the pid), falling back to the MCP =spawn= tool.
+
+* The relay
+
+gowl's MCP socket answers anybody who can reach it, with every tool. An agent is never given it. It is given =relay.sock=, a server inside cmacs that passes lines to gowl and back and looks at three things on the way:
+
+| Line | What happens |
+|------+--------------|
+| =tools/list= | the reply is cut down to the tools the agent's grants admit; a tool it may not use is not offered at all |
+| =tools/call= | a tool outside its grants, or an acting tool while a person holds the desktop, is answered by the relay with an =isError= result and never reaches gowl |
+| =initialize=, =ping=, =notifications/*=, replies | passed through |
+| a batch (a JSON array) | refused whole: a call inside an array is still a call |
+| any other method | =-32601= |
+
+Bytes from gowl go straight through unless a tool list is owed, so a screenshot (megabytes on one line) is not copied line by line.
+
+=gowl-mcp --socket …/relay.sock= is what goes in an agent's MCP config; =gowl-mcp= is gowl's own stdio-to-socket bridge and does no filtering of its own.
+
+* Watching, and taking over
+
+=M-x cmacs-brigade-desktop-view= shows the desktop as a picture, taken again every =cmacs-brigade-desktop-view-interval= seconds *while the buffer is on screen*. A buffer nobody is looking at asks for nothing. The picture never touches the disk: the image is made from the bytes gowl sent. It is scaled to fit the window, and a click is mapped back to the desktop's own coordinates.
+
+| Key | Does |
+|-----+------|
+| =t= | take control |
+| =r=, =C-c C-r= | release (only =C-c C-r= while you hold it) |
+| =C-c C-k= | send a key or combination by name (=Ctrl+s=, =Alt+F4=) |
+| =l=, =C-c C-l= | launch a program (you need not hold the desktop) |
+| =g= | take a picture now |
+| =q= | bury the view, releasing the desktop if you held it |
+
+While you hold it the agent's acting tools, the brigade's and gowl's, are refused with:
+
+#+begin_example
+A person has taken control of this desktop, so desktop_click was not done.
+Looking still works -- screenshots, window lists, reading text -- so wait and
+try again once they release it.
+#+end_example
+
+Looking is not refused, so the agent can wait usefully. And while you hold it, what you type and the clicks and scrolling you do on the picture go to the desktop: printing keys as text, and Return, Tab, BackSpace, Escape, Delete, the arrows, Home, End, Page Up and Down and F1 to F12 as keys. Emacs keeps =C-x=, =M-x= and its other prefixes; that is why releasing is =C-c C-r= and not =r=, and why a combination is sent by name.
+
+Killing the view buffer releases the desktop too. A desktop held by a buffer nobody can see is an agent stopped for no reason anybody remembers.
+
+The brigade dashboard has a *Desktops* panel: id, state, size, whether you hold it, and why it failed.
+
+* Security
+
+- The display is reachable by anything running as you that can reach its socket, in a 0700 directory. It is not a boundary against your own processes.
+- gowl runs with only its IPC and MCP modules, its MCP on a unix socket only, and none of your configuration. Its runtime directory is its own, so it cannot replace your session's =gowl.sock=.
+- An agent gets the relay, never =gowl.sock= or =gowl-mcp.sock=. A sandbox gets the Wayland socket file, never =run/=.
+- The state directory is not under any agent's working directory.
+
+* CLI agents
+
+A CLI agent (=claude-code=, =opencode=, =codex=, =grok-build=) is another process, so it reaches its desktop over MCP. Both halves are wired.
+
+** The desktop's server is in its config
+
+=cmacs-brigade--start-now= passes the prepared plist's =:mcp-servers= to =cmacs-brigade-host-provision= as =:extra-servers=, and each config dialect's emitter writes them beside the =cmacs= server:
+
+| Dialect | Agent | Where the =desktop= server lands |
+|---------+-------+----------------------------------|
+| =claude= | claude-code | =mcpServers.desktop=: =command=, =args=, =env= |
+| =opencode= | opencode | =mcp.desktop=: =type: local=, one =command= array, =environment= |
+| =grok= | grok-build | =[mcp_servers.cmacs-brigade-desktop]= |
+| =codex= | codex | the same table, in the overlay =CODEX_HOME/config.toml= |
+
+The TOML dialects prefix the name with =cmacs-brigade-=, for the reason the =cmacs= server is called =cmacs-brigade= there: grok merges config sources by server name, and a name a project's own config also uses makes the entry repo-local and silently unstarted. In those agents the tools are therefore the =cmacs-brigade-desktop= server's.
+
+The servers are passed to the emitter exactly as the provider returned them. Every conversion a dialect needs (an =:env= plist or alist, a TOML string) happens inside that dialect's emitter, and =cmacs-brigade-host--extra-servers= refuses a server no dialect could write faithfully: no =:command=, a =:name= that is not =[A-Za-z0-9_-]+=, a duplicate, or one of the brigade's own names (=cmacs=, =cmacs-brigade=), which would replace the scoped server. A refusal fails the start with a reason; it does not start an agent that is missing the server its isolation promised.
+
+** A =desktop_*= call knows its task
+
+The agent's =cmacs= server is a *scoped socket* (=cmacs-brigade-scope-open=). The run opens it with the task id as a second argument, the scope record in the editor keeps it, and every session accepted on that socket carries it. The MCP handler reads it from there and evaluates =(cmacs-brigade-call-tool NAME ARGS "mcp" nil TASK)=, so the before-tool-call hook sees =:task= exactly as it does for an in-process agent, and =desktop_*= act on that task's desktop.
+
+- The id never comes from the client. It is not in the config file, not in the agent's environment for this purpose, and no argument is read for it: a =task=, =desktop= or =id= member in a call's arguments is ignored, as it is in-process.
+- A scope opened for task A cannot reach task B's desktop. There is nothing it could send that names one.
+- The plain =cmacs-mcp-<pid>.sock=, and a scope opened for no task (a harness or chat buffer's), carry no task. =desktop_*= answer =this call came from no brigade task=.
+- The id is spliced into the generated call through =cmacs_dispatch_lisp_escape=, like the tool's name and arguments.
+- The call still goes through =cmacs-brigade-call-tool=, so grants, the takeover, confirmation, the audit hooks and the activity journal's agent rule apply unchanged. One consequence: a CLI agent's calls to cmacs's tools now appear in its task's transaction log, where before only an in-process agent's did.
+
+** What remains
+
+1. *No scope, no task.* In a build without the scoped-socket DEFUN, or when the socket cannot be bound, provisioning falls back to the plain socket behind the relay (as it always has). Calls then carry no task and =desktop_*= are refused.
+2. *No real CLI run in the test suite.* The tests drive the scoped socket with a plain MCP client and read the configs back in every dialect; they do not start =claude=, =opencode=, =codex= or =grok=.
+3. *=desktop-podman=.* The =desktop= server's command is a host path to =gowl-mcp= and its socket a host path; whether both exist inside the container depends on the image and mounts. The =desktop_*= brigade tools do not depend on either.
+4. A worker's environment cannot unset a variable, hence =DISPLAY== empty.
+
+* Tests
+
+=make -C test check-cmacs= runs =test/cmacs/cmacs-brigade-desktop-tests.el=. All but one test run against a stand-in for gowl, a unix socket server in the test's own Emacs: the exact config text, both environments, the socket-path refusal, grants, the takeover, coordinate mapping, the JSON-RPC client (handshake, lines that answer nothing, =isError=, errors, a dead socket, a timeout, ids answered as strings), the relay end to end, the tools reaching only the caller's desktop, and the binary search passing over a gowl with no MCP module. For CLI agents: the provider's own =:mcp-servers= provisioned through every registered config dialect, a tool call made by a plain MCP client on a scoped socket resolving to the scope's task (and to no other, whatever its arguments claim, including a task id written to break out of its string), a scope for a task with no desktop, a scope for no task, and the unscoped socket refused.
+
+=cmacs-brigade-desktop-test-real-start-and-stop= starts a real headless gowl in a temporary directory, takes a picture, lists its tools through the relay and stops it. It runs only with =CMACS_TEST_DESKTOP= set and a gowl present:
+
+#+begin_src sh
+CMACS_TEST_DESKTOP=1 src/emacs --batch -Q -L lisp/cmacs -L test/cmacs -l ert \
+    -l test/cmacs/cmacs-brigade-desktop-tests.el -f ert-run-tests-batch-and-exit
+#+end_src
+
+* Troubleshooting
+
+| You see | Why | Fix |
+|---------+-----+-----|
+| =no gowl could be started: … has no mcp module= | every gowl found was built without =MCP=1= | build one with it, or install one; pin it with =cmacs-brigade-desktop-gowl-program= |
+| =… does not run: … libwlroots= | an old hand-built gowl ahead of the working one on =PATH= | remove it, or pin the working one |
+| =gowl did not open its sockets in 15 seconds= | no MCP module after all, or it died; read =server.log= | as above |
+| =… is 131 bytes, and a unix socket address holds 107= | the state directory is too deep | set =cmacs-brigade-desktop-directory= to a shorter path |
+| =this call came from no brigade task= | a desktop tool called from a chat, a harness buffer, or an MCP client that is not a run's own agent | only a task's own agent has a desktop; see [[*CLI agents]] |
+| the agent's clicks are refused | you hold the desktop | =C-c C-r= in the viewer |
+| =screen_text refused: … tesseract= | no OCR program | install =tesseract= and =tesseract-langpack-eng= |
+| a black picture | nothing is open yet | =desktop_launch= something, or =l= in the viewer |
+| an ids mismatch you would not notice | gowl 0.5.0's MCP server answers id =1= as ="1"= | handled: ids are compared as text |

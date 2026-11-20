@@ -34,10 +34,11 @@
 ;; point of the sidecar-debugging case is reading what an agent actually
 ;; did, not the tidied version it would tell you about.
 ;;
-;; Tool entries are recorded for in-process agents.  A CLI agent reaches
-;; its tools over the MCP relay, which does not currently carry the task
-;; id, so its log has messages, replies and state but not individual tool
-;; calls -- see `cmacs-brigade-log-tool-attribution' for the details.
+;; Tool entries are recorded for in-process agents, and for the calls a
+;; CLI agent makes to cmacs's tools over its scoped socket, which knows
+;; the task it was opened for.  A CLI agent's own built-in tools run in
+;; its process and are never seen here -- see
+;; `cmacs-brigade-log-tool-attribution' for the details.
 
 ;;; Code:
 
@@ -60,11 +61,13 @@ marked in the text so a reader can tell it happened; nil disables it."
   "Which workers produce per-tool log entries.
 
 `inproc' agents call tools through `cmacs-brigade-call-tool' in this
-process, which knows the task and records each call.  CLI agents reach
-the same tools over the MCP relay, whose protocol carries the capability
-token but not the task id, so a call arriving from one cannot be
-attributed to the task that made it.  Their logs still carry every
-message, reply and state change.")
+process, which knows the task and records each call: for them the log is
+complete.  CLI agents reach cmacs's tools over MCP, on a scoped socket
+that remembers the task it was opened for (`cmacs-brigade-scope-open'),
+so those calls are attributed and recorded too -- but only those.  The
+tools a CLI agent runs itself, its shell and its file edits, never pass
+through this process.  A call on the plain socket, or on a scope opened
+for no task, belongs to no run and is not recorded.")
 
 (defun cmacs-brigade-log-file (id)
   "Path of task ID's transaction log."
@@ -234,8 +237,9 @@ own -- the log has to be readable even in a session where nothing runs."
 (defun cmacs-brigade-log--on-tool-call (req)
   "Record REQ, a finished tool call, against the task that made it.
 
-Attribution comes from `:task' in the request, which only the in-process
-worker sets -- see `cmacs-brigade-log-tool-attribution'.  A call with no
+Attribution comes from `:task' in the request, which the in-process
+worker sets and a scoped MCP socket supplies for a CLI agent -- see
+`cmacs-brigade-log-tool-attribution'.  A call with no
 task is a chat buffer's or an external MCP client's and belongs to no
 run, so it is dropped rather than guessed at."
   (when-let* ((task (plist-get req :task)))

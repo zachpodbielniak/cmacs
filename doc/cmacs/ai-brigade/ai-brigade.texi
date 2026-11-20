@@ -292,9 +292,11 @@ object per line rather than forwarding it.
 Return non-@code{nil} if @var{allowlist} authorises @var{tool-name}.
 @end defun
 
-@defun cmacs-brigade-scope-open allowlist
+@defun cmacs-brigade-scope-open allowlist &optional task
 Open a scoped MCP socket serving only @var{allowlist} and return its
-path.  @code{cmacs-brigade-scope-close} closes it;
+path.  With @var{task}, a brigade task id, every brigade tool call
+arriving on the socket is made on that task's behalf: the id is kept
+with the socket and never read from the client.  @code{cmacs-brigade-scope-close} closes it;
 @code{cmacs-brigade-scope-list} lists the open ones as
 @code{(@var{path} . @var{allowlist})} pairs.  Provisioning calls these
 for you.

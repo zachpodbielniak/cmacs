@@ -1382,7 +1382,14 @@ warning on stdout before its report."
                  :format (and (fboundp 'cmacs-brigade-host-format-for-provider)
                               (cmacs-brigade-host-format-for-provider
                                (car (cmacs-brigade--split-model
-                                     (plist-get agent :model)))))))
+                                     (plist-get agent :model)))))
+                 ;; Servers the isolation brought with it (a desktop's
+                 ;; own), passed as the provider returned them: each
+                 ;; dialect's emitter does its own converting.
+                 :extra-servers (plist-get prepared :mcp-servers)
+                 ;; The scoped socket remembers whose it is, so a tool
+                 ;; call a CLI agent makes over MCP is this task's.
+                 :task task-id))
           (setq proc (funcall (plist-get worker :start)
                               task-id agent
                               (cond

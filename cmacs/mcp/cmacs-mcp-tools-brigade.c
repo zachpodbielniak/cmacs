@@ -41,25 +41,9 @@
 #include <string.h>
 #include <unistd.h>
 
-/* Escape for interpolation into a quoted Lisp string.  Every argument
- * here is untrusted input from an external agent, so this is the
- * boundary that keeps it data rather than code. */
-static gchar *
-escape_for_lisp (const gchar *s)
-{
-  GString *out;
-  const gchar *p;
-
-  if (s == NULL) return g_strdup ("");
-  out = g_string_sized_new (strlen (s) + 8);
-  for (p = s; *p; p++)
-    {
-      if (*p == '\\' || *p == '"')
-        g_string_append_c (out, '\\');
-      g_string_append_c (out, *p);
-    }
-  return g_string_free (out, FALSE);
-}
+/* The key a scope's task id is stored under on each of its sessions'
+ * McpServer.  See scope_session_created.  */
+#define CMACS_BRIGADE_SCOPE_TASK_KEY "cmacs-brigade-scope-task"
 
 /* One handler for every brigade tool.  The tool name arrives as MCP's
  * `name' argument, so a single handler can serve the whole registry
@@ -72,12 +56,13 @@ handle_brigade_tool (McpServer *server, const gchar *name,
   g_autofree gchar *args_json = NULL;
   g_autofree gchar *esc_name = NULL;
   g_autofree gchar *esc_args = NULL;
+  g_autofree gchar *esc_task = NULL;
   g_autofree gchar *expr = NULL;
+  const gchar *task;
   g_autoptr (GError) err = NULL;
   g_autofree gchar *res = NULL;
   McpToolResult *result;
 
-  (void) server;
   (void) user_data;
 
   /* Re-serialise the arguments rather than walking them: the Elisp side
@@ -88,13 +73,37 @@ handle_brigade_tool (McpServer *server, const gchar *name,
   json_node_set_object (node, arguments);
   args_json = json_to_string (node, FALSE);
 
-  esc_name = escape_for_lisp (name);
-  esc_args = escape_for_lisp (args_json);
-  /* The agent argument is "mcp": an external client is not one of the
-   * brigade's own agents, and labelling it as such in the audit trail
-   * matters when working out who called what. */
-  expr = g_strdup_printf ("(cmacs-brigade-call-tool \"%s\" \"%s\" \"mcp\")",
-                          esc_name, esc_args);
+  /* Every string here is untrusted input from an external agent;
+   * cmacs_dispatch_lisp_escape is the boundary that keeps it data
+   * rather than code.  */
+  esc_name = cmacs_dispatch_lisp_escape (name);
+  esc_args = cmacs_dispatch_lisp_escape (args_json);
+
+  /* Who is calling.  The agent argument is "mcp": an external client is
+   * not one of the brigade's own agents, and labelling it as such in
+   * the audit trail matters when working out who called what.
+   *
+   * The task is another matter, and comes from exactly one place: the
+   * record of the scoped socket this session was accepted on, copied
+   * onto the session's McpServer when it was created.  Nothing the
+   * client sends is consulted -- not an argument, not a header, not its
+   * environment -- because a task id is what decides whose desktop a
+   * `desktop_*' call acts on, and an agent that could state its task
+   * could state another agent's.  A session on the plain cmacs socket,
+   * or on a scope opened for no task, has no such record and belongs to
+   * no task, which the tools that need one refuse in a sentence.  */
+  task = g_object_get_data (G_OBJECT (server), CMACS_BRIGADE_SCOPE_TASK_KEY);
+  if (task != NULL && *task != '\0')
+    {
+      esc_task = cmacs_dispatch_lisp_escape (task);
+      expr = g_strdup_printf ("(cmacs-brigade-call-tool \"%s\" \"%s\" "
+                              "\"mcp\" nil \"%s\")",
+                              esc_name, esc_args, esc_task);
+    }
+  else
+    expr = g_strdup_printf ("(cmacs-brigade-call-tool \"%s\" \"%s\" "
+                            "\"mcp\")",
+                            esc_name, esc_args);
 
   res = cmacs_dispatch_eval_string (expr, &err);
   if (res == NULL)
@@ -285,6 +294,7 @@ typedef struct
 {
   gchar               *path;
   gchar               *allowlist;
+  gchar               *task;        /* brigade task it was opened for, or NULL */
   McpUnixSocketServer *server;
 } CmacsBrigadeScope;
 
@@ -307,6 +317,7 @@ scope_free (gpointer p)
              g_strerror (errno));
   g_free (sc->path);
   g_free (sc->allowlist);
+  g_free (sc->task);
   g_free (sc);
 }
 
@@ -322,6 +333,14 @@ scope_session_created (McpUnixSocketServer *unix_server,
   guint i;
 
   (void) unix_server;
+
+  /* The session inherits the scope's task, as a copy it owns: the tool
+   * handler is handed the McpServer and nothing else, and a session can
+   * outlive the scope record by the length of a call in flight.  This
+   * is the only writer of the key.  */
+  if (sc->task != NULL)
+    g_object_set_data_full (G_OBJECT (server), CMACS_BRIGADE_SCOPE_TASK_KEY,
+                            g_strdup (sc->task), g_free);
 
   cmacs_brigade_policy_from_lisp (&policy);
 
@@ -392,7 +411,7 @@ scope_dir (GError **error)
 }
 
 DEFUN ("cmacs-brigade-scope-open", Fcmacs_brigade_scope_open,
-       Scmacs_brigade_scope_open, 1, 1, 0,
+       Scmacs_brigade_scope_open, 1, 2, 0,
        doc: /* Open a per-agent MCP socket that serves only ALLOWLIST.
 Returns the socket path.  A client connecting to it sees the tools
 ALLOWLIST admits (evaluated by the same C gate the relay uses, with
@@ -404,8 +423,16 @@ both.
 This is what makes a provision a capability: an agent that reaches
 the socket directly, bypassing `emacs --mcp-relay', still gets the
 scoped surface.  Close it with `cmacs-brigade-scope-close'.  Signals
-an error if the socket cannot be created.  */)
-  (Lisp_Object allowlist)
+an error if the socket cannot be created.
+
+Optional TASK is the id of the brigade task the socket is opened for.
+Every brigade tool call arriving on the socket is then made on that
+task's behalf -- `cmacs-brigade-call-tool' receives it as its TASK --
+which is how a tool that acts on "the calling task's" resources (its
+desktop, say) knows whose they are.  The id is held here, with the
+socket, and is never read from the client.  With TASK nil or empty the
+socket's calls belong to no task, as on the plain cmacs socket.  */)
+  (Lisp_Object allowlist, Lisp_Object task)
 {
   g_autoptr (GError) error = NULL;
   g_autofree gchar *dir = NULL;
@@ -415,6 +442,8 @@ an error if the socket cannot be created.  */)
   GMainContext *ctx;
 
   CHECK_STRING (allowlist);
+  if (!NILP (task))
+    CHECK_STRING (task);
 
   dir = scope_dir (&error);
   if (dir == NULL)
@@ -431,6 +460,8 @@ an error if the socket cannot be created.  */)
   sc = g_new0 (CmacsBrigadeScope, 1);
   sc->path = g_build_filename (dir, name, NULL);
   sc->allowlist = g_strdup (SSDATA (allowlist));
+  if (!NILP (task) && SBYTES (task) > 0)
+    sc->task = g_strdup (SSDATA (task));
   sc->server = mcp_unix_socket_server_new ("cmacs-brigade-scope",
                                             PACKAGE_VERSION, sc->path);
   mcp_unix_socket_server_set_instructions (sc->server,

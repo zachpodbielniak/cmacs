@@ -124,6 +124,12 @@ happened to be given a worktree."
 
 ;;;; podman
 
+(defvar cmacs-brigade-isolation-podman-extra-args nil
+  "Extra arguments for the `podman run' that starts an agent's container.
+Bound around `cmacs-brigade-isolation--podman-prepare' by a provider that
+builds on this one -- `desktop-podman' mounts its Wayland socket file
+this way -- so that it need not carry a copy of the command.")
+
 (defun cmacs-brigade-isolation--podman-name (agent-id)
   (format "cmacs-brigade-%s" agent-id))
 
@@ -134,11 +140,13 @@ happened to be given a worktree."
                 cmacs-brigade-podman-program))
   (let ((name (cmacs-brigade-isolation--podman-name agent-id)))
     (cmacs-brigade-isolation--podman-teardown agent-id)
-    (unless (zerop (call-process cmacs-brigade-podman-program nil nil nil
-                                 "run" "-d" "--name" name
-                                 "--network" "none"
-                                 cmacs-brigade-podman-image
-                                 "sleep" "infinity"))
+    (unless (zerop (apply #'call-process cmacs-brigade-podman-program
+                          nil nil nil
+                          `("run" "-d" "--name" ,name
+                            "--network" "none"
+                            ,@cmacs-brigade-isolation-podman-extra-args
+                            ,cmacs-brigade-podman-image
+                            "sleep" "infinity")))
       (user-error "cmacs-brigade: could not start container %s" name))
     (list :cwd default-directory
           :env (list (cons "CMACS_BRIGADE_CONTAINER" name)))))
@@ -187,5 +195,10 @@ happened to be given a worktree."
     (_ (and (cmacs-brigade-registry-get 'isolation kind) t))))
 
 (provide 'cmacs-brigade-isolation)
+
+;; The `desktop', `desktop-worktree' and `desktop-podman' providers.
+;; After the `provide', because that file builds on the functions above
+;; and asks for this one when it needs them.
+(require 'cmacs-brigade-desktop nil 'noerror)
 
 ;;; cmacs-brigade-isolation.el ends here

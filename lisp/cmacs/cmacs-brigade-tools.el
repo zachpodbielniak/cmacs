@@ -201,7 +201,10 @@ given, is the brigade task on whose behalf the call is being made; it
 reaches the hooks as `:task' and is what lets the transaction log record
 which run a tool call belonged to.  A call with no TASK -- from a chat
 buffer, or an external MCP client -- belongs to no run, which is a fact
-worth recording as absence rather than papering over.
+worth recording as absence rather than papering over.  A CLI agent's
+calls arrive over MCP with the TASK its scoped socket was opened for
+\(`cmacs-brigade-scope-open'); that id is the editor's own record and
+is never taken from the client.
 
 Errors are returned as an \"Error: ...\" string rather than signalled:
 that is ai-glib's soft-error convention, and it matters because a
@@ -261,7 +264,17 @@ the model read what went wrong and try something else."
              (deadline (+ (float-time) (cmacs-brigade-tool-timeout tool))))
         (apply (cmacs-brigade-tool-handler tool) cb args)
         (while (and (not done) (< (float-time) deadline))
-          (sit-for 0.05))
+          ;; `sit-for' reads an event, and `read-event' signals when
+          ;; `inhibit-interaction' is set -- which the RPC dispatch sets
+          ;; around every call arriving over MCP.  Waited for that way,
+          ;; an :async tool called by a CLI agent started its work and
+          ;; then answered "Error: inhibited-interaction" in any session
+          ;; with a display (batch never saw it: there `sit-for' is
+          ;; `sleep-for').  `accept-process-output' runs the same
+          ;; process filters and timers and reads no event.
+          (if (bound-and-true-p inhibit-interaction)
+              (accept-process-output nil 0.05)
+            (sit-for 0.05)))
         (if done
             (cmacs-brigade--stringify result)
           (format "Error: %s timed out after %ss"

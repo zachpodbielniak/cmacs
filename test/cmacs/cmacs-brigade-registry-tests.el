@@ -393,6 +393,105 @@ provisioner exports as CMACS_BRIGADE_BLOCK_RECURSIVE."
   (let ((cmacs-brigade-block-recursive-tools nil))
     (should (cmacs-brigade-tool-allowed-p "ai_call" "ai_call"))))
 
+(ert-deftest cmacs-brigade-async-tool-waits-without-reading-events ()
+  "An :async tool called under `inhibit-interaction' is waited for, not failed.
+
+The RPC dispatch binds `inhibit-interaction' around every MCP call, and
+`sit-for' reads an event, which signals there.  Batch never sees that --
+its `sit-for' is `sleep-for' -- so the stub below makes it behave as it
+does in a session with a display."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (unwind-protect
+      (progn
+        (eval '(cmacs-brigade-deftool test-async-wait "Answer later." ()
+                 :async t :timeout 5
+                 (run-at-time 0.05 nil done "late answer"))
+              t)
+        (cl-letf (((symbol-function 'sit-for)
+                   (lambda (&rest _)
+                     (when (bound-and-true-p inhibit-interaction)
+                       (signal 'inhibited-interaction nil))
+                     (sleep-for 0.05))))
+          (let ((inhibit-interaction t))
+            (should (equal (cmacs-brigade-call-tool "test_async_wait" "{}"
+                                                    "mcp")
+                           "late answer")))
+          ;; And with a user to interact with, the wait is `sit-for' still.
+          (should (equal (cmacs-brigade-call-tool "test_async_wait" "{}")
+                         "late answer"))))
+    (cmacs-brigade-unregister-tool 'test-async-wait)))
+
+(ert-deftest cmacs-brigade-scope-task-is-the-servers-not-the-clients ()
+  "A scope's task reaches `cmacs-brigade-call-tool'; a client's claim does not.
+
+The hook sees every call the socket's sessions make.  What it is told
+about the task is what `cmacs-brigade-scope-open' was told, for every
+scope at once and whatever the arguments say."
+  (skip-unless (fboundp 'cmacs-brigade-scope-open))
+  (skip-unless (equal (func-arity 'cmacs-brigade-scope-open) '(1 . 2)))
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (let* ((seen nil)
+         (note (lambda (request)
+                 (when (equal (plist-get request :tool) "test_scope_task")
+                   (push (list (plist-get request :task)
+                               (plist-get request :agent))
+                         seen))
+                 t))
+         (scopes nil)
+         (call
+          (lambda (task arguments)
+            (let* ((path (car (push (if (eq task 'none)
+                                        (cmacs-brigade-scope-open
+                                         "test_scope_task")
+                                      (cmacs-brigade-scope-open
+                                       "test_scope_task" task))
+                                    scopes)))
+                   (out "")
+                   (proc (make-network-process
+                          :name "brigade-scope-task-test" :family 'local
+                          :service path :noquery t :coding 'utf-8-unix
+                          :filter (lambda (_p s) (setq out (concat out s))))))
+              (unwind-protect
+                  (progn
+                    (process-send-string
+                     proc
+                     (concat
+                      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                      "\"params\":{\"protocolVersion\":\"2024-11-05\","
+                      "\"capabilities\":{},\"clientInfo\":{\"name\":\"ert\","
+                      "\"version\":\"0\"}}}\n"
+                      "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+                      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\","
+                      "\"params\":{\"name\":\"test_scope_task\",\"arguments\":"
+                      arguments "}}\n"))
+                    (let ((deadline (+ (float-time) 10)))
+                      (while (and (< (float-time) deadline)
+                                  (not (string-match-p "\"id\":2" out)))
+                        (accept-process-output proc 0.1)))
+                    (should (string-match-p "\"id\":2" out))
+                    (should (string-match-p "scope-task-ok" out)))
+                (ignore-errors (delete-process proc)))))))
+    (unwind-protect
+        (progn
+          (eval '(cmacs-brigade-deftool test-scope-task "Answer." ()
+                   "scope-task-ok")
+                t)
+          (add-hook 'cmacs-brigade-before-tool-call-functions note)
+          (funcall call "task-A" "{}")
+          (funcall call "task-B" "{\"task\":\"task-A\"}")
+          (funcall call 'none "{\"task\":\"task-A\"}")
+          (funcall call "" "{}")
+          ;; Quotes, a backslash, a newline and non-ASCII survive as data.
+          (funcall call "t\"x\\y\nz é" "{}")
+          (should (equal (reverse seen)
+                         '(("task-A" "mcp") ("task-B" "mcp")
+                           (nil "mcp") (nil "mcp")
+                           ("t\"x\\y\nz é" "mcp")))))
+      (remove-hook 'cmacs-brigade-before-tool-call-functions note)
+      (cmacs-brigade-unregister-tool 'test-scope-task)
+      (dolist (scope scopes)
+        (ignore-errors (cmacs-brigade-scope-close scope))))))
+
 ;;; Scoped sockets
 
 (ert-deftest cmacs-brigade-scope-open-close-round-trip ()

@@ -64,29 +64,134 @@ Zero means it lasts as long as the run."
   (or cmacs-brigade-relay-command
       (expand-file-name invocation-name invocation-directory)))
 
-(defun cmacs-brigade-host--config-claude (command args env)
-  "Claude Code's .mcp.json shape."
-  (list :mcpServers
-        (list :cmacs
-              (list :command command
-                    :args (vconcat args)
-                    :env env))))
+;;;; Extra servers
+;;
+;; An isolation provider can hand an agent MCP servers of its own (a
+;; `desktop' agent gets the relay of its desktop's gowl tools).  They are
+;; written beside the cmacs server, by the emitters, each in its own
+;; dialect.  The call site passes the provider's plists through untouched:
+;; every conversion a dialect needs happens in that dialect's emitter, for
+;; the reason `cmacs-brigade-host--env-pairs' gives at length.
 
-(defun cmacs-brigade-host--config-opencode (command args env)
+(defconst cmacs-brigade-host-reserved-server-names '("cmacs" "cmacs-brigade")
+  "Names an extra MCP server may not take: they are the brigade's own.
+A provider that could name its server `cmacs' would replace the scoped
+server in the agent's config with a command of its choosing.")
+
+(defun cmacs-brigade-host--extra-servers (servers)
+  "Validate SERVERS and return them as a list of normalized plists.
+
+Each of SERVERS is a plist of :name (a string or symbol), :command (a
+string), and optionally :args (a list of strings) and :env (a plist or
+an alist, as `cmacs-brigade-host--env-pairs' takes).  The result holds
+:name as a string, :args as a list and :env as a list of string pairs.
+
+Signals `cmacs-brigade-error' for a server no dialect could write
+faithfully: no command, a name that is not [A-Za-z0-9_-]+ (the one
+spelling that is a bare key in TOML and unremarkable in JSON), a
+reserved name, or a name used twice.  An error rather than a skip --
+the run then fails saying why, instead of starting an agent that is
+quietly missing the server its isolation promised."
+  (let (seen out)
+    (dolist (server servers)
+      (let* ((raw (plist-get server :name))
+             (name (cond ((stringp raw) raw)
+                         ((keywordp raw) (substring (symbol-name raw) 1))
+                         ((and raw (symbolp raw)) (symbol-name raw))))
+             (command (plist-get server :command))
+             (args (plist-get server :args)))
+        (unless (and name (string-match-p "\\`[A-Za-z0-9_-]+\\'" name))
+          (signal 'cmacs-brigade-error
+                  (list (format "extra MCP server name %S must match [A-Za-z0-9_-]+"
+                                raw))))
+        (when (member name cmacs-brigade-host-reserved-server-names)
+          (signal 'cmacs-brigade-error
+                  (list (format "extra MCP server may not be named `%s'"
+                                name))))
+        (when (member name seen)
+          (signal 'cmacs-brigade-error
+                  (list (format "two extra MCP servers are named `%s'" name))))
+        (unless (and (stringp command) (not (string-empty-p command)))
+          (signal 'cmacs-brigade-error
+                  (list (format "extra MCP server `%s' has no :command"
+                                name))))
+        (unless (and (listp args) (cl-every #'stringp args))
+          (signal 'cmacs-brigade-error
+                  (list (format "extra MCP server `%s': :args must be a list of strings"
+                                name))))
+        (push name seen)
+        (push (list :name name :command command :args args
+                    :env (mapcar (lambda (pair)
+                                   (cons (format "%s" (car pair))
+                                         (format "%s" (cdr pair))))
+                                 (cmacs-brigade-host--env-pairs
+                                  (plist-get server :env))))
+              out)))
+    (nreverse out)))
+
+(defun cmacs-brigade-host--env-object (pairs)
+  "PAIRS, a list of (NAME . VALUE) strings, as a plist `json-serialize' takes."
+  (cl-loop for (name . value) in pairs
+           append (list (intern (concat ":" name)) value)))
+
+(defun cmacs-brigade-host--config-claude (command args env
+                                                  &optional extra-servers)
+  "Claude Code's .mcp.json shape.
+EXTRA-SERVERS, as given to `cmacs-brigade-host-provision', are written
+beside the cmacs server under their own names."
+  (list :mcpServers
+        (append
+         (list :cmacs
+               (list :command command
+                     :args (vconcat args)
+                     :env env))
+         (cl-loop for server in (cmacs-brigade-host--extra-servers
+                                 extra-servers)
+                  for pairs = (plist-get server :env)
+                  append
+                  (list (intern (concat ":" (plist-get server :name)))
+                        (append
+                         (list :command (plist-get server :command)
+                               :args (vconcat (plist-get server :args)))
+                         (and pairs
+                              (list :env (cmacs-brigade-host--env-object
+                                          pairs)))))))))
+
+(defun cmacs-brigade-host--config-opencode (command args env
+                                                    &optional extra-servers)
   "opencode's own shape, which is not Claude's.
 
 Servers nest under `mcp', a local one is spelled with an explicit
 `type', and the whole command lives in one array rather than being split
 into command and args.  A Claude-shaped file handed to opencode is
 silently ignored, which is why the dialect is chosen per provider rather
-than written once and hoped over."
+than written once and hoped over.
+
+EXTRA-SERVERS, as given to `cmacs-brigade-host-provision', are further
+local servers in the same shape."
   (list :$schema "https://opencode.ai/config.json"
         :mcp
-        (list :cmacs
-              (list :type "local"
-                    :command (vconcat (cons command args))
-                    :enabled t
-                    :environment env))))
+        (append
+         (list :cmacs
+               (list :type "local"
+                     :command (vconcat (cons command args))
+                     :enabled t
+                     :environment env))
+         (cl-loop for server in (cmacs-brigade-host--extra-servers
+                                 extra-servers)
+                  for pairs = (plist-get server :env)
+                  append
+                  (list (intern (concat ":" (plist-get server :name)))
+                        (append
+                         (list :type "local"
+                               :command (vconcat
+                                         (cons (plist-get server :command)
+                                               (plist-get server :args)))
+                               :enabled t)
+                         (and pairs
+                              (list :environment
+                                    (cmacs-brigade-host--env-object
+                                     pairs)))))))))
 
 (defun cmacs-brigade-host--env-pairs (env)
   "ENV as a list of (NAME . VALUE) string pairs.
@@ -120,7 +225,44 @@ condition, and every codex session died before it got a single tool."
         (setq env (cddr env)))
       (nreverse pairs)))))
 
-(defun cmacs-brigade-host--config-grok (command args env)
+(defun cmacs-brigade-host--toml-string (string)
+  "STRING as a TOML basic string.
+Not `%S': Emacs prints a control character raw and a non-ASCII one
+either raw or as an escape TOML does not have, and a newline inside a
+basic string is a parse error that takes the whole config with it."
+  (concat "\""
+          (replace-regexp-in-string
+           "[\"\\\\[:cntrl:]]"
+           (lambda (c)
+             (pcase c
+               ("\"" "\\\"")
+               ("\\" "\\\\")
+               ("\n" "\\n")
+               ("\t" "\\t")
+               (_ (format "\\u%04X" (aref c 0)))))
+           string t t)
+          "\""))
+
+(defun cmacs-brigade-host--toml-server (name command args env)
+  "One [mcp_servers.NAME] table: COMMAND, ARGS, and ENV (any shape)."
+  (concat (format "\n[mcp_servers.%s]\n" name)
+          (format "command = %s\n" (cmacs-brigade-host--toml-string command))
+          (format "args = [%s]\n"
+                  (mapconcat #'cmacs-brigade-host--toml-string args ", "))
+          (let ((pairs (cmacs-brigade-host--env-pairs env)))
+            (if pairs
+                (concat (format "\n[mcp_servers.%s.env]\n" name)
+                        (mapconcat
+                         (lambda (pair)
+                           (format "%s = %s" (car pair)
+                                   (cmacs-brigade-host--toml-string
+                                    (format "%s" (cdr pair)))))
+                         pairs "\n")
+                        "\n")
+              ""))))
+
+(defun cmacs-brigade-host--config-grok (command args env
+                                                &optional extra-servers)
   "A TOML fragment declaring one [mcp_servers.*] table.
 
 The server is named `cmacs-brigade\=' here and plain `cmacs\=' in the
@@ -142,23 +284,27 @@ A mitigation, not a guarantee -- a project whose .mcp.json happens to
 use `cmacs-brigade\=' reintroduces it.  Nothing on this side can detect
 that; only `grok mcp doctor NAME --json\=' reports the truth.
 
+EXTRA-SERVERS, as given to `cmacs-brigade-host-provision', each get a
+table of their own, named `cmacs-brigade-NAME\=' for the same reason.
+
 Returned as a string rather than a plist: grok reads TOML, and the
 provider appends this to a copy of the user's own config."
-  (concat "\n[mcp_servers.cmacs-brigade]\n"
-          (format "command = %S\n" command)
-          (format "args = [%s]\n"
-                  (mapconcat (lambda (a) (format "%S" a)) args ", "))
-          (let ((pairs (cmacs-brigade-host--env-pairs env)))
-            (if pairs
-                (concat "\n[mcp_servers.cmacs-brigade.env]\n"
-                        (mapconcat
-                         (lambda (pair)
-                           (format "%s = %S" (car pair) (cdr pair)))
-                         pairs "\n")
-                        "\n")
-              ""))))
+  (concat (cmacs-brigade-host--toml-server "cmacs-brigade" command args env)
+          ;; Prefixed for the reason the docstring gives for the first
+          ;; one: `desktop' is exactly the kind of name a project's own
+          ;; config would also pick.
+          (mapconcat
+           (lambda (server)
+             (cmacs-brigade-host--toml-server
+              (concat "cmacs-brigade-" (plist-get server :name))
+              (plist-get server :command)
+              (plist-get server :args)
+              (plist-get server :env)))
+           (cmacs-brigade-host--extra-servers extra-servers)
+           "")))
 
-(defun cmacs-brigade-host--config-codex (command args env)
+(defun cmacs-brigade-host--config-codex (command args env
+                                                 &optional extra-servers)
   "A TOML fragment for Codex's config.toml.
 
 Codex declares MCP servers in exactly the shape grok does, so this is
@@ -168,7 +314,7 @@ CODEX_HOME/config.toml, which `cmacs-brigade--codex-overlay' builds.
 
 The server is named `cmacs-brigade' for the same reason it is there --
 a project's own config must not merge with ours by name."
-  (cmacs-brigade-host--config-grok command args env))
+  (cmacs-brigade-host--config-grok command args env extra-servers))
 
 (defconst cmacs-brigade-host-config-formats
   '((claude   . cmacs-brigade-host--config-claude)
@@ -205,7 +351,9 @@ here.")
     ('codex    "mcp-config-codex")
     (_         "mcp-config")))
 
-(cl-defun cmacs-brigade-host-provision (agent-id allowlist &key format)
+(cl-defun cmacs-brigade-host-provision (agent-id allowlist
+                                                 &key format extra-servers
+                                                 task)
   "Provision scoped tool access for AGENT-ID limited to ALLOWLIST.
 
 Returns a plist with :path (the MCP config), :token and :format, or nil
@@ -218,7 +366,20 @@ exists because the agents do not agree on one: opencode nests servers
 under `mcp' with a different server shape, grok reads TOML.  The dialect
 belongs here, with the credential lifecycle, rather than in each
 frontend -- a second writer would be a second place that has to agree
-about the 0600 write, the revoke-before-provision and the sweep."
+about the 0600 write, the revoke-before-provision and the sweep.
+
+EXTRA-SERVERS is a list of further MCP servers to declare beside the
+cmacs one, each a plist of :name, :command and optionally :args and
+:env -- what an isolation provider returns as `:mcp-servers'.  They are
+handed to the emitter as they are; see
+`cmacs-brigade-host--extra-servers' for what is accepted.
+
+TASK is the id of the brigade task this provision is for, when it is
+for one.  It is recorded with the scoped socket, inside the editor, and
+every brigade tool call arriving on that socket is made on that task's
+behalf.  It is deliberately not written to the config or exported to
+the agent: the agent is not asked who it is.  A harness or chat buffer
+provisions with no TASK, and its calls belong to no task."
   (unless (and (fboundp 'cmacs-mcp-socket-path) (cmacs-mcp-socket-path))
     (cl-return-from cmacs-brigade-host-provision nil))
   (cmacs-brigade-host-sweep-stale)
@@ -247,7 +408,7 @@ about the 0600 write, the revoke-before-provision and the sweep."
          ;; allowlist below is defence in depth.  Without the DEFUN (an
          ;; MCP-less build) the plain socket is used and the relay is the
          ;; only gate, which is what it always was.
-         (scope (cmacs-brigade-host--open-scope expanded))
+         (scope (cmacs-brigade-host--open-scope expanded task))
          (socket (or scope (cmacs-mcp-socket-path)))
          ;; The gate's two settings travel with the allowlist so the
          ;; relay -- which has no Lisp VM and cannot read them -- reaches
@@ -267,9 +428,17 @@ about the 0600 write, the revoke-before-provision and the sweep."
          ;; `cmacs-brigade-host--env-pairs'.  Choosing the shape here
          ;; means naming the dialects that want it, and the list is
          ;; always one short.
-         (config (funcall emit (cmacs-brigade--relay-command)
-                          (list "--mcp-relay")
-                          env)))
+         (config (condition-case err
+                     (funcall emit (cmacs-brigade--relay-command)
+                              (list "--mcp-relay")
+                              env extra-servers)
+                   ;; The scope is already open and nothing records it
+                   ;; yet; an emitter refusing a server must not leave a
+                   ;; listening socket nobody will ever close.
+                   (error
+                    (when (and scope (fboundp 'cmacs-brigade-scope-close))
+                      (ignore-errors (cmacs-brigade-scope-close scope)))
+                    (signal (car err) (cdr err))))))
     (make-directory dir t)
     (set-file-modes dir #o700)
     ;; `with-file-modes' sets the umask for the duration, so the file is
@@ -284,14 +453,18 @@ about the 0600 write, the revoke-before-provision and the sweep."
              cmacs-brigade--provisions)
     (list :path path :token token :format fmt :scope scope :socket socket)))
 
-(defun cmacs-brigade-host--open-scope (allowlist)
+(defun cmacs-brigade-host--open-scope (allowlist &optional task)
   "Open a scoped socket serving ALLOWLIST, or nil when unavailable.
+TASK, when non-nil, is the brigade task the socket is for; the scope
+remembers it and attributes every tool call on the socket to it.
 Failure is reported, not signalled: a provision without a scope still
 works through the relay, and refusing to run an agent because a socket
-could not be bound would be the wrong trade."
+could not be bound would be the wrong trade.  (Such a provision's calls
+arrive on the plain socket and so belong to no task.)"
   (when (fboundp 'cmacs-brigade-scope-open)
     (condition-case err
-        (cmacs-brigade-scope-open allowlist)
+        (cmacs-brigade-scope-open allowlist
+                                  (and task (format "%s" task)))
       (error
        (message "cmacs-brigade: scoped socket unavailable, relay-only: %s"
                 (error-message-string err))

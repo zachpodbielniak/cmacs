@@ -75,6 +75,10 @@ Before a CLI agent starts, the brigade:
    session registers the full tool set and then removes what the allowlist
    does not admit --- the same C gate the relay uses, run by the process that
    owns the tools;
+   A run opens it for its task id (the optional second argument), and
+   every brigade tool call arriving on the socket is then made on that
+   task's behalf --- the id is kept with the socket, never read from the
+   client. A harness or chat buffer opens one for no task;
 3. writes a 0600 =.mcp.json= under =XDG_RUNTIME_DIR= naming the relay, with the
    scoped socket path, the allowlist, the gate's policy and a token in its
    =env= block;

@@ -168,6 +168,128 @@ wrong.  Hence provisioning here, not emitting."
               (should (string-match-p "CMACS_BRIGADE_ALLOW" text))))
         (cmacs-brigade-host-revoke agent)))))
 
+(ert-deftest cmacs-brigade-host-provision-extra-server-every-format ()
+  "An extra MCP server reaches the config in every registered dialect.
+
+The servers are handed to provision in ONE shape -- the plists an
+isolation provider returns -- with a plist :env in one and an alist :env
+in another, and every emitter has to cope.  A dialect added to the table
+without an assertion below fails here rather than passing unexamined."
+  (skip-unless (and (featurep 'cmacs-brigade-host)
+                    (fboundp 'cmacs-mcp-start)))
+  (skip-unless (cmacs-brigade-run-tests--mcp-socket))
+  (let ((servers (list (list :name "desktop" :command "/bin/relay"
+                             :args (list "--socket" "/run/x \"q\"/r.sock")
+                             :env (list :RELAY_MODE "strict"))
+                       (list :name 'second :command "/bin/two"
+                             :env '(("TWO_A" . "1") ("TWO_B" . "b\\c")))
+                       (list :name "bare" :command "/bin/three"))))
+    (dolist (fmt (mapcar #'car cmacs-brigade-host-config-formats))
+      (let ((agent (format "test-extra-%s" fmt)))
+        (unwind-protect
+            (let* ((p (cmacs-brigade-host-provision
+                       agent "memory" :format fmt :extra-servers servers))
+                   (text (with-temp-buffer
+                           (insert-file-contents (plist-get p :path))
+                           (buffer-string))))
+              (should (eq fmt (plist-get p :format)))
+              (should (equal "-rw-------"
+                             (file-attribute-modes
+                              (file-attributes (plist-get p :path)))))
+              (should (string-match-p "CMACS_BRIGADE_SOCKET" text))
+              (pcase fmt
+                ((or 'claude 'opencode)
+                 (let* ((cfg (json-parse-string text :object-type 'plist
+                                                :array-type 'list))
+                        (all (plist-get cfg (if (eq fmt 'claude)
+                                                :mcpServers :mcp)))
+                        (env-key (if (eq fmt 'claude) :env :environment))
+                        (desktop (plist-get all :desktop))
+                        (second (plist-get all :second))
+                        (bare (plist-get all :bare)))
+                   (should (plist-get (plist-get (plist-get all :cmacs)
+                                                 env-key)
+                                      :CMACS_BRIGADE_SOCKET))
+                   (if (eq fmt 'claude)
+                       (progn
+                         (should (equal (plist-get desktop :command)
+                                        "/bin/relay"))
+                         (should (equal (plist-get desktop :args)
+                                        '("--socket" "/run/x \"q\"/r.sock")))
+                         (should (equal (plist-get bare :args) nil)))
+                     (should (equal (plist-get desktop :command)
+                                    '("/bin/relay" "--socket"
+                                      "/run/x \"q\"/r.sock")))
+                     (should (equal (plist-get desktop :type) "local"))
+                     (should (equal (plist-get bare :command)
+                                    '("/bin/three"))))
+                   (should (equal (plist-get (plist-get desktop env-key)
+                                             :RELAY_MODE)
+                                  "strict"))
+                   (should (equal (plist-get second env-key)
+                                  '(:TWO_A "1" :TWO_B "b\\c")))
+                   (should-not (plist-member bare env-key))))
+                ((or 'grok 'codex)
+                 (dolist (table '("cmacs-brigade" "cmacs-brigade-desktop"
+                                  "cmacs-brigade-second" "cmacs-brigade-bare"))
+                   (should (string-match-p
+                            (format "^\\[mcp_servers\\.%s\\]$"
+                                    (regexp-quote table))
+                            text)))
+                 (should (string-match-p
+                          (regexp-quote
+                           "args = [\"--socket\", \"/run/x \\\"q\\\"/r.sock\"]")
+                          text))
+                 (should (string-match-p
+                          (concat "^\\[mcp_servers\\.cmacs-brigade-desktop"
+                                  "\\.env\\]\nRELAY_MODE = \"strict\"$")
+                          text))
+                 (should (string-match-p
+                          (regexp-quote "TWO_B = \"b\\\\c\"") text))
+                 (should-not (string-match-p
+                              "mcp_servers\\.cmacs-brigade-bare\\.env" text)))
+                (_ (ert-fail (format "dialect %s has no assertion here" fmt)))))
+          (cmacs-brigade-host-revoke agent))))))
+
+(ert-deftest cmacs-brigade-host-extra-server-is-refused-not-mangled ()
+  "A server no dialect can write faithfully fails the provision, cleanly.
+
+`cmacs' is the scoped server itself; a provider naming its own server
+that would replace it.  And a refusal must not leave the scoped socket
+it had already opened listening for nobody."
+  (skip-unless (and (featurep 'cmacs-brigade-host)
+                    (fboundp 'cmacs-mcp-start)))
+  (skip-unless (cmacs-brigade-run-tests--mcp-socket))
+  (let ((before (and (fboundp 'cmacs-brigade-scope-list)
+                     (length (cmacs-brigade-scope-list)))))
+    (dolist (fmt (mapcar #'car cmacs-brigade-host-config-formats))
+      (dolist (bad (list '((:name "cmacs" :command "/bin/x"))
+                         '((:name "cmacs-brigade" :command "/bin/x"))
+                         '((:name "a.b" :command "/bin/x"))
+                         '((:name "a]\n[evil" :command "/bin/x"))
+                         '((:command "/bin/x"))
+                         '((:name "ok"))
+                         '((:name "ok" :command "/bin/x" :args ("a" 1)))
+                         '((:name "dup" :command "/bin/x")
+                           (:name "dup" :command "/bin/y"))))
+        (should-error (cmacs-brigade-host-provision
+                       "test-bad-extra" "memory" :format fmt
+                       :extra-servers bad)
+                      :type 'cmacs-brigade-error)
+        (should-not (gethash "test-bad-extra" cmacs-brigade--provisions))))
+    (when before
+      (should (= before (length (cmacs-brigade-scope-list)))))))
+
+(ert-deftest cmacs-brigade-host-toml-string-is-toml ()
+  "Strings in the TOML dialect are escaped as TOML, not as Lisp."
+  (skip-unless (fboundp 'cmacs-brigade-host--toml-string))
+  (should (equal (cmacs-brigade-host--toml-string "plain") "\"plain\""))
+  (should (equal (cmacs-brigade-host--toml-string "a\"b\\c")
+                 "\"a\\\"b\\\\c\""))
+  (should (equal (cmacs-brigade-host--toml-string "l1\nl2\tx\e")
+                 "\"l1\\nl2\\tx\\u001B\""))
+  (should (equal (cmacs-brigade-host--toml-string "é") "\"é\"")))
+
 (ert-deftest cmacs-brigade-host-env-pairs-takes-either-shape ()
   "The TOML emitters normalize their own environment.
 
@@ -488,6 +610,49 @@ reported success."
         ;; and it cleaned up after itself.  This task specifically:
         ;; the global count picks up runs other tests left behind.
         (should-not (gethash id cmacs-brigade--runs))))))
+
+(ert-deftest cmacs-brigade-start-hands-isolation-servers-and-task-to-provision ()
+  "A run provisions with its isolation's `:mcp-servers' and its own task id."
+  (skip-unless (and (cmacs-brigade-run-tests--available-p)
+                    (executable-find "bash")))
+  (cmacs-brigade-register-isolation
+   :name 'test-servers
+   :prepare (lambda (_id)
+              (list :cwd default-directory :env nil
+                    :mcp-servers (list (list :name "desktop"
+                                             :command "/bin/relay"
+                                             :args (list "--socket" "/s")))))
+   :teardown #'ignore)
+  (cmacs-brigade-register-agent
+   :name 'e2e-agent :prompt "# standing instructions"
+   :worker 'shell :isolation 'test-servers)
+  (let* ((finished nil)
+         (seen nil)
+         (real (symbol-function 'cmacs-brigade-host-provision))
+         ;; No cap: runs other tests left behind hold the slots, and this
+         ;; is about what a start passes on, not whether one is free.
+         (cmacs-brigade-max-concurrent 0)
+         (cmacs-brigade-run-finished-functions
+          (list (lambda (&rest _) (setq finished t)))))
+    (cl-letf (((symbol-function 'cmacs-brigade-host-provision)
+               (lambda (&rest args)
+                 (push args seen)
+                 (apply real args))))
+      (cmacs-brigade-run-tests--with-plan "echo ok"
+        (cmacs-brigade-task-transition id 'queued)
+        (should (cmacs-brigade-start-task id))
+        (let ((deadline (+ (float-time) 20)))
+          (while (and (null finished) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (should finished)
+        ;; This task's provision; a queued task another test left may
+        ;; have started behind it and provisioned too.
+        (should (= 1 (cl-count id seen :key #'car :test #'equal)))
+        (let ((args (cl-find id seen :key #'car :test #'equal)))
+          (should (equal (plist-get (cddr args) :task) id))
+          (should (equal (plist-get (cddr args) :extra-servers)
+                         '((:name "desktop" :command "/bin/relay"
+                            :args ("--socket" "/s"))))))))))
 
 (ert-deftest cmacs-brigade-task-prompt-comes-from-the-plan ()
   "The prompt is read back from the org file, not from the record."
