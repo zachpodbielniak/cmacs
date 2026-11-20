@@ -901,8 +901,15 @@ the session already has the matching tool_result."
            (cmacs-ai-chat--close-turn buf)
            (setq cmacs-ai-chat--tool-loop-depth 0)))
         (:error
+         ;; (:error MESSAGE) or (:error MESSAGE :kind K :reset R).  A
+         ;; usage limit, a rate limit, a lapsed login and an empty
+         ;; balance each get a sentence that says what to do about it,
+         ;; rather than only the provider's raw text.
+         ;; The heading stays "error" whatever the kind: saved chats
+         ;; are re-read by role, and `cmacs-ai-chat--skip-roles' is what
+         ;; keeps this text out of the history sent back to a model.
          (cmacs-ai-chat--insert-heading
-          buf "error" (cadr payload))
+          buf "error" (cmacs-ai-error-payload-sentence payload))
          (cmacs-ai-chat--close-turn buf)
          (setq cmacs-ai-chat--tool-loop-depth 0)
          (setq cmacs-ai-chat--pending-tool-uses nil))))))

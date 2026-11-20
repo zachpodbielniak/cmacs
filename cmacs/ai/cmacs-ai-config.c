@@ -53,6 +53,44 @@ cmacs_ai_openai_compatible_endpoint (Lisp_Object sym)
   return Qnil;
 }
 
+/* ── User-defined ACP agents ───────────────────────────────────────── */
+
+bool
+cmacs_ai_acp_symbol_p (Lisp_Object sym)
+{
+  /* `acp-agent' is ai-glib's own alias; accepted for the same reason
+   * `http' is above. */
+  return EQ (sym, intern ("acp")) || EQ (sym, intern ("acp-agent"));
+}
+
+Lisp_Object
+cmacs_ai_acp_agent (Lisp_Object sym)
+{
+  Lisp_Object alist, tail;
+
+  if (!SYMBOLP (sym) || NILP (sym))
+    return Qnil;
+
+  /* A plain cell read, like the endpoint lookup: void reads as "no
+   * agents" rather than signalling. */
+  alist = find_symbol_value (intern ("cmacs-ai-acp-agents"));
+  if (!CONSP (alist))
+    return Qnil;
+
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      /* An entry with an empty plist is still an agent (it runs
+       * $AI_ACP_COMMAND), so the entry itself is the answer's witness:
+       * return a non-nil plist even then. */
+      if (CONSP (entry) && EQ (XCAR (entry), sym))
+        return NILP (XCDR (entry))
+               ? list2 (intern (":command"), Qnil)
+               : XCDR (entry);
+    }
+  return Qnil;
+}
+
 AiProviderType
 cmacs_ai_provider_type_from_symbol (Lisp_Object sym)
 {
@@ -78,6 +116,14 @@ cmacs_ai_provider_type_from_symbol (Lisp_Object sym)
    * with its own base URL and key, so it maps to the same type. */
   if (!NILP (cmacs_ai_openai_compatible_endpoint (sym)))
     return AI_PROVIDER_OPENAI_COMPATIBLE;
+  /* ACP: any agent speaking the Agent Client Protocol.  Bare `acp'
+   * runs $AI_ACP_COMMAND; a name from `cmacs-ai-acp-agents' is the same
+   * type with its own command line.  Checked after the endpoints, so a
+   * name defined in both alists stays what it was before ACP existed. */
+  if (cmacs_ai_acp_symbol_p (sym))
+    return AI_PROVIDER_ACP;
+  if (!NILP (cmacs_ai_acp_agent (sym)))
+    return AI_PROVIDER_ACP;
   error ("cmacs-ai: unknown provider %s", SSDATA (SYMBOL_NAME (sym)));
 }
 

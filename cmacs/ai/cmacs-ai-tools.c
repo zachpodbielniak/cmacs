@@ -534,9 +534,11 @@ cmacs_ai_tools__main_done (gpointer user)
   if (j->result)
     payload = list2 (intern (":text"), build_string (j->result));
   else
-    payload = list2 (intern (":error"),
-                     build_string (j->error ? j->error->message
-                                            : "tool loop failed"));
+    /* (:error MESSAGE), plus :kind and :reset when the failure is a
+     * usage limit, a 429, a lapsed login or an empty balance -- which
+     * is what lets the brigade park a run until the reset instead of
+     * marking it failed. */
+    payload = cmacs_ai_error_payload (j->error, "tool loop failed");
   cmacs_dispatch_callback_invoke1 (j->cb_cookie, payload);
   cmacs_ai_tools_job__free (j);
   return G_SOURCE_REMOVE;
@@ -680,6 +682,183 @@ the model to continue with the new context.  */)
   return build_string (content);
 }
 
+/* ── Steering: words into a running turn ─────────────────────────
+ *
+ * ai-glib's AiSteerable hands text to the turn that is running, at the
+ * next point the engine itself accepts input, instead of making it wait
+ * to become the next turn.  The answer is a tri-state and the third
+ * value is the one that matters: INDETERMINATE means "sent, and nothing
+ * confirmed it", which counts as delivered because running the words
+ * twice is the one mistake steering must never make.  So a caller
+ * queues the words again only on `refused'.
+ *
+ * Threads.  ai_steerable_steer_async may be called from any thread and
+ * answers in the CALLER's thread-default context.  Every caller here is
+ * a DEFUN, so that is Emacs's thread -- but the tool loop being steered
+ * runs on a worker with a private context (cmacs_ai_tools__worker), and
+ * ai-glib hops onto it to splice the words in and hops back.  The
+ * callback below therefore does no Lisp at all: it copies the answer
+ * into C memory and re-posts to the cmacs context, which is the one
+ * place cmacs guarantees both the Lisp thread and the
+ * `waiting_for_input' guard.  A direct call would be correct today and
+ * a SIGSEGV the day ai-glib answered from the worker instead.
+ *
+ * Lifetime.  The async user_data is a ticket number, never a struct:
+ * the harness or executor being steered can be freed while the answer
+ * is in flight, and a ticket that fails to look up is the benign
+ * outcome.  */
+
+typedef struct
+{
+  guint    harness;   /* event callback to answer on, or 0 */
+  uint64_t cookie;    /* one-shot callback when HARNESS is 0 */
+} CmacsAiSteerTicket;
+
+/* Tickets by id.  Main thread only: added by cmacs_ai_steer_start,
+ * removed by cmacs_ai_steer__main_done, both of which run there.  */
+static GHashTable *cmacs_ai__steer_tickets = NULL;
+static guint       cmacs_ai__next_steer = 1;
+
+typedef struct
+{
+  guint          id;
+  AiSteerResult  result;
+  gchar         *reason;   /* owned; NULL when there is nothing to say */
+} CmacsAiSteerDone;
+
+static void
+cmacs_ai_steer_done__free (gpointer data)
+{
+  CmacsAiSteerDone *d = data;
+
+  g_free (d->reason);
+  g_free (d);
+}
+
+static gboolean
+cmacs_ai_steer__main_done (gpointer data)
+{
+  CmacsAiSteerDone *d = data;
+  CmacsAiSteerTicket *t;
+  Lisp_Object payload;
+  guint harness;
+  uint64_t cookie;
+
+  t = (cmacs_ai__steer_tickets == NULL)
+      ? NULL
+      : g_hash_table_lookup (cmacs_ai__steer_tickets,
+                             GUINT_TO_POINTER (d->id));
+  if (t == NULL)
+    return G_SOURCE_REMOVE;
+
+  harness = t->harness;
+  cookie = t->cookie;
+  /* Removed before Lisp runs: the callback may steer again.  */
+  g_hash_table_remove (cmacs_ai__steer_tickets, GUINT_TO_POINTER (d->id));
+
+  /* (:steer RESULT REASON ID).  ai_steer_result_to_string is the
+   * library's own spelling -- "refused", "delivered", "indeterminate"
+   * -- so the symbols cannot drift from its documentation.  */
+  payload = list4 (intern (":steer"),
+                   intern (ai_steer_result_to_string (d->result)),
+                   d->reason != NULL ? build_string (d->reason) : Qnil,
+                   make_uint (d->id));
+
+  if (harness != 0)
+    cmacs_ai_harness_emit_handle (harness, payload);
+  else
+    cmacs_dispatch_callback_invoke1 (cookie, payload);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+cmacs_ai_steer__on_steered (GObject *source, GAsyncResult *res,
+                            gpointer user)
+{
+  CmacsAiSteerDone *d = g_new0 (CmacsAiSteerDone, 1);
+  g_autoptr (GError) gerror = NULL;
+
+  d->id = GPOINTER_TO_UINT (user);
+  d->result = ai_steerable_steer_finish (AI_STEERABLE (source), res,
+                                         &gerror);
+  if (gerror != NULL)
+    d->reason = g_strdup (gerror->message);
+
+  /* No Lisp here -- see the section comment.  */
+  cmacs_glib_invoke_on_main (cmacs_ai_steer__main_done, d,
+                             cmacs_ai_steer_done__free);
+}
+
+guint
+cmacs_ai_steer_start (gpointer target, const gchar *text,
+                      guint harness, uint64_t cookie)
+{
+  CmacsAiSteerTicket *t;
+  guint id;
+
+  g_return_val_if_fail (AI_IS_STEERABLE (target), 0);
+
+  if (cmacs_ai__steer_tickets == NULL)
+    cmacs_ai__steer_tickets =
+      g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+
+  id = cmacs_ai__next_steer++;
+  if (id == 0)                  /* wrapped; 0 means "no ticket" */
+    id = cmacs_ai__next_steer++;
+
+  t = g_new0 (CmacsAiSteerTicket, 1);
+  t->harness = harness;
+  t->cookie = cookie;
+  g_hash_table_insert (cmacs_ai__steer_tickets, GUINT_TO_POINTER (id), t);
+
+  /* turn_id NULL: whichever turn is running.  ai-glib keeps the async
+   * source alive until the callback, so no ref is taken here.  */
+  ai_steerable_steer_async (AI_STEERABLE (target), NULL, text, NULL,
+                            cmacs_ai_steer__on_steered,
+                            GUINT_TO_POINTER (id));
+  return id;
+}
+
+DEFUN ("cmacs-ai-tools-steer", Fcmacs_ai_tools_steer,
+       Scmacs_ai_tools_steer, 3, 3, 0,
+       doc: /* Put TEXT into the tool loop running on EXECUTOR.
+
+EXECUTOR is a tool-executor handle whose loop was started with
+`cmacs-ai-tools-run-async'.  The words are spliced in at the top of the
+loop's next round -- after every result of the batch of tools that just
+ran, before the next request -- so nothing is interrupted and no tool
+call is separated from its result.
+
+Returns a ticket number at once.  CALLBACK is called later, on the main
+thread, with one argument (:steer RESULT REASON TICKET):
+
+  delivered      the running loop took the words.
+  indeterminate  they were sent and nothing confirmed it.  Treat this
+                 as delivered: the words may already be running, and
+                 sending them again risks running them twice.
+  refused        provably not delivered -- no loop is running, or it
+                 ended first.  REASON says why; the words are still
+                 yours to queue for the next turn.
+
+REASON is a string or nil.  */)
+  (Lisp_Object executor, Lisp_Object text, Lisp_Object callback)
+{
+  AiToolExecutor *exec;
+  guint id;
+
+  CHECK_FIXNAT (executor);
+  CHECK_STRING (text);
+
+  exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+  if (exec == NULL)
+    error ("cmacs-ai: bad executor handle");
+
+  id = cmacs_ai_steer_start (exec, SSDATA (text), 0,
+                             cmacs_dispatch_callback_register (callback));
+  return make_uint (id);
+}
+
 /* ── Tool calls off the command loop ───────────────────────────── */
 
 /* A chat's tool loop runs on the command loop: the stream callback
@@ -760,20 +939,36 @@ cmacs_ai_tool_job__main_done (gpointer user)
   gboolean cancelled = (j->result == NULL && j->error != NULL
                         && g_error_matches (j->error, G_IO_ERROR,
                                             G_IO_ERROR_CANCELLED));
+  /* A failed tool's message is read twice: by the model, as the
+   * tool_result, and by the person, in the buffer.  Neither wants
+   * ai-glib's machine-readable limit notice in it, so it is classified
+   * once here and the cleaned text serves both.  */
+  g_autofree gchar *clean = NULL;
+  gint64 reset = 0;
+  const gchar *limit_kind =
+    (j->result == NULL && !cancelled && j->error != NULL)
+    ? cmacs_ai_error_classify (j->error, &reset, &clean) : NULL;
   const gchar *content = j->result
     ? j->result
     : (cancelled ? "cancelled by the user"
-       : (j->error ? j->error->message : "tool execution failed"));
+       : (clean != NULL ? clean
+          : (j->error ? j->error->message : "tool execution failed")));
 
   g_hash_table_remove (cmacs_ai__tool_jobs, GUINT_TO_POINTER (j->job_id));
   cmacs_ai_tools__append_result (j->session_id, j->tool_id, j->tool_name,
                                  content, j->result == NULL);
 
-  /* (:text RESULT), (:error MESSAGE) or (:cancelled MESSAGE).  */
+  /* (:text RESULT), (:error MESSAGE) or (:cancelled MESSAGE); an
+   * :error that classifies also carries :kind SYMBOL :reset TIMESTAMP
+   * after the message, where older callers never look.  */
   Lisp_Object kind = intern (j->result ? ":text"
                              : cancelled ? ":cancelled" : ":error");
-  cmacs_dispatch_callback_invoke1 (j->cb_cookie,
-                                   list2 (kind, build_string (content)));
+  Lisp_Object payload = (limit_kind != NULL)
+    ? list (kind, build_string (content),
+            intern (":kind"), intern (limit_kind),
+            intern (":reset"), reset > 0 ? make_int (reset) : Qnil)
+    : list2 (kind, build_string (content));
+  cmacs_dispatch_callback_invoke1 (j->cb_cookie, payload);
   cmacs_ai_tool_job__free (j);
   return G_SOURCE_REMOVE;
 }
@@ -1184,6 +1379,7 @@ are watching the cost yourself.  */);
   defsubr (&Scmacs_ai_tools_free);
   defsubr (&Scmacs_ai_tools_register);
   defsubr (&Scmacs_ai_tools_run_async);
+  defsubr (&Scmacs_ai_tools_steer);
   defsubr (&Scmacs_ai_tools_execute_into_session);
   defsubr (&Scmacs_ai_tools_execute_into_session_async);
   defsubr (&Scmacs_ai_tools_cancel_job);

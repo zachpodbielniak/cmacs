@@ -25,6 +25,7 @@
 
 #include <ai-glib.h>
 #include <glib.h>
+#include <string.h>
 
 /* ── Registry ───────────────────────────────────────────────────── */
 
@@ -128,16 +129,105 @@ cmacs_ai__openai_compatible_from_endpoint (Lisp_Object ep)
   return c;
 }
 
+/* ── ACP agents (`cmacs-ai-acp-agents') ─────────────────────────────
+ *
+ * The value of KEY in PLIST through *VALUE, and whether KEY is there at
+ * all.  Presence matters separately from value: `:client-fs nil' turns
+ * a default-on capability off, which `plist_get' cannot tell from the
+ * key being absent.  Walks by hand so a malformed plist ends the search
+ * instead of signalling -- this runs inside provider construction,
+ * where an error would leak the half-built client. */
+static bool
+cmacs_ai__plist_has (Lisp_Object plist, const char *key, Lisp_Object *value)
+{
+  Lisp_Object k = intern (key), tail;
+
+  for (tail = plist; CONSP (tail) && CONSP (XCDR (tail));
+       tail = XCDR (XCDR (tail)))
+    if (EQ (XCAR (tail), k))
+      {
+        *value = XCAR (XCDR (tail));
+        return true;
+      }
+  return false;
+}
+
+/* Push one `cmacs-ai-acp-agents' entry onto an AiAcpClient.
+ *
+ * :command is split by ai-glib the way a shell would, with no shell
+ * run, so "gemini --experimental-acp" works and "$HOME/x | y" does not.
+ * An entry without one runs $AI_ACP_COMMAND like bare `acp'.
+ *
+ * :skip-permissions and :client-fs are only touched when the entry
+ * names them, so the library's own defaults (ask-and-refuse, reads
+ * offered) hold for an entry that says nothing. */
+static void
+cmacs_ai__apply_acp_agent (Lisp_Object agent, AiAcpClient *c)
+{
+  const gchar *command = cmacs_ai__endpoint_string (agent, ":command");
+  Lisp_Object v = Qnil;
+
+  if (command != NULL && *command != '\0')
+    ai_acp_client_set_command (c, command);
+  if (cmacs_ai__plist_has (agent, ":skip-permissions", &v))
+    ai_acp_client_set_skip_permissions (c, !NILP (v));
+  if (cmacs_ai__plist_has (agent, ":client-fs", &v))
+    ai_acp_client_set_client_fs (c, !NILP (v));
+}
+
+/* `cmacs-ai-codex-transport' onto a codex client.
+ *
+ * `exec' (the default, and what a void variable reads as) is left to
+ * the library, so a build that never loaded cmacs-ai.el behaves exactly
+ * as it did before the transport existed.  A symbol or a string is
+ * accepted: the defcustom stores a symbol, a hand-written `setq' tends
+ * to be a string. */
+static void
+cmacs_ai__apply_codex_transport (AiCodexCliClient *c)
+{
+  Lisp_Object v = find_symbol_value (intern ("cmacs-ai-codex-transport"));
+  const gchar *name = NULL;
+
+  if (SYMBOLP (v) && !NILP (v) && !BASE_EQ (v, Qunbound))
+    name = SSDATA (SYMBOL_NAME (v));
+  else if (STRINGP (v))
+    name = SSDATA (v);
+
+  if (name != NULL && strcmp (name, AI_CODEX_CLI_TRANSPORT_APP_SERVER) == 0)
+    ai_codex_cli_client_set_transport (c, AI_CODEX_CLI_TRANSPORT_APP_SERVER);
+}
+
+void
+cmacs_ai_apply_provider_settings (Lisp_Object sym, gpointer prov)
+{
+  if (prov == NULL)
+    return;
+
+  if (AI_IS_OPENAI_COMPATIBLE_CLIENT (prov))
+    {
+      Lisp_Object ep = cmacs_ai_openai_compatible_endpoint (sym);
+      if (!NILP (ep))
+        cmacs_ai__apply_endpoint (ep, prov);
+    }
+  else if (AI_IS_ACP_CLIENT (prov))
+    {
+      Lisp_Object agent = cmacs_ai_acp_agent (sym);
+      if (!NILP (agent))
+        cmacs_ai__apply_acp_agent (agent, AI_ACP_CLIENT (prov));
+    }
+  else if (AI_IS_CODEX_CLI_CLIENT (prov))
+    /* Keyed on the object, not on SYM: the configured default provider
+     * arrives here with no symbol at all and is a codex client all the
+     * same. */
+    cmacs_ai__apply_codex_transport (AI_CODEX_CLI_CLIENT (prov));
+}
+
 void
 cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov)
 {
-  Lisp_Object ep;
-
-  if (prov == NULL || !AI_IS_OPENAI_COMPATIBLE_CLIENT (prov))
-    return;
-  ep = cmacs_ai_openai_compatible_endpoint (sym);
-  if (!NILP (ep))
-    cmacs_ai__apply_endpoint (ep, prov);
+  /* The old name, kept so a site written against it cannot end up
+   * applying a third of what a provider needs. */
+  cmacs_ai_apply_provider_settings (sym, prov);
 }
 
 /* ── CLI accounts (`cmacs-ai-cli-config-dirs') ──────────────────────
@@ -231,8 +321,25 @@ cmacs_ai_apply_cli_config_dir (Lisp_Object sym, gpointer prov)
   return NULL;
 }
 
+static AiProvider *cmacs_ai__make_client_1 (Lisp_Object provider_sym);
+
+/* Build the client for PROVIDER_SYM, fully configured.  The table is
+ * `cmacs_ai__make_client_1'; this wrapper is what guarantees the
+ * settings a type alone does not carry (an ACP agent's command, the
+ * codex transport) are applied on this path as they are on the two
+ * factory paths in cmacs-ai-stream.c and cmacs-ai-harness.c. */
 static AiProvider *
 cmacs_ai__make_client (Lisp_Object provider_sym)
+{
+  AiProvider *p = cmacs_ai__make_client_1 (provider_sym);
+
+  if (p != NULL)
+    cmacs_ai_apply_provider_settings (provider_sym, p);
+  return p;
+}
+
+static AiProvider *
+cmacs_ai__make_client_1 (Lisp_Object provider_sym)
 {
   if (EQ (provider_sym, intern ("claude")))
     return AI_PROVIDER (ai_claude_client_new ());
@@ -271,6 +378,12 @@ cmacs_ai__make_client (Lisp_Object provider_sym)
     if (!NILP (ep))
       return AI_PROVIDER (cmacs_ai__openai_compatible_from_endpoint (ep));
   }
+  /* ACP, bare or named.  The named agent's command line is applied by
+   * the wrapper above, from the same alist entry this test just found;
+   * bare `acp' is left to $AI_ACP_COMMAND. */
+  if (cmacs_ai_acp_symbol_p (provider_sym)
+      || !NILP (cmacs_ai_acp_agent (provider_sym)))
+    return AI_PROVIDER (ai_acp_client_new ());
   return NULL;
 }
 
@@ -327,8 +440,9 @@ DEFUN ("cmacs-ai-client-new", Fcmacs_ai_client_new,
        doc: /* Create an ai-glib client for PROVIDER.
 PROVIDER is one of the symbols: claude, openai, gemini, grok, ollama,
 claude-code, opencode, claude-tmux, grok-build, antigravity, cursor,
-codex-cli.  Also any name in `cmacs-ai-openai-compatible-endpoints',
-which is an OpenAI-compatible HTTP server of your own.
+codex-cli, acp.  Also any name in `cmacs-ai-openai-compatible-endpoints',
+which is an OpenAI-compatible HTTP server of your own, or in
+`cmacs-ai-acp-agents', which is an ACP agent with its own command line.
 Optional MODEL is a
 string (passed to `ai-client-set-model').  Returns an integer handle.
 Free with `cmacs-ai-client-free'.  */)
@@ -679,6 +793,59 @@ common enough to deserve documentation of their own.  */)
   return Qt;
 }
 
+DEFUN ("cmacs-ai-client-cli-option",
+       Fcmacs_ai_client_cli_option,
+       Scmacs_ai_client_cli_option, 2, 2, 0,
+       doc: /* Return GObject property NAME of HANDLE's CLI client.
+
+The reading half of `cmacs-ai-client-set-cli-option': a string property
+comes back as a string or nil, a boolean as t or nil, a number as a
+number.  Returns nil when HANDLE is not a CLI client, has no readable
+property called NAME, or the property is of a type this cannot convert
+-- so "what did this client end up configured as" can be asked without
+knowing which provider it is.  For an ACP agent the interesting names
+are "command", "skip-permissions" and "client-fs"; for codex,
+"transport".  */)
+  (Lisp_Object handle, Lisp_Object name)
+{
+  GValue value = G_VALUE_INIT;
+  Lisp_Object out = Qnil;
+  GParamSpec *pspec;
+  GType type;
+  gpointer p;
+
+  CHECK_FIXNAT (handle);
+  CHECK_STRING (name);
+  p = cmacs_ai_client_lookup (XFIXNUM (handle));
+  if (p == NULL) error ("cmacs-ai: bad client handle");
+  if (!AI_IS_CLI_CLIENT (p)) return Qnil;
+
+  pspec = g_object_class_find_property (G_OBJECT_GET_CLASS (p), SSDATA (name));
+  if (pspec == NULL || !(pspec->flags & G_PARAM_READABLE))
+    return Qnil;
+
+  type = G_PARAM_SPEC_VALUE_TYPE (pspec);
+  g_value_init (&value, type);
+  g_object_get_property (G_OBJECT (p), SSDATA (name), &value);
+
+  if (type == G_TYPE_STRING)
+    {
+      const gchar *str = g_value_get_string (&value);
+      out = str != NULL ? build_string (str) : Qnil;
+    }
+  else if (type == G_TYPE_BOOLEAN)
+    out = g_value_get_boolean (&value) ? Qt : Qnil;
+  else if (type == G_TYPE_INT)
+    out = make_fixnum (g_value_get_int (&value));
+  else if (type == G_TYPE_UINT)
+    out = make_uint (g_value_get_uint (&value));
+  else if (type == G_TYPE_DOUBLE)
+    out = make_float (g_value_get_double (&value));
+
+  g_value_unset (&value);
+  return out;
+}
+
 void syms_of_cmacs_ai_client_defuns (void);
 void
 syms_of_cmacs_ai_client_defuns (void)
@@ -699,6 +866,7 @@ syms_of_cmacs_ai_client_defuns (void)
   defsubr (&Scmacs_ai_client_working_directory);
   defsubr (&Scmacs_ai_client_set_skip_permissions);
   defsubr (&Scmacs_ai_client_set_cli_option);
+  defsubr (&Scmacs_ai_client_cli_option);
 }
 
 #endif /* HAVE_CMACS_AI */

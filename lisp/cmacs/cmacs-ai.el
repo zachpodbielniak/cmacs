@@ -61,11 +61,86 @@ the OPENAI_COMPATIBLE_* environment."
                 :value-type (plist :key-type symbol :value-type string))
   :group 'cmacs-ai)
 
+(defcustom cmacs-ai-acp-agents nil
+  "Agents speaking the Agent Client Protocol, each a provider of its own.
+
+ACP (agentclientprotocol.com) is one wire protocol many agents speak
+over stdio, and ai-glib's `acp' provider drives any of them.  It has no
+request that selects a model -- the agent's own configuration or its
+command line does that -- so what tells two agents apart is the command
+that starts them.  Each entry here names one command line and is a
+provider symbol everywhere a name from
+`cmacs-ai-openai-compatible-endpoints' is: it completes in
+\[cmacs-ai-chat-with-provider], can be `cmacs-ai-harness-provider', and
+can be a brigade agent's model prefix (`gemini-acp/default\=').
+
+Each entry is (NAME . PLIST):
+
+  :command           the agent's command line, as one string.  Split the
+                     way a shell would but with no shell run, so quoting
+                     works and `$VAR', pipes and redirections do not.
+                     Without it the agent is whatever the AI_ACP_COMMAND
+                     environment variable names.
+  :skip-permissions  non-nil answers every permission request with
+                     \"allow once\" and lets the agent write files
+                     through the client.  Absent or nil, every request
+                     is refused -- there is nobody at a prompt to ask.
+  :client-fs         nil stops cmacs serving the agent's file reads (and,
+                     with :skip-permissions, writes) at all.  Absent
+                     means on; reads are confined to the working
+                     directory either way.
+
+  (setq cmacs-ai-acp-agents
+        \='((gemini-acp :command \"gemini --experimental-acp\")
+          (my-agent   :command \"my-agent acp --stdio\"
+                      :skip-permissions t)))
+
+The agent must already be signed in: ai-glib never runs ACP's
+`authenticate'.  A name defined both here and in
+`cmacs-ai-openai-compatible-endpoints' is the endpoint.
+
+The plain `acp' provider is still available and runs AI_ACP_COMMAND.
+
+An ACP turn cannot be steered (`cmacs-ai-harness-steer'): the protocol
+accepts no input mid-turn but a cancel, so words sent while one is
+running wait for the next turn."
+  :type '(alist :key-type symbol
+                :value-type (plist :key-type symbol :value-type sexp))
+  :group 'cmacs-ai)
+
+(defcustom cmacs-ai-codex-transport 'exec
+  "How cmacs talks to the Codex CLI.
+
+`exec'        `codex exec --json', one process per turn.  The default,
+              and what every earlier cmacs did.  A running turn accepts
+              no input.
+`app-server'  `codex app-server', JSON-RPC over stdio.  Makes a running
+              codex turn steerable -- see `cmacs-ai-harness-steer'.
+
+`app-server' is opt-in for a reason worth knowing before you choose it:
+ai-glib built that transport from Codex's published protocol source and
+has run it only against a scripted stand-in, never a real codex.  Treat
+it as unverified until it has worked for you.
+
+Applies wherever cmacs builds a codex client through ai-glib -- a chat,
+`cmacs-ai-call', the harness, an in-process brigade agent.  The
+brigade's `codex' subprocess worker runs `codex exec' itself and is not
+affected."
+  :type '(choice (const :tag "codex exec (default)" exec)
+                 (const :tag "codex app-server (steerable, unverified)"
+                        app-server))
+  :group 'cmacs-ai)
+
 (defcustom cmacs-ai-default-provider 'claude
   "Default provider symbol used by `cmacs-ai-chat'.
 One of: claude openai gemini grok ollama openai-compatible claude-code
-opencode claude-tmux grok-build antigravity cursor codex-cli, or any
-name you defined in `cmacs-ai-openai-compatible-endpoints'.
+opencode claude-tmux grok-build antigravity cursor codex-cli acp, or any
+name you defined in `cmacs-ai-openai-compatible-endpoints' or
+`cmacs-ai-acp-agents'.
+
+`acp' is any agent speaking the Agent Client Protocol, started from the
+AI_ACP_COMMAND environment variable; name the agents you use in
+`cmacs-ai-acp-agents' instead and each becomes a provider of its own.
 
 `grok' is xAI's HTTP API; `grok-build' is the agentic `grok' CLI.
 Both default to grok-4.7.  grok-4.7-build-fast is CLI-only.
@@ -83,8 +158,8 @@ environment, or name several servers at once in
                  (const grok) (const ollama) (const openai-compatible)
                  (const claude-code) (const opencode) (const claude-tmux)
                  (const grok-build) (const antigravity) (const cursor)
-                 (const codex-cli)
-                 (symbol :tag "Named endpoint"))
+                 (const codex-cli) (const acp)
+                 (symbol :tag "Named endpoint or ACP agent"))
   :group 'cmacs-ai)
 
 (defcustom cmacs-ai-default-model nil
@@ -465,6 +540,81 @@ API-KEY, when given, wins over both the token and
     (cmacs-ai-tools-set-search-provider
      executor provider (or api-key cmacs-ai-search-api-key))))
 
+;;;; Errors a person can act on.
+;;
+;; ai-glib 0.13 tells four failures apart that used to arrive as one
+;; string each: a usage limit, a rate limit, a lapsed login and an empty
+;; balance.  The C side classifies (`cmacs-ai-error-classify') and hangs
+;; the answer on the async error payload as :kind and :reset; this is the
+;; one place that turns it into words, so a chat, the harness and the
+;; brigade describe the same condition the same way.
+
+(defun cmacs-ai-error-reset-string (reset &optional now)
+  "Say when Unix time RESET is, as briefly as stays unambiguous.
+
+Today is a clock time (\"14:30\"); any other day adds the weekday and
+date, because \"resets 09:00\" read at 23:00 otherwise means tomorrow
+and says today.  NOW is the current time, for tests."
+  (let* ((now (or now (current-time)))
+         (same-day (equal (format-time-string "%F" reset)
+                          (format-time-string "%F" now))))
+    (format-time-string (if same-day "%H:%M" "%H:%M on %a %-d %b") reset)))
+
+(defun cmacs-ai-error-sentence (message &optional kind reset now)
+  "A sentence for a failed request, for a person to read.
+
+MESSAGE is the provider's text.  KIND is the :kind of an error payload
+-- `session-limit', `rate-limited', `signed-out', `quota' or nil -- and
+RESET its :reset, a Unix timestamp or nil.  NOW is the current time,
+for tests.
+
+A classified error leads with what happened and what will fix it, then
+gives the provider's own words in parentheses: the plan name or the
+login command is usually in those, and it is the part a person acts on.
+An unclassified one is MESSAGE unchanged -- except a refused redirect,
+which since ai-glib 0.13 is an error rather than something followed,
+and nearly always means the configured URL is the wrong one."
+  (let* ((message (or message ""))
+         (when-str (and (numberp reset) (> reset 0)
+                        (cmacs-ai-error-reset-string reset now)))
+         (lead
+          (pcase kind
+            ('session-limit
+             (if when-str
+                 (format "Session limit reached; resets %s." when-str)
+               "Session limit reached; the provider did not say when it \
+resets."))
+            ('rate-limited
+             (if when-str
+                 (format "Rate limited; try again after %s." when-str)
+               "Rate limited; wait a little and try again."))
+            ('signed-out
+             "Not signed in, or the credentials were refused; sign in to \
+the provider again.")
+            ('quota
+             "Out of quota or credit with this provider; nothing will \
+succeed until the account is topped up or the plan changed."))))
+    (cond
+     (lead
+      (if (string-empty-p (string-trim message))
+          lead
+        (format "%s  (%s)" lead (string-trim message))))
+     ((string-match-p "Redirect refused" message)
+      (concat message
+              "\n\nai-glib no longer follows a redirect that would carry \
+your API key or request body to another address.  Set the provider's \
+base URL to where the redirect points -- for an entry in \
+`cmacs-ai-openai-compatible-endpoints' that is its :base-url; a common \
+cause is http:// where the server wants https://, or a missing /v1."))
+     (t message))))
+
+(defun cmacs-ai-error-payload-sentence (payload)
+  "The sentence for PAYLOAD, an (:error MESSAGE [:kind K :reset R]) list."
+  (let ((rest (cddr payload)))
+    (cmacs-ai-error-sentence (cadr payload)
+                             (plist-get rest :kind)
+                             (plist-get rest :reset))))
+
 ;;;; CLI accounts: which login a CLI agent runs under.
 
 (defcustom cmacs-ai-cli-config-dirs nil
@@ -720,6 +870,7 @@ AiConfig singleton + the `cmacs-ai-default-provider' defcustom)."
                 (claude-tmux  . ("CLAUDE_CODE_PATH"))
                 (grok-build   . ("GROK_PATH"))
                 (codex-cli    . ("CODEX_PATH"))
+                (acp          . ("AI_ACP_COMMAND"))
                 (openai-compatible . ("OPENAI_COMPATIBLE_BASE_URL"
                                       "OPENAI_COMPATIBLE_API_KEY")))))
     (with-current-buffer buf

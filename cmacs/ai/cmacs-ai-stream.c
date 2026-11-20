@@ -12,6 +12,8 @@
  *   (:tool-use NAME INPUT-JSON ID)
  *   (:end :text TEXT :stop SYMBOL)
  *   (:error MESSAGE)
+ *   (:error MESSAGE :kind KIND :reset TIMESTAMP)   a limit, a 429, a
+ *       lapsed login or an empty balance -- see cmacs_ai_error_payload
  *
  * The callback is stashed in a staticpro'd Lisp hash table
  * (`Vcmacs_ai__stream_callbacks') keyed by an integer stream id so
@@ -34,6 +36,262 @@
 
 #include <ai-glib.h>
 #include <glib.h>
+#include <string.h>
+
+/* ── Errors worth telling apart ──────────────────────────────────────
+ *
+ * ai-glib 0.13 reclassifies what a CLI says into real codes: a usage
+ * limit is AI_ERROR_SESSION_LIMIT rather than a failed run, a 429 is
+ * AI_ERROR_RATE_LIMITED, an expired login AI_ERROR_INVALID_API_KEY, an
+ * empty balance AI_ERROR_INSUFFICIENT_QUOTA.  The first two can carry a
+ * machine-readable notice -- `ai-glib-session-limit: reset=<unix time>'
+ * -- inside the message, so a supervisor reading a log line can see
+ * the pause without parsing a localised sentence.
+ *
+ * Everything cmacs shows a person or decides on goes through here, for
+ * the reason ai-glib gives for having one formatter: three layers
+ * describing one condition reads like three problems. */
+
+/* MESSAGE without the notice token(s).  The notice sits mid-sentence
+ * ("...resets at 18:50 on Friday NOTICE (codex: ...)"), so the text
+ * either side is rejoined with exactly one space.  Never NULL for a
+ * non-NULL MESSAGE. */
+static gchar *
+cmacs_ai__strip_limit_notice (const gchar *message)
+{
+  const gsize plen = strlen (AI_SESSION_LIMIT_NOTICE_PREFIX);
+  GString *out;
+  const gchar *rest, *at;
+
+  if (message == NULL)
+    return NULL;
+
+  out = g_string_new (NULL);
+  rest = message;
+
+  while ((at = strstr (rest, AI_SESSION_LIMIT_NOTICE_PREFIX)) != NULL)
+    {
+      const gchar *end = at + plen;
+      const gchar *value = end;
+
+      g_string_append_len (out, rest, at - rest);
+
+      /* The value is optional: ai_session_limit_notice_parse accepts
+       * the bare marker, so the stripper has to as well. */
+      while (*value == ' ')
+        value++;
+      if (g_str_has_prefix (value, "reset="))
+        {
+          end = value + strlen ("reset=");
+          while (g_ascii_isdigit (*end))
+            end++;
+        }
+
+      /* One space where the notice was, none at either end. */
+      while (out->len > 0 && out->str[out->len - 1] == ' ')
+        g_string_truncate (out, out->len - 1);
+      while (*end == ' ')
+        end++;
+      if (out->len > 0 && *end != '\0')
+        g_string_append_c (out, ' ');
+
+      rest = end;
+    }
+
+  g_string_append (out, rest);
+  return g_string_free (out, FALSE);
+}
+
+const gchar *
+cmacs_ai_error_classify (const GError *gerr, gint64 *reset_out,
+                         gchar **clean_out)
+{
+  const gchar *kind = NULL;
+  gint64 reset = 0;
+  gboolean noticed;
+
+  if (reset_out != NULL) *reset_out = 0;
+  if (clean_out != NULL) *clean_out = NULL;
+  if (gerr == NULL)
+    return NULL;
+
+  noticed = ai_session_limit_notice_parse (gerr->message, &reset);
+
+  if (gerr->domain == AI_ERROR)
+    switch (gerr->code)
+      {
+      case AI_ERROR_SESSION_LIMIT:      kind = "session-limit"; break;
+      case AI_ERROR_RATE_LIMITED:       kind = "rate-limited";  break;
+      case AI_ERROR_INVALID_API_KEY:    kind = "signed-out";    break;
+      case AI_ERROR_INSUFFICIENT_QUOTA: kind = "quota";         break;
+      default: break;
+      }
+
+  /* A notice under any other code or domain is still a pause.  The
+   * tool loop and the conversation layer both re-wrap a provider's
+   * error on the way up, and a wrapper that lost the code must not
+   * turn "paused until 18:50" into "failed" -- the same reasoning
+   * ai_session_limit_notice_parse gives for accepting a bare marker. */
+  if (kind == NULL && noticed)
+    kind = "session-limit";
+
+  /* No notice, but the words may still say when: codex's "try again
+   * at 3:45 PM", a Retry-After.  Only for the two kinds that are a
+   * wait; a reset time on "signed out" would be a misreading. */
+  if (kind != NULL && reset <= 0
+      && (strcmp (kind, "session-limit") == 0
+          || strcmp (kind, "rate-limited") == 0))
+    {
+      if (!ai_session_limit_parse_reset (gerr->message,
+                                         g_get_real_time () / G_USEC_PER_SEC,
+                                         &reset))
+        reset = 0;
+    }
+
+  if (reset_out != NULL) *reset_out = reset > 0 ? reset : 0;
+  if (clean_out != NULL)
+    *clean_out = cmacs_ai__strip_limit_notice (gerr->message);
+  return kind;
+}
+
+Lisp_Object
+cmacs_ai_error_payload (const GError *gerr, const char *fallback)
+{
+  g_autofree gchar *clean = NULL;
+  gint64 reset = 0;
+  const gchar *kind;
+  Lisp_Object msg;
+
+  if (gerr == NULL)
+    return list2 (intern (":error"), build_string (fallback));
+
+  kind = cmacs_ai_error_classify (gerr, &reset, &clean);
+  msg = build_string (clean != NULL ? clean : fallback);
+
+  /* Unclassified errors keep the two-element shape they always had, so
+   * the extension is invisible to every caller that does not ask. */
+  if (kind == NULL)
+    return list2 (intern (":error"), msg);
+
+  return list (intern (":error"), msg,
+               intern (":kind"), intern (kind),
+               intern (":reset"), reset > 0 ? make_int (reset) : Qnil);
+}
+
+/* ERROR's message as a Lisp string with the notice removed, for the
+ * synchronous paths that signal rather than deliver a payload. */
+static Lisp_Object
+cmacs_ai__error_message (const GError *gerr, const char *fallback)
+{
+  g_autofree gchar *clean =
+    gerr != NULL ? cmacs_ai__strip_limit_notice (gerr->message) : NULL;
+
+  return build_string (clean != NULL ? clean : fallback);
+}
+
+DEFUN ("cmacs-ai-error-classify", Fcmacs_ai_error_classify,
+       Scmacs_ai_error_classify, 2, 2, 0,
+       doc: /* Classify an ai-glib error given as CODE and MESSAGE.
+
+CODE is the error's nick as a symbol or string -- `session-limit',
+`rate-limited', `invalid-api-key', `insufficient-quota',
+`cli-execution', ... -- or nil for an error outside ai-glib's own
+domain.  MESSAGE is its text.
+
+Returns (KIND RESET CLEAN):
+
+  KIND   `session-limit', `rate-limited', `signed-out', `quota', or
+         nil for every other error.
+  RESET  when the limit lifts, as a Unix timestamp, or nil if unknown.
+  CLEAN  MESSAGE with ai-glib's machine-readable
+         `ai-glib-session-limit:' notice removed.
+
+This is the classifier the async error payloads use -- (:error MESSAGE
+:kind KIND :reset RESET) -- exposed so it can be tested, and so Lisp
+holding only an error's text can ask the same question the same way.  */)
+  (Lisp_Object code, Lisp_Object message)
+{
+  g_autoptr (GError) gerror = NULL;
+  g_autofree gchar *clean = NULL;
+  const gchar *kind;
+  gint64 reset = 0;
+
+  CHECK_STRING (message);
+
+  if (NILP (code))
+    /* Any domain that is not AI_ERROR; the code is irrelevant. */
+    gerror = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED,
+                                  SSDATA (message));
+  else
+    {
+      const gchar *nick;
+      GEnumClass *klass;
+      GEnumValue *value;
+
+      if (STRINGP (code))
+        nick = SSDATA (code);
+      else
+        {
+          CHECK_SYMBOL (code);
+          nick = SSDATA (SYMBOL_NAME (code));
+        }
+
+      klass = g_type_class_ref (AI_TYPE_ERROR);
+      value = g_enum_get_value_by_nick (klass, nick);
+      if (value != NULL)
+        gerror = g_error_new_literal (AI_ERROR, value->value,
+                                      SSDATA (message));
+      g_type_class_unref (klass);
+
+      if (gerror == NULL)
+        error ("cmacs-ai: unknown error code %s", nick);
+    }
+
+  kind = cmacs_ai_error_classify (gerror, &reset, &clean);
+
+  return list3 (kind != NULL ? intern (kind) : Qnil,
+                reset > 0 ? make_int (reset) : Qnil,
+                build_string (clean != NULL ? clean : ""));
+}
+
+DEFUN ("cmacs-ai-session-limit-scan", Fcmacs_ai_session_limit_scan,
+       Scmacs_ai_session_limit_scan, 1, 1, 0,
+       doc: /* Look for a usage-limit report in TEXT, a worker's output.
+
+Returns nil, or (KIND RESET) where KIND is `session-limit' and RESET is
+the Unix time the limit lifts, or nil when the text does not say.
+
+Two things count.  ai-glib's own notice line
+\(`ai-glib-session-limit: reset=N'), which anything built on ai-glib
+prints, is taken at its word.  Failing that, a CLI's own sentence counts
+only when it both names a session or usage limit AND states a reset
+time ai-glib can read -- a worker's output is mostly a model's prose,
+and prose that merely mentions a limit must not park a task.
+
+For a subprocess the brigade spawned directly, which never passes
+through ai-glib's error classification.  */)
+  (Lisp_Object text)
+{
+  gint64 reset = 0;
+  g_autofree gchar *lower = NULL;
+
+  CHECK_STRING (text);
+
+  if (ai_session_limit_notice_parse (SSDATA (text), &reset))
+    return list2 (intern ("session-limit"),
+                  reset > 0 ? make_int (reset) : Qnil);
+
+  lower = g_ascii_strdown (SSDATA (text), -1);
+  if ((strstr (lower, "session limit") != NULL
+       || strstr (lower, "usage limit") != NULL)
+      && ai_session_limit_parse_reset (SSDATA (text),
+                                       g_get_real_time () / G_USEC_PER_SEC,
+                                       &reset)
+      && reset > 0)
+    return list2 (intern ("session-limit"), make_int (reset));
+
+  return Qnil;
+}
 
 /* ── Staticpro'd callback table ─────────────────────────────────── */
 
@@ -247,9 +505,8 @@ on_chat_finished (GObject *source, GAsyncResult *res, gpointer user)
                                                          res, &err);
   if (resp == NULL)
     {
-      cmacs_ai_stream__deliver (s, list2 (intern (":error"),
-                                           build_string (err ? err->message
-                                                             : "chat failed")));
+      cmacs_ai_stream__deliver (s, cmacs_ai_error_payload (err,
+                                                           "chat failed"));
       if (err) g_error_free (err);
       cmacs_ai_stream__free (s);
       return;
@@ -277,9 +534,8 @@ on_stream_finished (GObject *source, GAsyncResult *res, gpointer user)
   if (resp == NULL)
     {
       /* on_stream_end didn't fire; deliver :error and free. */
-      cmacs_ai_stream__deliver (s, list2 (intern (":error"),
-                                           build_string (err ? err->message
-                                                             : "stream failed")));
+      cmacs_ai_stream__deliver (s, cmacs_ai_error_payload (err,
+                                                           "stream failed"));
       if (err) g_error_free (err);
       cmacs_ai_stream__free (s);
     }
@@ -468,6 +724,12 @@ cmacs_ai__simple_for (Lisp_Object provider, Lisp_Object model)
   else
     ai = ai_simple_new ();
 
+  /* The configured default provider (PROVIDER nil) can be a codex
+   * client too, and `cmacs-ai-codex-transport' applies to it as it
+   * does to a named one. */
+  if (ai != NULL && NILP (provider))
+    cmacs_ai_apply_provider_settings (Qnil, ai_simple_get_provider (ai));
+
   /* A CLI agent's account, from `cmacs-ai-cli-config-dirs'.  Also for
    * the default provider (PROVIDER nil): the lookup falls back to the
    * client type's own name. */
@@ -510,7 +772,7 @@ history.  */)
   g_autofree gchar *out = ai_simple_prompt (ai, SSDATA (prompt), NULL, &err);
   if (out == NULL)
     xsignal1 (intern ("cmacs-ai-error"),
-              build_string (err ? err->message : "ai_simple_prompt failed"));
+              cmacs_ai__error_message (err, "ai_simple_prompt failed"));
   return build_string (out);
 }
 
@@ -592,8 +854,7 @@ is the Wayland compositor.  */)
   if (out == NULL)
     {
       /* xsignal longjmps past manual cleanup -- release ai + err first. */
-      Lisp_Object msg =
-        build_string (err ? err->message : "cmacs-ai-call failed");
+      Lisp_Object msg = cmacs_ai__error_message (err, "cmacs-ai-call failed");
       g_clear_error (&err);
       g_object_unref (ai);
       xsignal1 (intern ("cmacs-ai-error"), msg);
@@ -681,7 +942,8 @@ tables for CLI providers) with a 30 second timeout; signals
   if (st.error != NULL)
     {
       /* xsignal longjmps past the g_autoptr cleanups -- free here. */
-      Lisp_Object msg = build_string (st.error->message);
+      Lisp_Object msg = cmacs_ai__error_message (st.error,
+                                                 "could not list models");
       g_error_free (st.error);
       g_list_free_full (st.models, g_free);
       g_clear_object (&cancellable);
@@ -713,6 +975,8 @@ syms_of_cmacs_ai_stream_defuns (void)
   defsubr (&Scmacs_ai_prompt_sync);
   defsubr (&Scmacs_ai_call);
   defsubr (&Scmacs_ai_list_models);
+  defsubr (&Scmacs_ai_error_classify);
+  defsubr (&Scmacs_ai_session_limit_scan);
 }
 
 #endif /* HAVE_CMACS_AI */

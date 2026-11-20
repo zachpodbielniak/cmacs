@@ -168,6 +168,21 @@ cmacs_ai_harness__emit (CmacsAiHarness *h, Lisp_Object payload)
     cmacs_dispatch_safe_call1 (cb, payload);
 }
 
+void
+cmacs_ai_harness_emit_handle (guint handle, Lisp_Object payload)
+{
+  CmacsAiHarness *h;
+
+  /* By handle, so an answer arriving after the session was freed has
+   * nowhere to go and goes nowhere.  */
+  h = (cmacs_ai__harnesses == NULL)
+      ? NULL
+      : g_hash_table_lookup (cmacs_ai__harnesses, GUINT_TO_POINTER (handle));
+
+  if (h != NULL)
+    cmacs_ai_harness__emit (h, payload);
+}
+
 static void
 on_items_changed (GListModel *model, guint position, guint removed,
                   guint added, gpointer user)
@@ -319,9 +334,11 @@ cmacs_ai_harness__make_provider (Lisp_Object provider_sym,
     error ("cmacs-ai-harness: %s",
            gerror ? gerror->message : "could not build that provider");
 
-  /* The factory builds from a type; a named endpoint's URL and key
-   * arrive only here. */
-  cmacs_ai_apply_endpoint_settings (provider_sym, prov);
+  /* The factory builds from a type; a named endpoint's URL and key,
+   * a named ACP agent's command line and the codex transport arrive
+   * only here.  PROVIDER_SYM may be nil -- the configured default --
+   * and the codex transport applies to that too.  */
+  cmacs_ai_apply_provider_settings (provider_sym, prov);
 
   /* And a CLI agent's account, the same way every other client gets
    * one -- a second login that worked in a chat buffer and not here
@@ -336,6 +353,25 @@ cmacs_ai_harness__make_provider (Lisp_Object provider_sym,
         xsignal1 (Quser_error, msg);
       }
   }
+
+  /* Leave claude's stdin open so a running turn can be steered
+   * (`cmacs-ai-harness-steer').  Opt-in on ai-glib's side because an
+   * open stdin changes what the child sees: a stand-in that reads to
+   * EOF before answering would wait forever.  A real claude does not,
+   * so it is on here unless `cmacs-ai-harness-steerable' says
+   * otherwise.  A void variable -- the harness built from C before
+   * its Elisp loaded -- reads as the default, t.  Here rather than in
+   * `cmacs-ai-harness-new' so a provider switched to mid-session gets
+   * it too.  */
+  if (AI_IS_CLAUDE_CODE_CLIENT (prov))
+    {
+      Lisp_Object v =
+        find_symbol_value (intern ("cmacs-ai-harness-steerable"));
+
+      g_object_set (prov, "steerable",
+                    (BASE_EQ (v, Qunbound) || !NILP (v)) ? TRUE : FALSE,
+                    NULL);
+    }
 
   /* Set after construction rather than passed in: the factory takes a
    * config, and the two client hierarchies spell the model setter
@@ -448,6 +484,15 @@ FUNCTION is called with one argument, a list whose car is a keyword:
   (:block-changed POSITION BLOCK-ID)
   (:busy FLAG)
   (:activity STRING-OR-NIL)
+  (:error MESSAGE [:kind KIND :reset TIMESTAMP])
+  (:steer RESULT REASON TICKET)     see `cmacs-ai-harness-steer'
+  (:builtin NAME ARGUMENTS)
+  (:report KIND TEXT) / (:report-error MESSAGE)
+
+An :error whose cause is a usage limit, a rate limit, a lapsed login or
+an exhausted balance carries KIND -- `session-limit', `rate-limited',
+`signed-out', `quota' -- and, when the provider said, the Unix time the
+limit lifts.
 
 The callback is held in a GC-rooted table for the life of the handle;
 it is dropped when the harness is freed.  */)
@@ -466,17 +511,36 @@ it is dropped when the harness is freed.  */)
 static void
 on_input_sent (GObject *source, GAsyncResult *result, gpointer user)
 {
-  CmacsAiHarness *h = user;
+  /* The handle, not the struct.  This used to be handed the
+   * CmacsAiHarness pointer, and `cmacs-ai-harness-free' on a busy
+   * session cancels the conversation and frees that struct at once --
+   * while the GTask, which holds its own ref on the conversation, still
+   * completes later and called back into freed memory.  Killing a
+   * harness buffer mid-turn was enough to reach it.  The signal
+   * handlers never had the problem because freeing disconnects them;
+   * an async callback cannot be disconnected, only made harmless.  */
+  guint handle = GPOINTER_TO_UINT (user);
+  CmacsAiHarness *h;
   g_autoptr (AiCommandResult) command = NULL;
   g_autoptr (GError) error = NULL;
 
+  /* Finished unconditionally: the task owns COMMAND and ERROR until
+   * this runs, whether or not anyone is left to hear about them.  */
   ai_conversation_send_input_finish (AI_CONVERSATION (source), result,
                                      &command, &error);
 
+  h = (cmacs_ai__harnesses == NULL)
+      ? NULL
+      : g_hash_table_lookup (cmacs_ai__harnesses, GUINT_TO_POINTER (handle));
+
+  if (h == NULL) return;
+
   if (error != NULL)
     {
+      /* (:error MESSAGE), or (:error MESSAGE :kind KIND :reset TS) for
+       * a usage limit, a 429, a lapsed login or an empty balance.  */
       cmacs_ai_harness__emit (h,
-        list2 (intern (":error"), build_string (error->message)));
+                              cmacs_ai_error_payload (error, "the turn failed"));
       return;
     }
 
@@ -517,8 +581,74 @@ callback as (:builtin NAME ARGUMENTS).  */)
   CHECK_STRING (line);
 
   ai_conversation_send_input_async (h->conversation, SSDATA (line),
-                                    NULL, on_input_sent, h);
+                                    NULL, on_input_sent,
+                                    GUINT_TO_POINTER (h->handle));
   return Qt;
+}
+
+DEFUN ("cmacs-ai-harness-steer", Fcmacs_ai_harness_steer,
+       Scmacs_ai_harness_steer, 2, 2, 0,
+       doc: /* Put TEXT into the turn running on harness HANDLE.
+
+Unlike `cmacs-ai-harness-send-input', which starts a turn, this hands
+TEXT to the one already in flight, at the next point the engine itself
+accepts input -- before its next model call, or at the top of the next
+round of the tool loop.  Nothing is cancelled or restarted.  TEXT goes
+in as written: no slash command is resolved and no @ mention expanded.
+
+Returns a ticket number when the steer was sent, or nil when this
+session has nothing that can be steered -- an engine with no way to
+take input mid-turn (opencode, grok-build, cursor, antigravity, an ACP
+agent, codex on its `exec' transport).  On nil nothing was sent and the
+caller should queue TEXT for the next turn.
+
+Otherwise the answer arrives on the session's event callback as
+\(:steer RESULT REASON TICKET), RESULT being one of
+
+  delivered      the running turn took the words.
+  indeterminate  sent, and nothing confirmed it.  Counts as delivered:
+                 queueing the words again risks running them twice.
+  refused        provably not delivered (no turn is running, it ended
+                 first, the engine said no).  REASON says why.
+
+What is steered depends on where the tools run.  With local tools the
+conversation's own tool loop takes the words, which is how the HTTP
+providers -- whose clients cannot be steered -- get steering at all.
+Otherwise the provider is asked directly; for claude-code that needs
+`cmacs-ai-harness-steerable'.  */)
+  (Lisp_Object handle, Lisp_Object text)
+{
+  CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GObject *target = NULL;
+  guint id;
+
+  CHECK_STRING (text);
+
+  if (ai_conversation_get_local_tools (h->conversation))
+    {
+      /* The executor always can steer, and passes the words straight to
+       * a provider that can take them mid-request by itself.  */
+      AiToolExecutor *exec = ai_conversation_get_executor (h->conversation);
+
+      if (exec != NULL)
+        target = G_OBJECT (exec);
+    }
+  else
+    {
+      GObject *prov = ai_conversation_get_provider (h->conversation);
+
+      /* can_steer answers for the instance where the class needs it
+       * to: a codex client says yes only on its app-server transport.  */
+      if (prov != NULL && AI_IS_STEERABLE (prov)
+          && ai_steerable_can_steer (AI_STEERABLE (prov)))
+        target = prov;
+    }
+
+  if (target == NULL)
+    return Qnil;
+
+  id = cmacs_ai_steer_start (target, SSDATA (text), h->handle, 0);
+  return make_uint (id);
 }
 
 DEFUN ("cmacs-ai-harness-cancel", Fcmacs_ai_harness_cancel,
@@ -1655,6 +1785,7 @@ syms_of_cmacs_ai_harness (void)
   defsubr (&Scmacs_ai_harness_free);
   defsubr (&Scmacs_ai_harness_set_callback);
   defsubr (&Scmacs_ai_harness_send_input);
+  defsubr (&Scmacs_ai_harness_steer);
   defsubr (&Scmacs_ai_harness_cancel);
   defsubr (&Scmacs_ai_harness_clear);
   defsubr (&Scmacs_ai_harness_busy_p);

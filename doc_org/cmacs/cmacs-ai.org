@@ -32,6 +32,16 @@ with =--with-cmacs-libreclaw= when both are enabled.
 | =cursor=         | CLI      | =cursor-agent= on PATH               |
 | =codex-cli=      | CLI      | =codex= on PATH (or =CODEX_PATH=)    |
 | =openai-compatible= | HTTP  | =OPENAI_COMPATIBLE_BASE_URL= / =_API_KEY= |
+| =acp=            | CLI      | =AI_ACP_COMMAND=, or name agents in =cmacs-ai-acp-agents= |
+
+=acp= is any agent speaking the Agent Client Protocol.  It has no model
+to select, so each agent is named by its command line in
+=cmacs-ai-acp-agents= and becomes a provider symbol of its own, the way
+a server in =cmacs-ai-openai-compatible-endpoints= does.  That, the
+codex =app-server= transport (=cmacs-ai-codex-transport=), the
+classified usage-limit errors and steering a running turn all arrived
+with ai-glib 0.13 and are documented together in
+[[file:cmacs-ai-0.13.org][cmacs-ai and ai-glib 0.13]].
 
 ** Codex
 

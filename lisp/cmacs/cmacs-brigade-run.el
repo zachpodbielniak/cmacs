@@ -45,6 +45,9 @@
 (require 'cmacs-brigade-mailbox)
 (require 'cmacs-brigade-output)
 
+(declare-function cmacs-ai-tools-steer "cmacs-ai-tools.c"
+                  (executor text callback))
+(declare-function cmacs-ai-session-limit-scan "cmacs-ai-stream.c" (text))
 (declare-function cmacs-brigade-plan-adopt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-task-prompt "cmacs-brigade-plan")
 (declare-function cmacs-brigade-plan-task-property "cmacs-brigade-plan")
@@ -77,7 +80,15 @@ them over MCP instead."
 An HTTP provider is absent on purpose and runs under `inproc', which is
 also where a name from `cmacs-ai-openai-compatible-endpoints' lands: it
 is an HTTP server, so the in-process tool loop drives it and every
-brigade tool works.")
+brigade tool works.
+
+`acp' and the names in `cmacs-ai-acp-agents' are absent for a different
+reason.  An ACP agent is a CLI, but it is spoken to over JSON-RPC by
+ai-glib rather than run as `PROGRAM < prompt', so there is no subprocess
+form for a worker here to launch; it runs under `inproc' through
+ai-glib's client.  It brings its own tools and, like every CLI client,
+ignores the tools array -- so an ACP agent in the brigade has the
+agent's tools and none of the brigade's.")
 
 (defun cmacs-brigade-resolve-worker (agent)
   "Return the worker AGENT should run under.
@@ -180,6 +191,13 @@ evaluated from inside Emacs's pselect hook, and the finished hooks pump
 genuinely run in the middle of a completion.  Without this flag a send
 arriving during the hooks would try to start a turn while the previous
 one was still being retired.")
+
+(defvar cmacs-brigade--steering (make-hash-table :test 'equal)
+  "Task id -> the mailbox message a steer in flight is carrying.
+
+One at a time per task, and always the head of the mailbox: order is
+the mailbox's whole contract, so the second message is not offered
+until the first has an answer.")
 
 (defvar cmacs-brigade-run-finished-functions nil
   "Abnormal hook run with the task id and final state when a run ends.
@@ -295,6 +313,11 @@ and every later step is wrapped so one failure cannot skip the rest."
         (ignore-errors (cmacs-ai-tools-free e)))
       (when-let* ((s (plist-get c :session)))
         (ignore-errors (cmacs-ai-free-session s)))
+      ;; A conversation parked on a usage limit has a timer waiting to
+      ;; kick it; with the conversation gone there is nothing to kick.
+      (when-let* ((timer (plist-get c :limit-timer)))
+        (when (timerp timer) (cancel-timer timer)))
+      (remhash id cmacs-brigade--steering)
       (remhash id cmacs-brigade--conversations)
       (cmacs-brigade-log-append id "state" :state "closed"
                                 :turn (or (plist-get c :turn) 0)
@@ -612,7 +635,16 @@ resuming a run that failed halfway is not something to do quietly."
                ;; budget stop ends it whatever is queued, because
                ;; resuming a session whose last turn broke is the kind of
                ;; recovery that should be asked for rather than assumed.
-               (keep (and conv (eq state 'done))))
+               ;; `waiting-input' is the other state that keeps it:
+               ;; a turn stopped by the account's usage limit
+               ;; (`cmacs-brigade--park-limited') did not break, it was
+               ;; turned away at the door.
+               (keep (and conv (memq state '(done waiting-input)) t))
+               ;; Parked is not ended.  `run-finished' means the
+               ;; conversation is over and its observers act on that --
+               ;; the notifier would announce a failure -- so a parked
+               ;; turn runs only the per-turn hook.
+               (parked (eq state 'waiting-input)))
           (when run
             ;; Revoke the credential before anything else can fail, so a
             ;; token never outlives the run that needed it.  The
@@ -647,8 +679,9 @@ resuming a run that failed halfway is not something to do quietly."
           ;; notification, the plan -- goes on working unchanged.
           (run-hook-with-args 'cmacs-brigade-turn-finished-functions
                               task-id turn output)
-          (run-hook-with-args 'cmacs-brigade-run-finished-functions
-                              task-id state output))
+          (unless parked
+            (run-hook-with-args 'cmacs-brigade-run-finished-functions
+                                task-id state output)))
       (remhash task-id cmacs-brigade--finishing))
     ;; Outside the guard, so a message that arrived *during* the hooks
     ;; above is seen.  This is the second half of the delivery race: the
@@ -677,17 +710,220 @@ somebody does.  `done\=' to `queued\=' is the same transition a retry
 makes."
   (let ((rec (and (fboundp 'cmacs-brigade-task-get)
                   (cmacs-brigade-task-get task-id))))
-    (when (and rec
-               (gethash task-id cmacs-brigade--conversations)
-               (null (gethash task-id cmacs-brigade--runs))
-               (null (gethash task-id cmacs-brigade--finishing))
-               (fboundp 'cmacs-brigade-mailbox-peek)
-               (cmacs-brigade-mailbox-peek task-id)
-               (not (memq (plist-get rec :state) '(starting running))))
+    (cond
+     ;; A turn is running: try to hand it the message now rather than
+     ;; when it ends.  Returns nil either way -- nothing was queued --
+     ;; and the steer's own callback kicks again once it knows.
+     ((and rec (cmacs-brigade--steerable-run task-id rec))
+      (cmacs-brigade--steer-running task-id)
+      nil)
+     ((and rec
+           (gethash task-id cmacs-brigade--conversations)
+           (null (gethash task-id cmacs-brigade--runs))
+           (null (gethash task-id cmacs-brigade--finishing))
+           ;; A steer still waiting for its answer owns the head of the
+           ;; mailbox.  Starting a turn with that same message now, and
+           ;; then hearing `delivered', is the words running twice.
+           (null (gethash task-id cmacs-brigade--steering))
+           ;; Parked on a usage limit that has not lifted: starting
+           ;; would be refused by the provider at once, park again and
+           ;; arrive back here -- a loop at the speed of a failing
+           ;; request.  The timer set when it parked kicks at the reset.
+           (not (cmacs-brigade--limited-p task-id))
+           (fboundp 'cmacs-brigade-mailbox-peek)
+           (cmacs-brigade-mailbox-peek task-id)
+           (not (memq (plist-get rec :state) '(starting running))))
       (let ((res (cmacs-brigade-task-transition task-id 'queued)))
         (unless (plist-get res :rejected)
           (cmacs-brigade--drain-queue)
-          t)))))
+          t))))))
+
+
+;;;; Steering a running turn
+;;
+;; Without this a message for a busy agent waits and becomes its next
+;; turn, so a correction arrives after the work it was meant to change.
+;; ai-glib's tool loop can take words at the top of its next round
+;; (`cmacs-ai-tools-steer'), and the in-process worker runs exactly that
+;; loop -- so a message sent to a running in-process agent goes in now.
+;;
+;; The mailbox's rule still holds, with the steer's answer standing in
+;; for "the turn has started": peek, send, and only remove the message
+;; once the answer says the words landed.  `refused' leaves it where it
+;; was, to become the next turn as it always did.
+;;
+;; The CLI workers are subprocesses the brigade spawned itself, with
+;; their stdin already closed; there is no seam to steer them through.
+
+(defcustom cmacs-brigade-steer-running t
+  "Whether a message for a running in-process agent is steered into it.
+
+Non-nil hands the message to the turn in flight, at the top of its next
+tool round.  nil restores the older behaviour: every message waits for
+the turn to end and becomes the next one."
+  :type 'boolean
+  :group 'cmacs-brigade)
+
+(defun cmacs-brigade--steerable-run (task-id rec)
+  "The executor of TASK-ID's running in-process turn, or nil.
+REC is the task record.  Nil when there is nothing to steer, nothing to
+steer with, or a steer for this task is already in flight."
+  (let ((run (gethash task-id cmacs-brigade--runs)))
+    (and cmacs-brigade-steer-running
+         run
+         (eq (plist-get run :worker) 'inproc)
+         (plist-get run :executor)
+         (eq (plist-get rec :state) 'running)
+         (null (gethash task-id cmacs-brigade--finishing))
+         (null (gethash task-id cmacs-brigade--steering))
+         (fboundp 'cmacs-ai-tools-steer)
+         (fboundp 'cmacs-brigade-mailbox-peek)
+         (cmacs-brigade-mailbox-peek task-id)
+         (plist-get run :executor))))
+
+(defun cmacs-brigade--steer-running (task-id)
+  "Send the head of TASK-ID's mailbox into its running turn."
+  (let* ((run (gethash task-id cmacs-brigade--runs))
+         (msg (cmacs-brigade-mailbox-peek task-id))
+         (text (plist-get msg :text)))
+    (when (and run msg (stringp text) (not (string-empty-p text)))
+      (puthash task-id msg cmacs-brigade--steering)
+      (condition-case err
+          (cmacs-ai-tools-steer
+           (plist-get run :executor) text
+           (lambda (payload)
+             (cmacs-brigade--on-steered task-id msg payload)))
+        (error
+         ;; Could not even be sent (a stale executor handle).  Nothing
+         ;; reached the turn, so the message simply stays queued.
+         (remhash task-id cmacs-brigade--steering)
+         (message "cmacs-brigade: could not steer %s: %s"
+                  task-id (error-message-string err)))))))
+
+(defun cmacs-brigade--mailbox-remove (task-id msg)
+  "Remove MSG, by identity, from TASK-ID's mailbox.
+Returns non-nil if it was there.
+
+By identity and not by position: between the steer being sent and its
+answer arriving, `agent_drop' may have removed the message or others
+ahead of it, and dropping \"index 0\" would then delete something that
+was never delivered."
+  (when-let* ((index (cl-position msg (cmacs-brigade-mailbox-list task-id)
+                                  :test #'eq)))
+    (cmacs-brigade-mailbox-drop task-id index)
+    t))
+
+(defun cmacs-brigade--on-steered (task-id msg payload)
+  "Settle the steer that carried MSG into TASK-ID.  PAYLOAD is its answer.
+
+PAYLOAD is (:steer RESULT REASON TICKET).  `delivered' and
+`indeterminate' both remove MSG: indeterminate means the words were
+sent and nothing confirmed it, they may already be running, and leaving
+them queued would run them a second time as the next turn.  `refused'
+means provably not delivered, so MSG stays exactly where it was."
+  (let ((result (nth 1 payload))
+        (reason (nth 2 payload)))
+    (remhash task-id cmacs-brigade--steering)
+    (if (memq result '(delivered indeterminate))
+        (when (cmacs-brigade--mailbox-remove task-id msg)
+          (run-hook-with-args 'cmacs-brigade-mailbox-delivered-functions
+                              task-id msg)
+          (cmacs-brigade-log-append
+           task-id "state"
+           :state (if (eq result 'delivered) "steered" "steered-unconfirmed")
+           :turn (1+ (or (cmacs-brigade-conversation-turn task-id) 0))
+           :reason (plist-get msg :text)))
+      (when reason
+        (cmacs-brigade-log-append
+         task-id "state" :state "steer-refused"
+         :turn (1+ (or (cmacs-brigade-conversation-turn task-id) 0))
+         :reason reason)))
+    ;; Again, whatever happened: a delivered message may have another
+    ;; behind it to steer, and a refused one is usually refused because
+    ;; the turn just ended -- in which case this is the kick that
+    ;; `cmacs-brigade--finish' made and the steering flag turned away.
+    ;; A refusal while the turn is still running is not retried here:
+    ;; the kick at the end of the turn picks the message up.
+    (unless (and (eq result 'refused)
+                 (gethash task-id cmacs-brigade--runs))
+      (cmacs-brigade-kick-conversation task-id))))
+
+
+;;;; Usage limits
+;;
+;; ai-glib 0.13 tells a usage limit and a rate limit apart from a
+;; failure, and usually says when it lifts.  A run stopped by one is
+;; parked in `waiting-input' with its conversation intact, and a timer
+;; kicks it at the reset so a message that was waiting goes out then.
+
+(defcustom cmacs-brigade-limit-retry-seconds 900
+  "How long a run parked on a usage limit waits when no reset time is known.
+
+A provider that says when the limit lifts is taken at its word.  One
+that does not leaves only a guess, and the guess is deliberately not
+short: every retry into a limit is a refused request."
+  :type 'integer
+  :group 'cmacs-brigade)
+
+(defun cmacs-brigade--limit-kind-p (kind)
+  "Whether error KIND is a wait rather than a failure."
+  (memq kind '(session-limit rate-limited)))
+
+(defun cmacs-brigade--error-reason (message kind reset)
+  "The reason string for a run that failed with MESSAGE, KIND and RESET."
+  (if (fboundp 'cmacs-ai-error-sentence)
+      (cmacs-ai-error-sentence message kind reset)
+    message))
+
+(defun cmacs-brigade--limited-p (task-id)
+  "Whether TASK-ID is parked on a usage limit that has not lifted yet."
+  (when-let* ((conv (gethash task-id cmacs-brigade--conversations))
+              (until (plist-get conv :limit-until)))
+    (< (float-time) until)))
+
+(defun cmacs-brigade--limit-lifted (task-id)
+  "The usage limit TASK-ID was parked on should be over; try again."
+  (when-let* ((conv (gethash task-id cmacs-brigade--conversations)))
+    (cmacs-brigade-conversation-put task-id :limit-until nil
+                                    :limit-timer nil)
+    (cmacs-brigade-kick-conversation task-id)))
+
+(defun cmacs-brigade--park-limited (task-id kind reset message)
+  "Park TASK-ID, whose turn was refused by a usage or rate limit.
+
+KIND is `session-limit' or `rate-limited', RESET the Unix time it lifts
+or nil, MESSAGE the provider's words.  The task goes to `waiting-input'
+with the reset time as its reason; its conversation, session and
+sandbox are kept.  Anything already in its mailbox, or sent while it is
+parked, goes out when the limit lifts.
+
+The turn that was refused is not re-sent by itself.  Its prompt is
+already in the session, so any message -- \"carry on\" -- continues
+from it; sending one automatically would be the brigade deciding to
+spend the first of a fresh allowance on its own.
+
+A task with no conversation to keep cannot be resumed, so it fails as
+before, but says why."
+  (let* ((reason (cmacs-brigade--error-reason message kind reset))
+         (now (float-time))
+         (until (if (and (numberp reset) (> reset now))
+                    ;; A little past the stated time: a request sent on
+                    ;; the very second is the likeliest one to be early
+                    ;; by the provider's clock.
+                    (+ reset 30)
+                  (+ now cmacs-brigade-limit-retry-seconds))))
+    (if (not (gethash task-id cmacs-brigade--conversations))
+        (cmacs-brigade--finish task-id 'failed reason reason)
+      (when-let* ((old (plist-get (gethash task-id cmacs-brigade--conversations)
+                                  :limit-timer)))
+        (when (timerp old) (cancel-timer old)))
+      ;; Recorded before `--finish', whose closing kick must already
+      ;; see the task as limited.
+      (cmacs-brigade-conversation-put
+       task-id :limit-until until
+       :limit-timer (run-at-time (max 1 (- until now)) nil
+                                 #'cmacs-brigade--limit-lifted task-id))
+      (cmacs-brigade--finish task-id 'waiting-input reason reason))))
 
 (defun cmacs-brigade--on-exit (task-id proc)
   "Record that TASK-ID's PROC finished."
@@ -710,9 +946,32 @@ makes."
       (when (and parse output)
         (setq output (or (ignore-errors (funcall parse output task-id))
                          output)))
-      (cmacs-brigade--finish task-id state output
-                             (unless (zerop status)
-                               (format "worker exited %s" status))))))
+      ;; A CLI turned away by its account's usage limit exits non-zero
+      ;; like any other failure.  Its output is read with the parser
+      ;; ai-glib uses for the same condition -- its own notice line, or
+      ;; the CLI's sentence when that states a reset -- so the reason
+      ;; says "session limit, resets 14:30" instead of "exited 1".  A
+      ;; failed exit only: a run that succeeded may well have *written
+      ;; about* a limit.
+      ;;
+      ;; It still ends `failed', unlike the in-process worker, which
+      ;; parks.  A subprocess turn that never ran left nothing to
+      ;; resume: no session id came back, and a follow-up message would
+      ;; start a CLI holding that message and none of the agent's
+      ;; instructions.  Retrying the task rebuilds the prompt properly,
+      ;; and the reason now says when that is worth doing.
+      (let ((limit (and (not (zerop status))
+                        (stringp output)
+                        (fboundp 'cmacs-ai-session-limit-scan)
+                        (ignore-errors
+                          (cmacs-ai-session-limit-scan output)))))
+        (cmacs-brigade--finish
+         task-id state output
+         (cond
+          (limit (cmacs-brigade--error-reason
+                  (format "worker exited %s" status)
+                  (car limit) (cadr limit)))
+          ((not (zerop status)) (format "worker exited %s" status))))))))
 
 
 ;;;; The in-process worker
@@ -807,9 +1066,20 @@ through `cmacs-brigade--teardown-conversation\=' when the conversation
 actually ends -- which for a parked task is later, and may be much
 later."
   (let ((text (plist-get payload :text))
-        (err (plist-get payload :error)))
-    (cmacs-brigade--finish task-id (if err 'failed 'done)
-                           (or text err) err)))
+        (err (plist-get payload :error))
+        (kind (plist-get payload :kind))
+        (reset (plist-get payload :reset)))
+    (if (and err (cmacs-brigade--limit-kind-p kind))
+        ;; A usage or rate limit is not a failed run: nothing was wrong
+        ;; with the task, and retrying before the reset cannot succeed.
+        ;; Parked rather than failed, so the conversation -- and for an
+        ;; isolated agent, its worktree and everything it edited -- is
+        ;; still there when the account can be used again.
+        (cmacs-brigade--park-limited task-id kind reset err)
+      (cmacs-brigade--finish task-id (if err 'failed 'done)
+                             (or text err)
+                             (and err (cmacs-brigade--error-reason
+                                       err kind reset))))))
 
 (defun cmacs-brigade--cancel-inproc (_task-id run)
   "Stop an in-process run described by RUN.

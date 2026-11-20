@@ -110,6 +110,12 @@ Faces are one per ai-glib style role --- =cmacs-ai-harness-tool-name=, =cmacs-ai
 
 ai-glib grew mid-flight provider switching, native-history import, session reset and usage reporting at the same time as =ai-tui= grew a panel system, a theme picker and an animation loop. The capabilities are worth having. The chrome is not, because Emacs already has better versions of all of it: a buffer /is/ a panel, =customize-face= /is/ a theme picker, and nothing here needs to animate. So each of these is an ordinary command that prints an ordinary message, and every result lands in an ordinary buffer.
 
+** Saying more while it works
+
+=C-c C-c= while a turn is in flight no longer answers "still working": the line is handed to the running turn (ai-glib's =AiSteerable=), and a small =↳ steered:= note marks it in the transcript. It is queued for the next turn only when the engine refuses or has no way to take input mid-turn; the mode line then shows =[N queued]=, and =C-c C-k= hands queued lines back to the prompt rather than starting them. A slash command is never steered. =cmacs-ai-harness-steerable= controls it for Claude Code. The full contract --- including why an "unconfirmed" steer is never re-sent --- is in [[file:cmacs-ai-0.13.org::*Steering: words into a running turn][cmacs-ai and ai-glib 0.13]].
+
+A turn refused by a usage limit says so in a sentence with the reset time (="Session limit reached; resets 14:30."=) in the transcript as well as the echo area; see [[file:cmacs-ai-0.13.org::*Limits are not failures][Limits are not failures]].
+
 ** Switching provider mid-session
 
 =C-c C-p= moves the conversation to another provider. The transcript on screen, the message history behind it, the system prompt and the working directory all stay; only who answers the next turn changes. It is refused while a turn is in flight, and refused if the incoming provider cannot accept the tool endpoint this session is using --- in which case the current provider is left untouched rather than half-swapped.

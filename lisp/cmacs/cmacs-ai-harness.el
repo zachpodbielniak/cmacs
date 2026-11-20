@@ -37,6 +37,7 @@
 (declare-function cmacs-ai-harness-set-callback "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-send-input "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-cancel "cmacs-ai-harness.c")
+(declare-function cmacs-ai-harness-steer "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-clear "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-busy-p "cmacs-ai-harness.c")
 (declare-function cmacs-ai-harness-activity "cmacs-ai-harness.c")
@@ -98,6 +99,9 @@
 ;; about green -- so the mapping is ours to make and a theme can override
 ;; any of them without ai-glib knowing.
 
+(defface cmacs-ai-harness-steered '((t :inherit shadow :slant italic))
+  "Face for the note marking words sent into a running turn."
+  :group 'cmacs-ai-harness)
 (defface cmacs-ai-harness-user-prompt '((t :inherit font-lock-string-face))
   "Face for text the user typed." :group 'cmacs-ai-harness)
 (defface cmacs-ai-harness-heading '((t :inherit font-lock-function-name-face :weight bold))
@@ -177,6 +181,30 @@ from nothing, so the surrounding text is left alone."
   "Provider used by \\[cmacs-ai-harness], or nil for the configured default.
 See `cmacs-ai-providers' for the symbols this accepts."
   :type 'symbol
+  :group 'cmacs-ai-harness)
+
+(defcustom cmacs-ai-harness-steerable t
+  "Whether a running Claude Code turn can be given more words.
+
+With this on, \[cmacs-ai-harness-send] while a turn is in flight hands
+what you typed to that turn -- a correction lands before the work it
+was meant to change has finished, instead of after -- and only falls
+back to waiting for the next turn when the engine refuses.
+
+For claude-code it changes how the CLI is started: stdin is left open
+for the length of the turn so a second message can be written to it.
+That is the reason it is a setting at all.  A real claude is unaffected;
+a wrapper script standing in for claude that reads its whole stdin
+before answering would wait forever, and should have this turned off.
+
+Read when a session's provider is built, so it applies to harnesses
+started (or switched to claude-code) after it is changed.  Other
+engines are not affected by it: an HTTP provider with local tools is
+steered through cmacs's own tool loop regardless, codex needs
+`cmacs-ai-codex-transport' set to `app-server', and opencode,
+grok-build, cursor, antigravity and ACP agents cannot be steered at
+all."
+  :type 'boolean
   :group 'cmacs-ai-harness)
 
 (defcustom cmacs-ai-harness-import-native-context t
@@ -340,6 +368,18 @@ away from correct the moment the separator's shape changed.")
 (defvar-local cmacs-ai-harness--activity nil "What the current turn is doing.")
 (defvar-local cmacs-ai-harness--busy nil "Non-nil while a run is in flight.")
 
+(defvar-local cmacs-ai-harness--steers nil
+  "Steers sent and not yet answered, as an alist of (TICKET . TEXT).
+The ticket is what `cmacs-ai-harness-steer' returned and what the
+\(:steer ...) event carries back, so an answer is matched to its words
+even when two are in flight and come back out of order.")
+
+(defvar-local cmacs-ai-harness--queued nil
+  "Lines waiting for the turn in flight to end, oldest first.
+Only words a steer could not deliver end up here -- refused, or sent to
+an engine that cannot be steered -- and each becomes a turn of its own
+once the session goes idle.")
+
 ;;;; Rendering --------------------------------------------------------
 
 (defconst cmacs-ai-harness--read-only-props
@@ -374,6 +414,24 @@ multi-byte character in the buffer."
                   (fin (byte-to-position (+ base end))))
         (put-text-property beg fin 'face face)))))
 
+(defconst cmacs-ai-harness--limit-notice-regexp
+  " ?ai-glib-session-limit:\\(?: *reset=[0-9]+\\)?"
+  "ai-glib's machine-readable usage-limit notice, with its leading space.
+It rides inside the error text so a supervisor reading a log can see a
+pause without parsing a sentence; a person reading the transcript has
+the sentence and does not need the token.")
+
+(defun cmacs-ai-harness--hide-limit-notice (beg end)
+  "Hide any usage-limit notice between BEG and END.
+
+Hidden with a `display' property rather than deleted: the library's
+style spans are byte offsets into the text it rendered, and removing
+characters would shift every face after the notice."
+  (save-excursion
+    (goto-char beg)
+    (while (re-search-forward cmacs-ai-harness--limit-notice-regexp end t)
+      (put-text-property (match-beginning 0) (match-end 0) 'display ""))))
+
 (defun cmacs-ai-harness--insert-block (id)
   "Insert block ID at point and record the region it occupies."
   (when-let* ((rendered (cmacs-ai-harness-block-render
@@ -382,6 +440,7 @@ multi-byte character in the buffer."
               (origin (point)))
     (insert text)
     (cmacs-ai-harness--apply-spans origin (cdr rendered))
+    (cmacs-ai-harness--hide-limit-notice origin (point))
     ;; The whole block carries its id, so a command acting on "the block
     ;; at point" is a text-property lookup rather than a search.
     (put-text-property origin (point) 'cmacs-ai-harness-block id)
@@ -501,14 +560,29 @@ multi-byte character in the buffer."
 
           (`(:busy ,flag)
            (setq cmacs-ai-harness--busy flag)
-           (force-mode-line-update))
+           (force-mode-line-update)
+           ;; Going idle is what releases anything a steer could not
+           ;; deliver.  Deferred a tick: this event arrives from inside
+           ;; the library's own notify, and starting the next turn from
+           ;; there would re-enter the conversation mid-transition.
+           (when (and (null flag) cmacs-ai-harness--queued)
+             (run-at-time 0 nil #'cmacs-ai-harness--flush-queued
+                          (current-buffer))))
 
           (`(:activity ,what)
            (setq cmacs-ai-harness--activity what)
            (force-mode-line-update))
 
-          (`(:error ,message)
-           (message "cmacs-ai-harness: %s" message))
+          ;; (:error MESSAGE) or (:error MESSAGE :kind K :reset R).  The
+          ;; tail is matched loosely on purpose: a pattern for exactly two
+          ;; elements silently stops matching the day the payload grows,
+          ;; and an error nobody is told about is the worst kind.
+          (`(:error ,message . ,rest)
+           (cmacs-ai-harness--note-error
+            message (plist-get rest :kind) (plist-get rest :reset)))
+
+          (`(:steer ,result ,reason . ,rest)
+           (cmacs-ai-harness--on-steer result reason (car rest)))
 
           ;; Reports arrive here rather than as a return value because
           ;; the query spawns the CLI and waits on it -- see
@@ -521,6 +595,102 @@ multi-byte character in the buffer."
 
           (`(:builtin ,name ,arguments)
            (cmacs-ai-harness--builtin name arguments)))))))
+
+(defun cmacs-ai-harness--note-error (message kind reset)
+  "Tell the user a turn failed with MESSAGE.
+
+KIND and RESET come from the error payload.  A classified failure -- a
+usage limit, a rate limit, a lapsed login, an empty balance -- is also
+written into the transcript, because the echo area is gone by the next
+keystroke and \"when can I use this again\" is a thing to be able to
+scroll back to.  The library's own error block is already there for
+the rest."
+  (let ((sentence (cmacs-ai-error-sentence message kind reset)))
+    (when kind
+      (cmacs-ai-harness--insert-note sentence 'cmacs-ai-harness-error))
+    (message "cmacs-ai-harness: %s" sentence)))
+
+(defun cmacs-ai-harness--insert-note (text face)
+  "Insert TEXT as a line of the frontend's own at the transcript's end.
+
+For things the library has no block for: a steer, a limit.  The note is
+read-only like the rest of the transcript but is not one of the
+library's blocks, so a full redraw (/clear) drops it -- which is right
+for /clear and the only time a full redraw happens."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (cmacs-ai-harness--transcript-end))
+      (let ((start (point)))
+        (insert text "\n\n")
+        (put-text-property start (- (point) 2) 'face face)
+        (add-text-properties start (point)
+                             cmacs-ai-harness--read-only-props)))))
+
+(defun cmacs-ai-harness--steer-excerpt (text)
+  "TEXT shortened to one line, for a note about it."
+  (let ((line (car (split-string (string-trim text) "\n"))))
+    (if (> (length line) 60)
+        (concat (substring line 0 57) "...")
+      line)))
+
+(defun cmacs-ai-harness--on-steer (result reason ticket)
+  "Handle the answer to a steer: RESULT, REASON, and its TICKET.
+
+RESULT is `delivered', `indeterminate' or `refused'.  Only `refused'
+re-queues the words.  `indeterminate' means they were sent and nothing
+confirmed it; they may already be running, and sending them again as a
+turn of their own is the one mistake steering must never make -- so it
+is reported and otherwise treated as delivered."
+  (let* ((cell (assq ticket cmacs-ai-harness--steers))
+         (text (cdr cell)))
+    (setq cmacs-ai-harness--steers
+          (delq cell cmacs-ai-harness--steers))
+    (pcase result
+      ('delivered
+       (when text
+         (cmacs-ai-harness--insert-note
+          (format "↳ steered: %s" (cmacs-ai-harness--steer-excerpt text))
+          'cmacs-ai-harness-steered)))
+      ('indeterminate
+       (when text
+         (cmacs-ai-harness--insert-note
+          (format "↳ steered (unconfirmed): %s"
+                  (cmacs-ai-harness--steer-excerpt text))
+          'cmacs-ai-harness-steered))
+       (message "cmacs-ai-harness: sent into the running turn, but \
+nothing confirmed it arrived%s"
+                (if reason (format " (%s)" reason) "")))
+      (_
+       ;; Refused: provably not delivered, so the words are still ours.
+       (when text
+         (cmacs-ai-harness--queue text))
+       (message "cmacs-ai-harness: the running turn did not take that%s%s"
+                (if reason (format " (%s)" reason) "")
+                (if text "; it will go as the next turn" ""))))))
+
+(defun cmacs-ai-harness--queue (text)
+  "Hold TEXT until the turn in flight ends, then send it as a turn.
+When nothing is in flight any more -- the refusal that brought TEXT
+here may itself be \"the turn already ended\" -- it is sent at once."
+  (setq cmacs-ai-harness--queued
+        (append cmacs-ai-harness--queued (list text)))
+  (force-mode-line-update)
+  (unless (cmacs-ai-harness-busy-p cmacs-ai-harness--handle)
+    (run-at-time 0 nil #'cmacs-ai-harness--flush-queued (current-buffer))))
+
+(defun cmacs-ai-harness--flush-queued (buffer)
+  "Send the oldest queued line in BUFFER, if its session is idle.
+One line per idle: sending it makes the session busy again, and the
+next idle sends the next, so queued lines stay separate turns in the
+order they were typed."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and cmacs-ai-harness--handle
+                 cmacs-ai-harness--queued
+                 (not (cmacs-ai-harness-busy-p cmacs-ai-harness--handle)))
+        (let ((line (pop cmacs-ai-harness--queued)))
+          (force-mode-line-update)
+          (cmacs-ai-harness-send-input cmacs-ai-harness--handle line))))))
 
 (defun cmacs-ai-harness--builtin (name arguments)
   "Act on built-in command NAME with ARGUMENTS.
@@ -638,15 +808,49 @@ over MCP.\n\n" (or cmacs-ai-harness--provider "This agent")))
 
 ;;;; Commands ---------------------------------------------------------
 
+(defun cmacs-ai-harness--send-while-busy (line)
+  "Deal with LINE, typed while a turn is in flight.
+
+The words go into the running turn when the engine can take them
+\(`cmacs-ai-harness-steer'), and wait for the next turn only when it
+cannot or will not.  The answer to a steer arrives later, as a (:steer
+...) event; see `cmacs-ai-harness--on-steer'.
+
+A slash command is the exception and is left in the prompt.  Steering
+sends text as written -- nothing resolves a command -- so \"/clear\"
+would reach the model as the word, and queueing it would run it at some
+later moment the user is no longer thinking about."
+  (cond
+   ((string-prefix-p "/" line)
+    (message "cmacs-ai-harness: still working -- a command has to wait; \
+%s stops the turn"
+             (substitute-command-keys "\\[cmacs-ai-harness-kill]")))
+   (t
+    (cmacs-ai-harness-set-prompt "")
+    (goto-char (point-max))
+    (let ((ticket (and (fboundp 'cmacs-ai-harness-steer)
+                       (cmacs-ai-harness-steer cmacs-ai-harness--handle
+                                               line))))
+      (if ticket
+          (push (cons ticket line) cmacs-ai-harness--steers)
+        ;; Nothing here can be steered: no seam in this engine, or a
+        ;; cmacs built before steering existed.  Nothing was sent.
+        (cmacs-ai-harness--queue line)
+        (message "cmacs-ai-harness: this agent cannot take input \
+mid-turn; queued for the next one"))))))
+
 (defun cmacs-ai-harness-send ()
-  "Send the prompt region through the harness."
+  "Send the prompt region through the harness.
+
+While a turn is in flight the words are handed to that turn instead of
+starting another -- see `cmacs-ai-harness-steerable' -- and are queued
+for the next turn only if the running one refuses them."
   (interactive)
   (let ((line (string-trim (cmacs-ai-harness-prompt-string))))
     (cond
      ((string-empty-p line) (message "cmacs-ai-harness: nothing to send"))
      ((cmacs-ai-harness-busy-p cmacs-ai-harness--handle)
-      (message "cmacs-ai-harness: still working -- %s to stop it"
-               (substitute-command-keys "\\[cmacs-ai-harness-kill]")))
+      (cmacs-ai-harness--send-while-busy line))
      (t
       (cmacs-ai-harness-set-prompt "")
       (cmacs-ai-harness-send-input cmacs-ai-harness--handle line)
@@ -663,8 +867,23 @@ the two are never ambiguous: there is either a run to stop or there is
 not."
   (interactive)
   (if (cmacs-ai-harness-busy-p cmacs-ai-harness--handle)
-      (progn (cmacs-ai-harness-cancel cmacs-ai-harness--handle)
-             (message "cmacs-ai-harness: cancelled"))
+      (let ((queued cmacs-ai-harness--queued))
+        ;; Emptied BEFORE the cancel: going idle sends the next queued
+        ;; line, and "stop" must not be answered by starting a turn the
+        ;; user typed for a run that no longer exists.  The words are
+        ;; handed back to the prompt rather than thrown away.
+        (setq cmacs-ai-harness--queued nil)
+        (when queued
+          (cmacs-ai-harness-set-prompt
+           (string-join
+            (append queued
+                    (let ((typed (cmacs-ai-harness-prompt-string)))
+                      (unless (string-empty-p (string-trim typed))
+                        (list typed))))
+            "\n")))
+        (cmacs-ai-harness-cancel cmacs-ai-harness--handle)
+        (message "cmacs-ai-harness: cancelled%s"
+                 (if queued "; queued lines are back in the prompt" "")))
     (cmacs-ai-harness-set-prompt "")))
 
 (defun cmacs-ai-harness-block-at-point ()
@@ -1085,6 +1304,10 @@ at startup is not enough for a buffer that stays open for hours."
           (format "  [%s]" cmacs-ai-harness--activity))
          (cmacs-ai-harness--busy "  [working]")
          (t ""))
+   ;; Lines a steer could not deliver, waiting for this turn to end.
+   (if cmacs-ai-harness--queued
+       (format "  [%d queued]" (length cmacs-ai-harness--queued))
+     "")
    (cmacs-ai-harness--tools-indicator)))
 
 (define-derived-mode cmacs-ai-harness-mode fundamental-mode "AI-Harness"

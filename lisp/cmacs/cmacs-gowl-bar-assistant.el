@@ -57,8 +57,14 @@
   :group 'cmacs-gowl-bar)
 
 (defcustom cmacs-gowl-bar-assistant-model-list-providers
-  '(claude-code claude-tmux opencode grok-build antigravity cursor codex-cli)
+  '(claude-code claude-tmux opencode grok-build antigravity cursor codex-cli
+    acp)
   "Providers whose model lists are pushed to the widget.
+
+`acp' is here because its list is static too -- the single entry
+`default', since the Agent Client Protocol has no way to choose a
+model.  A name from `cmacs-ai-acp-agents' lists the same way and can be
+added.
 
 Listing is synchronous in cmacs-ai, so only providers whose list is a
 static table belong here: the CLI providers.  Adding an HTTP provider

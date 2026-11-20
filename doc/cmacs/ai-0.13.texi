@@ -1,0 +1,648 @@
+@c -*- texinfo -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c
+@c The Info counterpart of doc_org/cmacs/cmacs-ai-0.13.org.  Keep the
+@c two in step: they say the same thing.
+
+@node CMacs AI and ai-glib 0.13
+@chapter CMacs AI and ai-glib 0.13: ACP, Steering, Limits
+
+@cindex ACP
+@cindex Agent Client Protocol
+@cindex steering a running turn
+@cindex session limit
+@cindex rate limit
+@cindex codex app-server
+
+ai-glib went from 0.10.2 to 0.13.0 underneath cmacs, and four of the
+things it gained change what you can do from the editor rather than
+only what the library can do.  This chapter is all four in one place,
+because they landed together and lean on each other.
+
+@itemize @bullet
+@item
+@strong{ACP agents are providers.}  Any program speaking the Agent
+Client Protocol becomes a provider symbol, named by its command line in
+@code{cmacs-ai-acp-agents}.
+@item
+@strong{Codex can run as an app-server.}
+@code{cmacs-ai-codex-transport} opts into @command{codex app-server},
+which is what makes a codex turn steerable.
+@item
+@strong{Limits are not failures.}  A usage limit, a rate limit, a
+lapsed login and an empty balance are told apart, said in a sentence
+that names the reset time, and a brigade run stopped by one is parked
+rather than failed.
+@item
+@strong{A running turn takes more words.}  Typing into a harness that
+is still working hands the words to that turn; a message sent to a
+running in-process brigade agent goes into its tool loop.  Both fall
+back to ``wait for the next turn'' only when the engine refuses.
+@end itemize
+
+Two things in ai-glib 0.13 were @emph{not} ported, on purpose; see
+@ref{AI 0.13 Deferred}.
+
+@menu
+* AI 0.13 ACP Agents::          Any ACP agent as a provider.
+* AI 0.13 Codex Transport::     @code{exec} or @code{app-server}.
+* AI 0.13 Limits::              Usage limits are not failures.
+* AI 0.13 Steering::            Words into a running turn.
+* AI 0.13 Deferred::            What was deliberately not ported.
+* AI 0.13 Reference::           Options, functions, tests.
+@end menu
+
+@node AI 0.13 ACP Agents
+@section ACP agents
+
+@subsection What ACP is here
+
+The Agent Client Protocol (@url{https://agentclientprotocol.com}) is one
+wire protocol many coding agents speak over stdio.  ai-glib's
+@code{AiAcpClient} starts the agent's command for each turn, speaks ACP
+v1 (JSON-RPC 2.0, one object per line), and translates what the agent
+says into the same response and event stream every other provider
+produces.  cmacs exposes it as the provider @code{acp}.
+
+ACP has no request that selects a model.  The agent's own
+configuration, or its command line, chooses one; ai-glib reports the
+single model id @code{default}.  So the thing that tells two ACP agents
+apart is not a model string, it is the command that starts them ---
+which is exactly the shape of the problem
+@code{cmacs-ai-openai-compatible-endpoints} already solved for HTTP
+servers, and it is solved the same way.
+
+@subsection Naming your agents
+
+@lisp
+(setq cmacs-ai-acp-agents
+      '((gemini-acp :command "gemini --experimental-acp")
+        (my-agent   :command "my-agent acp --stdio"
+                    :skip-permissions t)))
+@end lisp
+
+@vindex cmacs-ai-acp-agents
+Each entry is @code{(@var{name} . @var{plist})}, and each @var{name} is
+a provider symbol everywhere a built-in name is: it completes in
+@code{cmacs-ai-chat-with-provider}, can be
+@code{cmacs-ai-harness-provider} or @code{cmacs-ai-textops-provider},
+and can be a brigade agent's model prefix (@samp{gemini-acp/default}).
+
+@table @code
+@item :command
+The agent's command line as one string.  Split the way a shell would,
+with no shell run: quoting works, @samp{$VAR}, pipes and redirections
+do not.
+@item :skip-permissions
+Non-@code{nil} answers every permission request ``allow once'' and lets
+the agent write files through the client.  Absent or @code{nil}, every
+request is refused.
+@item :client-fs
+@code{nil} stops cmacs serving the agent's file requests at all.
+Absent means on.
+@end table
+
+An entry without @code{:command} runs whatever the
+@env{AI_ACP_COMMAND} environment variable names, which is also what the
+bare @code{acp} provider does.  A flag an entry does not mention keeps
+ai-glib's default, and the defaults are the cautious ones: permissions
+refused, because there is nobody at a prompt to ask; file reads served,
+confined to the working directory.
+
+A name that appears both here and in
+@code{cmacs-ai-openai-compatible-endpoints} is the endpoint.  That is
+the order the lookup was in before ACP existed, so adding an agent can
+never change what an existing name means.
+
+@subsection What an ACP agent cannot do
+
+@itemize @bullet
+@item
+@strong{Sign in.}  ai-glib never runs ACP's @code{authenticate}.  The
+agent must already be logged in.
+@item
+@strong{Be steered.}  The protocol accepts no input mid-turn but a
+cancel.  Words typed while an ACP turn runs wait for the next one.
+@item
+@strong{Use cmacs's tool array.}  Like every CLI client it runs its own
+tools in its own process.  In a harness it is handed an MCP config
+naming this cmacs, the way every CLI agent is, and ai-glib passes those
+servers to the agent when the session opens --- so whether it reaches
+cmacs's tools is up to the agent's own MCP support, and this has not
+been tried against a real one.  Under the brigade's in-process worker
+there is no such config: an ACP agent there has the agent's tools and
+none of the brigade's.
+@item
+@strong{Run a terminal for the agent.}  ai-glib never offers ACP's
+@code{terminal} capability: it would be a second, unapproved way to
+execute what the agent's own tools already run behind a permission
+request.
+@end itemize
+
+@subsection ACP in the brigade
+
+@code{cmacs-brigade-cli-providers} maps a CLI provider to the
+subprocess worker that launches it.  @code{acp} is deliberately absent
+from it.  An ACP agent is spoken to over JSON-RPC by ai-glib, not run
+as @samp{PROGRAM < prompt}, so there is no subprocess form for a worker
+to launch; it runs under the @code{inproc} worker through ai-glib's
+client.
+
+@subsection Where it is wired
+
+For anyone adding the next provider: cmacs keeps @emph{two} symbol
+tables, and a provider present in one and missing from the other works
+in a chat buffer and is ``unknown provider'' in @code{cmacs-ai-call}.
+
+@multitable @columnfractions .40 .25 .35
+@headitem Table @tab File @tab Reached by
+@item @code{cmacs_ai_provider_type_from_symbol}
+@tab @file{cmacs/ai/cmacs-ai-config.c}
+@tab @code{cmacs-ai-call}, @code{cmacs-ai-list-models}, the harness
+@item @code{cmacs_ai__make_client}
+@tab @file{cmacs/ai/cmacs-ai-client.c}
+@tab @code{cmacs-ai-client-new}, chat buffers, the in-process worker
+@end multitable
+
+Settings a type alone does not carry --- an endpoint's URL, an agent's
+command line, the codex transport --- are applied by one function,
+@code{cmacs_ai_apply_provider_settings}, called from all three
+construction sites.  @code{cmacs-ai-client-cli-option} reads a client's
+properties back (@code{"command"}, @code{"skip-permissions"},
+@code{"client-fs"}, @code{"transport"}), which is how the tests prove a
+setting arrived rather than assuming it.
+
+@node AI 0.13 Codex Transport
+@section The codex transport
+
+@vindex cmacs-ai-codex-transport
+@lisp
+(setq cmacs-ai-codex-transport 'app-server)   ; default: 'exec
+@end lisp
+
+@multitable @columnfractions .25 .45 .30
+@headitem Value @tab Runs @tab Steerable
+@item @code{exec} @tab @command{codex exec --json} @tab no
+@item @code{app-server} @tab @command{codex app-server} @tab yes
+@end multitable
+
+@code{exec} is the default and is what every earlier cmacs did.
+@code{app-server} is JSON-RPC over stdio, one process per turn, and a
+steer is a @code{turn/steer} request naming the running turn.
+
+It is opt-in for a reason you should know before choosing it: ai-glib
+built that transport from Codex's published protocol source and has run
+it only against a scripted stand-in.  @strong{It has never been run
+against a real codex.}  Treat it as unverified until it has worked for
+you.
+
+The setting applies wherever cmacs builds a codex client through
+ai-glib: a chat, @code{cmacs-ai-call}, the harness, an in-process
+brigade agent, and the configured default provider when that is codex.
+It does not affect the brigade's @code{codex} subprocess worker, which
+runs @command{codex exec} itself.
+
+@node AI 0.13 Limits
+@section Limits are not failures
+
+@subsection Four conditions that used to be one string
+
+A CLI reports a usage limit, a 429 and an expired login as the same
+thing: a failed run.  ai-glib 0.13 reads what the CLI said and gives
+each a real error code, and for the two that are a wait it works out
+@emph{when} the wait ends.
+
+@multitable @columnfractions .18 .32 .35 .15
+@headitem Kind @tab ai-glib code @tab What it means @tab Waiting fixes it
+@item @code{session-limit} @tab @code{AI_ERROR_SESSION_LIMIT}
+@tab The account's usage allowance is spent until it resets. @tab yes
+@item @code{rate-limited} @tab @code{AI_ERROR_RATE_LIMITED}
+@tab Too many requests; slow down. @tab yes
+@item @code{signed-out} @tab @code{AI_ERROR_INVALID_API_KEY}
+@tab Not logged in, or the credentials were refused. @tab no
+@item @code{quota} @tab @code{AI_ERROR_INSUFFICIENT_QUOTA}
+@tab Out of credit, or the plan does not cover this. @tab no
+@end multitable
+
+A session limit is not a failed request at all: the CLI never contacts
+the API.  It writes one message of its own and exits.  Retrying before
+the stated reset cannot succeed, which is why it has to be
+distinguishable before anything decides whether to try again.
+
+@subsection The notice line
+
+So that a supervisor watching a log can see a pause without parsing a
+localised sentence with no year in it, ai-glib puts a machine-readable
+token inside the error text:
+
+@example
+the account's session usage limit is reached; it resets at 18:50 on
+Friday 20 November ai-glib-session-limit: reset=1795218600
+@end example
+
+@noindent
+(one line; wrapped here).  That token is for programs.  cmacs reads the
+reset time out of it and then removes it from everything a person sees.
+
+@subsection One classifier
+
+@findex cmacs-ai-error-classify
+@code{cmacs_ai_error_classify} in @file{cmacs/ai/cmacs-ai-stream.c}
+maps a @code{GError} to a kind, a reset time and the cleaned message.
+It is pure --- no Lisp, callable from any thread --- and exposed as
+@code{cmacs-ai-error-classify} so it can be tested and so Lisp holding
+only an error's text can ask the same question the same way:
+
+@lisp
+(cmacs-ai-error-classify
+ 'rate-limited
+ "codex is rate limited ai-glib-session-limit: reset=1900000000 \
+(codex: slow down)")
+;; @result{} (rate-limited 1900000000
+;;     "codex is rate limited (codex: slow down)")
+@end lisp
+
+A notice found under any @emph{other} code, or outside ai-glib's error
+domain, still classifies as @code{session-limit}.  The tool loop and
+the conversation layer both re-wrap a provider's error on the way up,
+and a wrapper that lost the code must not turn ``paused until 18:50''
+into ``failed''.
+
+@subsection The payload, and why it is safe
+
+Every asynchronous error payload was @code{(:error @var{message})}.  A
+classified one is now
+
+@example
+(:error @var{message} :kind @var{kind} :reset @var{timestamp-or-nil})
+@end example
+
+@var{message} is still second, so a caller reading @code{(cadr
+payload)} or @code{(plist-get payload :error)} is unaffected, and an
+error that does not classify keeps exactly the two-element shape it
+always had.  This applies to streamed and non-streamed chat replies,
+the tool loop (@code{cmacs-ai-tools-run-async}), a single off-thread
+tool call, and the harness's @code{:error} event.  The synchronous
+paths that signal @code{cmacs-ai-error} carry the cleaned message.
+
+@subsection What you see
+
+@findex cmacs-ai-error-sentence
+@code{cmacs-ai-error-sentence} is the one place the classification
+becomes words, so a chat, the harness and the brigade describe one
+condition one way:
+
+@example
+Session limit reached; resets 14:30.  (claude: Max plan)
+Session limit reached; resets 09:00 on Sat 21 Nov.
+Rate limited; try again after 14:31.
+Not signed in, or the credentials were refused; sign in to the
+provider again.
+@end example
+
+A reset later today is a clock time; any other day adds the weekday and
+date, because ``resets 09:00'' read at 23:00 means tomorrow and says
+today.  The provider's own words follow in parentheses: the plan name
+or the login command is usually in those, and it is the part you act
+on.
+
+In a chat the sentence is the body of the @samp{error} heading.  In a
+harness it is written into the transcript as well as the echo area ---
+``when can I use this again'' is a thing to be able to scroll back to
+--- and the raw notice inside ai-glib's own error block is hidden with
+a @code{display} property rather than deleted, because the block's
+style spans are byte offsets into the text as rendered.
+
+@subsection In the brigade
+
+An in-process run stopped by a session or rate limit is @emph{parked},
+not failed:
+
+@itemize @bullet
+@item
+the task goes to @code{waiting-input} with the sentence above as its
+reason;
+@item
+its conversation, session and --- for an isolated agent --- its
+worktree and everything it edited are kept;
+@item
+@code{cmacs-brigade-run-finished-functions} does @emph{not} fire,
+because the run has not ended; the per-turn hook does;
+@item
+it is not restarted before the reset.  Mail sent to it while it is
+parked waits, and a timer delivers it when the limit lifts.
+@end itemize
+
+That last point is not a nicety.  Without it a parked task with a
+message waiting would be started, refused at once, parked, and kicked
+again --- a loop at the speed of a failing request.
+
+@vindex cmacs-brigade-limit-retry-seconds
+When the provider did not say when the limit lifts,
+@code{cmacs-brigade-limit-retry-seconds} (900) is the wait.  It is
+deliberately not short: every retry into a limit is a refused request.
+
+The turn that was refused is not re-sent by itself.  Its prompt is
+already in the session, so any message --- ``carry on'' --- continues
+from it.  Sending one automatically would be the brigade deciding to
+spend the first of a fresh allowance on its own.
+
+A lapsed login and an empty balance still end the run @code{failed}:
+waiting fixes neither.
+
+@findex cmacs-ai-session-limit-scan
+@strong{Subprocess workers} (@code{claude-code}, @code{opencode},
+@code{codex}) are CLIs the brigade spawned itself, so they never pass
+through ai-glib's classification.  On a failed exit their output is
+scanned with the same parser (@code{cmacs-ai-session-limit-scan}):
+ai-glib's notice line is taken at its word, and a CLI's own sentence
+counts only when it both names a limit and states a reset ai-glib can
+read.  A match makes the failure reason say ``session limit, resets
+14:30'' instead of ``worker exited 1''.  It still ends @code{failed},
+unlike the in-process worker: a subprocess turn that never ran left no
+session to resume, and a follow-up message would start a CLI holding
+that message and none of the agent's instructions.  Retrying the task
+rebuilds the prompt properly.
+
+@subsection Redirects are refused
+
+@cindex Redirect refused
+ai-glib 0.13 no longer follows an HTTP redirect that would carry your
+API key or request body to another address.  An
+@code{openai-compatible} endpoint that only worked because a redirect
+was silently followed now fails:
+
+@example
+Redirect refused (HTTP 301): a request that carries ...
+@end example
+
+The remedy is the URL, and the chat says so under the error: set the
+provider's base URL to where the redirect points.  For an entry in
+@code{cmacs-ai-openai-compatible-endpoints} that is its
+@code{:base-url}.  The usual causes are @samp{http://} where the server
+wants @samp{https://}, and a missing @samp{/v1}.
+
+@node AI 0.13 Steering
+@section Steering: words into a running turn
+
+@subsection The problem
+
+Without steering, a message for a turn that is running waits and
+becomes the next turn.  A correction --- ``stop, use the staging
+database'' --- arrives after the work it was meant to change has
+finished, and a follow-up costs a whole extra turn that rereads
+everything.
+
+ai-glib's @code{AiSteerable} hands the words to the turn that is
+running, at the next point the engine itself accepts input: before its
+next model call, or at the top of the next round of a tool loop.
+Nothing is cancelled, interrupted or restarted to make room.
+
+@subsection The answer is a tri-state, and the third value is the one that matters
+
+@multitable @columnfractions .20 .55 .25
+@headitem Result @tab Means @tab Queue the words again?
+@item @code{delivered} @tab The running turn took the words. @tab no
+@item @code{indeterminate} @tab Sent, and nothing confirmed it.
+@tab @strong{no}
+@item @code{refused} @tab Provably not delivered.  A reason says why.
+@tab yes
+@end multitable
+
+@code{indeterminate} counts as delivered.  The words may already be
+running, and running them twice is the one mistake steering must never
+make.  Every caller in cmacs follows the same rule: re-queue on
+@code{refused} and on nothing else.
+
+@subsection Which engines can be steered
+
+@multitable @columnfractions .38 .17 .45
+@headitem Engine @tab Steerable @tab How
+@item @code{claude-code} @tab yes
+@tab a stream-json user event on stdin, kept open for the turn
+@item @code{claude-tmux} @tab yes
+@tab a line typed into the TUI while it works
+@item any HTTP provider with local tools @tab yes
+@tab spliced into cmacs's own tool loop at the top of the next round
+@item @code{codex-cli} @tab on @code{app-server} only
+@tab @code{turn/steer}
+@item @code{opencode}, @code{grok-build}, @code{cursor},
+@code{antigravity}, ACP @tab no
+@tab no seam: the protocol takes no input mid-turn
+@end multitable
+
+The HTTP row is how providers whose clients cannot be steered get
+steering at all: the tool loop running them can, so the loop is what is
+steered.  The words go in as one user message after every result of
+the batch of tools that just ran --- never between a tool call and its
+result.
+
+@subsection In a harness buffer
+
+@kbd{C-c C-c} while a turn is in flight used to say ``still working''.
+Now it steers:
+
+@enumerate
+@item
+The line leaves the prompt and is handed to the running turn.
+@item
+On @code{delivered} a small note appears in the transcript:
+@samp{steered: use the staging db}.
+@item
+On @code{indeterminate} the note says @samp{(unconfirmed)} and the echo
+area explains; nothing is queued.
+@item
+On @code{refused}, or when the engine cannot be steered at all, the
+line is queued, the mode line shows @samp{[1 queued]}, and it goes as
+an ordinary turn the moment the session is idle.
+@end enumerate
+
+Three details that are easy to get wrong and are tested:
+
+@itemize @bullet
+@item
+@strong{A slash command is not steered.}  Steering sends text as
+written --- nothing resolves a command --- so @samp{/clear} would reach
+the model as a word.  It stays in the prompt.
+@item
+@strong{Stopping a turn does not start the queued one.}  @kbd{C-c C-k}
+empties the queue first and puts the lines back in the prompt.
+@item
+@strong{Answers are matched by ticket}, not by order: two steers in
+flight can come back out of order.
+@end itemize
+
+@vindex cmacs-ai-harness-steerable
+@code{cmacs-ai-harness-steerable} (default @code{t}) is what makes a
+Claude Code session steerable.  It changes how the CLI is started:
+stdin is left open for the length of the turn.  A real @command{claude}
+is unaffected; a wrapper script standing in for it that reads its whole
+stdin before answering would wait forever, and should have this turned
+off.  It is read when a session's provider is built.
+
+@subsection In the brigade
+
+A message sent to a @emph{running in-process} agent ---
+@code{agent_send}, @code{cmacs-brigade-mailbox-send}, the dashboard ---
+is steered into its tool loop instead of waiting for the turn to end.
+The mailbox's rule is unchanged, with the steer's answer standing in
+for ``the turn has started'':
+
+@itemize @bullet
+@item
+the message is @emph{peeked}, sent, and left in the mailbox;
+@item
+@code{delivered} or @code{indeterminate} removes it (by identity, not
+by position: @code{agent_drop} may have reordered the queue meanwhile)
+and runs @code{cmacs-brigade-mailbox-delivered-functions};
+@item
+@code{refused} leaves it at the head, to become the next turn exactly
+as before.
+@end itemize
+
+Only the head of the mailbox is offered, and the next message only once
+the first has an answer: order is the mailbox's whole contract.  And a
+turn that @emph{ends} while a steer is unanswered does not start the
+next turn with that same message --- the steer's answer decides, which
+is what stops the words running twice.
+
+@vindex cmacs-brigade-steer-running
+@code{cmacs-brigade-steer-running} (default @code{t}) turns this off
+and restores wait-for-the-next-turn.  The subprocess workers are not
+steered: the brigade spawned them with stdin already closed, so there
+is no seam.
+
+@subsection For programs
+
+@findex cmacs-ai-harness-steer
+@findex cmacs-ai-tools-steer
+@multitable @columnfractions .40 .27 .33
+@headitem Function @tab Steers @tab Answer arrives as
+@item @code{(cmacs-ai-harness-steer @var{h} @var{text})}
+@tab harness @var{h}'s running turn
+@tab @code{(:steer @var{result} @var{reason} @var{ticket})} on its
+event callback
+@item @code{(cmacs-ai-tools-steer @var{e} @var{text} @var{fn})}
+@tab the tool loop running on executor @var{e}
+@tab the same list, as @var{fn}'s one argument
+@end multitable
+
+Both return a ticket number at once.  @code{cmacs-ai-harness-steer}
+returns @code{nil} instead when the session has nothing that can be
+steered; nothing was sent, and the caller queues.
+
+@subsection Threads, and a lifetime bug this found
+
+@code{ai_steerable_steer_async} may be called from any thread and
+answers in the caller's thread-default main context.  Every caller in
+cmacs is a DEFUN, so that is Emacs's thread --- but the tool loop being
+steered runs on a worker with a private context, and ai-glib hops onto
+it to splice the words in and hops back.  The C callback therefore does
+no Lisp at all: it copies the answer into C memory and re-posts to the
+cmacs context through @code{cmacs_glib_invoke_on_main}, the one place
+cmacs guarantees both the Lisp thread and the @code{waiting_for_input}
+guard.
+
+The async user data is a ticket number, never a struct: the harness or
+executor being steered can be freed while the answer is in flight, and
+a ticket that fails to look up is the benign outcome.
+
+Applying that rule turned up an existing bug.
+@code{cmacs-ai-harness-send-input} passed the harness @emph{struct} as
+the user data of @code{ai_conversation_send_input_async}.  Freeing a
+busy harness cancels the conversation and frees that struct at once,
+while the task --- which holds its own reference on the conversation
+--- completes later and called back into freed memory.  Killing a
+harness buffer mid-turn was enough to reach it.  It now passes the
+integer handle and looks it up.
+
+@node AI 0.13 Deferred
+@section Deferred
+
+ai-glib 0.13 also ships two things cmacs does not use yet.
+
+@itemize @bullet
+@item
+@strong{Room mode and voiceprints.}  The library can follow a
+multi-speaker room and tell speakers apart with
+@code{AiOnnxSpeakerEmbedder}.  cmacs already has a speech engine with
+speaker embedding and diarization --- @code{cmacs-sherpa}, on the
+system onnxruntime --- so naming speakers here would be sherpa-backed
+rather than a second embedder loaded beside it.  That is its own piece
+of work and is not started.
+@item
+@strong{Everything under @file{deps/ai-glib/bin/}.}  Those are
+ai-glib's own frontends (@command{ai}, @command{ai-tui} and friends).
+cmacs consumes the library, not its programs, and ports nothing from
+there.
+@end itemize
+
+Also not done, and worth knowing:
+
+@itemize @bullet
+@item
+@strong{libreclaw's steer vfunc.}  libreclaw 0.30 added
+@code{LcChannelInterface.send_steered} and
+@code{LC_CHANNEL_CAPABILITY_STEER}, so a channel's far end can ask for
+a message to steer a running turn and be told what became of it.  The
+cmacs channel's @code{LcChannel} implementation lives in libreclaw
+(@file{lc-cmacs-channel.c}), not in cmacs; teaching it to steer means a
+change there (the vfunc, the capability, an inject that carries the
+steer flag and a message id) before cmacs has anything to call.
+@item
+@strong{Auto-resume after a limit.}  A parked brigade run waits for
+someone to say ``carry on''.  Doing that automatically is a policy
+decision about spending a fresh allowance, and is left to you.
+@end itemize
+
+@node AI 0.13 Reference
+@section Reference
+
+@subsection Options
+
+@multitable @columnfractions .42 .13 .45
+@headitem Variable @tab Default @tab What
+@item @code{cmacs-ai-acp-agents} @tab @code{nil}
+@tab Named ACP agents, each a provider symbol.
+@item @code{cmacs-ai-codex-transport} @tab @code{exec}
+@tab @code{exec} or @code{app-server}.
+@item @code{cmacs-ai-harness-steerable} @tab @code{t}
+@tab Keep a Claude Code turn's stdin open so it can be steered.
+@item @code{cmacs-brigade-steer-running} @tab @code{t}
+@tab Steer a message into a running in-process agent.
+@item @code{cmacs-brigade-limit-retry-seconds} @tab 900
+@tab How long a limit-parked run waits when no reset time is known.
+@end multitable
+
+@subsection Functions
+
+@multitable @columnfractions .42 .58
+@headitem Function @tab Returns
+@item @code{cmacs-ai-error-classify}
+@tab @code{(@var{kind} @var{reset} @var{clean})} for an error's code
+and message.
+@item @code{cmacs-ai-session-limit-scan}
+@tab @code{(session-limit @var{reset})} or @code{nil}, for a worker's
+output.
+@item @code{cmacs-ai-error-sentence}
+@tab The sentence a person reads, from a message, kind and reset.
+@item @code{cmacs-ai-error-payload-sentence}
+@tab The same, straight from an @code{(:error ...)} payload.
+@item @code{cmacs-ai-harness-steer}
+@tab A ticket, or @code{nil} when nothing can be steered.
+@item @code{cmacs-ai-tools-steer}
+@tab A ticket; the answer goes to its callback.
+@item @code{cmacs-ai-client-cli-option}
+@tab A CLI client's property, read back.
+@end multitable
+
+@subsection Tests
+
+@file{test/cmacs/cmacs-ai-v013-tests.el} covers the provider tables for
+@code{acp} and a named agent, the transport, the classifier, the
+sentence, and the harness's handling of each steer answer.
+@file{test/cmacs/cmacs-brigade-steer-tests.el} covers the brigade: each
+steer answer against the mailbox, a turn ending mid-steer, and parking
+on a limit.  Neither talks to a model.

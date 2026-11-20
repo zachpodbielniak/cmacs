@@ -46,7 +46,9 @@ The built-ins, followed by every name in
 `cmacs-ai-openai-compatible-endpoints' -- a user's own OpenAI-compatible
 servers are providers here in every sense, so they complete in
 `cmacs-ai-chat-with-provider', in the brigade's composer, and anywhere
-else this list is offered.  */)
+else this list is offered -- and then every name in
+`cmacs-ai-acp-agents', which are ACP agents with their own command
+lines.  */)
   (void)
 {
   Lisp_Object builtin = list (intern ("claude"),
@@ -61,7 +63,8 @@ else this list is offered.  */)
                               intern ("grok-build"),
                               intern ("antigravity"),
                               intern ("cursor"),
-                              intern ("codex-cli"));
+                              intern ("codex-cli"),
+                              intern ("acp"));
   Lisp_Object extra = Qnil, tail;
   Lisp_Object alist =
     find_symbol_value (intern ("cmacs-ai-openai-compatible-endpoints"));
@@ -70,6 +73,17 @@ else this list is offered.  */)
     {
       Lisp_Object entry = XCAR (tail);
       if (CONSP (entry) && SYMBOLP (XCAR (entry)) && !NILP (XCAR (entry)))
+        extra = Fcons (XCAR (entry), extra);
+    }
+  /* Then the named ACP agents.  A name already listed as an endpoint
+   * is skipped: the type table resolves it as the endpoint, and
+   * offering it twice would suggest there were two of it. */
+  alist = find_symbol_value (intern ("cmacs-ai-acp-agents"));
+  for (tail = alist; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object entry = XCAR (tail);
+      if (CONSP (entry) && SYMBOLP (XCAR (entry)) && !NILP (XCAR (entry))
+          && NILP (Fmemq (XCAR (entry), extra)))
         extra = Fcons (XCAR (entry), extra);
     }
   return CALLN (Fnconc, builtin, Fnreverse (extra));

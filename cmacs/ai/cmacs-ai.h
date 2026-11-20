@@ -71,6 +71,77 @@ extern void cmacs_ai_apply_endpoint_settings (Lisp_Object sym, gpointer prov);
  * (cursor, antigravity). */
 extern gchar *cmacs_ai_apply_cli_config_dir (Lisp_Object sym, gpointer prov);
 
+/* ── ACP agents and the codex transport (ai-glib 0.13) ───────────────
+ *
+ * `cmacs-ai-acp-agents' is to AI_PROVIDER_ACP what the endpoint alist is
+ * to AI_PROVIDER_OPENAI_COMPATIBLE: ACP has no request that selects a
+ * model, so what distinguishes one agent from another is its command
+ * line, and each named command line is a provider symbol of its own.
+ *
+ * Returns the agent's plist for SYM, or Qnil. */
+extern Lisp_Object cmacs_ai_acp_agent (Lisp_Object sym);
+
+/* True when SYM is `acp' or one of ai-glib's aliases for it. */
+extern bool cmacs_ai_acp_symbol_p (Lisp_Object sym);
+
+/* Everything a freshly built provider needs that its type alone does
+ * not carry, in one call so no construction site can apply half of it:
+ * a named OpenAI-compatible endpoint's URL and key, a named ACP agent's
+ * command line and permission flags, and `cmacs-ai-codex-transport' on
+ * a codex client.  Each part is a no-op for a provider it does not
+ * concern, and SYM may be Qnil (the configured default provider).
+ * Never signals.
+ *
+ * cmacs_ai_apply_endpoint_settings is the older name for the first
+ * third and now simply calls this, so a site written against it gets
+ * the rest too. */
+extern void cmacs_ai_apply_provider_settings (Lisp_Object sym, gpointer prov);
+
+/* ── Errors worth telling apart (cmacs-ai-stream.c) ──────────────────
+ *
+ * A usage limit, a 429, an expired login and an empty wallet used to
+ * reach Lisp as four strings.  ai-glib 0.13 gives them codes and, for
+ * the first two, a machine-readable reset time; this is the one place
+ * cmacs reads them.
+ *
+ * Returns the kind as a C string -- "session-limit", "rate-limited",
+ * "signed-out", "quota" -- or NULL for every other error.  *RESET_OUT
+ * is the Unix time the limit lifts, 0 when unknown.  *CLEAN_OUT, when
+ * non-NULL, receives ERROR's message with the raw
+ * `ai-glib-session-limit:' notice removed (caller g_frees); the notice
+ * is for supervisors, and a person should never have to read it.
+ *
+ * Pure: no Lisp, callable from any thread. */
+extern const gchar *cmacs_ai_error_classify (const GError *gerr,
+                                             gint64       *reset_out,
+                                             gchar       **clean_out);
+
+/* The Lisp payload for ERROR: (:error MESSAGE), or
+ * (:error MESSAGE :kind SYMBOL :reset TIMESTAMP-OR-NIL) when the error
+ * classifies.  MESSAGE stays second so every consumer that reads
+ * `cadr' or `plist-get :error' is unaffected.  FALLBACK is the message
+ * when ERROR is NULL.  Main thread only: it allocates Lisp objects. */
+extern Lisp_Object cmacs_ai_error_payload (const GError *gerr,
+                                           const char   *fallback);
+
+/* ── Steering (cmacs-ai-tools.c) ─────────────────────────────────────
+ *
+ * Words into a running turn, through ai-glib's AiSteerable.  TARGET is
+ * the executor or provider to steer.  The answer is delivered on the
+ * main thread as (:steer RESULT REASON ID), RESULT one of the symbols
+ * `delivered', `indeterminate', `refused': to harness HARNESS's event
+ * callback when HARNESS is non-zero, else to the one-shot callback
+ * COOKIE.  Returns ID, a ticket that is all the async callback carries
+ * -- an integer, so a harness or executor freed mid-steer leaves it a
+ * number that fails to look up rather than a pointer to dereference.
+ * Main thread only. */
+extern guint cmacs_ai_steer_start (gpointer target, const gchar *text,
+                                   guint harness, uint64_t cookie);
+
+/* Deliver PAYLOAD to harness HANDLE's event callback, if it still
+ * exists (cmacs-ai-harness.c).  Main thread only. */
+extern void cmacs_ai_harness_emit_handle (guint handle, Lisp_Object payload);
+
 extern void   cmacs_ai_client_registry_init  (void);
 extern guint  cmacs_ai_client_register       (gpointer client_gobject);
 extern gpointer cmacs_ai_client_lookup       (guint handle);

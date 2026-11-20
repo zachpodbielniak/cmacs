@@ -41,6 +41,14 @@ When a message arrives, the task goes =done= → =queued= → =running= again. T
 
 Only a clean =done= keeps the conversation. A failure, a cancellation or a budget stop releases it — session, sandbox and all. Silently resuming a session whose last turn broke is the kind of recovery that should be asked for rather than assumed.
 
+** A running agent can be told now, not later
+
+Since ai-glib 0.13 a message for an agent that is /running/ under the in-process worker does not wait for its turn to end: the run layer steers the head of the mailbox into the tool loop, where it lands at the top of the next round. The peek-never-pop rule is what makes that safe. The message stays in the mailbox until the steer answers; =delivered= removes it, and so does =indeterminate= (sent but unconfirmed --- leaving it queued would run it twice); =refused= leaves it at the head to become the next turn as before. One message is offered at a time, in order, and a turn that ends while a steer is unanswered does not start the next turn with that same message. =cmacs-brigade-steer-running= turns it off. The subprocess workers have no seam and still wait for the turn.
+
+** A usage limit parks the conversation, it does not end it
+
+"Ending badly ends the conversation" has one exception. A turn refused by the account's usage limit or a rate limit did not go wrong, it was turned away, so the task is parked in =waiting-input= with the reset time as its reason and the conversation --- session, sandbox, edits --- is kept. It is not restarted before the reset: mail sent meanwhile waits, and a timer delivers it when the limit lifts. A lapsed login or an empty balance still fails. Both of these are described in full in [[file:../cmacs-ai-0.13.org][cmacs-ai and ai-glib 0.13]].
+
 * Using it
 
 ** From the dashboard

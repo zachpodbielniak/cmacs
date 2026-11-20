@@ -62,8 +62,8 @@ reason."
                  (const openai-compatible)
                  (const claude-code) (const opencode) (const claude-tmux)
                  (const grok-build) (const antigravity) (const cursor)
-                 (const codex-cli)
-                 (symbol :tag "Named endpoint")))
+                 (const codex-cli) (const acp)
+                 (symbol :tag "Named endpoint or ACP agent")))
 
 (defcustom cmacs-ai-textops-model "sonnet"
   "Model string used by summarize/rephrase/reply.

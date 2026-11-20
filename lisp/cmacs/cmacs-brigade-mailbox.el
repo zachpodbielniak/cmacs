@@ -32,6 +32,18 @@
 ;;   has gone away, an agent definition that was reloaded out from under
 ;;   the task -- silently eats what somebody typed.
 ;;
+;; Since ai-glib 0.13 a message for an agent that is *running* need not
+;; wait for its turn to end: an in-process agent's tool loop can take
+;; words at the top of its next round, and the run layer steers the head
+;; of the queue into it (`cmacs-brigade--steer-running').  The second
+;; rule is what makes that safe.  The message is peeked, sent, and
+;; removed only when the steer answers `delivered' -- or
+;; `indeterminate', which means sent-but-unconfirmed and must count as
+;; delivered, since leaving it queued would run it twice.  A `refused'
+;; steer leaves it at the head, to become the next turn exactly as
+;; before.  Nothing in this file changes for that: `agent_send' still
+;; appends and kicks, and the kick is what decides.
+;;
 ;; Messages are persisted as JSONL under the state directory, so a
 ;; message queued against a busy agent survives the restart that happens
 ;; before it is delivered.  The file is rewritten rather than appended
@@ -281,10 +293,11 @@ undelivered.  Whichever of the two runs second does the waking."
 
 (cmacs-brigade-deftool agent-send
   "Say something more to an agent.  Works whether it is still running --
-the message is delivered when its current turn ends -- or already
-finished, in which case it starts again with the same conversation and
-remembers everything from before.  Returns immediately; poll with
-agent_status and collect with agent_result as usual."
+the message reaches it during its current turn when it can take one
+mid-turn, and otherwise when that turn ends -- or already finished, in
+which case it starts again with the same conversation and remembers
+everything from before.  Returns immediately; poll with agent_status and
+collect with agent_result as usual."
   ((id string "Task id, from agent_spawn")
    (message string "What to say.  It continues the existing conversation,
 so you do not need to repeat context you already gave it."))

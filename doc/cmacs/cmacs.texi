@@ -76,6 +76,7 @@ interaction.
 * CMacs Vidstudio::             Reel-based video editor (timeline, transitions, export).
 * CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
+* CMacs AI and ai-glib 0.13::   ACP agents, steering, limit notices, Codex transport.
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
 * CMacs AI Brigade::            Multi-agent orchestration, memory, and the AI tool fabric.
@@ -13840,6 +13841,11 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include transcribe/transcribe.texi
+
+@c ===================================================================
+
+@c ===================================================================
+@include ai-0.13.texi
 
 @c ===================================================================
 @include calculator/calculator.texi
