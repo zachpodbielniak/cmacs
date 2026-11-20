@@ -82,6 +82,9 @@ const char *const cmacs_feature_names[] = {
 #ifdef HAVE_CMACS_TRANSCRIBE
   "transcribe",
 #endif
+#ifdef HAVE_CMACS_JOURNAL
+  "journal",
+#endif
 #ifdef HAVE_CMACS_GNUSEYE
   "gnuseye",
 #endif
@@ -306,6 +309,12 @@ syms_of_cmacs_features (void)
   is_cmacs_transcribe = true;
 #endif
 
+  DEFVAR_BOOL ("IS-CMACS-JOURNAL", is_cmacs_journal,
+    doc: /* Non-nil if this build was configured --with-cmacs-journal.  */);
+#ifdef HAVE_CMACS_JOURNAL
+  is_cmacs_journal = true;
+#endif
+
   DEFVAR_BOOL ("IS-CMACS-GNUSEYE", is_cmacs_gnuseye,
     doc: /* Non-nil if this build was configured --with-cmacs-gnuseye.  */);
 #ifdef HAVE_CMACS_GNUSEYE
@@ -499,6 +508,7 @@ The networks also need onnxruntime: see `cmacs-handtrack-available-p'.  */);
   cmacs_features__alias ("is-cmacs-vidstudio",   "IS-CMACS-VIDSTUDIO");
   cmacs_features__alias ("is-cmacs-transcode",   "IS-CMACS-TRANSCODE");
   cmacs_features__alias ("is-cmacs-transcribe",  "IS-CMACS-TRANSCRIBE");
+  cmacs_features__alias ("is-cmacs-journal",     "IS-CMACS-JOURNAL");
   cmacs_features__alias ("is-cmacs-gnuseye",     "IS-CMACS-GNUSEYE");
   cmacs_features__alias ("is-cmacs-roamgraph",   "IS-CMACS-ROAMGRAPH");
   cmacs_features__alias ("is-cmacs-secondbrain", "IS-CMACS-SECONDBRAIN");

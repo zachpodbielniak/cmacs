@@ -667,6 +667,7 @@ OPTION_DEFAULT_OFF([cmacs-imgedit], [CMacs 2D image / sprite editor (layers, ble
 OPTION_DEFAULT_OFF([cmacs-vidstudio], [CMacs video editor (libregnum Reel timeline, transitions, effects, ffmpeg export)])
 OPTION_DEFAULT_OFF([cmacs-transcode], [CMacs native ffmpeg video/audio transcoder (podman/docker container or host; Emacs-managed parallel pool)])
 OPTION_DEFAULT_OFF([cmacs-transcribe], [CMacs batch speech-to-text (whisper.cpp STT + transcode pre-pass, AI summaries, hooks; Emacs-managed parallel pool)])
+OPTION_DEFAULT_OFF([cmacs-journal], [CMacs activity journal (local, text-only spans of focused windows/buffers/URLs; privacy filters; LQL activity source; recording is opt-in at runtime)])
 OPTION_DEFAULT_OFF([cmacs-calculator], [CMacs calculator (desktop/financial/physics/relativity/CAS over GNU Calc; SVG + libregnum charts; emacs --calc REPL)])
 OPTION_DEFAULT_OFF([cmacs-lsp], [CMacs in-binary LSP framework (emacs --cmacs-lsp LANG; gnucalc server for .calc sheets when the calculator is also enabled)])
 OPTION_DEFAULT_OFF([cmacs-office], [CMacs native Office documents (.docx/.xlsx/.pptx + .odt/.ods/.odp) over libzip + libxml2])
@@ -817,6 +818,13 @@ if test "$with_cmacs_bacon" != "no"; then
   fi
   AC_DEFINE([HAVE_CMACS_BACON], 1, [CMacs bacon integration])
   CMACS_BACON_OBJ="cmacs-bacon.o cmacs-bacon-ipc.o"
+fi
+# cmacs-yaml-parse-file (cmacs/glib/cmacs-yaml.c): YAML file -> JSON text.
+# yaml-glib reaches the link only inside libbacon-1.0.a, so the primitive
+# exists exactly when bundled bacon does.
+if test "$with_cmacs_glib" != "no" && test "$CMACS_BACON_BUNDLED" = "yes"; then
+  AC_DEFINE([HAVE_CMACS_YAML], 1, [cmacs-yaml-parse-file (yaml-glib via libbacon)])
+  CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-yaml.o"
 fi
 if test "$with_cmacs_gowl" != "no"; then
   # gowl builds against wlroots 0.19 or 0.20 (selectable; newest present
@@ -2001,6 +2009,18 @@ if test "$with_cmacs_transcribe" != "no"; then
   fi
 fi
 AC_SUBST(HAVE_CMACS_TRANSCRIBE)
+
+# CMACS Journal: pure-Elisp subsystem (no C build artefacts of its own).  A
+# local activity journal over hooks other subsystems already provide (gowl
+# focus/title/lock, gsurf URIs, brigade runs) -- each is optional and found at
+# runtime, so nothing here is fatal.  Building it in records NOTHING: the
+# recording is `cmacs-journal-mode', off by default.
+HAVE_CMACS_JOURNAL=no
+if test "$with_cmacs_journal" != "no"; then
+  HAVE_CMACS_JOURNAL=yes
+  AC_DEFINE([HAVE_CMACS_JOURNAL], 1, [CMacs activity journal subsystem])
+fi
+AC_SUBST(HAVE_CMACS_JOURNAL)
 
 # CMACS Video: GStreamer-backed video overlay for inline #+BEGIN_VIDEO
 # blocks and standalone cmacs-video-mode buffers.  Compositor-agnostic:

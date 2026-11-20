@@ -729,6 +729,7 @@ cd cmacs
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-journal \
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
@@ -886,6 +887,7 @@ Requires =autoconf= (>= 2.65) and =automake=.
   --with-cmacs-vidstudio \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-journal \
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \
@@ -1012,6 +1014,24 @@ Module flags:
   part of the standard flag set; needs =--with-cmacs-whisper= plus podman/docker
   or a host =ffmpeg= at runtime (and =--with-cmacs-ai= for summaries).  See
   [[file:doc_org/cmacs/transcribe/index.org][the manual]].
+
+- =--with-cmacs-journal= — A local, structured, text-only *activity journal*.
+  =M-x cmacs-journal-mode= (off by default: building it in records nothing)
+  writes spans — which window was focused under gowl, which buffer was
+  selected, which page a gsurf buffer showed, that an agent run finished — as
+  JSON Lines, one file per day, under =$XDG_STATE_HOME/cmacs/journal= (0700,
+  files 0600).  Names and titles only: no screen contents, no keystrokes,
+  nothing while the session is locked.  Every event passes privacy filters
+  /before/ it is kept anywhere: =cmacs-journal-filters= in Elisp, plus YAML
+  files (=~/.config/cmacs/journal-filters.yaml=) meant to live outside a
+  tracked dotfiles repository, since a list of what must not be recorded is
+  itself a record.  A rule can exclude an event, blank fields, sanitise part of
+  a field, or replace it by a keyed hash; a filter file that does not parse
+  stops the recording instead of being ignored.  The LQL source =activity=
+  queries it (hidden from agents unless =cmacs-journal-expose-to-agents=), and
+  =cmacs-journal-report=, the =cmacs-journal= Org dynamic block,
+  =cmacs-journal-at= and =cmacs-journal-reopen= use it.  Pure Elisp; part of
+  the standard flag set.  See [[file:doc_org/cmacs/cmacs-journal.org][the manual]].
 
 Each module auto-detects bundled (=deps/=) or system libraries.  To
 force system-installed versions:

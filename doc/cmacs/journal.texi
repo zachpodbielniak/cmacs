@@ -1,0 +1,532 @@
+@c journal.texi --- the CMacs Journal chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Journal
+@chapter CMacs Journal: A Local Activity Journal
+
+@cindex journal
+@cindex activity journal
+@cindex time tracking
+@cindex privacy filters
+
+@code{cmacs-journal} keeps a journal of what had your attention: which
+window was focused, which buffer was selected, which page a browser
+buffer showed, which agent run finished.  It answers ``where did
+Tuesday go'', ``what was I looking at when I wrote this'', and ``reopen
+what I had open then''.
+
+Four things about it, stated plainly:
+
+@itemize @bullet
+@item
+@strong{It is off by default.}  Building cmacs
+@option{--with-cmacs-journal} records nothing and listens to nothing.
+Recording starts when you turn on @code{cmacs-journal-mode} and stops
+when you turn it off.  While it records, the mode line says so.
+@item
+@strong{It is text only.}  Names and titles: an app id, a window title,
+a buffer name, a file name, a major mode, a project, a URL.  Never
+screen contents, never keystrokes, never the clipboard, never buffer
+text.
+@item
+@strong{It is local.}  Plain files under
+@file{$XDG_STATE_HOME/cmacs/journal}, readable only by you.  Nothing is
+sent anywhere.  Agents cannot query it unless you say so.
+@item
+@strong{It is filtered before it is kept.}  Privacy rules see every
+event before it is stored anywhere, including in memory.  What a rule
+excludes was never recorded, and nothing notes that a rule fired.
+@end itemize
+
+@lisp
+(cmacs-journal-mode 1)                  ; start recording
+(setq cmacs-journal-retention-days 90)  ; keep three months
+@end lisp
+
+Built with @option{--with-cmacs-journal} (part of the default flag
+set).  @code{IS-CMACS-JOURNAL} is non-nil in a build that has it.  It is
+pure Elisp over hooks other subsystems provide; each of those is
+optional.
+
+@menu
+* Journal Events::       What is recorded, and what is not.
+* Journal Storage::      Where it is kept.
+* Journal Commands::     The mode, pausing, forgetting.
+* Journal Filters::      The privacy rules, in Elisp and in YAML.
+* Journal LQL::          Querying it, and what agents see.
+* Journal Uses::         Reports, recall, Org clock.
+* Journal Options::      Every option.
+* Journal Internals::    The pipeline and the YAML primitive.
+@end menu
+
+@node Journal Events
+@section What Is Recorded
+
+The journal records @dfn{spans}, not samples.  Nothing polls.  A span
+opens when something takes the focus and closes when something else
+does, so ``Firefox, this title, from 10:02:11 for 340 seconds'' is one
+line.
+
+@multitable @columnfractions .2 .8
+@headitem Field @tab Meaning
+@item @code{time} @tab When the span started (ISO 8601 with offset)
+@item @code{end} @tab When it ended
+@item @code{duration} @tab Seconds
+@item @code{kind} @tab @code{focus}, @code{buffer}, @code{url}, @code{agent} or @code{idle}
+@item @code{app} @tab The window's app id; @code{emacs} for a buffer; @code{gsurf} for a page
+@item @code{title} @tab The window or page title
+@item @code{pid} @tab The window's process id
+@item @code{tags} @tab The gowl tags the window is on
+@item @code{monitor} @tab The focused monitor's name
+@item @code{buffer} @tab The buffer name
+@item @code{file} @tab The file the buffer visits, with @file{~} for the home directory
+@item @code{mode} @tab The major mode
+@item @code{project} @tab The project (@code{project-current}), or the PARA path inside a notes tree
+@item @code{url} @tab The URL of a gsurf buffer
+@item @code{detail} @tab @code{para:BUCKET} for a notes file, @code{container:NAME} for a gsurf container, the final state of an agent run
+@end multitable
+
+Where each kind comes from:
+
+@table @code
+@item focus
+Under gowl, the focused window, from
+@code{cmacs-gowl-focus-changed-functions},
+@code{cmacs-gowl-client-title-changed-functions} and
+@code{cmacs-gowl-tag-changed-functions}.
+@item buffer
+The selected window's buffer, from
+@code{window-selection-change-functions} and
+@code{window-buffer-change-functions}.  Under gowl, Emacs's own frames
+are recorded this way and not as @code{focus}, and buffer changes are
+ignored while another program's window has the focus.
+@item url
+A gsurf buffer, from @code{cmacs-gsurf-uri-changed-functions} and
+@code{cmacs-gsurf-title-changed-functions}.
+@item agent
+A brigade run finishing, from
+@code{cmacs-brigade-run-finished-functions}.  A point event: the agent,
+the task title and the final state.  The run's output is not recorded.
+@item idle
+No input for @code{cmacs-journal-idle-threshold} seconds while Emacs
+itself has the focus.  Emacs cannot see input going to another
+program's window, so it does not guess there.
+@end table
+
+What is @emph{not} recorded: anything while the session is locked (a
+lock closes the open span, and the locked stretch is a gap); anything
+while the journal is paused; anything a filter excludes; spans shorter
+than @code{cmacs-journal-min-span} (2 seconds), since passing through a
+window is not attention.
+
+Everything works without gowl.  A plain pgtk or tty Emacs has no
+@code{focus} events and records buffers, URLs and agent runs.
+
+@node Journal Storage
+@section Where It Is Kept
+
+One JSON Lines file per day, @file{YYYY-MM-DD.jsonl}, in
+@code{cmacs-journal-directory} (default
+@file{$XDG_STATE_HOME/cmacs/journal}, that is
+@file{~/.local/state/cmacs/journal}).  The directory is mode 0700 and
+each file 0600, set explicitly every time rather than left to the
+umask.  A line looks like this:
+
+@example
+@{"time":"2026-11-20T10:02:11-0500","end":"2026-11-20T10:07:51-0500",
+ "duration":340.0,"kind":"focus","app":"firefox",
+ "title":"Wayland - Wikipedia","pid":4242,"tags":[2],"monitor":"DP-1"@}
+@end example
+
+@noindent
+(one line in the file).  JSON Lines because the files are meant to be
+read, grepped and deleted by the person they are about.  Closed spans
+wait in memory and are written when Emacs has been idle for
+@code{cmacs-journal-flush-idle} seconds, at least every
+@code{cmacs-journal-flush-interval} seconds, and when Emacs exits.
+@code{cmacs-journal-flush} writes them now.
+@code{cmacs-journal-retention-days} deletes older day files (@code{nil},
+the default, keeps everything).
+
+The file @file{secret} in the same directory is the per-install key
+that @code{hash} filters use.  It is 0600 and is never written into the
+journal.
+
+@node Journal Commands
+@section Commands
+
+@table @code
+@item cmacs-journal-mode
+Global minor mode: record.  Off by default.
+@item cmacs-journal-pause
+Stop recording; the open span closes.
+@item cmacs-journal-resume
+Start again.
+@item cmacs-journal-flush
+Write queued spans now.
+@item cmacs-journal-forget
+Delete a time range, or everything matching a regexp.
+@item cmacs-journal-filters-reload
+Re-read the filter rules.
+@item cmacs-journal-filter-test
+Show what the filters would make of the current (or a typed) event.
+@item cmacs-journal-report
+Time by project, app, day or kind, as an Org table.
+@item cmacs-journal-at
+What was focused and open around a moment.
+@item cmacs-journal-reopen
+Reopen that moment's files and pages.
+@item cmacs-journal-org-clock
+Insert CLOCK lines for a project and a day under the heading at point.
+@end table
+
+The mode line shows @code{cmacs-journal-mode-line-recording} while
+recording and @code{cmacs-journal-mode-line-paused} while the mode is on
+but not recording (paused, locked, or stopped because the filters did
+not load).
+
+@code{cmacs-journal-forget} deletes from the stored files, from the
+spans not yet written, and the span still open.  Give it a time range,
+a regexp, or both: a range alone forgets a stretch of time, a regexp
+alone forgets everything that mentions something.  A span partly inside
+the range goes whole.  Each day file is rewritten through a temporary
+file and a rename, so an interruption leaves the old file or the new
+one, never half of one; a day with nothing left is deleted.
+Interactively it counts what would go and asks before deleting.
+
+@node Journal Filters
+@section Filters
+
+@cindex journal filters
+@cindex journal-filters.yaml
+
+This is the part that makes a journal like this safe to keep.  Every
+event passes through the filters @emph{before} it is kept anywhere:
+before the open span, before the in-memory queue, and so before the
+files, the LQL source and any agent.
+
+A rule is a @dfn{match} plus @dfn{actions}.
+
+@table @asis
+@item match
+Field to regexp pairs over any event field (@code{kind}, @code{app},
+@code{title}, @code{pid}, @code{tags}, @code{monitor}, @code{buffer},
+@code{file}, @code{mode}, @code{project}, @code{url}, @code{detail}).
+All of them must match.  A field the event does not have never matches.
+In Elisp the match may instead be a predicate function called with the
+event.
+@item @code{exclude}
+Drop the whole event.  The open span closes and the time becomes an
+untracked gap, exactly as if nothing had been focused.  There is no
+placeholder and no counter.
+@item @code{drop}
+A list of fields to blank.
+@item @code{replace}
+A list of field / regexp / replacement: sanitise @emph{part} of a field,
+such as a query string or an account number.  @samp{\N} in the
+replacement refers to a group.
+@item @code{hash}
+A list of fields replaced by a short keyed hash (@samp{#3fa9c1e07b2d}).
+The same text always gives the same hash on this machine, so durations
+still add up per document or per site without the journal holding the
+text.  The key is the per-install secret; another machine gives
+different hashes.
+@end table
+
+Three properties are kept on purpose:
+
+@enumerate
+@item
+Every rule is matched against the event @emph{as it arrived}; the
+actions are applied afterwards.  One rule's @code{drop} can never hide
+the text another rule's @code{exclude} was waiting for, whatever order
+they are in.
+@item
+Nothing records which rule matched.  Not in the event, not in a log,
+not in a message.  A note that ``rule 4 fired at 14:02'' is the thing
+the rule was written to keep out.
+@item
+The filters @emph{fail closed} (see below).
+@end enumerate
+
+Matching ignores case by default
+(@code{cmacs-journal-filter-case-fold}): a rule that matches too much
+loses a title, and a rule that matches too little records one.
+
+@subsection The two layers, and why there are two
+
+The rules come from three places and are merged into one set.
+
+@subsubheading Elisp: @code{cmacs-journal-filters}
+
+@lisp
+(setq cmacs-journal-filters
+      '((:match ((:app . "^org\\.keepassxc")) :exclude t)
+        (:match ((:url . "bank")) :drop (:url :title))
+        (:match ((:title . "Invoice"))
+         :replace ((:title "[0-9]\\@{6,\\@}" "***"))
+         :hash (:file))
+        ;; a predicate instead of regexps
+        (:match (lambda (event)
+                  (equal (plist-get event :monitor) "HDMI-A-1"))
+         :exclude t)))
+@end lisp
+
+These are Emacs regexps.  This layer is for rules you do not mind anyone
+reading, because your Emacs configuration is very often a tracked,
+shared or published repository.
+
+@subsubheading YAML: @code{cmacs-journal-filter-files}
+
+The default is one file, @file{~/.config/cmacs/journal-filters.yaml}.
+
+@example
+filters:
+  - match: @{app: '^org\.keepassxc'@}
+    exclude: true
+  - match: @{url: 'bank'@}
+    drop: [url, title]
+  - match: @{title: 'Invoice'@}
+    replace: [@{field: title, regexp: '\d@{6,@}', with: '***'@}]
+    hash: [file]
+@end example
+
+@strong{The YAML layer exists because the exclusion rules themselves
+are sensitive.}  A rule that says ``never record windows whose title
+contains the name of this clinic, this lawyer, this employer I am
+interviewing with'' tells a reader exactly what the rule was written to
+hide.  Rules like that must not be in a dotfiles repository, and a file
+with its own path outside the tracked tree is the simplest way to make
+that true.  Keep it out of Stow, out of git, and readable only by you.
+It expresses exactly the same rule set as the Elisp variable; nothing
+can be said in one that cannot be said in the other, except the
+predicate function.
+
+Regexps in a YAML file are written the way they are everywhere else ---
+@samp{\d}, @samp{\s}, @samp{\w}, @samp{(a|b)}, @samp{(?:...)},
+@samp{@{6,@}}, a leading @samp{(?i)} --- and translated to Emacs
+regexps.  A construct with no Emacs equivalent (lookahead, lookbehind,
+named groups, @samp{\p@{...@}}) is an error, which stops the recording
+rather than matching something else.
+
+The files are re-read when they change: their directories are watched
+with file notification, and the flush timer compares modification times
+as a fallback.  @code{cmacs-journal-filters-reload} does it by hand.
+When the rules change, the open span closes and whatever has the focus
+is looked at again under the new rules.
+
+@subsubheading Shipped defaults: @code{cmacs-journal-default-filters}
+
+A third variable, in the same Elisp shape, holds the rules cmacs ships.
+They exclude password managers and keyrings (KeePassXC, Bitwarden,
+1Password, GNOME Secrets, Seahorse, KWallet and others), authentication
+and passphrase prompts (polkit, pinentry, askpass, ``Authentication
+Required''), private and incognito browser windows (by the title
+browsers give them), Tor Browser, gsurf's temporary containers, and
+Emacs buffers visiting @file{.gpg} files, @file{.authinfo}, the password
+store, @file{~/.ssh} and @file{.bashrc-secrets}.  Set it to @code{nil}
+to drop them.
+
+@subsection Failing closed
+
+If a listed YAML file @emph{exists} but cannot be read, cannot be
+parsed, or holds a top-level key, a rule key, an action, a field name or
+a regexp the journal does not understand, there is no usable rule set
+and the journal records @emph{nothing}: @code{cmacs-journal-mode} stays
+on but stopped, the mode line shows the paused indicator, and a warning
+names the file and the problem (never the text of a regexp).  The same
+goes for an invalid rule in the Elisp variables.  Fix the file and the
+recording starts again on its own; a pause you asked for with
+@code{cmacs-journal-pause} is never overridden.
+
+A file that does not exist is fine and means no rules from it.
+
+The reasoning: a typo in @code{exclude} must not silently become
+``record everything''.  The one direction in which this tool is allowed
+to be wrong is recording too little.
+
+YAML is read by a C primitive, @code{cmacs-yaml-parse-file}
+(@pxref{Journal Internals}).  A cmacs built without it treats a filter
+file that is present as a failure, not as an empty rule set.
+
+@subsection Trying rules out
+
+@kbd{M-x cmacs-journal-filter-test} shows the event the journal would
+record right now and what the filters would make of it.  With a prefix
+argument it asks for the fields of a sample instead, so you can check a
+rule against a title you would rather not have on screen.  It shows the
+result, never which rule produced it.
+
+@node Journal LQL
+@section Querying It: the LQL Source
+
+When cmacs has LQL (@option{--with-cmacs-lql}) and the journal is
+loaded, the source @code{activity} is defined.  It reads the last
+@code{cmacs-journal-lql-days} days (default 14) of stored spans plus
+those not yet written.
+
+@multitable @columnfractions .6 .4
+@headitem Column @tab Type
+@item @code{time}, @code{end} @tab timestamp
+@item @code{duration} @tab duration (seconds)
+@item @code{kind}, @code{app}, @code{title}, @code{buffer}, @code{file}, @code{mode}, @code{project}, @code{url}, @code{monitor}, @code{detail} @tab string
+@item @code{tags} @tab array
+@end multitable
+
+The snapshot is cached on a generation counter that moves when a span
+closes, is written, or is forgotten, so repeated queries do not re-read
+the files.
+
+@subsection Agents
+
+By default @strong{agents get no rows}.
+@code{cmacs-journal-expose-to-agents} (default @code{nil}) decides
+whether the @code{activity} source and @code{cmacs-journal-events}
+return anything to a caller that is not you.
+
+The journal tells the two apart with two signals, either of which is
+enough:
+
+@itemize @bullet
+@item
+A brigade tool call.  Every tool call, from an in-process agent, a CLI
+agent over the MCP relay or an external MCP client, goes through one
+function, @code{cmacs-brigade-call-tool}.  The journal puts an around
+advice on it that binds a flag for the dynamic extent of the call.  A
+dynamic binding cannot be left set by a tool that signals, and it covers
+exactly the call.
+@item
+cmacs's RPC dispatch.  Everything arriving over MCP, D-Bus,
+@command{emacsctl} and bacon is evaluated with
+@code{inhibit-interaction} bound.  This also catches your own
+@command{emacsctl lql} from a terminal: over that channel you are
+indistinguishable from a program, and the journal assumes the program.
+@end itemize
+
+An LQL source's rows are snapshotted on the editor thread when the query
+is submitted, inside whichever of those extents applies, so that is when
+the decision is made.  Who is asking is part of the snapshot's cache
+key, so a snapshot made for you is never the one handed to an agent.
+
+What this is @emph{not}: a sandbox.  An agent you have allowed to
+evaluate Lisp or to read files can read the day files directly.  The
+switch keeps the journal out of the tools an agent reaches for by
+default; the filters are what keep sensitive text out of the journal in
+the first place.
+
+@node Journal Uses
+@section Using It
+
+@subsection Reports
+
+@kbd{M-x cmacs-journal-report} asks for a span (@code{today},
+@code{yesterday}, @code{week}, @code{month}, a number of days, or a
+@samp{YYYY-MM-DD} date) and a grouping (@code{project}, @code{app},
+@code{day}, @code{kind}) and shows an Org table of time and share.  Only
+the kinds in @code{cmacs-journal-report-kinds} (focus, buffer, url)
+count; idle time and agent runs are left out.  Time outside any project
+is listed under the app it went to.
+
+@subsection Org dynamic block
+
+@example
+#+BEGIN: cmacs-journal :span today :by project
+#+END:
+@end example
+
+@kbd{C-c C-c} on the block writes the same table.  @code{:span} and
+@code{:by} take the values the report command does.
+
+@subsection Recall
+
+@kbd{M-x cmacs-journal-at} reads a date and time the Org way and lists
+what the journal has within @code{cmacs-journal-at-window} seconds of
+it, marking the span that covers the moment.
+
+@kbd{M-x cmacs-journal-reopen} visits that moment's files that still
+exist and hands its URLs to @code{browse-url}.  Windows of other
+programs are listed, not started again: the journal knows a title, not
+a command line.  Fields a filter hashed or blanked are skipped.
+
+@subsection Org clock
+
+@kbd{M-x cmacs-journal-org-clock} asks for a day and one of the projects
+the journal has for it, and inserts @samp{CLOCK:} lines under the
+heading at point, joining spans closer than
+@code{cmacs-journal-clock-merge-gap} seconds.  This is the only way the
+journal reaches an Org file and it happens only when you run it.
+Nothing is ever written to your Org files automatically.
+
+@node Journal Options
+@section Options
+
+@multitable @columnfractions .4 .2 .4
+@headitem Option @tab Default @tab Meaning
+@item @code{cmacs-journal-directory} @tab @file{$XDG_STATE_HOME/cmacs/journal} @tab Where the day files live
+@item @code{cmacs-journal-min-span} @tab 2 @tab Spans shorter than this are dropped
+@item @code{cmacs-journal-merge-gap} @tab 1.0 @tab Rejoin a span reopened this soon after closing
+@item @code{cmacs-journal-flush-idle} @tab 10 @tab Write after this much idle time
+@item @code{cmacs-journal-flush-interval} @tab 300 @tab Write at least this often
+@item @code{cmacs-journal-idle-threshold} @tab 300 @tab Idle span after this long without input; @code{nil} = never
+@item @code{cmacs-journal-retention-days} @tab @code{nil} @tab Delete older day files; @code{nil} keeps everything
+@item @code{cmacs-journal-lql-days} @tab 14 @tab Days the @code{activity} source reads
+@item @code{cmacs-journal-expose-to-agents} @tab @code{nil} @tab Let agents and RPC callers read the journal
+@item @code{cmacs-journal-filters} @tab @code{nil} @tab Your rules, in Elisp
+@item @code{cmacs-journal-filter-files} @tab @file{~/.config/cmacs/journal-filters.yaml} @tab YAML rule files
+@item @code{cmacs-journal-default-filters} @tab (shipped) @tab The built-in rules; @code{nil} removes them
+@item @code{cmacs-journal-filter-case-fold} @tab @code{t} @tab Filter regexps ignore case
+@end multitable
+
+@node Journal Internals
+@section Internals
+
+@example
+hook --> raw event --> FILTERS --> open span --> queue --> day files
+                                                      \--> LQL source
+@end example
+
+Two rules shape the pipeline.
+
+@strong{Hook functions are O(1), never signal and never do I/O.}  They
+run on gowl's hooks, where under @command{emacs --gowl} Emacs is the
+desktop; a hook that signals or waits there is a frozen session, not a
+missing journal line.  So a hook builds a small plist, or just notes the
+time and arms a zero-delay timer, and returns inside a
+@code{condition-case}.  A client that vanished between the signal and
+the hook is recorded as ``nothing focused''.  Anything that touches the
+disk happens in a timer: finding a buffer's project
+(@code{project-current} stats the filesystem; the answer is cached per
+buffer and directory, and a remote directory is never asked, so the
+journal cannot open a Tramp connection), and writing the day file.
+
+@strong{Filters run before the open span.}
+@code{cmacs-journal--observe} hands the raw event to
+@code{cmacs-journal-filter-apply} and keeps only what comes back.
+Coalescing compares filtered events, so hashed or blanked titles extend
+a span like any others.
+
+@multitable @columnfractions .45 .55
+@headitem File @tab What
+@item @file{lisp/cmacs/cmacs-journal.el} @tab Spans, hooks, storage, forget, the mode, the LQL source
+@item @file{lisp/cmacs/cmacs-journal-filter.el} @tab Rules: compiling, YAML, the regexp translation, applying
+@item @file{lisp/cmacs/cmacs-journal-report.el} @tab Reports, the dynamic block, recall, Org clock
+@item @file{cmacs/glib/cmacs-yaml.c} @tab @code{cmacs-yaml-parse-file}
+@item @file{test/cmacs/cmacs-journal-tests.el} @tab ERT; needs no compositor
+@end multitable
+
+@defun cmacs-yaml-parse-file file
+Return the first document of the YAML file @var{file} as JSON text,
+which @code{json-parse-string} turns into data; going through JSON text
+leaves the choice of alist, plist or hash table to the caller.  Signals
+an @code{error} carrying yaml-glib's message when @var{file} cannot be
+read or is not valid YAML.  A general primitive, not specific to the
+journal.
+@end defun
+
+Emacs has no YAML reader, and cmacs already links yaml-glib.  yaml-glib
+is not on the @option{--with-cmacs-glib} link line by itself: its
+objects reach the binary inside @file{libbacon-1.0.a}.  So the function
+is compiled only when @code{HAVE_CMACS_YAML} is defined (a bundled
+bacon), and Lisp callers test
+@code{(fboundp 'cmacs-yaml-parse-file)}.

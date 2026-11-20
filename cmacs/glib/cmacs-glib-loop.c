@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include "cmacs-glib-screenshot.h"
 #include "cmacs-ink-overlay.h"
+#include "cmacs-yaml.h"
 
 #include <glib.h>
 #include <stdlib.h>
@@ -548,6 +549,7 @@ syms_of_cmacs_glib (void)
   /* Post-glyph ink overlay paint hook needs to staticpro a few
      symbols.  Cheap to fold into the same init. */
   syms_of_cmacs_ink_overlay ();
+  syms_of_cmacs_yaml ();
 }
 
 #endif /* HAVE_CMACS_GLIB */

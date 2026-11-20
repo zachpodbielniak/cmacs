@@ -117,6 +117,7 @@ All CMacs features are auto-detected.  You can force them on or off:
 | =--with-cmacs-screensaver=    | libregnum screensavers as wallpaper / lock / buffer |
 | =--with-cmacs-transcode=      | Native ffmpeg video/audio transcoder (container/host; parallel pool) |
 | =--with-cmacs-transcribe=     | Batch speech-to-text (whisper STT + transcode pre-pass, AI summaries, hooks) |
+| =--with-cmacs-journal=        | Local text-only activity journal (spans, privacy filters, LQL =activity= source); recording is opt-in at runtime |
 | =--with-cmacs-calculator=     | Calculator over GNU Calc: desktop/financial/physics/relativity/CAS, SVG + libregnum charts, =emacs --calc= REPL (libregnum optional) |
 | =--with-cmacs-lsp=            | In-binary LSP language servers (=emacs --cmacs-lsp LANG=); the gnucalc =.calc= server needs the calculator too |
 | =--with-cmacs-dbexplorer=    | Database explorer: query, browse, edit and export SQLite / PostgreSQL / MySQL in Emacs buffers (orm-glib) |
@@ -185,6 +186,7 @@ Example with explicit flags:
   --with-cmacs-lrgvr \
   --with-cmacs-transcode \
   --with-cmacs-transcribe \
+  --with-cmacs-journal \
   --with-cmacs-calculator \
   --with-cmacs-lsp \
   --with-cmacs-dbexplorer \

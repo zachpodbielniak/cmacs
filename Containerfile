@@ -599,6 +599,7 @@ RUN ./autogen.sh \
         --with-cmacs-vidstudio \
         --with-cmacs-transcode \
         --with-cmacs-transcribe \
+        --with-cmacs-journal \
         --with-cmacs-calculator \
         --with-cmacs-lsp \
         --with-cmacs-dbexplorer \
