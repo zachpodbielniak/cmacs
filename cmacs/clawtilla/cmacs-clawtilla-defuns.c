@@ -516,15 +516,22 @@ Returns the handle, or nil if there is no such profile.  See
 }
 
 DEFUN ("cmacs-clawtilla--link-notice", Fcmacs_clawtilla__link_notice,
-       Scmacs_clawtilla__link_notice, 1, 3, 0,
+       Scmacs_clawtilla__link_notice, 1, 4, 0,
        doc: /* Return what to tell someone about HANDLE's link, as a string.
 
 NAME names a saved profile, so the advice can say where that daemon is.
 EVER-CONNECTED distinguishes "never reached" from "was there and went
 away", which is the caller's to remember: once disconnected the client
 cannot tell those apart, and they have different remedies -- only one
-of which is on this machine.  */)
-  (Lisp_Object handle, Lisp_Object name, Lisp_Object ever_connected)
+of which is on this machine.
+
+REMEMBERED non-nil says the link was opened from the last-connection
+record (`cmacs-clawtilla-resume') rather than named by somebody.  A
+remembered daemon that never answered gets the sentence that says it is
+the one this client was last on and points at the local daemon; see
+`cmacs-clawtilla--offer-local' for the same rule as a predicate.  */)
+  (Lisp_Object handle, Lisp_Object name, Lisp_Object ever_connected,
+   Lisp_Object remembered)
 {
   char *c_name = NULL;
   char *text;
@@ -536,7 +543,8 @@ of which is on this machine.  */)
     c_name = cmacs_clawt_dup (name);
 
   text = cmacs_clawt_link_notice (cmacs_clawt_uint (handle), c_name,
-                                  !NILP (ever_connected));
+                                  !NILP (ever_connected),
+                                  !NILP (remembered));
   result = cmacs_clawt_string (text);
 
   xfree (c_name);
@@ -994,6 +1002,206 @@ and starts on the first browser call: the library's sentence.  */)
   return result;
 }
 
+DEFUN ("cmacs-clawtilla--ask", Fcmacs_clawtilla__ask,
+       Scmacs_clawtilla__ask, 1, 2, 0,
+       doc: /* Ask libclawt WHAT, with the JSON object ARGS-JSON, and return its answer.
+
+WHAT names a question -- "notice-badge", "task-state", "device-seen",
+"ledger-view", "qr" and so on; `cmacs-clawtilla--ask-names' lists them.
+ARGS-JSON is the question's arguments as JSON object text, or nil.  The
+answer is a string -- JSON text when it has more than one part -- or nil
+for no answer or a question this build does not know.
+
+One primitive rather than one per sentence, because every one of these
+is the same shape: some values in, the library's words out.  The point
+is unchanged from the dedicated primitives beside this one: the words
+on screen are libclawt's, the same in every client, and never spelled
+out in elisp.
+
+Values that came from the daemon should be spliced into ARGS-JSON as
+the text the daemon sent, not re-encoded from the parsed form:
+`cmacs-clawtilla-ask' does that for you.  */)
+  (Lisp_Object what, Lisp_Object args_json)
+{
+  char *c_what = cmacs_clawt_dup (what);
+  char *c_args = NILP (args_json) ? NULL : cmacs_clawt_dup (args_json);
+  char *text = cmacs_clawt_ask (c_what, c_args);
+  Lisp_Object result = cmacs_clawt_string (text);
+
+  xfree (c_what);
+  xfree (c_args);
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--ask-names", Fcmacs_clawtilla__ask_names,
+       Scmacs_clawtilla__ask_names, 0, 0, 0,
+       doc: /* Return the questions `cmacs-clawtilla--ask' answers, as a JSON array.  */)
+  (void)
+{
+  char *text = cmacs_clawt_ask_names ();
+  Lisp_Object result = cmacs_clawt_string (text);
+
+  cmacs_clawt_free (text);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--connection-choice",
+       Fcmacs_clawtilla__connection_choice,
+       Scmacs_clawtilla__connection_choice, 0, 0, 0,
+       doc: /* Return the daemon a client with nothing named should open on, as JSON.
+
+An object with `name', `local', `describe', `from_last' -- whether it
+is the profile this client was last switched to -- and `notice', a
+sentence to show when the remembered profile no longer exists and the
+local daemon was chosen instead, else null.  This is libclawt's
+clawt_connection_choose, the rule every clawtilla client starts by.
+Signals an error if no connection can be chosen at all.  */)
+  (void)
+{
+  char *error = NULL;
+  char *json = cmacs_clawt_connection_choice_json (&error);
+  Lisp_Object result;
+
+  if (json == NULL)
+    {
+      Lisp_Object message = cmacs_clawt_string (error);
+
+      cmacs_clawt_free (error);
+      xsignal1 (Qerror, NILP (message)
+                        ? build_string ("no connection could be chosen")
+                        : message);
+    }
+
+  result = cmacs_clawt_string (json);
+  cmacs_clawt_free (json);
+  cmacs_clawt_free (error);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--last-connection", Fcmacs_clawtilla__last_connection,
+       Scmacs_clawtilla__last_connection, 0, 0, 0,
+       doc: /* Return the saved profile this client was last switched to, or nil.
+
+nil when it was the local daemon, or nothing was ever remembered.  */)
+  (void)
+{
+  char *name = cmacs_clawt_last_load ();
+  Lisp_Object result = cmacs_clawt_string (name);
+
+  cmacs_clawt_free (name);
+  return result;
+}
+
+DEFUN ("cmacs-clawtilla--remember-connection",
+       Fcmacs_clawtilla__remember_connection,
+       Scmacs_clawtilla__remember_connection, 1, 1, 0,
+       doc: /* Remember the saved profile NAME as the daemon to resume next time.
+
+By name only -- never an address or a token, which stay in clawtilla's
+connections file.  nil, or a name that is not a saved profile, forgets:
+the next start is on the local daemon.  Returns t, or signals with the
+reason the record could not be written.  */)
+  (Lisp_Object name)
+{
+  char *c_name = NILP (name) ? NULL : cmacs_clawt_dup (name);
+  char *error = NULL;
+  bool ok = cmacs_clawt_last_save (c_name, &error);
+
+  xfree (c_name);
+
+  if (!ok)
+    {
+      Lisp_Object message = cmacs_clawt_string (error);
+
+      cmacs_clawt_free (error);
+      xsignal1 (Qerror, message);
+    }
+
+  cmacs_clawt_free (error);
+  return Qt;
+}
+
+DEFUN ("cmacs-clawtilla--offer-local", Fcmacs_clawtilla__offer_local,
+       Scmacs_clawtilla__offer_local, 1, 4, 0,
+       doc: /* Return non-nil if HANDLE's unreachable daemon should offer the local one.
+
+NAME is the saved profile HANDLE was opened from, EVER-CONNECTED whether
+it has answered this session and REMEMBERED whether it was chosen from
+the last-connection record rather than named.  libclawt's rule: only a
+daemon that never answered, was reached from memory, and is not the
+local one already.  */)
+  (Lisp_Object handle, Lisp_Object name, Lisp_Object ever_connected,
+   Lisp_Object remembered)
+{
+  char *c_name;
+  bool offer;
+
+  CHECK_INTEGER (handle);
+  c_name = NILP (name) ? NULL : cmacs_clawt_dup (name);
+  offer = cmacs_clawt_offer_local (cmacs_clawt_uint (handle), c_name,
+                                   !NILP (ever_connected),
+                                   !NILP (remembered));
+  xfree (c_name);
+  return offer ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-clawtilla--pair", Fcmacs_clawtilla__pair,
+       Scmacs_clawtilla__pair, 4, 8, 0,
+       doc: /* Pair this machine with the daemon at HOST and PORT using CODE.
+
+CODE is the six digits the daemon showed.  CALLBACK is called with
+(JSON ERROR): `{"name": ...}' naming the profile now saved in
+clawtilla's connections file, or nil and the reason -- a wrong code
+says how many tries are left, in the daemon's words.
+
+NAME is what to call the profile (nil: HOST), TLS and INSECURE as for
+`cmacs-clawtilla--connect-tcp', DEVICE-NAME what the daemon calls this
+machine (nil: its host name).
+
+Asynchronous: the exchange blocks, so it runs on a worker thread and
+the answer arrives on the main one.  Returns t once started, nil if
+the arguments could not start anything.  */)
+  (Lisp_Object host, Lisp_Object port, Lisp_Object code,
+   Lisp_Object callback, Lisp_Object name, Lisp_Object tls,
+   Lisp_Object insecure, Lisp_Object device_name)
+{
+  char *c_host;
+  char *c_code;
+  char *c_name;
+  char *c_device;
+  uint64_t cookie;
+  bool started;
+
+  /* Every check before the first allocation: a signal past an xstrdup
+     leaks it.  */
+  CHECK_FIXNUM (port);
+  CHECK_STRING (host);
+  CHECK_STRING (code);
+  if (!NILP (name))
+    CHECK_STRING (name);
+  if (!NILP (device_name))
+    CHECK_STRING (device_name);
+
+  c_host = cmacs_clawt_dup (host);
+  c_code = cmacs_clawt_dup (code);
+  c_name = NILP (name) ? NULL : cmacs_clawt_dup (name);
+  c_device = NILP (device_name) ? NULL : cmacs_clawt_dup (device_name);
+  cookie = cmacs_dispatch_callback_register (callback);
+  started = cmacs_clawt_pair (c_name, c_host, (int) XFIXNUM (port),
+                              !NILP (tls), !NILP (insecure), c_code,
+                              c_device, cookie);
+
+  if (!started)
+    cmacs_dispatch_callback_drop (cookie);
+
+  xfree (c_host);
+  xfree (c_code);
+  xfree (c_name);
+  xfree (c_device);
+  return started ? Qt : Qnil;
+}
+
 void
 syms_of_cmacs_clawtilla_defuns (void)
 {
@@ -1056,6 +1264,13 @@ gap and anything cached from before it must be refetched.  */);
   defsubr (&Scmacs_clawtilla__fleet_payload);
   defsubr (&Scmacs_clawtilla__fleet_view);
   defsubr (&Scmacs_clawtilla__browser_line);
+  defsubr (&Scmacs_clawtilla__ask);
+  defsubr (&Scmacs_clawtilla__ask_names);
+  defsubr (&Scmacs_clawtilla__connection_choice);
+  defsubr (&Scmacs_clawtilla__last_connection);
+  defsubr (&Scmacs_clawtilla__remember_connection);
+  defsubr (&Scmacs_clawtilla__offer_local);
+  defsubr (&Scmacs_clawtilla__pair);
 }
 
 #endif /* HAVE_CMACS_CLAWTILLA */

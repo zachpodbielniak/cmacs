@@ -40,13 +40,9 @@ both surprising and expensive.
 M-x cmacs-clawtilla
 #+end_src
 
-With no connection open it offers the saved profiles from clawtilla's
-own =~/.config/clawtilla/connections.yaml= --- the same file the GTK
-client writes, so a workstation you added there is simply here --- plus
-the local daemon.  With one open it shows the fleet.
+With no connection open it resumes the daemon this client was last on, else the local one --- libclawt's =clawt_connection_choose=, the rule every clawtilla client starts by, reading the one =last-connection= file they all share.  Set ~cmacs-clawtilla-resume-last~ to nil to be asked instead: the saved profiles from clawtilla's own =~/.config/clawtilla/connections.yaml= (the file the GTK client writes, so a workstation you added there is simply here) plus the local daemon.  With a connection open it shows the fleet.
 
-=M-x cmacs-clawtilla-menu= is the transient that reaches everything:
-the fleet, alerts, work, automation, library, recordings and settings.
+=M-x cmacs-clawtilla-menu= is the transient that reaches everything: the fleet, notifications, work, automation, library, recordings, settings, and (=m=) the fleet-wide pages --- projects, the spending ledger, version history, export and import, paired devices, orchestration, the broker, the egress allowlist and the sentinel's issues.  [[file:clawtilla-parity.org][clawtilla 0.52 in cmacs]] describes those.
 
 *** Connecting to another machine
 
@@ -359,9 +355,7 @@ The tab says =Grok (N)= when N jobs need somebody: failed, unanswered, refused, 
 
 *** Automation: Routines and Triggers
 
-=A= adds a routine; with a prefix argument it also asks for the routine's
-own model and its three flags.  =U= changes one field of the routine at
-point: schedule, prompt, agent, model, or one of the flags.
+=A= adds a routine; with a prefix argument it also asks for the routine's own model, its flags, and how many failed starts turn it off.  =U= changes one field of the routine at point.  What a routine does is its =instructions= --- the daemon's own key; an earlier version of this client sent =prompt=, which the daemon's schema does not have, so the routine was saved with nothing to do.  When it runs is a =schedule= from libclawt's list (the "schedule" family: by hand, hourly, daily, Monday to Friday, weekly, or a cron expression) with an =at= time, a =weekday= for the weekly one (the "weekday" family) and =cron= for the last.  A routine the daemon switched off after too many failed starts says so on its row in the library's words, and =W= in the menu turns it back on.
 
 - *model* runs the routine on a model other than the agent's own --- a
   cheaper one for a check that compares a number.  Empty is the
@@ -407,21 +401,9 @@ here.  The panel reloads on =account.changed=, so an account added from
 another client appears.  Which account an agent uses is chosen on the
 agent's page.
 
-*** Alerts and unread
+*** Notifications and unread
 
-Which events are worth interrupting you for is
-=clawt_alert_tier_for_event= --- four tiers, one of which is "skip", so
-a turn's constant step events do not become alerts.  =a= shows every
-tier rather than the filtered set, =x= clears what is shown, and =o=
-loads the daemon's own event log, which goes back further than this
-client has been connected.
-
-An alert that lands while the buffer is in front of you *arrives already
-read*.  Marking it unread would leave a count that reading cannot clear.
-
-The unread counts beside each agent follow =clawt_unread_should_count=:
-not your own message, not the room you are looking at, not older than
-the connection, and not a room with no row on screen.
+=M-x cmacs-clawtilla-alerts= (=!= in the menu).  Since clawtilla 0.52 the list is the daemon's (=notice.list=) and so are the read marks (=room.read=): what is read here is read in every client.  See [[file:clawtilla-parity.org::*Notifications, mutes and read marks][Notifications, mutes and read marks]].
 
 *** Teaching by demonstration
 
@@ -467,13 +449,9 @@ Two kinds are declared as allowed absences with reasons:
 =agent.file_read= and =agent.file_write=, because =/edit= opens the file
 in a buffer.
 
-The affordance layer declares forty pairs.  Since clawtilla 0.9 they
-include the Activity page, its elapsed label and stop question; the
-Fleet page, its summary, payload, periods and stop-the-idle action; the
-Browser view and its session line; the account and shared-computer
-pickers and the action-rule editor; and a routine's model and its
-read-only, proactive and locked flags.  Each names the GTK symbol and
-the cmacs one, so removing either half fails the check.
+The affordance layer declares a hundred-odd pairs.  Since clawtilla 0.9 they include the Activity page, its elapsed label and stop question; the Fleet page, its summary, payload, periods and stop-the-idle action; the Browser view and its session line; the account and shared-computer pickers and the action-rule editor; and a routine's model and its read-only, proactive and locked flags.  Since 0.52 they also include the bell's count, mutes and the daemon's unread counts; the task caption, state tone and waiting caption; the ledger's rows and CSV; the attachment block and a conversation's files; the device code, countdown and QR; resuming and remembering a daemon; the transcript's marks, folding, rounds and inline decisions; and libclawt's choice lists.  Each names the GTK symbol and the cmacs one, so removing either half fails the check.
+
+Two markers were dropped at 0.52 because the GTK client no longer has them: =clawt_alert_tier_for_event= and its show-everything filter.  The alert list is the daemon's now, so no client decides a tier.
 
 =just clawtilla-parity= runs it; it needs no build.
 
@@ -532,5 +510,8 @@ needed adding to clawtilla for this: =clawt_client_connect_async()= and
 |------+------|
 | =cmacs/clawtilla/= | the C half: transport, presentation helpers, primitives |
 | =lisp/cmacs/cmacs-clawtilla*.el= | the buffers |
+| =lisp/cmacs/cmacs-clawtilla-page.el= | one buffer kind for a list and its verbs |
+| =lisp/cmacs/cmacs-clawtilla-{tasks,files,devices,pages,events}.el= | what 0.52 added |
 | =test/cmacs/cmacs-clawtilla-tests.el= | the suite |
+| =test/cmacs/cmacs-clawtilla-parity-tests.el= | the suite for what 0.52 added |
 | =admin/cmacs-clawtilla-parity.sh= | the parity check |

@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later  */
 #include <clawtilla.h>
 #include <glib.h>
 #include <json-glib/json-glib.h>
+#include <string.h>
 
 #include "cmacs-clawtilla.h"
 
@@ -885,6 +886,75 @@ cmacs_clawt_enum_grok_job_states (JsonBuilder *builder)
     }
 }
 
+/* Who reviews a task.  The two labels are the same choice worded for
+   the two places it is offered: on an agent ("Nobody") and on a project,
+   where the first value means "whatever its agents say".  */
+static void
+cmacs_clawt_enum_review_by (JsonBuilder *builder)
+{
+  guint n;
+
+  for (n = 0; n < clawt_review_by_count (); n++)
+    {
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder, clawt_review_by_nth (n));
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder,
+                                     clawt_review_by_nth_label (n, FALSE));
+      json_builder_set_member_name (builder, "project-label");
+      json_builder_add_string_value (builder,
+                                     clawt_review_by_nth_label (n, TRUE));
+      json_builder_end_object (builder);
+    }
+}
+
+/* Who hears about a broken run.  */
+static void
+cmacs_clawt_enum_incident_recipients (JsonBuilder *builder)
+{
+  guint n;
+
+  for (n = 0; n < clawt_incident_recipient_count (); n++)
+    {
+      ClawtIncidentRecipient recipient = clawt_incident_recipient_nth (n);
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (
+        builder, clawt_incident_recipient_nick (recipient));
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (
+        builder, clawt_incident_recipient_label (recipient));
+      json_builder_end_object (builder);
+    }
+}
+
+/* What a message sent into a running turn does.  The explanation rides
+   along because the choice is unreadable without it.  */
+static void
+cmacs_clawt_enum_steer_policies (JsonBuilder *builder)
+{
+  guint n;
+
+  for (n = 0; n < clawt_steer_policy_count (); n++)
+    {
+      ClawtSteerPolicy policy = (ClawtSteerPolicy) n;
+
+      json_builder_begin_object (builder);
+      json_builder_set_member_name (builder, "nick");
+      json_builder_add_string_value (builder,
+                                     clawt_steer_policy_nick (policy));
+      json_builder_set_member_name (builder, "label");
+      json_builder_add_string_value (builder,
+                                     clawt_steer_policy_label (policy));
+      json_builder_set_member_name (builder, "explanation");
+      json_builder_add_string_value (
+        builder, clawt_steer_policy_explanation (policy));
+      json_builder_end_object (builder);
+    }
+}
+
 char *
 cmacs_clawt_enum_json (const char *family)
 {
@@ -933,6 +1003,33 @@ cmacs_clawt_enum_json (const char *family)
     cmacs_clawt_enum_decision_states (builder);
   else if (g_str_equal (family, "grok-job-state"))
     cmacs_clawt_enum_grok_job_states (builder);
+  else if (g_str_equal (family, "effort"))
+    cmacs_clawt_enum_simple (builder, clawt_effort_count, clawt_effort_nth,
+                             clawt_effort_nth_label);
+  else if (g_str_equal (family, "weekday"))
+    cmacs_clawt_enum_simple (builder, clawt_weekday_count, clawt_weekday_nth,
+                             clawt_weekday_nth_label);
+  else if (g_str_equal (family, "schedule"))
+    cmacs_clawt_enum_simple (builder, clawt_schedule_count,
+                             clawt_schedule_nth, clawt_schedule_nth_label);
+  else if (g_str_equal (family, "resolution"))
+    cmacs_clawt_enum_simple (builder, clawt_resolution_count,
+                             clawt_resolution_nth, NULL);
+  else if (g_str_equal (family, "usage-group"))
+    cmacs_clawt_enum_simple (builder, clawt_usage_group_count,
+                             clawt_usage_group_nth, clawt_usage_group_label);
+  else if (g_str_equal (family, "ack-check-model"))
+    cmacs_clawt_enum_simple (builder, clawt_ack_check_model_count,
+                             clawt_ack_check_model_nth_value,
+                             clawt_ack_check_model_nth_label);
+  else if (g_str_equal (family, "review-by"))
+    cmacs_clawt_enum_review_by (builder);
+  else if (g_str_equal (family, "incident-recipient"))
+    cmacs_clawt_enum_incident_recipients (builder);
+  else if (g_str_equal (family, "steer-policy"))
+    cmacs_clawt_enum_steer_policies (builder);
+  else if (g_str_equal (family, "task-state"))
+    cmacs_clawt_enum_gtype (builder, CLAWT_TYPE_TASK_STATE);
   else
     return NULL;
 
@@ -1094,27 +1191,314 @@ cmacs_clawt_connect_profile (const char *path, const char *name,
   return cmacs_clawt_adopt (client, cookie);
 }
 
-char *
-cmacs_clawt_link_notice (uint64_t handle, const char *name,
-                         bool ever_connected)
+/* The profile NAME names, out of the saved list.  The list is the
+   caller's to free; the connection borrows from it.  */
+static ClawtConnection *
+cmacs_clawt_named_connection (const char *name, GPtrArray **list_out)
 {
   g_autofree gchar *path = clawt_connection_list_default_path ();
+  GPtrArray *list = clawt_connection_list_load (path, NULL);
+
+  *list_out = list;
+
+  if (list == NULL || name == NULL)
+    return NULL;
+
+  return clawt_connection_list_find (list, name);
+}
+
+char *
+cmacs_clawt_link_notice (uint64_t handle, const char *name,
+                              bool ever_connected, bool remembered)
+{
   g_autoptr (GPtrArray) list = NULL;
-  ClawtConnection *found = NULL;
+  ClawtConnection *found = cmacs_clawt_named_connection (name, &list);
   ClawtClient *client = cmacs_clawt_client (handle);
   ClawtDaemonLink link;
-
-  list = clawt_connection_list_load (path, NULL);
-
-  if (list != NULL && name != NULL)
-    found = clawt_connection_list_find (list, name);
 
   /* `ever_connected' is the whole discriminator between NEVER and LOST,
      and it is the caller's to remember: the client object cannot tell
      them apart after it has been disconnected.  */
   link = clawt_daemon_link_state (client, ever_connected ? TRUE : FALSE);
 
-  return clawt_connection_notice_text (link, found, FALSE, NULL, NULL);
+  /* REMEMBERED is the `from_last' clawt_connection_choose() answered
+     when this link was opened by `cmacs-clawtilla-resume': a daemon
+     reached from memory and never heard from gets the sentence that
+     says so and points at the local one, where a daemon somebody named
+     does not.  */
+  return clawt_connection_notice_text (link, found,
+                                       remembered ? TRUE : FALSE, NULL,
+                                       NULL);
+}
+
+bool
+cmacs_clawt_offer_local (uint64_t handle, const char *name,
+                         bool ever_connected, bool remembered)
+{
+  g_autoptr (GPtrArray) list = NULL;
+  ClawtConnection *found = cmacs_clawt_named_connection (name, &list);
+  ClawtDaemonLink link
+    = clawt_daemon_link_state (cmacs_clawt_client (handle),
+                               ever_connected ? TRUE : FALSE);
+
+  return clawt_connection_offer_local (link, found,
+                                       remembered ? TRUE : FALSE);
+}
+
+/* ------------------------------------------------------------------
+   The daemon a client was last on.
+
+   Every clawtilla client opens on the same daemon by the same rule --
+   clawt_connection_choose() -- and remembers the one it was switched to
+   in the same file, by name only.  cmacs asks that rule rather than
+   keeping a variable of its own, so "the daemon I was last on" is the
+   same daemon whichever client was used to get there.
+   ------------------------------------------------------------------ */
+
+char *
+cmacs_clawt_connection_choice_json (char **error)
+{
+  g_autoptr (ClawtConnection) chosen = NULL;
+  g_autoptr (JsonBuilder) builder = json_builder_new ();
+  g_autoptr (JsonNode) root = NULL;
+  g_autoptr (GError) local_error = NULL;
+  g_autofree gchar *notice = NULL;
+  g_autofree gchar *described = NULL;
+  gboolean from_last = FALSE;
+
+  /* Nothing named: no host, profile or socket.  That leaves the
+     remembered profile, then the local daemon -- and a remembered
+     profile that no longer exists is the local daemon plus a sentence
+     saying so, not an error.  */
+  chosen = clawt_connection_choose (NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                    TRUE, &from_last, &notice, &local_error);
+
+  if (chosen == NULL)
+    {
+      if (error != NULL)
+        *error = g_strdup (local_error != NULL
+                           ? local_error->message
+                           : "no connection could be chosen");
+      return NULL;
+    }
+
+  described = clawt_connection_describe (chosen);
+
+  json_builder_begin_object (builder);
+  json_builder_set_member_name (builder, "name");
+  json_builder_add_string_value (builder, clawt_connection_get_name (chosen));
+  json_builder_set_member_name (builder, "local");
+  json_builder_add_boolean_value (builder,
+                                  clawt_connection_is_local (chosen));
+  json_builder_set_member_name (builder, "describe");
+  json_builder_add_string_value (builder, described);
+  json_builder_set_member_name (builder, "from_last");
+  json_builder_add_boolean_value (builder, from_last);
+  json_builder_set_member_name (builder, "notice");
+  if (notice != NULL)
+    json_builder_add_string_value (builder, notice);
+  else
+    json_builder_add_null_value (builder);
+  json_builder_end_object (builder);
+  root = json_builder_get_root (builder);
+
+  return cmacs_clawt_node_to_json (root);
+}
+
+char *
+cmacs_clawt_last_load (void)
+{
+  return clawt_connection_last_load (NULL);
+}
+
+bool
+cmacs_clawt_last_save (const char *name, char **error)
+{
+  g_autoptr (GPtrArray) list = NULL;
+  g_autoptr (GError) local_error = NULL;
+  /* NULL -- no name, or a name that is not a saved profile -- removes
+     the record, which is also what a local connection does: the next
+     start is on the local daemon.  */
+  ClawtConnection *found = cmacs_clawt_named_connection (name, &list);
+
+  if (clawt_connection_last_save (NULL, found, &local_error))
+    return true;
+
+  if (error != NULL)
+    *error = g_strdup (local_error != NULL ? local_error->message
+                                           : "could not be remembered");
+  return false;
+}
+
+/* ------------------------------------------------------------------
+   Pairing.
+
+   clawt_connection_new_paired() blocks for as long as the far end
+   takes.  It runs on a context of its own, so it is safe on a worker --
+   and a worker is the only place it may run here, because the caller's
+   thread is the editor's and under `--gowl' the compositor's.
+
+   The job carries strings and one integer cookie, never a pointer into
+   anything Lisp owns.  GTask delivers the callback on the context the
+   task was created under, which is the cmacs GLib context, so the reply
+   reaches Lisp on the main thread like every other one.
+   ------------------------------------------------------------------ */
+
+typedef struct
+{
+  gchar    *name;
+  gchar    *host;
+  gchar    *code;
+  gchar    *device_name;
+  guint16   port;
+  gboolean  tls;
+  gboolean  accept_unknown_certificate;
+  uint64_t  cookie;
+} CmacsClawtPairJob;
+
+static void
+cmacs_clawt_pair_job_free (gpointer data)
+{
+  CmacsClawtPairJob *job = data;
+
+  g_free (job->name);
+  g_free (job->host);
+  /* The code is single-use and already spent or refused by now, but it
+     is still a credential while it sits in freed memory.  */
+  if (job->code != NULL)
+    memset (job->code, 0, strlen (job->code));
+  g_free (job->code);
+  g_free (job->device_name);
+  g_free (job);
+}
+
+static void
+cmacs_clawt_pair_worker (GTask *task, gpointer source, gpointer data,
+                         GCancellable *cancellable)
+{
+  CmacsClawtPairJob *job = data;
+  GError *error = NULL;
+  ClawtConnection *connection;
+
+  (void) source;
+  (void) cancellable;
+
+  connection = clawt_connection_new_paired (job->name, job->host, job->port,
+                                            job->tls,
+                                            job->accept_unknown_certificate,
+                                            job->code, job->device_name,
+                                            &error);
+
+  if (connection == NULL)
+    {
+      g_task_return_error (task, error);
+      return;
+    }
+
+  g_task_return_pointer (task, connection,
+                         (GDestroyNotify) clawt_connection_free);
+}
+
+/* Back on the main thread: keep the profile, then say what it is
+   called.  Saving is what makes a pairing last -- the token exists only
+   in this profile -- so a save that fails is reported as the failure it
+   is rather than as a pairing that worked.  */
+static void
+cmacs_clawt_on_paired (GObject *source, GAsyncResult *result, gpointer data)
+{
+  CmacsClawtPairJob *job = g_task_get_task_data (G_TASK (result));
+  g_autoptr (GError) error = NULL;
+  g_autoptr (ClawtConnection) connection = NULL;
+  g_autoptr (GPtrArray) list = NULL;
+  g_autofree gchar *path = clawt_connection_list_default_path ();
+  g_autofree gchar *reply = NULL;
+  ClawtConnection *existing;
+
+  (void) source;
+  (void) data;
+
+  connection = g_task_propagate_pointer (G_TASK (result), &error);
+
+  if (connection == NULL)
+    {
+      cmacs_clawt_deliver_reply (job->cookie, NULL,
+                                 error != NULL ? error->message
+                                               : "pairing failed");
+      return;
+    }
+
+  list = clawt_connection_list_load (path, NULL);
+
+  if (list == NULL)
+    list = g_ptr_array_new_with_free_func (
+      (GDestroyNotify) clawt_connection_free);
+
+  /* Pairing again under a name that exists replaces that profile: its
+     old token is the one being superseded.  */
+  existing = clawt_connection_list_find (
+    list, clawt_connection_get_name (connection));
+
+  if (existing != NULL)
+    g_ptr_array_remove (list, existing);
+
+  g_ptr_array_add (list, clawt_connection_copy (connection));
+
+  if (!clawt_connection_list_save (path, list, &error))
+    {
+      cmacs_clawt_deliver_reply (job->cookie, NULL,
+                                 error != NULL ? error->message
+                                               : "the profile was not saved");
+      return;
+    }
+
+  /* Through the JSON builder rather than a format string: a profile
+     name is whatever somebody typed, and g_strescape's octal escapes
+     are not JSON.  */
+  {
+    g_autoptr (JsonBuilder) builder = json_builder_new ();
+    g_autoptr (JsonNode) root = NULL;
+
+    json_builder_begin_object (builder);
+    json_builder_set_member_name (builder, "name");
+    json_builder_add_string_value (builder,
+                                   clawt_connection_get_name (connection));
+    json_builder_end_object (builder);
+    root = json_builder_get_root (builder);
+    reply = cmacs_clawt_node_to_json (root);
+  }
+
+  cmacs_clawt_deliver_reply (job->cookie, reply, NULL);
+}
+
+bool
+cmacs_clawt_pair (const char *name, const char *host, int port, bool tls,
+                  bool accept_unknown_certificate, const char *code,
+                  const char *device_name, uint64_t cookie)
+{
+  CmacsClawtPairJob *job;
+  GTask *task;
+
+  if (host == NULL || *host == '\0' || code == NULL || *code == '\0'
+      || port < 0 || port > G_MAXUINT16)
+    return false;
+
+  job = g_new0 (CmacsClawtPairJob, 1);
+  job->name = (name != NULL && *name != '\0') ? g_strdup (name) : NULL;
+  job->host = g_strdup (host);
+  job->code = g_strdup (code);
+  job->device_name = (device_name != NULL && *device_name != '\0')
+                     ? g_strdup (device_name) : NULL;
+  job->port = (guint16) port;
+  job->tls = tls ? TRUE : FALSE;
+  job->accept_unknown_certificate = accept_unknown_certificate ? TRUE : FALSE;
+  job->cookie = cookie;
+
+  task = g_task_new (NULL, NULL, cmacs_clawt_on_paired, NULL);
+  g_task_set_task_data (task, job, cmacs_clawt_pair_job_free);
+  g_task_run_in_thread (task, cmacs_clawt_pair_worker);
+  g_object_unref (task);
+
+  return true;
 }
 
 #endif /* HAVE_CMACS_CLAWTILLA */

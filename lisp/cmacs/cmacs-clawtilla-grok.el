@@ -374,6 +374,39 @@ offered."
   (kill-buffer (current-buffer)))
 
 
+;;;; Cancelling or removing a job.
+
+(defun cmacs-clawtilla-grok-remove-job (conn job question &optional label)
+  "Ask QUESTION, then remove the Grok job JOB on CONN.
+
+LABEL is what removing is called for the job's state, in libclawt's
+words: cancelling an open job, removing a settled one.  Asked first
+either way: cancelling an open job tells an agent to stop waiting,
+which is not a thing to do by a stray key."
+  (when (yes-or-no-p (format "%s %s?  %s " (or label "Remove") job
+                             (or question "")))
+    (cmacs-clawtilla-request
+     conn "grok.remove" (list (cons 'job job))
+     (lambda (_data err)
+       ;; The reply's failure is the message; success is the list, which
+       ;; the daemon's `grok.job_updated' redraws.
+       (when err (message "clawtilla: %s" err))))))
+
+(defun cmacs-clawtilla-grok-remove ()
+  "Cancel or remove the Grok job at point, after asking.
+
+What it is called and what is asked both come from libclawt for the
+job's state (`clawt_grok_job_remove_label' and `_question')."
+  (interactive)
+  (let* ((job (or (cmacs-clawtilla-value-at-point 'grok-job)
+                  (user-error "No Grok job at point")))
+         (words (cmacs-clawtilla-ask-parsed
+                 "grok-remove" :state (alist-get 'state job))))
+    (cmacs-clawtilla-grok-remove-job
+     (cmacs-clawtilla-current) (alist-get 'id job)
+     (alist-get 'question words) (alist-get 'label words))))
+
+
 ;;;; Events.
 
 (defun cmacs-clawtilla-grok--on-event (conn kind _data)

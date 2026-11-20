@@ -74,6 +74,8 @@ scroll rather than read."
 (defvar-local cmacs-clawtilla-fleet--agents nil)
 (defvar-local cmacs-clawtilla-fleet--agents-json nil
   "The agents array exactly as the daemon sent it.")
+(defvar-local cmacs-clawtilla-fleet--agents-faithful nil
+  "`cmacs-clawtilla-fleet--agents-json' parsed with null and false kept.")
 (defvar-local cmacs-clawtilla-fleet--teams nil)
 (defvar-local cmacs-clawtilla-fleet--rooms nil)
 (defvar-local cmacs-clawtilla-fleet--warnings nil)
@@ -90,6 +92,9 @@ scroll rather than read."
          (room (alist-get 'dm_room agent))
          (depth (or (alist-get 'mailbox_depth agent) 0))
          (unread (and room (cmacs-clawtilla-unread-count room)))
+         (muted (cmacs-clawtilla-agent-muted-p cmacs-clawtilla-connection
+                                               (alist-get 'id agent)))
+         (failover (cmacs-clawtilla-fleet--failover-badge agent))
          (activity (cmacs-clawtilla--activity-label busy peer))
          (parts nil))
     (when (eq t (alist-get 'chief_of_staff agent))
@@ -108,11 +113,41 @@ scroll rather than read."
      ;; `peer' for as long as they existed, and the web client dropped
      ;; `peer' on the floor.
      (when activity (concat "  " (cmacs-clawtilla-dim activity)))
+     ;; Running on a fallback model, in the library's words: the row
+     ;; would otherwise say "running" about an agent that is not on the
+     ;; model anybody chose for it.
+     (when failover
+       (concat "  " (propertize failover 'face 'cmacs-clawtilla-busy)))
+     ;; A muted agent keeps its count, dimmed: what a mute takes away is
+     ;; the interruption, not the knowledge that something is there.
      (when (and unread (> unread 0))
        (concat "  " (propertize (format "%d" unread)
-                                'face 'cmacs-clawtilla-unread)))
+                                'face (if muted 'cmacs-clawtilla-dim
+                                        'cmacs-clawtilla-unread))))
+     (when muted (concat "  " (cmacs-clawtilla-dim "muted")))
      (when (> depth 0)
        (concat "  " (cmacs-clawtilla-dim (format "%d queued" depth)))))))
+
+(defun cmacs-clawtilla-fleet--failover-badge (agent)
+  "Return AGENT's failover badge in libclawt's words, or nil.
+
+`clawt_failover_sidebar_badge', given the agent's `failover' object as
+the daemon sent it -- so it is cut out of the raw listing rather than
+re-encoded from the parsed one."
+  (when (and (alist-get 'failover agent) cmacs-clawtilla-fleet--agents-json)
+    (let* ((faithful (or cmacs-clawtilla-fleet--agents-faithful
+                         (setq cmacs-clawtilla-fleet--agents-faithful
+                               (cmacs-clawtilla-faithful
+                                cmacs-clawtilla-fleet--agents-json))))
+           (raw (seq-find (lambda (entry)
+                            (equal (alist-get 'id entry)
+                                   (alist-get 'id agent)))
+                          faithful))
+           (text (cmacs-clawtilla-faithful-text (alist-get 'failover raw))))
+      (and text
+           (alist-get 'sidebar
+                      (cmacs-clawtilla-ask-parsed
+                       "failover" :failover (cons :json text)))))))
 
 (defun cmacs-clawtilla-fleet--insert-agent (agent level)
   "Insert AGENT at LEVEL."
@@ -173,6 +208,19 @@ scroll rather than read."
               "  "
               (cmacs-clawtilla-dim
                (or (cmacs-clawtilla-connection-describe conn) ""))
+              ;; Every count added up, less the muted agents'
+              ;; (`clawt_unread_total'), and the bell beside it.
+              (let ((unread (cmacs-clawtilla-unread-total conn))
+                    (bell (cmacs-clawtilla-notice-badge conn)))
+                (concat
+                 (if (> unread 0)
+                     (concat "  " (propertize (format "%d unread" unread)
+                                              'face 'cmacs-clawtilla-unread))
+                   "")
+                 (if (> bell 0)
+                     (concat "  " (propertize (format "! %d" bell)
+                                              'face 'cmacs-clawtilla-unread))
+                   "")))
               "\n")
       (unless (eq (cmacs-clawtilla-connection-state conn) 'connected)
         (insert (propertize (cmacs-clawtilla-link-notice conn)
@@ -226,10 +274,32 @@ scroll rather than read."
          :heading (propertize "Rooms" 'face 'cmacs-clawtilla-team)
          :body (lambda ()
                  (dolist (room cmacs-clawtilla-fleet--rooms)
-                   (cmacs-clawtilla-insert-section
-                    :type 'room :value room :level 1
-                    :heading (or (alist-get 'name room)
-                                 (alist-get 'id room))))))))))
+                   (let ((unread (cmacs-clawtilla-unread-count
+                                  (alist-get 'id room))))
+                     (cmacs-clawtilla-insert-section
+                      :type 'room :value room :level 1
+                      :heading
+                      (concat
+                       (or (alist-get 'name room) (alist-get 'id room))
+                       ;; How many are in it, and whether being in it
+                       ;; means answering everything: the thing somebody
+                       ;; needs to know before they type in it.
+                       (let ((subtitle
+                              (cmacs-clawtilla-ask
+                               "room-subtitle"
+                               :room (alist-get 'id room)
+                               :members (length (alist-get 'members room))
+                               :require_mention
+                               (if (eq t (alist-get 'require_mention room))
+                                   t :false))))
+                         (if subtitle
+                             (concat "  " (cmacs-clawtilla-dim subtitle))
+                           ""))
+                       (if (> unread 0)
+                           (concat "  " (propertize
+                                         (format "%d" unread)
+                                         'face 'cmacs-clawtilla-unread))
+                         "")))))))))))
 
 
 ;;;; Loading.
@@ -249,9 +319,15 @@ scroll rather than read."
              (let ((data (cmacs-clawtilla--parse json)))
                (setq cmacs-clawtilla-fleet--agents
                      (cmacs-clawtilla-get data 'agents))
+               ;; The connection keeps the listing too: completion over
+               ;; agent ids and the unread rule both want the fleet, and
+               ;; neither may ask for it synchronously.
+               (setf (cmacs-clawtilla-connection-agents conn)
+                     cmacs-clawtilla-fleet--agents)
                ;; Kept as text for anything that goes back to C.
                (setq cmacs-clawtilla-fleet--agents-json
-                     (cmacs-clawtilla-member-json json 'agents)))
+                     (cmacs-clawtilla-member-json json 'agents))
+               (setq cmacs-clawtilla-fleet--agents-faithful nil))
              (cmacs-clawtilla-fleet--draw))))))
     (cmacs-clawtilla-request
      conn "team.list" nil
@@ -263,13 +339,20 @@ scroll rather than read."
            (setq cmacs-clawtilla-fleet--warnings
                  (cmacs-clawtilla-get data 'warnings))
            (cmacs-clawtilla-fleet--draw)))))
-    (cmacs-clawtilla-request
+    (cmacs-clawtilla-request-both
      conn "room.list" nil
-     (lambda (data err)
+     (lambda (data text err)
        (when (and (buffer-live-p buffer) (not err))
          (with-current-buffer buffer
            (setq cmacs-clawtilla-fleet--rooms
                  (cmacs-clawtilla-get data 'rooms))
+           (setf (cmacs-clawtilla-connection-rooms conn)
+                 cmacs-clawtilla-fleet--rooms)
+           ;; The daemon holds the read marks, so its counts are the
+           ;; ones to show -- including after this client was away.
+           (let ((cmacs-clawtilla-unread-changed-hook nil))
+             (cmacs-clawtilla-unread-seed
+              conn (cmacs-clawtilla-member-json text 'rooms)))
            (cmacs-clawtilla-fleet--draw)))))))
 
 
@@ -418,7 +501,10 @@ interleave in a way nobody asked for."
     ("R" "restart" cmacs-clawtilla-fleet-restart)]
    [("i" "interrupt turn" cmacs-clawtilla-fleet-interrupt)
     ("!" "reset session" cmacs-clawtilla-fleet-reset)
-    ("D" "remove" cmacs-clawtilla-fleet-remove)]]
+    ("D" "remove" cmacs-clawtilla-fleet-remove)]
+   [("m" "mark as read" cmacs-clawtilla-fleet-mark-read)
+    ("A" "mark everything read" cmacs-clawtilla-fleet-mark-all-read)
+    ("z" "mute / unmute" cmacs-clawtilla-fleet-toggle-mute)]]
   ["Fleet"
    [("c" "create agent" cmacs-clawtilla-agent-create)
     ("I" "import agent" cmacs-clawtilla-agent-import)]
@@ -428,6 +514,47 @@ interleave in a way nobody asked for."
     ("M-n" "move down" cmacs-clawtilla-fleet-move-down)]
    [("gr" "refresh" cmacs-clawtilla-refresh)
     ("q" "quit" quit-window)]])
+
+(defun cmacs-clawtilla-fleet--room-at-point ()
+  "Return the room of the row at point: a room's own, or an agent's with you."
+  (let ((section (cmacs-clawtilla-section-at-point)))
+    (pcase (plist-get section :type)
+      ('agent (alist-get 'dm_room (plist-get section :value)))
+      ('room (alist-get 'id (plist-get section :value))))))
+
+(defun cmacs-clawtilla-fleet-mark-read ()
+  "Mark the conversation at point read, for every client.
+
+Says what it cleared in the library's words (`clawt_agent_menu_read_label')."
+  (interactive)
+  (let ((room (or (cmacs-clawtilla-fleet--room-at-point)
+                  (user-error "No conversation at point"))))
+    (message "clawtilla: %s"
+             (or (cmacs-clawtilla-ask
+                  "menu-read-label"
+                  :unread (cmacs-clawtilla-unread-count room))
+                 "marked read"))
+    (cmacs-clawtilla-mark-read room (cmacs-clawtilla-current))))
+
+(defun cmacs-clawtilla-fleet-mark-all-read ()
+  "Mark every conversation and alert read, as `clawtilla room read --all'."
+  (interactive)
+  (cmacs-clawtilla-mark-all-read (cmacs-clawtilla-current)))
+
+(defun cmacs-clawtilla-fleet-toggle-mute ()
+  "Mute the agent at point's notifications, or unmute them.
+
+One command that flips, as the GTK menu's one item does: a mute is a
+state, and the label read back is the thing now offered to undo."
+  (interactive)
+  (let* ((conn (cmacs-clawtilla-current))
+         (id (cmacs-clawtilla-fleet--agent-id))
+         (muted (cmacs-clawtilla-agent-muted-p conn id)))
+    (cmacs-clawtilla-set-agent-muted conn id (not muted))
+    (message "clawtilla: %s: now offers \"%s\"" id
+             (or (cmacs-clawtilla-ask "menu-mute-label"
+                                      :muted (if muted :false t))
+                 (if muted "mute" "unmute")))))
 
 (defun cmacs-clawtilla-fleet-hold ()
   "Pause the whole fleet."
@@ -457,6 +584,9 @@ interleave in a way nobody asked for."
     (define-key map (kbd "i") #'cmacs-clawtilla-fleet-interrupt)
     (define-key map (kbd "!") #'cmacs-clawtilla-fleet-reset)
     (define-key map (kbd "D") #'cmacs-clawtilla-fleet-remove)
+    (define-key map (kbd "m") #'cmacs-clawtilla-fleet-mark-read)
+    (define-key map (kbd "A") #'cmacs-clawtilla-fleet-mark-all-read)
+    (define-key map (kbd "z") #'cmacs-clawtilla-fleet-toggle-mute)
     (define-key map (kbd "M-p") #'cmacs-clawtilla-fleet-move-up)
     (define-key map (kbd "M-n") #'cmacs-clawtilla-fleet-move-down)
     (define-key map (kbd "?") #'cmacs-clawtilla-fleet-menu)
@@ -525,12 +655,31 @@ agents, and an agent's row is where its unread count appears."
           (dolist (room cmacs-clawtilla-fleet--rooms)
             (when-let* ((id (alist-get 'id room)))
               (push id rooms))))))
-    (delete-dups (append rooms (cmacs-clawtilla-known-rooms)))))
+    ;; The default, not this function again: `cmacs-clawtilla-known-rooms'
+    ;; calls whatever the variable holds, and the variable holds this.
+    (delete-dups
+     (append rooms
+             (let ((cmacs-clawtilla-known-rooms-function nil))
+               (cmacs-clawtilla-known-rooms))))))
 
 (setq cmacs-clawtilla-known-rooms-function
       #'cmacs-clawtilla-fleet--known-rooms)
 
 (add-hook 'cmacs-clawtilla-event-hook #'cmacs-clawtilla-fleet--on-event)
+
+(defun cmacs-clawtilla-fleet--redraw-all ()
+  "Redraw every fleet buffer from what it already holds.
+
+For a count or a mute that moved: nothing the daemon would be asked
+has changed, only what is drawn beside it."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'cmacs-clawtilla-fleet-mode)
+                 cmacs-clawtilla-connection)
+        (cmacs-clawtilla-fleet--draw)))))
+
+(add-hook 'cmacs-clawtilla-unread-changed-hook
+          #'cmacs-clawtilla-fleet--redraw-all)
 
 
 ;; Mandatory for any single-key cmacs mode: without it Evil answers

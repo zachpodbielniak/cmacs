@@ -99,7 +99,7 @@ extern uint64_t cmacs_clawt_connect_profile (const char *path,
                                              const char *name,
                                              uint64_t cookie, char **error);
 extern char *cmacs_clawt_link_notice (uint64_t handle, const char *name,
-                                      bool ever_connected);
+                                      bool ever_connected, bool remembered);
 
 /* Shared presentation helpers.
 
@@ -157,6 +157,41 @@ extern char *cmacs_clawt_usage_fleet_payload (int period, int days);
 extern char *cmacs_clawt_usage_fleet_json (const char *reply_json,
                                            int64_t now);
 extern char *cmacs_clawt_browser_session_line (const char *session_json);
+
+/* One door for everything else libclawt words (cmacs-clawtilla-render.c
+   has the table): WHAT names a question, ARGS-JSON is a JSON object of
+   its arguments, and the answer is text -- JSON text when it has more
+   than one part -- or NULL for no answer.  `cmacs_clawt_ask_names' is
+   the table's own list of questions.  */
+extern char *cmacs_clawt_ask (const char *what, const char *args_json);
+extern char *cmacs_clawt_ask_names (void);
+
+/* Which daemon a client starts on, and remembering it (clawt-connection.h).
+
+   `cmacs_clawt_connection_choice_json' is clawt_connection_choose with
+   nothing named: the profile this client was last switched to, else the
+   local daemon -- as `{"name","local","describe","from_last","notice"}'.
+   `cmacs_clawt_last_save' records the profile NAME for the next start
+   (NULL or a local one removes the record), and `cmacs_clawt_last_load'
+   reads it back.  `cmacs_clawt_offer_local' is whether a client that
+   cannot reach HANDLE's daemon should offer the local one instead.  */
+extern char *cmacs_clawt_connection_choice_json (char **error);
+extern char *cmacs_clawt_last_load (void);
+extern bool cmacs_clawt_last_save (const char *name, char **error);
+extern bool cmacs_clawt_offer_local (uint64_t handle, const char *name,
+                                     bool ever_connected, bool remembered);
+
+/* Pairing this machine with a daemon, off the main thread.
+
+   clawt_connection_new_paired() trades a six-digit code for a device
+   token over the network and blocks while it does, so it runs on a
+   worker and the outcome is delivered to COOKIE on the cmacs GLib
+   context like any other reply: `{"name": ...}' for the saved profile,
+   or an error string.  Returns false when nothing was started.  */
+extern bool cmacs_clawt_pair (const char *name, const char *host, int port,
+                              bool tls, bool accept_unknown_certificate,
+                              const char *code, const char *device_name,
+                              uint64_t cookie);
 
 /* syms_of_/init_ for each translation unit.  */
 extern void syms_of_cmacs_clawtilla_defuns (void);

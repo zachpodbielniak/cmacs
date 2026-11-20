@@ -59,6 +59,8 @@
 (declare-function cmacs-clawtilla--step-precedes "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--unread-should-count
                   "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla-files "cmacs-clawtilla-files")
+(declare-function cmacs-clawtilla-open-app "cmacs-clawtilla-pages")
 (declare-function cmacs-clawtilla-fleet "cmacs-clawtilla-fleet")
 (declare-function cmacs-clawtilla-agent "cmacs-clawtilla-agent")
 
@@ -112,6 +114,31 @@ drawn stays drawn.")
 (defvar-local cmacs-clawtilla-chat--peer nil
   "The agent this one is working with, if any.")
 
+(defvar-local cmacs-clawtilla-chat--rule-at nil
+  "The id of the message the \"New messages\" rule goes above, once.
+
+Placed by the first history load from the daemon's read mark and spent
+when drawn: a replay of the history must not draw a second rule above
+something that has since been read.")
+(defvar-local cmacs-clawtilla-chat--rule-done nil
+  "Non-nil once this buffer has decided where its rule goes.")
+(defvar-local cmacs-clawtilla-chat--read-sent nil
+  "The message id this buffer last told the daemon it had read up to.")
+(defvar-local cmacs-clawtilla-chat--last-round 0
+  "The round of the last message drawn, so a new round is marked once.")
+(defvar-local cmacs-clawtilla-chat--decisions nil
+  "The decisions asked in this conversation: a list of (DATA . TEXT).
+
+DATA is one parsed `decision.list' entry and TEXT the same entry as the
+daemon sent it, which is what libclawt is asked about.")
+(defvar-local cmacs-clawtilla-chat--rescue nil
+  "What the daemon offers for a turn that has gone quiet: rescue offers.")
+
+(defface cmacs-clawtilla-chat-mark
+  '((t :inherit font-lock-comment-face :slant italic))
+  "Face for a mark the daemon put on a message: steered, acknowledged."
+  :group 'cmacs-clawtilla)
+
 (defface cmacs-clawtilla-chat-self
   '((t :inherit font-lock-string-face))
   "Face for the operator's own name in a transcript."
@@ -156,11 +183,105 @@ notice."
   "Return the day key for TS."
   (format-time-string "%F" (seconds-to-time ts)))
 
+(defun cmacs-clawtilla-chat--marks (message)
+  "Return the marks the daemon put on MESSAGE, as one propertised string.
+
+Every word is libclawt's: that a message was folded into a running turn
+(`steered'), cut short (`interrupted'), answered without waking anybody
+(`acknowledged'), is a consultation, or crossed over from another
+conversation.  A client that worded these itself would be the third
+spelling of each."
+  (let ((marks nil)
+        (steered (alist-get 'steered message))
+        (consult (alist-get 'consult message))
+        (answer (alist-get 'answer_from message)))
+    (cl-flet ((mark (label &optional tip)
+                (when (and (stringp label) (not (string-empty-p label)))
+                  (push (propertize label 'face 'cmacs-clawtilla-chat-mark
+                                    'help-echo tip)
+                        marks))))
+      (when (and (stringp steered) (not (string-empty-p steered)))
+        (mark (cmacs-clawtilla-label 'steered)
+              (cmacs-clawtilla-ask "steered-tooltip" :outcome steered)))
+      (when (and (numberp (alist-get 'interrupted message))
+                 (/= 0 (alist-get 'interrupted message)))
+        (mark (cmacs-clawtilla-label 'interrupted)
+              (cmacs-clawtilla-label 'interrupted_tooltip)))
+      (when (and (numberp (alist-get 'acknowledged message))
+                 (/= 0 (alist-get 'acknowledged message)))
+        (mark (cmacs-clawtilla-label 'ack)
+              (cmacs-clawtilla-label 'ack_tooltip)))
+      (when (and (numberp consult) (/= 0 consult))
+        (mark (cmacs-clawtilla-ask "message-consult" :role consult)
+              (cmacs-clawtilla-label 'consult_tooltip)))
+      (when (stringp (alist-get 'crosstalk_room message))
+        (mark (cmacs-clawtilla-label 'crosstalk)
+              (cmacs-clawtilla-label 'crosstalk_tooltip))
+        (when (and (stringp answer) (not (string-empty-p answer)))
+          (mark (cmacs-clawtilla-ask "message-answer" :answer_from answer)))))
+    (string-join (nreverse marks) "  ")))
+
+(defun cmacs-clawtilla-chat--insert-notes (message)
+  "Insert the notes the daemon put under MESSAGE.
+
+Who it is waiting on, and who was named but skipped this round."
+  (let ((waiting (alist-get 'waiting_on message))
+        (skipped (alist-get 'skipped message)))
+    (when (and (stringp waiting) (not (string-empty-p waiting)))
+      (when-let* ((note (cmacs-clawtilla-ask "message-waiting"
+                                             :waiting_on waiting)))
+        (insert "    " (propertize note 'face 'cmacs-clawtilla-chat-mark
+                                   'help-echo (cmacs-clawtilla-label
+                                               'waiting_tooltip))
+                "\n")))
+    ;; Somebody named in a group room who already answered this thread:
+    ;; kept in the room, marked as not delivered, with the reason.
+    (when (and (stringp skipped) (not (string-empty-p skipped)))
+      (when-let* ((note (cmacs-clawtilla-ask
+                         "round-skip" :skipped skipped
+                         :reason (alist-get 'skip_reason message))))
+        (insert "    " (propertize note 'face 'cmacs-clawtilla-chat-mark
+                                   'help-echo (cmacs-clawtilla-label
+                                               'round_skip_tooltip))
+                "\n")))))
+
+(defun cmacs-clawtilla-chat--insert-body (sender body)
+  "Insert BODY, a message from SENDER, folded if the library says so.
+
+Another agent's long message to the agent whose conversation this is
+folds to one line (`clawt_chat_should_fold'): a page-long brief from a
+chief should not bury the lines around it.  TAB opens it.  A group room
+has no such agent and never folds."
+  (let* ((fold (and cmacs-clawtilla-chat--agent
+                    (cmacs-clawtilla-ask-parsed
+                     "chat-fold" :sender sender
+                     :viewer cmacs-clawtilla-chat--agent :body body)))
+         (lines (split-string (cmacs-clawtilla-render-markdown body) "\n")))
+    (if (not (eq t (alist-get 'fold fold)))
+        (dolist (line lines)
+          (insert "    " line "\n"))
+      (let ((start (point)) heading-end body-start)
+        (insert "    "
+                (propertize "▸ " 'face 'cmacs-clawtilla-chat-step)
+                (or (alist-get 'preview fold) "")
+                "\n")
+        (setq heading-end (point)
+              body-start (point))
+        (dolist (line lines)
+          (insert "    " line "\n"))
+        ;; The same overlay the tool runs fold with, so TAB opens both.
+        (let ((overlay (make-overlay body-start (point) nil t nil)))
+          (overlay-put overlay 'cmacs-clawtilla-step-body t)
+          (overlay-put overlay 'invisible t)
+          (put-text-property start heading-end
+                             'cmacs-clawtilla-step-run overlay))))))
+
 (defun cmacs-clawtilla-chat--insert-message (message)
   "Insert MESSAGE at point."
   (let* ((sender (or (alist-get 'sender message) "?"))
          (body (or (alist-get 'body message) ""))
          (ts (or (alist-get 'ts message) 0))
+         (round (or (alist-get 'round message) 0))
          (day (cmacs-clawtilla-chat--day ts))
          (boundary (cmacs-clawtilla--parse
                     (cmacs-clawtilla--run-is-start
@@ -168,6 +289,7 @@ notice."
                      cmacs-clawtilla-chat--last-day sender day)))
          (start-run (eq t (alist-get 'start boundary)))
          (new-day (eq t (alist-get 'new-day boundary)))
+         (marks (cmacs-clawtilla-chat--marks message))
          (start (point)))
     ;; The divider, and whether there should be one, are both the
     ;; library's answer.  A client that decided for itself would draw
@@ -178,7 +300,22 @@ notice."
                (format "── %s ──"
                        (or (cmacs-clawtilla--time-label ts t) day)))
               "\n"))
-    (when start-run
+    ;; "New messages": above the first message after the read mark that
+    ;; somebody else sent, where `clawt_unread_rule_index' put it.
+    (when (and cmacs-clawtilla-chat--rule-at
+               (equal (alist-get 'id message) cmacs-clawtilla-chat--rule-at))
+      (setq cmacs-clawtilla-chat--rule-at nil)
+      (insert (propertize "──────────────  New messages  ──────────────"
+                          'face 'cmacs-clawtilla-unread)
+              "\n"))
+    ;; A round in a group room starts at each message from you, a
+    ;; routine or a trigger; said once, where it starts.
+    (when (and (numberp round) (> round 0)
+               (/= round cmacs-clawtilla-chat--last-round))
+      (setq cmacs-clawtilla-chat--last-round round)
+      (when-let* ((label (cmacs-clawtilla-ask "round-label" :round round)))
+        (insert (cmacs-clawtilla-dim (format "· %s ·" label)) "\n")))
+    (when (or start-run (not (string-empty-p marks)))
       (insert (propertize
                (truncate-string-to-width
                 sender cmacs-clawtilla-chat-sender-width nil ?\s)
@@ -187,9 +324,10 @@ notice."
                        'cmacs-clawtilla-agent))
               " "
               (cmacs-clawtilla-dim (or (cmacs-clawtilla--time-label ts) ""))
+              (if (string-empty-p marks) "" (concat "  " marks))
               "\n"))
-    (dolist (line (split-string (cmacs-clawtilla-render-markdown body) "\n"))
-      (insert "    " line "\n"))
+    (cmacs-clawtilla-chat--insert-body sender body)
+    (cmacs-clawtilla-chat--insert-notes message)
     (put-text-property start (point) 'cmacs-clawtilla-section
                        (list :type 'message :value message
                              :identity (format "message/%s"
@@ -265,7 +403,37 @@ empty object, which the library then reads as a boolean."
                        (or text "")))
              'face (if failed
                        'cmacs-clawtilla-chat-step-failed
-                     'cmacs-clawtilla-chat-step)))))
+                     'cmacs-clawtilla-chat-step))
+            ;; A tool call that came with an app: a link out, worded by
+            ;; the library, opened with `o' on this line.
+            (if (alist-get 'app_id step)
+                (concat "  "
+                        (propertize
+                         (format "[%s]" (or (alist-get 'app_label step) "app"))
+                         'face 'cmacs-clawtilla-link
+                         'cmacs-clawtilla-app (alist-get 'app_id step)))
+              ""))))
+
+(defun cmacs-clawtilla-chat-open-app ()
+  "Open the app the tool call on this line came with, in a browser.
+
+This client draws no HTML in a transcript, so it links out, as the GTK
+one does: the daemon answers where the web client's sandboxed view of
+the app is (`connector.app_get')."
+  (interactive)
+  (let ((app (or (get-text-property (point) 'cmacs-clawtilla-app)
+                 (save-excursion
+                   (goto-char (line-beginning-position))
+                   (let ((at (text-property-not-all
+                              (point) (line-end-position)
+                              'cmacs-clawtilla-app nil)))
+                     (and at (get-text-property at 'cmacs-clawtilla-app)))))))
+    (unless app (user-error "No app on this line"))
+    (unless cmacs-clawtilla-chat--agent
+      (user-error "This room is not one agent's"))
+    (require 'cmacs-clawtilla-pages)
+    (cmacs-clawtilla-open-app cmacs-clawtilla-chat--agent app
+                              (cmacs-clawtilla-current))))
 
 (defun cmacs-clawtilla-chat--insert-step-run (steps summary)
   "Insert STEPS as one collapsible run headed by SUMMARY.
@@ -371,6 +539,8 @@ client and the CLI say, and the tool summary beside it is
 rather than every operation called a command."
   (setq cmacs-clawtilla-chat--steps-start (point-max))
   (goto-char (point-max))
+  (cmacs-clawtilla-chat--draw-decisions)
+  (cmacs-clawtilla-chat--draw-rescue)
   (let* ((activity (and cmacs-clawtilla-chat--busy
                         (cmacs-clawtilla--activity-label
                          cmacs-clawtilla-chat--busy
@@ -395,16 +565,248 @@ rather than every operation called a command."
         (cmacs-clawtilla-chat--seal start (point))))))
 
 
+;;;; Decisions asked here, and a turn that has gone quiet.
+
+(defun cmacs-clawtilla-chat--draw-decisions ()
+  "Draw the decisions asked in this conversation, at the live edge.
+
+Where they are answered: an agent that asks you something in your own
+conversation with it should not need you to go to another page.  The
+sentences around the question -- where it was routed, what happens if
+nobody answers, how it ended -- are libclawt's, from the decision as
+the daemon sent it."
+  (dolist (entry cmacs-clawtilla-chat--decisions)
+    (let* ((decision (car entry))
+           (view (cmacs-clawtilla-ask-parsed
+                  "decision-view" :decision (cons :json (cdr entry))))
+           (options (alist-get 'options decision))
+           (outcome (alist-get 'outcome view))
+           (start (point)))
+      (insert "\n"
+              (propertize (format "%s asks" (or (alist-get 'agent decision)
+                                                "?"))
+                          'face 'cmacs-clawtilla-agent)
+              (if (alist-get 'routed view)
+                  (concat "  " (cmacs-clawtilla-dim (alist-get 'routed view)))
+                "")
+              "\n    "
+              (or (cmacs-clawtilla-ask
+                   "decision-question"
+                   :question (alist-get 'question decision)
+                   :loses (alist-get 'loses decision))
+                  (alist-get 'question decision) "")
+              "\n")
+      (cond
+       ((and outcome (not (string-empty-p outcome)))
+        (insert "    " (cmacs-clawtilla-dim outcome) "\n"))
+       (options
+        (insert "    "
+                (mapconcat (lambda (option)
+                             (propertize (format "[%s]" option)
+                                         'face 'cmacs-clawtilla-badge))
+                           options "  ")
+                "   " (cmacs-clawtilla-dim "y answers") "\n"))
+       (t
+        (insert "    " (cmacs-clawtilla-dim
+                        "No options offered: y answers in your own words.")
+                "\n")))
+      (when (and (alist-get 'default view) (not outcome))
+        (insert "    " (cmacs-clawtilla-dim (alist-get 'default view)) "\n"))
+      (put-text-property start (point) 'cmacs-clawtilla-section
+                         (list :type 'decision :value decision
+                               :identity (format "decision/%s"
+                                                 (alist-get 'id decision))
+                               :level 0 :foldable nil))
+      (cmacs-clawtilla-chat--seal start (point)))))
+
+(defun cmacs-clawtilla-chat--draw-rescue ()
+  "Draw what the daemon offers for a turn that has said nothing for a while."
+  (dolist (offer cmacs-clawtilla-chat--rescue)
+    (let ((start (point)))
+      (insert "\n"
+              (propertize
+               (or (cmacs-clawtilla-ask
+                    "rescue-offer" :agent cmacs-clawtilla-chat--agent
+                    :seconds (or (alist-get 'seconds offer) 0))
+                   "")
+               'face 'cmacs-clawtilla-busy)
+              "\n    "
+              (cmacs-clawtilla-dim "u stops it, or sends it again on another model")
+              "\n")
+      (put-text-property start (point) 'cmacs-clawtilla-section
+                         (list :type 'rescue :value offer
+                               :identity (format "rescue/%s"
+                                                 (alist-get 'room offer))
+                               :level 0 :foldable nil))
+      (cmacs-clawtilla-chat--seal start (point)))))
+
+(defun cmacs-clawtilla-chat--redraw-tail ()
+  "Redraw everything below the last message: decisions, rescue, activity."
+  (cmacs-clawtilla-chat--appending
+    (cmacs-clawtilla-chat--clear-activity)
+    (cmacs-clawtilla-chat--draw-activity
+     (cmacs-clawtilla-chat--split-steps))))
+
+(defun cmacs-clawtilla-chat--load-decisions (&optional buffer)
+  "Fetch the decisions asked in BUFFER's conversation."
+  (let* ((buffer (or buffer (current-buffer)))
+         (conn (buffer-local-value 'cmacs-clawtilla-connection buffer))
+         (room (buffer-local-value 'cmacs-clawtilla-chat--room buffer)))
+    (cmacs-clawtilla-request-both
+     conn "decision.list" (list (cons 'room room))
+     (lambda (data text err)
+       (when (and (buffer-live-p buffer) (not err))
+         (with-current-buffer buffer
+           (let ((faithful (cmacs-clawtilla-faithful-get
+                            (cmacs-clawtilla-faithful text) 'decisions))
+                 (index 0)
+                 (entries nil))
+             (dolist (decision (cmacs-clawtilla-get data 'decisions))
+               (push (cons decision
+                           (cmacs-clawtilla-faithful-text
+                            (cmacs-clawtilla-faithful-get faithful index)))
+                     entries)
+               (setq index (1+ index)))
+             (setq cmacs-clawtilla-chat--decisions (nreverse entries)))
+           (cmacs-clawtilla-chat--redraw-tail)))))))
+
+(defun cmacs-clawtilla-chat--load-rescue (&optional buffer)
+  "Ask whether BUFFER's agent has a turn the daemon offers to rescue."
+  (let* ((buffer (or buffer (current-buffer)))
+         (conn (buffer-local-value 'cmacs-clawtilla-connection buffer))
+         (agent (buffer-local-value 'cmacs-clawtilla-chat--agent buffer)))
+    (when agent
+      (cmacs-clawtilla-request
+       conn "turn.rescue" (list (cons 'action "list") (cons 'agent agent))
+       (lambda (data err)
+         (when (and (buffer-live-p buffer) (not err))
+           (with-current-buffer buffer
+             (setq cmacs-clawtilla-chat--rescue
+                   (cmacs-clawtilla-get data 'offers))
+             (cmacs-clawtilla-chat--redraw-tail))))))))
+
+(defun cmacs-clawtilla-chat-answer ()
+  "Answer the decision at point, or the only one waiting here.
+
+Offers the options the agent gave; anything else typed is sent as it
+is.  Recorded as answered from the chat, which is what the other
+clients then say about it."
+  (interactive)
+  (let* ((open (seq-filter
+                (lambda (entry) (alist-get 'options (car entry)))
+                cmacs-clawtilla-chat--decisions))
+         (decision (or (cmacs-clawtilla-value-at-point 'decision)
+                       (and (= 1 (length cmacs-clawtilla-chat--decisions))
+                            (car (car cmacs-clawtilla-chat--decisions)))
+                       (car (car open))
+                       (user-error "No decision is waiting here")))
+         (options (alist-get 'options decision))
+         (answer (if options
+                     (completing-read
+                      (format "%s: " (or (alist-get 'question decision)
+                                         "Answer"))
+                      options)
+                   (read-string "Answer: ")))
+         (buffer (current-buffer)))
+    (when (string-empty-p answer) (user-error "Nothing to answer with"))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "decision.answer"
+     (cmacs-clawtilla--as-alist
+      (list :decision (alist-get 'id decision) :answer answer
+            :via (or (cmacs-clawtilla-label 'decision_via_chat) "")))
+     (lambda (_data err)
+       (if err
+           (message "clawtilla: %s" err)
+         (when (buffer-live-p buffer)
+           (cmacs-clawtilla-chat--load-decisions buffer)))))))
+
+(defun cmacs-clawtilla-chat-rescue ()
+  "Stop the turn that has gone quiet, or send it again on another model.
+
+The choices are the daemon's, per turn: Stop always, and each model it
+could switch to for this turn only.  Either one stops everything else
+the agent is running too -- the agent stays up."
+  (interactive)
+  (let* ((offer (or (cmacs-clawtilla-value-at-point 'rescue)
+                    (car cmacs-clawtilla-chat--rescue)
+                    (user-error "Nothing here needs rescuing")))
+         (choices (mapcar (lambda (model)
+                            (cons (or (cmacs-clawtilla-ask "rescue-switch"
+                                                           :model model)
+                                      model)
+                                  model))
+                          (alist-get 'choices offer)))
+         (stop "Stop")
+         (pick (completing-read "Rescue: " (cons stop (mapcar #'car choices))
+                                nil t))
+         (model (cdr (assoc pick choices)))
+         (buffer (current-buffer)))
+    (cmacs-clawtilla-request
+     (cmacs-clawtilla-current) "turn.rescue"
+     (append (list (cons 'action (if model "switch" "stop"))
+                   (cons 'agent cmacs-clawtilla-chat--agent))
+             (and (alist-get 'room offer)
+                  (list (cons 'room (alist-get 'room offer))))
+             (and model (list (cons 'model model))))
+     (lambda (_data err)
+       (message "clawtilla: %s"
+                (or err
+                    (if model
+                        "stopped, and sent the same message again on the other model, for this turn only"
+                      "stopped")))
+       (when (buffer-live-p buffer)
+         (cmacs-clawtilla-chat--load-rescue buffer))))))
+
+
 ;;;; Loading.
+
+(defun cmacs-clawtilla-chat--place-rule (data text)
+  "Decide, once, where this buffer's \"New messages\" rule goes.
+
+DATA and TEXT are a `room.history' reply.  The index is libclawt's,
+from the read mark the daemon holds; a daemon too old to hold one sends
+no `read_upto' and gets no rule, because a rule above the whole
+transcript says nothing true."
+  (unless cmacs-clawtilla-chat--rule-done
+    (setq cmacs-clawtilla-chat--rule-done t)
+    (when (assq 'read_upto data)
+      (let* ((messages (cmacs-clawtilla-get data 'messages))
+             (index (string-to-number
+                     (or (cmacs-clawtilla-ask
+                          "unread-rule-index"
+                          :messages (cons :json (cmacs-clawtilla-member-json
+                                                 text 'messages))
+                          :read_upto (alist-get 'read_upto data))
+                         "-1"))))
+        (when (and (>= index 0) (< index (length messages)))
+          (setq cmacs-clawtilla-chat--rule-at
+                (alist-get 'id (nth index messages))))))))
+
+(defun cmacs-clawtilla-chat--read-upto (conn data)
+  "Tell CONN's daemon this conversation is read up to DATA's last message.
+
+After the history is drawn, never before it: its `read_upto' is what
+placed the rule.  Only when the daemon holds marks, and only while the
+transcript is actually in a window -- a buffer reloading in the
+background has shown nobody anything."
+  (let ((messages (cmacs-clawtilla-get data 'messages)))
+    (when (and (assq 'read_upto data) messages
+               (get-buffer-window (current-buffer) t))
+      (let ((upto (alist-get 'id (car (last messages)))))
+        ;; Once per newest message: this runs on every reload, and a
+        ;; turn publishing steps reloads several times a second.
+        (unless (equal upto cmacs-clawtilla-chat--read-sent)
+          (setq cmacs-clawtilla-chat--read-sent upto)
+          (cmacs-clawtilla-mark-read cmacs-clawtilla-chat--room conn upto))))))
 
 (defun cmacs-clawtilla-chat--load (&optional buffer)
   "Fetch history and steps for BUFFER."
   (let* ((buffer (or buffer (current-buffer)))
          (conn (buffer-local-value 'cmacs-clawtilla-connection buffer))
          (room (buffer-local-value 'cmacs-clawtilla-chat--room buffer)))
-    (cmacs-clawtilla-request
+    (cmacs-clawtilla-request-both
      conn "room.history" (list (cons 'room room) (cons 'as "user"))
-     (lambda (data err)
+     (lambda (data text err)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
            (if err
@@ -414,8 +816,12 @@ rather than every operation called a command."
              ;; to name the same thing the daemon named back.
              (setq cmacs-clawtilla-chat--room
                    (or (cmacs-clawtilla-get data 'room) room))
+             (cmacs-clawtilla-chat--place-rule data text)
              (cmacs-clawtilla-chat--append-messages
-              (cmacs-clawtilla-get data 'messages)))))))
+              (cmacs-clawtilla-get data 'messages))
+             (cmacs-clawtilla-chat--read-upto conn data))))))
+    (cmacs-clawtilla-chat--load-decisions buffer)
+    (cmacs-clawtilla-chat--load-rescue buffer)
     (cmacs-clawtilla-request-raw
      conn "room.steps" (list (cons 'room room) (cons 'as "user")
                              (cons 'live t))
@@ -728,24 +1134,75 @@ losing a conversation."
         (cmacs-clawtilla-chat--send last)
       (user-error "Nothing of yours to send again"))))
 
-(defun cmacs-clawtilla-chat-attach (file)
-  "Send FILE to this conversation."
-  (interactive "fSend file: ")
-  (cmacs-clawtilla-request
-   (cmacs-clawtilla-current) "attachment.put"
-   (list (cons 'agent (or cmacs-clawtilla-chat--agent ""))
-         (cons 'room cmacs-clawtilla-chat--room)
-         (cons 'name (file-name-nondirectory file))
-         (cons 'data (base64-encode-string
-                      (with-temp-buffer
-                        (set-buffer-multibyte nil)
-                        (insert-file-contents-literally file)
-                        (buffer-string))
-                      t)))
-   (lambda (_data err)
-     (message "clawtilla: %s" (or err (format "sent %s"
-                                              (file-name-nondirectory
-                                               file)))))))
+(defun cmacs-clawtilla-chat--file-data (file)
+  "Return FILE's bytes as base64 on one line."
+  (base64-encode-string
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (insert-file-contents-literally file)
+     (buffer-string))
+   t))
+
+(defun cmacs-clawtilla-chat-attach (files &optional body)
+  "Send FILES with the message BODY to this conversation.
+
+Each file goes to the daemon first (`attachment.put'), and the message
+that follows names them in libclawt's attachment block -- the one
+spelling every client previews from and the conversation's Files page
+finds.  A file the daemon refused is named as not saved rather than
+dropped: an agent told nothing about a file it was meant to have
+answers as if it had been sent nothing.
+
+Interactively, reads files until an empty answer, then the message."
+  (interactive
+   (let ((files nil) (file nil))
+     (while (progn
+              (setq file (read-file-name
+                          (if files "Another file (RET to finish): "
+                            "Send file: ")
+                          nil "" t))
+              (and (not (string-empty-p file))
+                   (file-regular-p file)))
+       (push (expand-file-name file) files))
+     (unless files (user-error "No file chosen"))
+     (list (nreverse files) (read-string "Say with it (optional): "))))
+  (let* ((files (if (listp files) files (list files)))
+         (conn (cmacs-clawtilla-current))
+         (agent (or cmacs-clawtilla-chat--agent ""))
+         (buffer (current-buffer))
+         (pending (length files))
+         (items (make-vector (length files) nil))
+         (index 0))
+    (dolist (file files)
+      (let ((slot index)
+            (name (file-name-nondirectory file)))
+        (cmacs-clawtilla-request
+         conn "attachment.put"
+         (list (cons 'agent agent) (cons 'name name)
+               (cons 'data (cmacs-clawtilla-chat--file-data file)))
+         (lambda (data err)
+           ;; Both paths and the id, as attachment.put reports them: the
+           ;; host path for the agent's own read tool, the guest path for
+           ;; a command inside its container, the id for every preview.
+           (aset items slot
+                 (if err
+                     (list (cons 'name name) (cons 'unsaved t))
+                   (cmacs-clawtilla--as-alist
+                    (list :name name
+                          :host_path (or (alist-get 'host_path data) "")
+                          :path (or (alist-get 'path data) "")
+                          :id (or (alist-get 'id data) "")))))
+           (setq pending (1- pending))
+           (when (zerop pending)
+             (let ((block (cmacs-clawtilla-ask
+                           "attachment-block" :body (or body "")
+                           :items (cons :json
+                                        (json-serialize items)))))
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (cmacs-clawtilla-chat--send
+                    (or block body ""))))))))
+        (setq index (1+ index))))))
 
 (defun cmacs-clawtilla-chat-files ()
   "Browse this agent's files."
@@ -909,6 +1366,24 @@ losing a conversation."
          (message "clawtilla: %s"
                   (or e (cmacs-clawtilla-get data 'removed) "removed")))))))
 
+(defun cmacs-clawtilla-chat-gallery ()
+  "Show every file sent in this conversation, by you or the agent."
+  (interactive)
+  (require 'cmacs-clawtilla-files)
+  (cmacs-clawtilla-files (cmacs-clawtilla-current)
+                         cmacs-clawtilla-chat--agent
+                         cmacs-clawtilla-chat--room))
+
+(defun cmacs-clawtilla-chat-toggle-mute ()
+  "Mute this conversation's agent, or unmute it."
+  (interactive)
+  (let* ((conn (cmacs-clawtilla-current))
+         (agent (or cmacs-clawtilla-chat--agent
+                    (user-error "This room is not one agent's")))
+         (muted (cmacs-clawtilla-agent-muted-p conn agent)))
+    (cmacs-clawtilla-set-agent-muted conn agent (not muted))
+    (message "clawtilla: %s %s" agent (if muted "unmuted" "muted"))))
+
 (defun cmacs-clawtilla-chat-room-create (room name members)
   "Make a room called NAME with id ROOM holding MEMBERS.
 
@@ -953,7 +1428,10 @@ doing."
     ("a" "attach a file" cmacs-clawtilla-chat-attach)]
    [("r" "send the last again" cmacs-clawtilla-chat-retry)
     ("C" "copy the last" cmacs-clawtilla-chat-copy-last)
-    ("x" "export" cmacs-clawtilla-chat-export)]]
+    ("x" "export" cmacs-clawtilla-chat-export)]
+   [("y" "answer a decision" cmacs-clawtilla-chat-answer)
+    ("u" "rescue a quiet turn" cmacs-clawtilla-chat-rescue)
+    ("z" "mute / unmute this agent" cmacs-clawtilla-chat-toggle-mute)]]
   ["Agent"
    [("s" "start" (lambda () (interactive)
                    (cmacs-clawtilla-chat--agent-frame "agent.start")))
@@ -964,6 +1442,8 @@ doing."
     ("n" "fresh conversation" cmacs-clawtilla-chat-new)]]
   ["Look at"
    [("f" "files" cmacs-clawtilla-chat-files)
+    ("P" "files sent here" cmacs-clawtilla-chat-gallery)
+    ("o" "open the app on this line" cmacs-clawtilla-chat-open-app)
     ("m" "memory" cmacs-clawtilla-chat-memory)]
    [("t" "tasks" cmacs-clawtilla-chat-tasks)
     ("F" "flow" cmacs-clawtilla-chat-flow)]]
@@ -984,6 +1464,11 @@ doing."
     (define-key map (kbd "r") #'cmacs-clawtilla-chat-retry)
     (define-key map (kbd "C") #'cmacs-clawtilla-chat-copy-last)
     (define-key map (kbd "x") #'cmacs-clawtilla-chat-export)
+    (define-key map (kbd "y") #'cmacs-clawtilla-chat-answer)
+    (define-key map (kbd "u") #'cmacs-clawtilla-chat-rescue)
+    (define-key map (kbd "z") #'cmacs-clawtilla-chat-toggle-mute)
+    (define-key map (kbd "P") #'cmacs-clawtilla-chat-gallery)
+    (define-key map (kbd "o") #'cmacs-clawtilla-chat-open-app)
     (define-key map (kbd "?") #'cmacs-clawtilla-chat-menu)
     map)
   "Keymap for `cmacs-clawtilla-chat-mode'.")
@@ -1016,10 +1501,57 @@ doing."
       (setq-local cmacs-clawtilla-chat--room room-id)
       (cmacs-clawtilla-chat--load buffer))
     ;; Opening it is reading it, and saying so is what stops the count
-    ;; being raised again while it is in front of you.
+    ;; being raised again while it is in front of you.  Only the local
+    ;; count is cleared here: the daemon is told once the history has
+    ;; been drawn (`cmacs-clawtilla-chat--read-upto'), up to the last
+    ;; message actually on screen.
     (setq cmacs-clawtilla--viewing-room room-id)
-    (cmacs-clawtilla-mark-read room-id)
+    (remhash room-id cmacs-clawtilla-unread)
     (cmacs-clawtilla-display buffer)))
+
+;;;###autoload
+(defun cmacs-clawtilla-open (target &optional conn)
+  "Open the conversation TARGET names on CONN.
+
+TARGET is a `clawtilla://' link or what one carries: an agent, an agent
+and a peer for the exchange between them, or a room.  What it leads to
+is libclawt's answer (`clawt_open_target_resolve') against the fleet as
+the daemon lists it, so a link pasted from another client opens the
+same conversation here -- and one that names nothing in this fleet is
+refused in the library's words rather than opening an empty buffer."
+  (interactive "sOpen (a clawtilla:// link, an agent or a room): ")
+  (let ((conn (or conn (cmacs-clawtilla-current)))
+        (agents nil) (rooms nil) (pending 2))
+    (cl-flet ((resolve ()
+                (setq pending (1- pending))
+                (when (zerop pending)
+                  (let ((found (cmacs-clawtilla-ask-parsed
+                                "open-target" :text target
+                                :agents (cons :json (or agents "[]"))
+                                :rooms (cons :json (or rooms "[]")))))
+                    (cond
+                     ((null found)
+                      (message "clawtilla: this build cannot follow links"))
+                     ((alist-get 'error found)
+                      (message "clawtilla: %s" (alist-get 'error found)))
+                     ((alist-get 'room found)
+                      (cmacs-clawtilla-chat conn (alist-get 'agent found)
+                                            (alist-get 'room found)))
+                     ((alist-get 'agent found)
+                      (cmacs-clawtilla-chat conn (alist-get 'agent found)))
+                     (t (message "clawtilla: that names nothing here")))))))
+      (cmacs-clawtilla-request-raw
+       conn "agent.list" nil
+       (lambda (json _err)
+         (setq agents (and json (cmacs-clawtilla-member-json
+                                 (cmacs-clawtilla-payload-text json) 'agents)))
+         (resolve)))
+      (cmacs-clawtilla-request-raw
+       conn "room.list" nil
+       (lambda (json _err)
+         (setq rooms (and json (cmacs-clawtilla-member-json
+                                (cmacs-clawtilla-payload-text json) 'rooms)))
+         (resolve))))))
 
 (defun cmacs-clawtilla-chat--note-turn (kind data)
   "Move this buffer's busy state for an event of KIND carrying DATA.
@@ -1046,8 +1578,30 @@ arrived, which is worse than saying nothing."
 
 (defun cmacs-clawtilla-chat--on-event (conn kind data)
   "Append to any transcript for CONN that KIND in DATA concerns."
+  ;; A decision asked, settled or deleted in a conversation, and a turn
+  ;; that has gone quiet in one: both redraw only the tail, and both name
+  ;; their conversation in `detail' rather than as the subject.
+  (when (or (string-prefix-p "decision." kind)
+            (string-prefix-p "turn.no_reply" kind))
+    (let ((room (cmacs-clawtilla-event-detail data 'room))
+          (subject (cmacs-clawtilla-event-subject data)))
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when (and (derived-mode-p 'cmacs-clawtilla-chat-mode)
+                     (eq cmacs-clawtilla-connection conn))
+            (cond
+             ((and (string-prefix-p "decision." kind)
+                   (equal room cmacs-clawtilla-chat--room))
+              (cmacs-clawtilla-chat--load-decisions buffer))
+             ((and (string-prefix-p "turn.no_reply" kind)
+                   (equal subject cmacs-clawtilla-chat--agent))
+              (cmacs-clawtilla-chat--load-rescue buffer))))))))
   (when (string-match-p (rx bos (or "message" "turn." "agent.typing")) kind)
-    (let ((subject (cmacs-clawtilla-event-subject data)))
+    (let ((subject (if (equal kind "turn.steered")
+                       ;; A steer names its conversation in `detail'.
+                       (or (cmacs-clawtilla-event-detail data 'room)
+                           (cmacs-clawtilla-event-subject data))
+                     (cmacs-clawtilla-event-subject data))))
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
           (when (and (derived-mode-p 'cmacs-clawtilla-chat-mode)

@@ -411,7 +411,9 @@ pinned is which question gets asked."
     (cmacs-clawtilla-section-mode   . cmacs-clawtilla-section)
     (cmacs-clawtilla-settings-mode  . cmacs-clawtilla-settings)
     (cmacs-clawtilla-alerts-mode    . cmacs-clawtilla-alerts)
-    (cmacs-clawtilla-teach-mode     . cmacs-clawtilla-teach))
+    (cmacs-clawtilla-teach-mode     . cmacs-clawtilla-teach)
+    (cmacs-clawtilla-page-mode      . cmacs-clawtilla-page)
+    (cmacs-clawtilla-pairing-mode   . cmacs-clawtilla-devices))
   "Every clawtilla major mode, and the feature that defines it.")
 
 (ert-deftest cmacs-clawtilla-modes-own-their-shared-keys ()

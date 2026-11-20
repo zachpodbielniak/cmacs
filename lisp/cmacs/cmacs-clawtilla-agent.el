@@ -60,6 +60,8 @@ one -- so this is remembered rather than assumed to be the only one.")
 (defvar-local cmacs-clawtilla-agent--id nil)
 (defvar-local cmacs-clawtilla-agent--data nil)
 (defvar-local cmacs-clawtilla-agent--mailbox nil)
+(defvar-local cmacs-clawtilla-agent--failover-json nil
+  "This agent's `failover' object as the daemon sent it, or nil.")
 (defvar-local cmacs-clawtilla-agent--settings nil
   "The agent's `settings' from `agent.show': every per-agent schema key.
 
@@ -96,6 +98,22 @@ that is what `agent.set' parses back against the same schema.")
                                   'provider)
     (cmacs-clawtilla-agent--field "Model" (alist-get 'model agent) 'model)
     (cmacs-clawtilla-agent--field "Effort" (alist-get 'effort agent) 'effort)
+    ;; On a fallback model, in the library's words, with the daemon's
+    ;; own account of why beside it.
+    (when-let* ((badge (and cmacs-clawtilla-agent--failover-json
+                            (alist-get 'badge
+                                       (cmacs-clawtilla-ask-parsed
+                                        "failover"
+                                        :failover
+                                        (cons :json
+                                              cmacs-clawtilla-agent--failover-json))))))
+      (insert (format "  %-22s " "Fallback")
+              (propertize badge 'face 'cmacs-clawtilla-busy)
+              (if (alist-get 'failover_message agent)
+                  (concat "  " (cmacs-clawtilla-dim
+                                (alist-get 'failover_message agent)))
+                "")
+              "\n"))
     (cmacs-clawtilla-agent--field "Account"
                                   (cmacs-clawtilla-agent--setting
                                    'model.account "the CLI's own login")
@@ -111,6 +129,20 @@ that is what `agent.set' parses back against the same schema.")
     (cmacs-clawtilla-agent--field "Browser session"
                                   (cmacs-clawtilla-agent--setting 'browser.use)
                                   'browser.use)
+    (cmacs-clawtilla-agent--field "Display"
+                                  (cmacs-clawtilla-agent--setting
+                                   'computer.display.resolution)
+                                  'computer.display.resolution)
+    (cmacs-clawtilla-agent--field "Steering"
+                                  (cmacs-clawtilla-agent--choice-label
+                                   "steer-policy"
+                                   (cmacs-clawtilla-agent--setting 'steer))
+                                  'steer)
+    (cmacs-clawtilla-agent--field "Reviewed by"
+                                  (cmacs-clawtilla-agent--choice-label
+                                   "review-by"
+                                   (cmacs-clawtilla-agent--setting 'review_by))
+                                  'review_by)
     (cmacs-clawtilla-agent--field "Team" (alist-get 'team agent) 'team)
     (cmacs-clawtilla-agent--field "Team role" (alist-get 'team_role agent)
                                   'team_role)
@@ -256,9 +288,9 @@ that is what `agent.set' parses back against the same schema.")
   (let* ((buffer (or buffer (current-buffer)))
          (conn (buffer-local-value 'cmacs-clawtilla-connection buffer))
          (id (buffer-local-value 'cmacs-clawtilla-agent--id buffer)))
-    (cmacs-clawtilla-request
+    (cmacs-clawtilla-request-both
      conn "agent.show" (list (cons 'agent id))
-     (lambda (data err)
+     (lambda (data text err)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
            (if err
@@ -267,6 +299,15 @@ that is what `agent.set' parses back against the same schema.")
                    (or (cmacs-clawtilla-get data 'agent) data))
              (setq cmacs-clawtilla-agent--settings
                    (cmacs-clawtilla-get data 'settings))
+             ;; The failover object as the daemon sent it, for the
+             ;; library to word.
+             (setq cmacs-clawtilla-agent--failover-json
+                   (let ((faithful (cmacs-clawtilla-faithful text)))
+                     (cmacs-clawtilla-faithful-text
+                      (or (cmacs-clawtilla-faithful-get faithful
+                                                        'agent 'failover)
+                          (cmacs-clawtilla-faithful-get faithful
+                                                        'failover)))))
              (cmacs-clawtilla-agent--draw))))))
     (cmacs-clawtilla-request
      conn "computer.shared" nil
@@ -357,9 +398,51 @@ it exists, and `make parity' fails a client holding its own copy."
   (pcase key
     ('computer (cmacs-clawtilla-enum-nicks "computer-type"))
     ('browser.mode (cmacs-clawtilla-enum-nicks "browser-mode"))
+    ;; libclawt's choice lists (clawt-choices.h and friends), the same
+    ;; ones the GTK client's drop-downs are filled from.
+    ('effort (cmacs-clawtilla-enum-nicks "effort"))
+    ('computer.display.resolution (cmacs-clawtilla-enum-nicks "resolution"))
+    ('steer (cmacs-clawtilla-enum-nicks "steer-policy"))
+    ;; The library's choices, or any agent by id.
+    ('review_by
+     (append (cmacs-clawtilla-enum-nicks "review-by")
+             (delq nil (mapcar (lambda (agent) (alist-get 'id agent))
+                               (cmacs-clawtilla-connection-agents
+                                (cmacs-clawtilla-current))))))
     ('team_role '("member" "lead"))
     ((or 'autostart 'chief_of_staff 'enabled) '("yes" "no"))
     (_ nil)))
+
+(defun cmacs-clawtilla-agent--choice-label (family nick)
+  "Return libclawt's label for NICK in FAMILY, or NICK itself.
+
+A value that is not one of the family's -- an agent id as a reviewer --
+is shown as it is."
+  (and nick
+       (or (alist-get 'label
+                      (seq-find (lambda (entry)
+                                  (equal (alist-get 'nick entry) nick))
+                                (cmacs-clawtilla-enum family)))
+           nick)))
+
+(defun cmacs-clawtilla-agent--annotate (key)
+  "Return a completion annotation function for the choices of KEY, or nil.
+
+Shows libclawt's own label, and for a steer level its explanation,
+beside each value: the nick is what is saved, the words are what it
+means."
+  (when-let* ((family (pcase key
+                        ('effort "effort")
+                        ('steer "steer-policy")
+                        ('review_by "review-by"))))
+    (lambda (candidate)
+      (let ((entry (seq-find (lambda (e) (equal (alist-get 'nick e) candidate))
+                             (cmacs-clawtilla-enum family))))
+        (when entry
+          (concat "  " (or (alist-get 'label entry) "")
+                  (if (alist-get 'explanation entry)
+                      (concat " -- " (alist-get 'explanation entry))
+                    "")))))))
 
 (defun cmacs-clawtilla-agent-set ()
   "Change the field at point."
@@ -379,7 +462,13 @@ it exists, and `make parity' fails a client holding its own copy."
               (current (or (alist-get key agent)
                            (alist-get key cmacs-clawtilla-agent--settings)))
               (value (if choices
-                         (completing-read (format "%s: " key) choices nil t)
+                         (let ((completion-extra-properties
+                                (list :annotation-function
+                                      (cmacs-clawtilla-agent--annotate key))))
+                           ;; A reviewer may be any agent, so that one is
+                           ;; not held to the list.
+                           (completing-read (format "%s: " key) choices nil
+                                            (not (eq key 'review_by))))
                        (read-string (format "%s: " key)
                                     (and current (format "%s" current))))))
          (cmacs-clawtilla-agent--put
@@ -915,6 +1004,54 @@ take a URL rather than a path is the library's answer too."
                                     (format "imported %s" id)))))))
 
 
+;;;; The pages that are about this agent.
+
+(declare-function cmacs-clawtilla-memory-review "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-saved-steps "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-waits "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-vault "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-files "cmacs-clawtilla-files")
+(declare-function cmacs-clawtilla-agent-muted-p "cmacs-clawtilla-alerts")
+(declare-function cmacs-clawtilla-set-agent-muted "cmacs-clawtilla-alerts")
+
+(defun cmacs-clawtilla-agent-open-memory-review ()
+  "Show what this agent remembered, forgot and pinned, with a way back."
+  (interactive)
+  (cmacs-clawtilla-memory-review cmacs-clawtilla-agent--id
+                                 (cmacs-clawtilla-current)))
+
+(defun cmacs-clawtilla-agent-open-steps ()
+  "Show the steps this agent did on its screen that were saved."
+  (interactive)
+  (cmacs-clawtilla-saved-steps cmacs-clawtilla-agent--id
+                               (cmacs-clawtilla-current)))
+
+(defun cmacs-clawtilla-agent-open-waits ()
+  "Show what this agent is waiting for."
+  (interactive)
+  (cmacs-clawtilla-waits cmacs-clawtilla-agent--id (cmacs-clawtilla-current)))
+
+(defun cmacs-clawtilla-agent-open-vault ()
+  "Show which vault logins this agent's browser may use."
+  (interactive)
+  (cmacs-clawtilla-vault cmacs-clawtilla-agent--id (cmacs-clawtilla-current)))
+
+(defun cmacs-clawtilla-agent-open-files ()
+  "Show the files sent in this agent's conversation with you."
+  (interactive)
+  (cmacs-clawtilla-files (cmacs-clawtilla-current) cmacs-clawtilla-agent--id))
+
+(defun cmacs-clawtilla-agent-toggle-mute ()
+  "Mute this agent's notifications, or unmute them."
+  (interactive)
+  (let* ((conn (cmacs-clawtilla-current))
+         (muted (cmacs-clawtilla-agent-muted-p conn cmacs-clawtilla-agent--id)))
+    (cmacs-clawtilla-set-agent-muted conn cmacs-clawtilla-agent--id
+                                     (not muted))
+    (message "clawtilla: %s %s" cmacs-clawtilla-agent--id
+             (if muted "unmuted" "muted"))))
+
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-agent-menu ()
@@ -937,6 +1074,13 @@ take a URL rather than a path is the library's answer too."
    [("r" "add or change a rule" cmacs-clawtilla-agent-policy-add)
     ("R" "remove a rule" cmacs-clawtilla-agent-policy-remove)
     ("E" "edit them all" cmacs-clawtilla-agent-policy-edit)]]
+  ["More about this agent"
+   [("y" "memory review" cmacs-clawtilla-agent-open-memory-review)
+    ("s" "saved steps" cmacs-clawtilla-agent-open-steps)
+    ("i" "what it is waiting for" cmacs-clawtilla-agent-open-waits)]
+   [("O" "browser vault" cmacs-clawtilla-agent-open-vault)
+    ("x" "files sent in its conversation" cmacs-clawtilla-agent-open-files)
+    ("z" "mute / unmute" cmacs-clawtilla-agent-toggle-mute)]]
   ["Mailbox"
    [("a" "acknowledge" cmacs-clawtilla-agent-ack)
     ("u" "requeue" cmacs-clawtilla-agent-requeue)]
@@ -960,6 +1104,12 @@ take a URL rather than a path is the library's answer too."
     (define-key map (kbd "P") #'cmacs-clawtilla-agent-purge)
     (define-key map (kbd "m") #'cmacs-clawtilla-agent-models)
     (define-key map (kbd "v") #'cmacs-clawtilla-agent-avatar)
+    (define-key map (kbd "y") #'cmacs-clawtilla-agent-open-memory-review)
+    (define-key map (kbd "s") #'cmacs-clawtilla-agent-open-steps)
+    (define-key map (kbd "i") #'cmacs-clawtilla-agent-open-waits)
+    (define-key map (kbd "O") #'cmacs-clawtilla-agent-open-vault)
+    (define-key map (kbd "x") #'cmacs-clawtilla-agent-open-files)
+    (define-key map (kbd "z") #'cmacs-clawtilla-agent-toggle-mute)
     (define-key map (kbd "?") #'cmacs-clawtilla-agent-menu)
     map)
   "Keymap for `cmacs-clawtilla-agent-mode'.")

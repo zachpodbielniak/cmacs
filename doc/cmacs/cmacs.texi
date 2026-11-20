@@ -14112,6 +14112,7 @@ the same feature set as clawtilla's GTK client.
 * Clawtilla Work Pages::        Decisions, Activity and Fleet; routines.
 * Clawtilla Agent Page::        Account, shared computer, browser, rules.
 * Clawtilla Browser::           An agent's web browser, and Accounts.
+* clawtilla 0.52::              Notices, tasks, files, pairing and the rest.
 * Clawtilla Parity::            How this client is kept honest.
 * Clawtilla Nothing Blocks::    Why there is no synchronous request.
 @end menu
@@ -14415,6 +14416,8 @@ can be two different people.  @kbd{a a} declares one and @kbd{a r}
 removes the one at point, saying how many agents still name it.  Logging
 in is the CLI's own business, and no credential passes through cmacs.
 The panel reloads when another client changes the accounts.
+
+@include clawtilla-parity.texi
 
 @node Clawtilla Parity
 @section Parity

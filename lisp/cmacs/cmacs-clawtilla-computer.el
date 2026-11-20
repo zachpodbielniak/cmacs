@@ -55,6 +55,11 @@
 (defvar-local cmacs-clawtilla-computer--mounts nil)
 (defvar-local cmacs-clawtilla-computer--exchange nil)
 (defvar-local cmacs-clawtilla-computer--output nil)
+(defvar-local cmacs-clawtilla-computer--display-line nil
+  "What libclawt says about this agent's virtual display, or nil.
+
+`clawt_display_status_line': which display server draws the screen and
+at what size, for an agent whose computer is a virtual display.")
 (defvar-local cmacs-clawtilla-computer--screen nil
   "What `computer.screen' last said about the screen.")
 (defvar-local cmacs-clawtilla-computer--frame nil
@@ -117,7 +122,18 @@ window and a click must be mapped back to the page's pixels.")
   ;; not one whose idleness means anything.
   (when-let* ((holder (alist-get 'holder cmacs-clawtilla-computer--screen)))
     (insert "\n" (propertize (format "screen held by %s" holder)
-                             'face 'cmacs-clawtilla-busy) "\n")))
+                             'face 'cmacs-clawtilla-busy) "\n"))
+  ;; What the agent asked for hands with, and why there is no picture,
+  ;; both in the daemon's words; then the virtual display's own line.
+  (when-let* ((request (alist-get 'request cmacs-clawtilla-computer--screen)))
+    (insert (propertize (format "It has asked for hands: %s" request)
+                        'face 'cmacs-clawtilla-busy)
+            "\n"))
+  (when-let* ((problem (alist-get 'error cmacs-clawtilla-computer--screen)))
+    (insert (cmacs-clawtilla-dim problem) "\n"))
+  (when cmacs-clawtilla-computer--display-line
+    (insert (cmacs-clawtilla-dim cmacs-clawtilla-computer--display-line)
+            "\n")))
 
 (defun cmacs-clawtilla-computer--draw-mounts ()
   "Draw the Mounts view."
@@ -264,12 +280,17 @@ window and a click must be mapped back to the page's pixels.")
            (setq cmacs-clawtilla-computer--mounts
                  (cmacs-clawtilla-get data 'mounts))
            (cmacs-clawtilla-computer--draw)))))
-    (cmacs-clawtilla-request
+    (cmacs-clawtilla-request-both
      conn "computer.screen" payload
-     (lambda (data err)
+     (lambda (data text err)
        (when (and (buffer-live-p buffer) (not err))
          (with-current-buffer buffer
            (setq cmacs-clawtilla-computer--screen data)
+           ;; A virtual display says which server draws it; the sentence
+           ;; is libclawt's, from the reply as the daemon sent it.
+           (setq cmacs-clawtilla-computer--display-line
+                 (cmacs-clawtilla-ask "display-status"
+                                      :screen (cons :json text)))
            (cmacs-clawtilla-computer--draw)))))
     (cmacs-clawtilla-request
      conn "browser.list" nil

@@ -54,6 +54,10 @@
 ;; variable, and setting one from here would create a second binding
 ;; that the fleet never reads.
 (require 'cmacs-clawtilla-fleet)
+;; Projects, the ledger, history, devices and the rest: the pages the
+;; GTK client keeps under Settings, reached from here with `P'.
+(require 'cmacs-clawtilla-pages)
+(require 'cmacs-clawtilla-events)
 (declare-function cmacs-clawtilla--format-cost "cmacs-clawtilla-defuns.c")
 
 (defcustom cmacs-clawtilla-colour-scheme nil
@@ -198,7 +202,9 @@ Offered from the library's own list rather than one written here."
           (cmacs-clawtilla-settings--micros
            (cmacs-clawtilla-get (alist-get 'total cmacs-clawtilla-settings--extra)
                                 'cost_micros)))
-         (insert "\n")
+         (insert "  " (cmacs-clawtilla-dim
+                        "P s opens the ledger: by period, grouped, with a CSV export")
+                 "\n\n")
          (cmacs-clawtilla-settings--draw-rows
           (lambda (row)
             (format "%-18s %s"
@@ -221,8 +227,13 @@ Offered from the library's own list rather than one written here."
                   (or (alist-get 'name row) (alist-get 'id row) "?")
                   (or (alist-get 'state row) "")
                   (cmacs-clawtilla-dim
-                   (let ((size (alist-get 'size row)))
-                     (if size (file-size-human-readable size) "")))))
+                   ;; A download in flight says how far it has got, from
+                   ;; the daemon's `image.progress'; anything else its
+                   ;; size.
+                   (or (cmacs-clawtilla-image-progress-label
+                        (alist-get 'id row))
+                       (let ((size (alist-get 'size row)))
+                         (if size (file-size-human-readable size) ""))))))
         "no cloud images")))))
 
 (defun cmacs-clawtilla-settings--micros (micros)
@@ -789,6 +800,8 @@ between trying again and not."
   "What settings can do."
   ["Panel"
    [("TAB" "next panel" cmacs-clawtilla-settings-next-panel)
+    ("P" "more: projects, ledger, history, devices…"
+     cmacs-clawtilla-more-menu)
     ("gr" "refresh" cmacs-clawtilla-refresh)]]
   ["Change"
    [("RET" "change setting" cmacs-clawtilla-settings-set)
@@ -832,6 +845,7 @@ between trying again and not."
     (define-key map (kbd "c") #'cmacs-clawtilla-settings-connect-account)
     (define-key map (kbd "i") #'cmacs-clawtilla-settings-health)
     (define-key map (kbd "D") #'cmacs-clawtilla-settings-revoke)
+    (define-key map (kbd "P") #'cmacs-clawtilla-more-menu)
     (define-key map (kbd "?") #'cmacs-clawtilla-settings-menu)
     map)
   "Keymap for `cmacs-clawtilla-settings-mode'.")

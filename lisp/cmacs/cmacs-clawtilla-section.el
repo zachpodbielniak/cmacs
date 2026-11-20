@@ -51,6 +51,8 @@
 (require 'cmacs-clawtilla)
 (require 'cmacs-clawtilla-ui)
 (require 'cmacs-clawtilla-grok)
+(require 'cmacs-clawtilla-tasks)
+(require 'cmacs-clawtilla-page)
 
 (declare-function cmacs-clawtilla--time-label "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--activity-elapsed "cmacs-clawtilla-defuns.c")
@@ -123,6 +125,19 @@ daemon's \"which agent?\" back at somebody who never chose."
                                          (_ 'cmacs-clawtilla-running)))
                      (cmacs-clawtilla-dim
                       (concat
+                       ;; Switched off by the daemon after failed starts:
+                       ;; said in the library's words, before anything
+                       ;; else, because nothing else on the row is true
+                       ;; of a routine that no longer runs.
+                       (if (alist-get 'turned_off_after row)
+                           (concat
+                            (or (cmacs-clawtilla-ask
+                                 "routine-turned-off"
+                                 :failures (alist-get 'turned_off_after row)
+                                 :error (alist-get 'turned_off_error row))
+                                "turned off")
+                            " · ")
+                         "")
                        (or (cmacs-clawtilla--time-label
                             (or (alist-get 'last_run row) 0))
                            "never run")
@@ -141,15 +156,11 @@ daemon's \"which agent?\" back at somebody who never chose."
                      (or (alist-get 'kind row) "")
                      (cmacs-clawtilla-dim (or (alist-get 'agent row) "")))))
     ("tasks"
-     :list "task.list" :rows tasks :type task
-     :row ,(lambda (row)
-             (format "%-12s %-12s %-10s %s"
-                     (or (alist-get 'id row) "?")
-                     (or (alist-get 'assignee row) "?")
-                     (propertize (or (alist-get 'state row) "")
-                                 'face (cmacs-clawtilla-state-face
-                                        (alist-get 'state row)))
-                     (or (alist-get 'title row) ""))))
+     ;; Broken runs and tasks, two frames, with what each task waits on
+     ;; worded by the library: cmacs-clawtilla-tasks.el.
+     :list "task.list" :type task
+     :load ,#'cmacs-clawtilla-tasks--load
+     :draw ,#'cmacs-clawtilla-tasks--draw)
     ("decisions"
      :list "decision.list" :rows decisions :type decision
      :payload ,(lambda ()
@@ -378,23 +389,30 @@ nothing, in the buffer.")
                "skill.enable"
                (list (cons 'id (cmacs-clawtilla-section--row-id))
                      (cons 'enabled t))))
+    ("tasks" (cmacs-clawtilla-tasks-retry))
     (_ (user-error "Nothing to run on this page"))))
 
 (defun cmacs-clawtilla-section-remove ()
   "Remove the row at point."
   (interactive)
-  (let ((id (cmacs-clawtilla-section--row-id)))
-    (when (yes-or-no-p (format "Remove %s? " id))
-      (pcase cmacs-clawtilla-section--page
-        ("routines" (cmacs-clawtilla-section--send
-                     "routine.remove" (list (cons 'id id))))
-        ("triggers" (cmacs-clawtilla-section--send
-                     "trigger.remove" (list (cons 'id id))))
-        ("skills" (cmacs-clawtilla-section--send
-                   "skill.remove" (list (cons 'id id))))
-        ("tasks" (cmacs-clawtilla-section--send
-                  "task.cancel" (list (cons 'id id))))
-        (_ (user-error "Nothing to remove on this page"))))))
+  (pcase cmacs-clawtilla-section--page
+    ;; Tasks and Grok jobs ask in their own words, and name the row
+    ;; their own way: a task is `task', not `id'.
+    ("tasks" (cmacs-clawtilla-tasks-cancel
+              (alist-get 'id (or (cmacs-clawtilla-value-at-point 'task)
+                                 (user-error "No task at point")))))
+    ("grok" (cmacs-clawtilla-grok-remove))
+    (_
+     (let ((id (cmacs-clawtilla-section--row-id)))
+       (when (yes-or-no-p (format "Remove %s? " id))
+         (pcase cmacs-clawtilla-section--page
+           ("routines" (cmacs-clawtilla-section--send
+                        "routine.remove" (list (cons 'id id))))
+           ("triggers" (cmacs-clawtilla-section--send
+                        "trigger.remove" (list (cons 'id id))))
+           ("skills" (cmacs-clawtilla-section--send
+                      "skill.remove" (list (cons 'id id))))
+           (_ (user-error "Nothing to remove on this page"))))))))
 
 (defun cmacs-clawtilla-section-scope-to-agent (agent)
   "Scope this section to AGENT and reload."
@@ -413,14 +431,26 @@ once -- decisions are fleet-wide and memory is somebody's own."
   (interactive
    (list (when (equal cmacs-clawtilla-section--page "decisions")
            (read-string "Answer: "))))
-  (if (not (equal cmacs-clawtilla-section--page "decisions"))
-      (call-interactively #'cmacs-clawtilla-section-scope-to-agent)
+  (cond
+   ;; On Tasks the same key hands the task at point to somebody.
+   ((equal cmacs-clawtilla-section--page "tasks")
+    (call-interactively #'cmacs-clawtilla-tasks-assign))
+   ((not (equal cmacs-clawtilla-section--page "decisions"))
+    (call-interactively #'cmacs-clawtilla-section-scope-to-agent))
+   ;; A decision that is an agent's proposed skill is not answered with
+   ;; a sentence: it is approved, rejected or edited, on its own page.
+   ;; Which ids those are is libclawt's to say.
+   ((cmacs-clawtilla-ask "skill-proposal-p"
+                         :id (cmacs-clawtilla-section--row-id))
+    (message "clawtilla: that is a proposed skill; approve, reject or edit it here")
+    (cmacs-clawtilla-skill-proposals (cmacs-clawtilla-current)))
+   (t
     ;; The daemon reads the decision from `decision', not `id'
     ;; (daemon-misc.c); sending `id' was refused as "decision is
     ;; required" and no answer ever reached an agent from here.
     (cmacs-clawtilla-section--send
      "decision.answer" (list (cons 'decision (cmacs-clawtilla-section--row-id))
-                             (cons 'answer answer)))))
+                             (cons 'answer answer))))))
 
 (defun cmacs-clawtilla-section-dismiss ()
   "Dismiss the decision at point."
@@ -432,21 +462,62 @@ once -- decisions are fleet-wide and memory is somebody's own."
    (list (cons 'decision (cmacs-clawtilla-section--row-id)))))
 
 (defun cmacs-clawtilla-section-show ()
-  "Show the row at point in full."
+  "Show the row at point in full.
+
+A task opens its own page, with everything that can be done to it; any
+other row is shown field by field."
   (interactive)
-  (let* ((row (cmacs-clawtilla-value-at-point))
-         (buffer (get-buffer-create "*clawtilla detail*")))
+  (let ((row (cmacs-clawtilla-value-at-point)))
     (unless row (user-error "Nothing at point"))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (dolist (pair row)
-          (insert (propertize (format "%-18s " (car pair))
-                              'face 'cmacs-clawtilla-heading)
-                  (format "%s" (cdr pair)) "\n"))
-        (goto-char (point-min))
-        (special-mode)))
-    (cmacs-clawtilla-display buffer)))
+    (if (cmacs-clawtilla-value-at-point 'task)
+        (cmacs-clawtilla-task (alist-get 'id row) (cmacs-clawtilla-current))
+      (let ((buffer (get-buffer-create "*clawtilla detail*")))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (dolist (pair row)
+              (insert (propertize (format "%-18s " (car pair))
+                                  'face 'cmacs-clawtilla-heading)
+                      (format "%s" (cdr pair)) "\n"))
+            (goto-char (point-min))
+            (special-mode)))
+        (cmacs-clawtilla-display buffer)))))
+
+(defun cmacs-clawtilla-section-new ()
+  "Start the new thing this page is a list of.
+
+A task on Tasks, work for a bot on Grok, a routine, a trigger, a skill:
+one key for \"add one\" wherever there is a one to add."
+  (interactive)
+  (call-interactively
+   (pcase cmacs-clawtilla-section--page
+     ("tasks" #'cmacs-clawtilla-tasks-create)
+     ("grok" #'cmacs-clawtilla-grok-send)
+     ("routines" #'cmacs-clawtilla-section-routine-add)
+     ("triggers" #'cmacs-clawtilla-section-trigger-add)
+     ("skills" #'cmacs-clawtilla-section-skill-create)
+     (_ (user-error "Nothing to add on this page")))))
+
+(defun cmacs-clawtilla-section-open ()
+  "Open what the row at point leads to, or widen the page.
+
+On Tasks, the conversation the task is being worked in; on Decisions,
+the settled ones as well as the open."
+  (interactive)
+  (pcase cmacs-clawtilla-section--page
+    ("tasks" (cmacs-clawtilla-tasks-open-thread))
+    ("decisions" (cmacs-clawtilla-section-toggle-settled))
+    (_ (user-error "Nothing to open on this page"))))
+
+(defun cmacs-clawtilla-section-configure ()
+  "Steer the turn at point, or change how this page's subject is handled.
+
+On Activity this sends a message into the running turn; on Tasks it
+changes whether broken runs are reported and to whom."
+  (interactive)
+  (pcase cmacs-clawtilla-section--page
+    ("tasks" (cmacs-clawtilla-tasks-configure-incidents))
+    (_ (call-interactively #'cmacs-clawtilla-section-steer))))
 
 
 ;;;; Decisions.
@@ -519,13 +590,8 @@ withdrawn on the way out exactly as a dismissal would be."
 (defun cmacs-clawtilla-section--payload-text (json)
   "Return the payload of the reply text JSON, itself as JSON text.
 
-A reply may arrive as the whole envelope or as its bare payload; either
-way what comes back is the payload, re-encoded faithfully (see
-`cmacs-clawtilla-member-json') so it can go back to C."
-  (let ((parsed (and (stringp json) (cmacs-clawtilla--parse json))))
-    (if (and (assq 'ok parsed) (assq 'payload parsed))
-        (cmacs-clawtilla-member-json json 'payload)
-      json)))
+`cmacs-clawtilla-payload-text', kept under this name for its callers."
+  (cmacs-clawtilla-payload-text json))
 
 (defun cmacs-clawtilla-section--activity-turns (json)
   "Return the turns in the activity.list reply text JSON, ready to draw.
@@ -972,6 +1038,10 @@ per event would be a request per step per open page."
                '("activity" "fleet") '("activity")))
           ((string-match-p (rx bos (or "agent." "spending.")) kind) '("fleet"))
           ((string-match-p (rx bos "decision.") kind) '("decisions"))
+          ((string-match-p (rx bos (or "task." "incident.")) kind) '("tasks"))
+          ((string-match-p (rx bos "skill.") kind) '("skills"))
+          ((string-match-p (rx bos "trigger.") kind) '("triggers"))
+          ((string-match-p (rx bos "memory.") kind) '("memory"))
           ((string-match-p (rx bos "routine.") kind) '("routines")))))
     (when pages
       (dolist (buffer (buffer-list))
@@ -986,32 +1056,36 @@ per event would be a request per step per open page."
 
 ;;;; Routines.
 
-(defun cmacs-clawtilla-section--presets ()
-  "Return the schedule presets, with cron behind Custom.
-
-Most standing work is one of five shapes, and nobody should have to
-write `0 9 * * 1-5' to get weekday mornings.  Cron is still there for
-the sixth."
-  '("manual" "hourly" "daily" "weekdays" "weekly" "custom"))
-
 (defconst cmacs-clawtilla-section-routine-text-fields
-  '("schedule" "prompt" "agent" "model")
+  '("schedule" "at" "weekday" "cron" "instructions" "description"
+    "agent" "model" "directory")
   "The routine fields `routine.update' takes as text.
 
-`model' (since clawtilla 0.7.7) runs the routine on a model other than
-the agent's own -- a cheaper one for a check that compares a number.
-Empty is the agent's own.")
+The daemon's own keys (its `routines.*' schema): what a routine does is
+`instructions', and its timing is a `schedule' preset with `at' and
+`weekday' beside it, or `cron' for the one case a preset does not
+cover.  `model' runs the routine on a model other than the agent's own
+-- a cheaper one for a check that compares a number.  Empty is the
+agent's own.")
+
+(defconst cmacs-clawtilla-section-routine-int-fields
+  '("max_start_failures" "jitter_seconds")
+  "The routine fields `routine.update' takes as integers.
+
+`max_start_failures' is how many failed starts turn the routine off:
+the daemon then stops trying, says so, and waits for somebody to turn
+it back on.")
 
 (defconst cmacs-clawtilla-section-routine-flags
-  '("enabled" "read_only" "proactive" "locked")
+  '("enabled" "read_only" "proactive" "locked" "catch_up")
   "The routine fields `routine.update' takes as booleans.
 
 `read_only' runs it unable to change anything, `proactive' lets it
-start work rather than only report, and `locked' keeps the agent
-itself from editing or removing it.  Sent as JSON true and false:
-a string that is not a boolean is read as the default, which is the
-worst failure a flag can have -- the request succeeds and does the
-other thing.")
+start work rather than only report, `locked' keeps the agent itself
+from editing or removing it, and `catch_up' runs a firing the machine
+slept through.  Sent as JSON true and false: a string that is not a
+boolean is read as the default, which is the worst failure a flag can
+have -- the request succeeds and does the other thing.")
 
 (defun cmacs-clawtilla-section--flag (value)
   "Return VALUE as a JSON boolean for a payload: t or :false.
@@ -1022,8 +1096,9 @@ nil would serialize as an empty object, not as false."
 (defun cmacs-clawtilla-section--routine-payload (id fields)
   "Return the routine payload for ID with FIELDS, an alist of name to value.
 
-Text fields pass as they are; flags become JSON booleans.  The pure half
-of `cmacs-clawtilla-section-routine-add' and `-update', so the encoding
+Text fields pass as they are; flags become JSON booleans and the
+integer fields integers.  The pure half of
+`cmacs-clawtilla-section-routine-add' and `-update', so the encoding
 can be tested without a daemon."
   (cons (cons 'id id)
         (mapcar (lambda (pair)
@@ -1031,44 +1106,86 @@ can be tested without a daemon."
                                   (symbol-name (car pair))
                                 (car pair))))
                     (cons (intern name)
-                          (if (member name cmacs-clawtilla-section-routine-flags)
-                              (cmacs-clawtilla-section--flag
-                               (and (cdr pair) (not (eq (cdr pair) :false))))
-                            (cdr pair)))))
+                          (cond
+                           ((member name cmacs-clawtilla-section-routine-flags)
+                            (cmacs-clawtilla-section--flag
+                             (and (cdr pair) (not (eq (cdr pair) :false)))))
+                           ((member name
+                                    cmacs-clawtilla-section-routine-int-fields)
+                            (if (stringp (cdr pair))
+                                (string-to-number (cdr pair))
+                              (cdr pair)))
+                           (t (cdr pair))))))
                 fields)))
 
 (defun cmacs-clawtilla-section--read-schedule ()
-  "Read a schedule: a preset, or cron behind Custom."
-  (let ((preset (completing-read "When: "
-                                 (cmacs-clawtilla-section--presets) nil t)))
-    (if (equal preset "custom")
-        (read-string "Cron: ")
-      preset)))
+  "Read when a routine runs, and return the fields that say so.
 
-(defun cmacs-clawtilla-section-routine-add (id schedule prompt &optional extra)
-  "Add a routine ID running PROMPT on SCHEDULE.
+An alist of `schedule' and whichever of `at', `weekday' and `cron' that
+schedule uses.  The schedules and the weekdays are libclawt's (the
+\"schedule\" and \"weekday\" families), so one added there is offered
+here; most standing work is one of a handful of shapes, and nobody
+should have to write `0 9 * * 1-5' to get weekday mornings."
+  (let* ((choose (lambda (prompt family)
+                   (let* ((choices (mapcar (lambda (entry)
+                                             (cons (alist-get 'label entry)
+                                                   (alist-get 'nick entry)))
+                                           (cmacs-clawtilla-enum family)))
+                          (pick (completing-read prompt choices nil t)))
+                     (cdr (assoc pick choices)))))
+         (preset (funcall choose "When: " "schedule")))
+    (append
+     (list (cons "schedule" preset))
+     ;; Which fields a schedule uses, as the GTK dialog shows them: a
+     ;; time for the ones that run at one, a day for the weekly one, an
+     ;; expression for the one that is nothing else.
+     (and (member preset '("hourly" "daily" "weekdays" "weekly"))
+          (list (cons "at" (read-string
+                            (if (equal preset "hourly")
+                                "At minute (MM): " "At (HH:MM): ")))))
+     (and (equal preset "weekly")
+          (list (cons "weekday" (funcall choose "On: " "weekday"))))
+     (and (equal preset "custom")
+          (list (cons "cron" (read-string "Cron: ")))))))
 
-EXTRA is an alist of further fields.  With a prefix argument the model
-and the three flags (read-only, proactive, locked) are asked for too."
+(defun cmacs-clawtilla-section-routine-add (id schedule instructions
+                                               &optional extra)
+  "Add a routine ID that does INSTRUCTIONS on SCHEDULE.
+
+SCHEDULE is the alist `cmacs-clawtilla-section--read-schedule' returns,
+or a bare preset name.  EXTRA is an alist of further fields.  With a
+prefix argument the model, the flags (read-only, proactive, locked) and
+how many failed starts turn it off are asked for too."
   (interactive
    (let* ((id (read-string "Routine id: "))
           (schedule (cmacs-clawtilla-section--read-schedule))
-          (prompt (read-string "Do what: "))
+          (instructions (read-string "Do what: "))
           (extra (when current-prefix-arg
                    (list (cons "model"
                                (read-string "Model (empty: the agent's own): "))
                          (cons "read_only" (y-or-n-p "Read-only? "))
                          (cons "proactive" (y-or-n-p "Proactive? "))
                          (cons "locked"
-                               (y-or-n-p "Locked against the agent? "))))))
-     (list id schedule prompt extra)))
+                               (y-or-n-p "Locked against the agent? "))
+                         (cons "max_start_failures"
+                               ;; What the number means, in the library's
+                               ;; words rather than a guess at them.
+                               (read-string
+                                (format "Turn off after failed starts (%s): "
+                                        (or (cmacs-clawtilla-label
+                                             'routine_failures_hint)
+                                            ""))
+                                "3"))))))
+     (list id schedule instructions extra)))
   (cmacs-clawtilla-section--send
    "routine.add"
    (append (cmacs-clawtilla-section--routine-payload
-            id (append (list (cons "schedule" schedule)
-                             (cons "prompt" prompt))
+            id (append (if (stringp schedule)
+                           (list (cons "schedule" schedule))
+                         schedule)
+                       (list (cons "instructions" instructions))
                        (seq-remove (lambda (pair)
-                                     (and (equal (car pair) "model")
+                                     (and (stringp (cdr pair))
                                           (string-empty-p (cdr pair))))
                                    extra)))
            (cmacs-clawtilla-section--scope))))
@@ -1081,21 +1198,41 @@ and the three flags (read-only, proactive, locked) are asked for too."
          (field (completing-read
                  "Change: "
                  (append cmacs-clawtilla-section-routine-text-fields
+                         cmacs-clawtilla-section-routine-int-fields
                          cmacs-clawtilla-section-routine-flags)
                  nil t))
-         (value (cond
-                 ((equal field "schedule")
-                  (cmacs-clawtilla-section--read-schedule))
-                 ((member field cmacs-clawtilla-section-routine-flags)
-                  (y-or-n-p (format "%s (now %s)? " field
-                                    (if (eq t (alist-get (intern field) row))
-                                        "on" "off"))))
-                 (t (read-string (format "%s: " field)
-                                 (let ((now (alist-get (intern field) row)))
-                                   (and (stringp now) now)))))))
+         (fields (cond
+                  ;; A schedule is several fields that only make sense
+                  ;; together, so they are read and sent together.
+                  ((member field '("schedule" "at" "weekday" "cron"))
+                   (cmacs-clawtilla-section--read-schedule))
+                  ((member field cmacs-clawtilla-section-routine-flags)
+                   (list (cons field
+                               (y-or-n-p
+                                (format "%s (now %s)? " field
+                                        (if (eq t (alist-get (intern field) row))
+                                            "on" "off"))))))
+                  (t (list (cons field
+                                 (read-string
+                                  (format "%s: " field)
+                                  (let ((now (alist-get (intern field) row)))
+                                    (cond ((stringp now) now)
+                                          ((numberp now)
+                                           (number-to-string now)))))))))))
     (cmacs-clawtilla-section--send
      "routine.update"
-     (cmacs-clawtilla-section--routine-payload id (list (cons field value))))))
+     (cmacs-clawtilla-section--routine-payload id fields))))
+
+(defun cmacs-clawtilla-section-routine-turn-on ()
+  "Turn the routine at point back on.
+
+For one the daemon switched off after too many failed starts: it stops
+trying by itself, and waits for somebody to say the cause is fixed."
+  (interactive)
+  (cmacs-clawtilla-section--send
+   "routine.update"
+   (cmacs-clawtilla-section--routine-payload
+    (cmacs-clawtilla-section--row-id) (list (cons "enabled" t)))))
 
 
 ;;;; Triggers.
@@ -1288,6 +1425,45 @@ command whose name comes from a skill exists in no client's source."
    "skill.unassign" (list (cons 'id (cmacs-clawtilla-section--row-id))
                           (cons 'agent agent))))
 
+;;;; Pages reached from a row.
+
+(declare-function cmacs-clawtilla-skill-tests "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-skill-proposals "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-trigger-match-test "cmacs-clawtilla-pages")
+(declare-function cmacs-clawtilla-memory-review "cmacs-clawtilla-pages")
+
+(defun cmacs-clawtilla-section-skill-tests ()
+  "Show the tests of the skill at point and how each last went."
+  (interactive)
+  (let ((row (cmacs-clawtilla-value-at-point 'skill)))
+    (unless row (user-error "No skill at point"))
+    (cmacs-clawtilla-skill-tests (or (alist-get 'name row) (alist-get 'id row))
+                                 (cmacs-clawtilla-current))))
+
+(defun cmacs-clawtilla-section-trigger-match-test ()
+  "Ask whether the last event the trigger at point captured would have matched.
+
+Reads the conditions to test; nothing is delivered."
+  (interactive)
+  (let ((id (cmacs-clawtilla-section--row-id))
+        (conditions nil)
+        (line nil))
+    (while (progn
+             (setq line (read-string
+                         "Condition as path=value (empty to finish): "))
+             (not (string-empty-p line)))
+      (when (string-match "\\`\\([^=]*\\)=\\(.*\\)\\'" line)
+        (push (cons (match-string 1 line) (match-string 2 line)) conditions)))
+    (cmacs-clawtilla-trigger-match-test id (nreverse conditions)
+                                        (cmacs-clawtilla-current))))
+
+(defun cmacs-clawtilla-section-memory-review ()
+  "Open the memory review of the agent this section is scoped to."
+  (interactive)
+  (cmacs-clawtilla-memory-review (cmacs-clawtilla-section--need-agent)
+                                 (cmacs-clawtilla-current)))
+
+
 ;;;; The mode.
 
 (transient-define-prefix cmacs-clawtilla-section-menu ()
@@ -1303,26 +1479,39 @@ command whose name comes from a skill exists in no client's source."
     ("d" "dismiss" cmacs-clawtilla-section-dismiss)
     ("D" "remove" cmacs-clawtilla-section-remove)]]
   ["Activity"
-   [("c" "steer the turn" cmacs-clawtilla-section-steer)]]
+   [("c" "steer the turn" cmacs-clawtilla-section-configure)]]
+  ["Tasks"
+   ;; The same keys as the rows above and the same commands: each one
+   ;; does the Tasks thing on the Tasks page.  Listed again so the menu
+   ;; says what that thing is.
+   [("i" "new task" cmacs-clawtilla-section-new)
+    ("a" "assign" cmacs-clawtilla-section-answer)
+    ("o" "open its conversation" cmacs-clawtilla-section-open)]
+   [("r" "retry the task or broken run" cmacs-clawtilla-section-run)
+    ("c" "how broken runs are reported" cmacs-clawtilla-section-configure)
+    ("J" "projects" cmacs-clawtilla-projects)]]
   ["Fleet"
    [("p" "period" cmacs-clawtilla-section-fleet-period)
     ("X" "stop the idle ones" cmacs-clawtilla-section-fleet-stop-idle)]]
   ["Grok"
-   [("i" "hand a bot some work" cmacs-clawtilla-grok-send)
+   [("i" "hand a bot some work" cmacs-clawtilla-section-new)
     ("R" "routine prompt" cmacs-clawtilla-grok-routine-prompt)
-    ("Y" "mint MCP key" cmacs-clawtilla-grok-mint-key)]]
+    ("Y" "mint MCP key" cmacs-clawtilla-grok-mint-key)
+    ("D" "cancel or remove the job" cmacs-clawtilla-section-remove)]]
   ["Decisions"
-   [("o" "show settled too" cmacs-clawtilla-section-toggle-settled)
+   [("o" "show settled too" cmacs-clawtilla-section-open)
     ("x" "delete for good" cmacs-clawtilla-section-delete-decision)]]
   ["Routines"
    [("A" "add a routine (C-u: model, flags)"
      cmacs-clawtilla-section-routine-add)
-    ("U" "change it" cmacs-clawtilla-section-routine-update)]]
+    ("U" "change it" cmacs-clawtilla-section-routine-update)
+    ("W" "turn it back on" cmacs-clawtilla-section-routine-turn-on)]]
   ["Triggers"
    [("T" "add a trigger" cmacs-clawtilla-section-trigger-add)
     ("E" "change it" cmacs-clawtilla-section-trigger-update)
     ("C" "capture the next" cmacs-clawtilla-section-trigger-capture)]
-   [("V" "deliveries" cmacs-clawtilla-section-trigger-deliveries)
+   [("m" "would it have matched?" cmacs-clawtilla-section-trigger-match-test)
+    ("V" "deliveries" cmacs-clawtilla-section-trigger-deliveries)
     ("P" "replay one" cmacs-clawtilla-section-trigger-replay)
     ("O" "rotate the secret" cmacs-clawtilla-section-trigger-rotate)]]
   ["Skills"
@@ -1332,7 +1521,12 @@ command whose name comes from a skill exists in no client's source."
    [("M" "its commands" cmacs-clawtilla-section-skill-commands)
     ("L" "reload from disk" cmacs-clawtilla-section-skill-reload)]
    [("G" "give to an agent" cmacs-clawtilla-section-skill-assign)
-    ("K" "take it away" cmacs-clawtilla-section-skill-unassign)]])
+    ("K" "take it away" cmacs-clawtilla-section-skill-unassign)]
+   [("t" "its tests" cmacs-clawtilla-section-skill-tests)
+    ("u" "proposed by agents" cmacs-clawtilla-skill-proposals)]]
+  ["Memory"
+   [("y" "review: journal, undo, suggestions"
+     cmacs-clawtilla-section-memory-review)]])
 
 (defvar cmacs-clawtilla-section-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1344,12 +1538,13 @@ command whose name comes from a skill exists in no client's source."
     (define-key map (kbd "d") #'cmacs-clawtilla-section-dismiss)
     (define-key map (kbd "D") #'cmacs-clawtilla-section-remove)
     (define-key map (kbd "s") #'cmacs-clawtilla-section-stop)
-    (define-key map (kbd "c") #'cmacs-clawtilla-section-steer)
+    (define-key map (kbd "c") #'cmacs-clawtilla-section-configure)
+    (define-key map (kbd "J") #'cmacs-clawtilla-projects)
     (define-key map (kbd "p") #'cmacs-clawtilla-section-fleet-period)
     (define-key map (kbd "X") #'cmacs-clawtilla-section-fleet-stop-idle)
-    (define-key map (kbd "o") #'cmacs-clawtilla-section-toggle-settled)
+    (define-key map (kbd "o") #'cmacs-clawtilla-section-open)
     (define-key map (kbd "x") #'cmacs-clawtilla-section-delete-decision)
-    (define-key map (kbd "i") #'cmacs-clawtilla-grok-send)
+    (define-key map (kbd "i") #'cmacs-clawtilla-section-new)
     (define-key map (kbd "R") #'cmacs-clawtilla-grok-routine-prompt)
     (define-key map (kbd "Y") #'cmacs-clawtilla-grok-mint-key)
     (define-key map (kbd "?") #'cmacs-clawtilla-section-menu)

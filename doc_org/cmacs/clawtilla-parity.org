@@ -1,0 +1,266 @@
+#+title: clawtilla 0.52 in cmacs
+#+description: What the client gained when clawtilla went from 0.11 to 0.52, and how to reach it
+#+authors: Zach Podbielniak
+#+categories: cmacs
+#+created: 2026-11-20T12:00:00-05:00
+#+updated: 2026-11-20T12:00:00-05:00
+#+version: 1
+#+options: toc:2
+
+* clawtilla 0.52 in cmacs
+
+Between clawtilla 0.11 and 0.52 the daemon grew seventy-four frame kinds the GTK client sends and this client did not, and eighteen pushed events it handles that this one never named.  This chapter is what was built to close that: where each thing is, what it asks the daemon, and what it asks libclawt rather than deciding for itself.  [[file:clawtilla.org][clawtilla in cmacs]] is the chapter for everything that was already there.
+
+=bash admin/cmacs-clawtilla-parity.sh= is the check.  It needs no build, and at the time of writing it says every kind the GTK client sends is reachable here.
+
+** The short version
+
+| You want | Do |
+|----------+----|
+| what needs you | =M-x cmacs-clawtilla-alerts= (=!= in the menu) |
+| to mark a conversation read | =m= on its row in the fleet buffer; =A= for everything |
+| to mute an agent | =z= on its row, in its conversation, or on its page |
+| tasks and broken runs | Work section, Tasks page |
+| one task, with everything that can be done to it | =RET= on it, or =M-x cmacs-clawtilla-task= |
+| projects and budgets | =M-x cmacs-clawtilla-projects= (=J= on the Tasks page) |
+| the files sent in a conversation | =P= in the conversation |
+| to send files with a message | =a= in the conversation |
+| to pair a phone or laptop | =M-x cmacs-clawtilla-devices=, then =i= |
+| to pair *this* machine with a daemon | =M-x cmacs-clawtilla-pair= |
+| the daemon you were last on | =M-x cmacs-clawtilla-resume= (what =M-x cmacs-clawtilla= does) |
+| the fleet-wide pages | =M-x cmacs-clawtilla-more-menu= (=m= in the menu, =P= in Settings) |
+
+** Notifications, mutes and read marks
+
+The notification list is the daemon's.  =notice.list= answers four groups --- conversations with something unread, decisions waiting, Grok jobs that need somebody, and alerts --- already less the agents you have muted, and every client draws the same list.  =cmacs-clawtilla-alerts= is that list.
+
+| Key | On a row |
+|-----+----------|
+| =RET= | go where it leads: the conversation, the Decisions page, the Grok page |
+| =r= | mark read: one alert (=notice.read=), or the whole conversation (=room.read=) |
+| =d= | dismiss an alert (=notice.dismiss=); on a Grok job, remove it after asking (=grok.remove=) |
+| =z= | mute the row's agent, or unmute it (=notice.mute= / =notice.unmute=) |
+| =U= | unmute an agent, chosen from those muted |
+| =a= | narrow the buffer to the row's agent, or widen it again |
+| =m= | mark everything read: every alert and every conversation |
+| =x= | clear the alerts (=notice.clear=), or only the narrowed agent's |
+| =o= | load fifty lines of the daemon's event log |
+
+Opening the buffer reads the alerts, as the GTK panel does on opening.  An alert that arrives while the buffer is on screen is read at once --- libclawt's =clawt_alert_arrives_read= --- because otherwise the bell counts a row you watched appear.
+
+*** The bell
+
+The number is =clawt_notice_list_badge=, computed by the library from the daemon's reply, so every client shows the same one.  It is in the mode line of every clawtilla buffer (~cmacs-clawtilla-mode-line-bell~) and in the fleet buffer's first line.
+
+*** Unread counts
+
+The daemon holds the read marks.  A count is therefore the daemon's number, taken in by =clawt_unread_seed= whenever the rooms are listed --- which is why a client that has just connected shows what everybody else does.  Between listings a message raises a count by =clawt_unread_should_count=, and a =room.read= event --- from this client, another one, or the CLI --- sets it to the daemon's number again.
+
+Opening a conversation marks it read *up to the last message drawn*, after the history has been drawn and never before: the history's =read_upto= is what places the "New messages" rule (=clawt_unread_rule_index=), above the first message somebody else sent after the mark.  A transcript reloading in a buried buffer marks nothing read.
+
+*** Mutes
+
+A mute is the daemon's too, and holds for every client.  A muted agent's row keeps its count, dimmed: what a mute takes away is the interruption, so the conversation leaves every total (=clawt_unread_total=) and stays out of the bell.
+
+*** A bug this fixed
+
+The fleet buffer set ~cmacs-clawtilla-known-rooms-function~ to a function that called ~cmacs-clawtilla-known-rooms~, which calls whatever that variable holds.  The recursion was unbounded and happened inside the event dispatch, where errors are swallowed by design --- so with a fleet buffer open no unread count ever rose, and nothing said why.
+
+** Tasks, broken runs and projects
+
+*** The Tasks page
+
+Broken runs first, then every task.
+
+A broken run is an *incident*: a run that failed, stalled or could not start, or a routine that did not run.  The daemon reports it to somebody; =c= changes whether it does and to whom (=incident.configure=, the recipients being libclawt's "incident-recipient" family).  =r= on an incident that can be retried retries it.
+
+Each task shows its state as a badge in the tone libclawt gives that state, who asked for it and who has it, its project, and --- in the library's words --- what it is waiting on.
+
+| Key | Does |
+|-----+------|
+| =i= | new task (=task.create=): what, an optional title, who, what it waits for, a repository for a checkout of its own |
+| =RET= | the task's own page |
+| =a= | assign it (=task.assign=) |
+| =r= | retry the task, or the broken run, at point (=task.retry=) |
+| =D= | cancel it (=task.cancel=) |
+| =o= | open the conversation it is being worked in |
+| =c= | how broken runs are reported |
+| =J= | projects |
+
+Every task frame names its task as =task=.  An earlier version of this client sent =id= to =task.cancel=, which the daemon does not read.
+
+*** One task
+
+=M-x cmacs-clawtilla-task= (=task.show=, with its journal).  What was asked; the result; the thread of notes; what it waits for; its checkout; its VENTURE ticket; its review; its history.
+
+| Key | Does |
+|-----+------|
+| =c= | comment (=task.comment=); the assignee hears it while the task is with them |
+| =a= | assign |
+| =u= / =U= | make it wait for another task, or stop (=task.link= / =task.unlink=) |
+| =d= | show what its checkout changed (=task.diff=), in ~diff-mode~ |
+| =X= | remove the checkout; the branch is kept (=task.checkout_remove=) |
+| =v= | your verdict on a result in review: accept, or ask for changes (=task.review=) |
+| =o= | open its ticket, else its conversation |
+| =V= | send it to VENTURE again (=task.venture_retry=) |
+| =r= / =D= | retry, cancel |
+
+*** Projects
+
+=M-x cmacs-clawtilla-projects=.  A project says what work is for and keeps a monthly budget on it.  =i= makes one (=project.create=; the id cannot be changed afterwards), =RET= changes a field (=project.set= --- name, goal, directory, who reviews, which agents, the budget, the warning percent, and whether work is refused once the budget is spent), =D= removes it (=project.remove=).  Who reviews is libclawt's "review-by" family, worded for a project, or any agent by id.
+
+** Files sent in a conversation
+
+=P= in a conversation (=attachment.list=): every file sent in it, by you or the agent, with a preview --- the picture itself for an image, the first page for a PDF and the first lines for a text file, the last two being the daemon's work (=attachment.thumbnail=).  =RET= opens a file, =s= saves a copy, =y= copies a local path.
+
+Fetched bytes are cached under =$XDG_CACHE_HOME/clawtilla/attachments= by id --- the GTK client's own cache, so a file one client fetched is there for the other.  An id is reduced to a file name first, so one with a slash in it cannot name a file outside the cache.  Only the first ~cmacs-clawtilla-files-previews~ files get a preview, each a request.
+
+=a= in a conversation sends files *with* a message.  Each goes to the daemon first (=attachment.put=) and the message names them in libclawt's attachment block (=clawt_attachment_block_new=) --- the one spelling every client previews from and =attachment.list= finds.  A file the daemon refused is listed as not saved rather than dropped.
+
+** Devices and pairing
+
+*** From the daemon's side
+
+=M-x cmacs-clawtilla-devices= (=device.list=): who is paired, when each was last seen, and =D= to revoke one or sign this one out (=device.revoke=).  Whether a row offers that at all is libclawt's rule: only the owner revokes somebody else.
+
+=i= asks the daemon for a six-digit code (=device.pair=) and shows it, grouped for reading by the library, with a countdown and a QR code of the pairing link.  The QR code is an SVG where this Emacs draws images, libclawt's half-block rendering where it does not, and the link itself when libclawt was built without a QR encoder.  Closing the buffer before the code is used cancels it (=device.pair_cancel=); the daemon's =device.paired= event ends the countdown.
+
+*** From this machine's side
+
+=M-x cmacs-clawtilla-pair= takes a daemon's address and the code somebody read off the other screen, trades it for a token of this machine's own, saves that as a profile in clawtilla's connections file, and connects.  The code's shape is checked by the library before anything is dialled, so a typo costs nothing against the daemon's guess limit.
+
+The exchange blocks, so it does not run on Emacs's thread --- which under =--gowl= is the compositor's.  It runs on a GLib worker and its outcome is delivered on the cmacs GLib context like any other reply.
+
+*** The daemon you were last on
+
+=M-x cmacs-clawtilla-resume=, which is also what =M-x cmacs-clawtilla= does with nothing connected.  Which daemon that is comes from =clawt_connection_choose=: the saved profile this client was last switched to, then the local daemon.  The record is a name in a file every clawtilla client shares, never an address or a token.  Connecting to a saved profile writes it; connecting to the local daemon removes it.
+
+A remembered daemon that never answers is described as the one you were last on --- =clawt_connection_notice_text= now receives the real "remembered" flag --- and =M-x cmacs-clawtilla-use-local= is the way out, offered when =clawt_connection_offer_local= says so.
+
+** A conversation
+
+- *Marks.*  A message folded into a running turn, cut short, acknowledged without waking anybody, a consultation, a cross-talk summary: each is marked on the message's heading in libclawt's words.
+- *Folding.*  Another agent's long message to the agent whose conversation this is folds to one line (=clawt_chat_should_fold=); =TAB= opens it.
+- *Rounds.*  In a group room a new round is labelled where it starts, and somebody named who had already answered is noted as not delivered, with the reason.
+- *Decisions.*  A decision asked in the conversation is drawn at its live edge with its options; =y= answers it (=decision.answer=, recorded as answered from the chat).
+- *Rescue.*  A turn that has said nothing for a while is offered (=turn.rescue=): =u= stops it, or sends the same message again on another model for this turn only.
+- *Apps.*  A tool call that came with an MCP app carries a link; =o= on its line opens it (=connector.app_get=).
+- *Links.*  =M-x cmacs-clawtilla-open= follows a =clawtilla://= link, or a bare agent or room name, to the conversation it names (=clawt_open_target_resolve=).
+
+** The fleet-wide pages
+
+=M-x cmacs-clawtilla-more-menu=.
+
+| Page | Command | Frames |
+|------+---------+--------|
+| Projects | ~cmacs-clawtilla-projects~ | =project.list= =.create= =.set= =.remove= |
+| Spending | ~cmacs-clawtilla-spending~ | =usage.ledger= |
+| Issues | ~cmacs-clawtilla-issues~ | =sentinel.report= =sentinel.scan= |
+| Version history | ~cmacs-clawtilla-history~ | =revision.list= =.diff= =.restore= |
+| Export & import | ~cmacs-clawtilla-pack~ | =fleet.export= =fleet.import_preview= =fleet.import= |
+| Paired devices | ~cmacs-clawtilla-devices~ | =device.list= =.pair= =.pair_cancel= =.revoke= |
+| Orchestration | ~cmacs-clawtilla-orchestration~ | =orchestration.get= =.set=, =room.set= |
+| Integration broker | ~cmacs-clawtilla-broker~ | =broker.status= =.start= =.stop= =.restart=, =connector.settings= =connector.discover= |
+| Egress allowlist | ~cmacs-clawtilla-egress~ | =egress.allow.list= =.add= =.remove= |
+| Skills agents proposed | ~cmacs-clawtilla-skill-proposals~ | =skill.proposals= =skill.proposal_resolve= |
+
+Spending is the ledger: a period and a grouping (both libclawt's lists), each row's subtitle and cost in the library's words, the line about turns no price was known for, and =x= to export exactly the CSV the GTK client's Export writes.
+
+** The per-agent pages
+
+From an agent's page:
+
+| Key | Page | Frames |
+|-----+------+--------|
+| =y= | Memory review | =memory.journal= =memory.undo= =memory.proposals= =memory.proposal_accept= =memory.proposal_reject= =memory.review= =memory.review_set= |
+| =s= | Saved steps | =steps.last= =steps.list= =steps.save= =steps.replay= =steps.set_check= =steps.delete= |
+| =i= | What it is waiting for | =wait.list= =wait.cancel= |
+| =O= | Browser vault | =vault.list= (grants change =browser.secrets= through =agent.set=) |
+| =x= | Files sent in its conversation | =attachment.list= |
+| =z= | mute or unmute it | =notice.mute= =notice.unmute= |
+
+And from a row elsewhere: a skill's tests (=t= in the Library menu; =skill.tests=, =skill.test_run=), and whether a trigger's last captured event would have matched some conditions (=m= in the Automation menu; =trigger.match_test=).
+
+** Pushed events
+
+The daemon pushes; nothing here polls.  ~cmacs-clawtilla-events-table~ lists every pushed event that no buffer is named after, with what it moves:
+
+| Event | Moves |
+|-------+-------|
+| =agent.changed= | the agent's page |
+| =agent.state= | Fleet and Activity pages, the agent's page |
+| =agent.idle_stopped= | Fleet page, the agent's page; said once |
+| =agent.failover= | Fleet page, the agent's page; said once |
+| =broker.changed= | the broker page, Settings' Connectors panel |
+| =decision.asked=, =decision.deleted= | Decisions, the proposals page, the conversation it was asked in |
+| =device.paired= | the Devices page, the pairing buffer |
+| =image.progress=, =image.finished= | Settings' Cloud images, with how far a download has got |
+| =memory.changed= | the Memory page and the memory review |
+| =notice.changed= | the bell and the notifications buffer |
+| =routine.turned_off= | Routines; said once, in the library's words |
+| =sentinel.finished= | Issues |
+| =steps.replayed= | Saved steps; says how the replay ended |
+| =task.tree_budget= | Tasks; said once, in the library's words |
+| =turn.no_reply= | the conversation's rescue offer |
+| =turn.steered= | the conversation, Activity |
+
+Nothing is patched from an event.  An event says what changed, not what everything now is, so each of these asks again, coalesced so that a burst is one request.
+
+** One buffer kind for a list and its verbs
+
+Most of the above is the same thing many times: ask the daemon for a list, draw a row per entry with a line of detail under it, offer three or four verbs.  =lisp/cmacs/cmacs-clawtilla-page.el= is that, once.
+
+#+begin_src elisp
+(cmacs-clawtilla-define-page "waits"
+  :title "Waiting for"
+  :needs-agent t
+  :fetch '((waits "wait.list"))
+  :draw #'cmacs-clawtilla-waits--draw
+  :events "\\`wait\\."
+  :verbs '(("D" "cancel this wait" cmacs-clawtilla-waits-cancel)))
+#+end_src
+
+The framework fetches every frame of a page at once and keeps each answer twice --- parsed, for drawing, and as the text the daemon sent, for libclawt --- redraws keeping point on its row, reloads (coalesced) on the events the page names, and builds the page's transient from its verbs.  A frame that failed is said on the page.
+
+The keys are the part that is not obvious.  A clawtilla buffer is an Evil intercept map, promoted per major mode, so a keymap per page would be a mode per page.  Instead the one mode map binds every letter that is safe to take in a read-only buffer to a dispatcher that runs whichever verb the current page gave that key.  A page therefore cannot bind a motion key even by mistake.
+
+** Asking the library
+
+Nearly every sentence above is libclawt's.  0.52 words a great deal more than 0.11 did, and each helper needs the same thing from this side --- some values in, a string out --- so there is one primitive rather than fifty:
+
+#+begin_src elisp
+(cmacs-clawtilla-ask "device-seen" :last_seen 1763650000 :connected :false)
+;; => "seen 1 hour ago"
+(cmacs-clawtilla-ask-parsed "task-state" :state "running")
+;; => ((tone . "info") (retryable) (cancellable . t))
+#+end_src
+
+~cmacs-clawtilla--ask~ takes the name of a question and its arguments as a JSON object; the table of questions is in =cmacs/clawtilla/cmacs-clawtilla-render.c= and ~cmacs-clawtilla--ask-names~ lists it.  A value the daemon sent must travel as the text it sent, not re-encoded from the parsed form --- a null re-encoded from an alist is an empty object, which the library reads as a value --- so such a value is passed as =(:json . TEXT)=, and ~cmacs-clawtilla-request-both~ exists to give a caller both halves of a reply.
+
+The choice lists are asked for in the same spirit, through ~cmacs-clawtilla-enum~: =effort=, =weekday=, =schedule=, =resolution=, =usage-group=, =ack-check-model=, =review-by=, =incident-recipient=, =steer-policy= and =task-state= joined the families that were already walked.
+
+** What is not here
+
+Stated rather than left to be found:
+
+- The GTK client's Appearance fonts and its window chrome have no Emacs equivalent to build.
+- Model fallback lists, the per-agent network (egress) choice and the confine switch have no row on an agent's page.
+- A connector's tool-directory mode, how a computer starts, a recording's source, and a trigger's mode and provider are typed rather than chosen from libclawt's lists.
+- Mention completion, per-conversation drafts, and the split view of a merged delivery are not built.
+- The cross-talk summary setting and the "view exchange" window for a folded agent-to-agent message are not built; the fold itself and the cross-talk mark are.
+
+** Files
+
+| Path | What |
+|------+------|
+| =lisp/cmacs/cmacs-clawtilla-page.el= | the list-page framework |
+| =lisp/cmacs/cmacs-clawtilla-alerts.el= | the notification list, mutes, unread counts |
+| =lisp/cmacs/cmacs-clawtilla-tasks.el= | the Tasks page, one task, projects |
+| =lisp/cmacs/cmacs-clawtilla-files.el= | a conversation's files |
+| =lisp/cmacs/cmacs-clawtilla-devices.el= | devices, pairing, the QR code |
+| =lisp/cmacs/cmacs-clawtilla-pages.el= | the fleet-wide and per-agent pages |
+| =lisp/cmacs/cmacs-clawtilla-events.el= | the pushed events |
+| =cmacs/clawtilla/cmacs-clawtilla-render.c= | the table of questions asked of libclawt |
+| =cmacs/clawtilla/cmacs-clawtilla-client.c= | pairing on a worker, the last-connection record, the choice families |
+| =test/cmacs/cmacs-clawtilla-parity-tests.el= | the suite |
+| =admin/cmacs-clawtilla-parity.sh= | the parity check |

@@ -72,9 +72,7 @@ declare -A MAY_LACK=(
 declare -A AFFORDANCES=(
     ["unread marker"]="clawt-unread-badge|cmacs-clawtilla-unread"
     ["unread rule"]="clawt_unread_should_count|unread-should-count"
-    ["alert severity tiers"]="clawt_alert_tier_for_event|alert-tier"
     ["alert arrives read"]="clawt_alert_arrives_read|alert-arrives-read"
-    ["alert filter"]="alerts_show_all|alerts-toggle-filter"
     ["alerts surface"]="build_alerts_panel|clawtilla-alerts-mode"
     ["team tally"]="clawt_team_tally|team-tally"
     ["fleet warnings"]="append_warning_rows|fleet--warnings"
@@ -110,6 +108,86 @@ declare -A AFFORDANCES=(
     ["routine read-only"]="read_only_row|\"read_only\""
     ["routine proactive"]="proactive_row|\"proactive\""
     ["routine locked"]="locked_row|\"locked\""
+
+    # -- clawtilla 0.52: the notification list and the read marks are
+    #    the daemon's, and so are the words around them.
+    ["bell count"]="clawt_notice_list_badge|notice-badge"
+    ["muted agents"]="clawt_notice_list_mutes|notice-mutes"
+    ["mute menu label"]="clawt_agent_menu_mute_label|menu-mute-label"
+    ["mark-read menu label"]="clawt_agent_menu_read_label|menu-read-label"
+    ["unread from the daemon"]="clawt_unread_seed|unread-seed"
+    ["unread total less mutes"]="clawt_unread_total|unread-total"
+    ["new-messages rule"]="clawt_unread_rule_index|unread-rule-index"
+    ["room subtitle"]="clawt_room_sidebar_subtitle|room-subtitle"
+    ["task tree budget alert"]="clawt_loop_guard_tree_alert_text|tree-alert"
+
+    # -- tasks, broken runs, projects, spending.
+    ["task list caption"]="clawt_task_list_caption|task-caption"
+    ["task state tone"]="clawt_task_state_tone|task-state"
+    ["task waiting caption"]="clawt_task_waiting_caption|task-waiting"
+    ["task thread summary"]="clawt_task_thread_summary|task-thread"
+    ["incident recipients"]="clawt_incident_recipient_count|incident-recipient"
+    ["review-by choices"]="clawt_gtk_review_by_row_new|review-by"
+    ["ledger rows"]="clawt_usage_ledger_row_subtitle|ledger-view"
+    ["ledger csv"]="clawt_usage_ledger_csv|ledger-csv"
+    ["ledger grouping"]="clawt_usage_group_count|usage-group"
+
+    # -- files sent in a conversation.
+    ["attachment block"]="clawt_attachment_block_new|attachment-block"
+    ["conversation files"]="clawt_gtk_show_conversation_files|cmacs-clawtilla-files"
+
+    # -- devices, pairing, and which daemon a client starts on.
+    ["device code grouping"]="clawt_device_code_display|device-code"
+    ["device countdown"]="clawt_device_countdown_text|device-countdown"
+    ["device seen"]="clawt_device_seen_text|device-seen"
+    ["device row action"]="clawt_device_row_action|device-action"
+    ["pairing QR code"]="clawt_gtk_qr_texture|qr-modules"
+    ["pair with a code"]="clawt_connection_new_paired|cmacs-clawtilla--pair"
+    ["resume the last daemon"]="clawt_connection_choose|connection-choice"
+    ["remember the daemon"]="clawt_connection_last_save|remember-connection"
+    ["offer the local daemon"]="clawt_connection_offer_local|offer-local"
+
+    # -- the transcript's marks, and decisions asked in it.
+    ["message folding"]="clawt_chat_should_fold|chat-fold"
+    ["steered mark"]="clawt_message_steered_label|'steered"
+    ["interrupted mark"]="clawt_message_interrupted_label|'interrupted"
+    ["acknowledged mark"]="clawt_message_ack_label|'ack"
+    ["consultation mark"]="clawt_message_consult_label|message-consult"
+    ["waiting note"]="clawt_message_waiting_note|message-waiting"
+    ["crosstalk mark"]="clawt_crosstalk_mark_label|'crosstalk"
+    ["round label"]="clawt_round_label|round-label"
+    ["round skips"]="clawt_round_skip_note|round-skip"
+    ["inline decisions"]="clawt_gtk_inline_decision_append|chat--draw-decisions"
+    ["decision routing"]="clawt_decision_routed_text|decision-view"
+    ["decision question"]="clawt_decision_question_text|decision-question"
+    ["skill proposals"]="clawt_skill_proposal_id_is_valid|skill-proposal-p"
+    ["turn rescue offer"]="clawt_rescue_offer_text|rescue-offer"
+    ["turn rescue switch"]="clawt_rescue_switch_label|rescue-switch"
+    ["deep links"]="clawt_open_target_resolve|open-target"
+    ["MCP app links"]="clawt_mcp_app_link_label|app_label"
+
+    # -- per agent, and fleet-wide settings.
+    ["failover badge"]="clawt_failover_badge|\"failover\""
+    ["virtual display line"]="clawt_display_status_line|display-status"
+    ["memory journal"]="clawt_memory_journal_action_label|journal-labels"
+    ["wait schedule"]="clawt_wait_schedule_label|wait-schedule"
+    ["vault entries"]="clawt_vault_entry_label|vault-entry"
+    ["vault grants"]="clawt_vault_grants_with|vault-grants"
+    ["sentinel age"]="clawt_sentinel_age_text|sentinel-age"
+    ["sentinel kinds"]="clawt_sentinel_kind_label|sentinel-kind"
+    ["broker state"]="clawt_broker_state_label|broker-state"
+    ["grok job removal"]="clawt_grok_job_remove_question|grok-remove"
+    ["routine turned off"]="clawt_routine_turned_off_note|routine-turned-off"
+    ["routine failures hint"]="clawt_routine_start_failures_hint|routine_failures_hint"
+    ["egress allowlist"]="clawt_egress_allowlist_label|egress_allowlist"
+
+    # -- libclawt's choice lists, offered rather than typed.
+    ["schedule choices"]="clawt_schedule_count|\"schedule\""
+    ["weekday choices"]="clawt_weekday_count|\"weekday\""
+    ["effort choices"]="clawt_gtk_effort_row_new|\"effort\""
+    ["resolution choices"]="clawt_resolution_count|\"resolution\""
+    ["steer levels"]="clawt_steer_policy_count|steer-policy"
+    ["ack-check models"]="clawt_ack_check_model_count|ack-check-model"
 )
 
 #

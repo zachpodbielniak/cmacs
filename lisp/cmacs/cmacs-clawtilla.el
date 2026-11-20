@@ -65,6 +65,12 @@
 (declare-function cmacs-clawtilla--cursor "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--link-notice "cmacs-clawtilla-defuns.c")
 (declare-function cmacs-clawtilla--enum "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--ask "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--connection-choice "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--last-connection "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--remember-connection
+                  "cmacs-clawtilla-defuns.c")
+(declare-function cmacs-clawtilla--offer-local "cmacs-clawtilla-defuns.c")
 
 (defgroup cmacs-clawtilla nil
   "Drive a clawtilla agent fleet from cmacs."
@@ -81,6 +87,17 @@
 
 A laptop that suspends or a tailnet that moves takes the link with it,
 and the daemon is usually still there when it comes back."
+  :type 'boolean
+  :group 'cmacs-clawtilla)
+
+(defcustom cmacs-clawtilla-resume-last t
+  "Whether `cmacs-clawtilla' opens on the daemon this client was last on.
+
+The record is clawtilla's own -- one file every clawtilla client reads
+and writes, holding a saved profile's NAME and nothing else -- so the
+daemon resumed here is the one the GTK client would resume too.  With
+nothing remembered, or with this nil, the answer is the local daemon or
+a prompt respectively."
   :type 'boolean
   :group 'cmacs-clawtilla)
 
@@ -144,6 +161,11 @@ without anybody remembering to make it."
   ;; two have different remedies -- only one of which is on this
   ;; machine -- so the answer is remembered here.
   (ever-connected nil)
+  ;; Whether this link was opened from the last-connection record rather
+  ;; than named by somebody: libclawt's `remembered'.  It changes what an
+  ;; unreachable daemon is described as, and whether the local one is
+  ;; offered instead.
+  (remembered nil)
   (cursor 0)
   ;; When this link came up.  The unread rule needs it: without it,
   ;; connecting to a fleet marks its whole history unread and the count
@@ -153,6 +175,12 @@ without anybody remembering to make it."
   (agents nil)
   (teams nil)
   (rooms nil)
+  ;; The last `notice.list' payload, parsed, and the same payload as the
+  ;; text the daemon sent (for the library, which must see it as sent).
+  (notices nil)
+  (notices-json nil)
+  ;; Agents whose notifications are muted, from that payload.
+  (muted nil)
   ;; Callbacks waiting on a reply, keyed by nothing: the C layer owns
   ;; correlation.  This is only the timeout bookkeeping.
   (pending 0))
@@ -355,6 +383,143 @@ one of them ends up ignoring the error argument."
           ,@body)))))
 
 
+;;;; Replies as the daemon sent them.
+
+(defun cmacs-clawtilla-payload-text (json)
+  "Return the payload of the reply text JSON, itself as JSON text.
+
+A reply may arrive as the whole envelope or as its bare payload; either
+way what comes back is the payload, cut out faithfully (see
+`cmacs-clawtilla-member-json') so it can go back to C."
+  (let ((parsed (and (stringp json) (cmacs-clawtilla--parse json))))
+    (if (and (assq 'ok parsed) (assq 'payload parsed))
+        (cmacs-clawtilla-member-json json 'payload)
+      json)))
+
+(defun cmacs-clawtilla-request-both (conn kind &optional payload callback)
+  "Send KIND on CONN; call CALLBACK with the reply parsed AND as text.
+
+CALLBACK receives (DATA TEXT ERROR): the payload as an alist, the same
+payload as the JSON text the daemon sent, or two nils and a string.
+
+For a page that draws from the parsed reply and also asks libclawt
+about it.  The two halves want different things: drawing wants alists
+with nil for null, and the library wants the reply exactly as sent --
+a null re-encoded from the parsed form is an empty object, which the
+library reads as a value."
+  (cmacs-clawtilla-request-raw
+   conn kind payload
+   (lambda (json error)
+     (when callback
+       (if error
+           (funcall callback nil nil error)
+         (let* ((envelope (cmacs-clawtilla--parse json))
+                (text (cmacs-clawtilla-payload-text json)))
+           (if (and (assq 'ok envelope) (not (alist-get 'ok envelope)))
+               (funcall callback nil nil
+                        (or (alist-get 'error envelope)
+                            "the daemon refused that"))
+             (funcall callback (cmacs-clawtilla--parse text) text nil))))))))
+
+(defun cmacs-clawtilla-faithful (json)
+  "Parse the JSON text JSON keeping null, false and arrays distinct.
+
+Objects are alists, arrays are VECTORS, null is `:json-null' and false
+is `:json-false' -- the shape `cmacs-clawtilla-faithful-text' turns back
+into the same JSON.  nil for anything that does not parse."
+  (and (stringp json)
+       (condition-case nil
+           (json-parse-string json :object-type 'alist :array-type 'array
+                              :null-object :json-null
+                              :false-object :json-false)
+         (error nil))))
+
+(defun cmacs-clawtilla-faithful-get (node &rest path)
+  "Walk PATH through NODE, a value from `cmacs-clawtilla-faithful'.
+
+A symbol steps into an object and an integer into an array."
+  (dolist (key path node)
+    (setq node (cond
+                ((and (integerp key) (vectorp node) (< key (length node)))
+                 (aref node key))
+                ((and (symbolp key) (consp node)) (alist-get key node))
+                (t nil)))))
+
+(defun cmacs-clawtilla-faithful-text (node)
+  "Return NODE, a value from `cmacs-clawtilla-faithful', as JSON text, or nil."
+  (and node (not (eq node :json-null))
+       (json-serialize node :null-object :json-null
+                       :false-object :json-false)))
+
+
+;;;; Asking the library.
+
+(defun cmacs-clawtilla--ask-value (value)
+  "Return VALUE as JSON text for `cmacs-clawtilla-ask'."
+  (cond
+   ((and (consp value) (eq (car value) :json))
+    ;; Text the daemon sent, spliced in untouched.
+    (if (stringp (cdr value)) (cdr value) "null"))
+   ((null value) "null")
+   ((eq value t) "true")
+   ((eq value :false) "false")
+   ((stringp value) (json-serialize value))
+   ((integerp value) (number-to-string value))
+   ((numberp value) (number-to-string (truncate value)))
+   ((vectorp value) (json-serialize value :null-object :json-null
+                                    :false-object :json-false))
+   (t (error "cmacs-clawtilla-ask: cannot send %S" value))))
+
+(defun cmacs-clawtilla-ask (what &rest args)
+  "Ask libclawt WHAT and return its answer, a string or nil.
+
+ARGS is a plist of the question's arguments.  A value is a string, an
+integer, t, `:false' or nil (JSON null); a vector of such; or
+\(:json . TEXT) for JSON text to pass through exactly as it is -- which
+is how anything the daemon sent must travel, see
+`cmacs-clawtilla-request-both'.
+
+The sentence that comes back is the library's: the same words the GTK
+and web clients show, and never spelled out here.  nil in a build whose
+C side predates the question."
+  (when (fboundp 'cmacs-clawtilla--ask)
+    (cmacs-clawtilla--ask
+     what
+     (concat "{"
+             (mapconcat
+              #'identity
+              (cl-loop for (key value) on args by #'cddr
+                       collect (concat
+                                (json-serialize
+                                 (substring (symbol-name key) 1))
+                                ":" (cmacs-clawtilla--ask-value value)))
+              ",")
+             "}"))))
+
+(defun cmacs-clawtilla-ask-parsed (what &rest args)
+  "Ask libclawt WHAT with ARGS and return its JSON answer parsed.
+
+For a question whose answer has more than one part."
+  (cmacs-clawtilla--parse (apply #'cmacs-clawtilla-ask what args)))
+
+(defvar cmacs-clawtilla--labels nil
+  "The transcript's fixed words, as libclawt gave them once.")
+
+(defun cmacs-clawtilla-label (name)
+  "Return the fixed label NAME from libclawt's `message-labels', or nil.
+
+Cached: the answer cannot change inside one process."
+  (alist-get name
+             (or cmacs-clawtilla--labels
+                 (setq cmacs-clawtilla--labels
+                       (cmacs-clawtilla-ask-parsed "message-labels")))))
+
+(defun cmacs-clawtilla-time-ago (seconds)
+  "Return how long ago the Unix time SECONDS was, in libclawt's words."
+  (when (and (numberp seconds) (> seconds 0))
+    (cmacs-clawtilla-ask "time-ago" :at (* (truncate seconds) 1000000))))
+
+
 ;;;; Connecting.
 
 (defun cmacs-clawtilla--adopt (handle name describe local-p)
@@ -371,11 +536,22 @@ one of them ends up ignoring the error argument."
   (if error
       (progn
         (setf (cmacs-clawtilla-connection-state conn) 'disconnected)
-        (message "clawtilla: %s" error))
+        ;; A daemon reached from memory that never answered gets the
+        ;; library's own sentence, which says it is the one this client
+        ;; was last on -- and the way out, since nobody chose it today.
+        (if (and (cmacs-clawtilla-connection-remembered conn)
+                 (fboundp 'cmacs-clawtilla--offer-local)
+                 (cmacs-clawtilla--offer-local
+                  (cmacs-clawtilla-connection-handle conn)
+                  (cmacs-clawtilla-connection-name conn) nil t))
+            (message "clawtilla: %s  (M-x cmacs-clawtilla-use-local)"
+                     (or (cmacs-clawtilla-link-notice conn) error))
+          (message "clawtilla: %s" error)))
     (setf (cmacs-clawtilla-connection-state conn) 'connected)
     (setf (cmacs-clawtilla-connection-ever-connected conn) t)
     (setf (cmacs-clawtilla-connection-connected-at conn)
           (truncate (float-time)))
+    (cmacs-clawtilla--remember conn)
     ;; Subscribing from 0 asks for everything the daemon still has.  A
     ;; client that has been away does not know what it missed, and the
     ;; daemon answering `resumed: false' is how it finds out.
@@ -486,10 +662,74 @@ see -- so it read as \"cmacs cannot see my machines\"."
 
 (defun cmacs-clawtilla-link-notice (conn)
   "Return what to tell someone about CONN's link."
-  (cmacs-clawtilla--link-notice
-   (cmacs-clawtilla-connection-handle conn)
-   (cmacs-clawtilla-connection-name conn)
-   (cmacs-clawtilla-connection-ever-connected conn)))
+  (condition-case nil
+      (cmacs-clawtilla--link-notice
+       (cmacs-clawtilla-connection-handle conn)
+       (cmacs-clawtilla-connection-name conn)
+       (cmacs-clawtilla-connection-ever-connected conn)
+       (cmacs-clawtilla-connection-remembered conn))
+    ;; A build whose primitive predates REMEMBERED takes three.
+    (wrong-number-of-arguments
+     (cmacs-clawtilla--link-notice
+      (cmacs-clawtilla-connection-handle conn)
+      (cmacs-clawtilla-connection-name conn)
+      (cmacs-clawtilla-connection-ever-connected conn)))))
+
+
+;;;; The daemon this client was last on.
+
+(defun cmacs-clawtilla--remember (conn)
+  "Record CONN as the daemon to resume next time.
+
+By name, in clawtilla's own last-connection file, and only for a saved
+profile: the local daemon removes the record (so the next start is
+local), and an ad-hoc host and token is not something a name could find
+again.  Failing to write it is not worth interrupting a connection that
+just worked."
+  (when (fboundp 'cmacs-clawtilla--remember-connection)
+    (ignore-errors
+      (cmacs-clawtilla--remember-connection
+       (and (not (cmacs-clawtilla-connection-local-p conn))
+            (cmacs-clawtilla-connection-name conn))))))
+
+;;;###autoload
+(defun cmacs-clawtilla-resume ()
+  "Connect to the daemon this client was last on, else the local one.
+
+Which daemon that is comes from libclawt's `clawt_connection_choose',
+the rule every clawtilla client starts by: the saved profile this
+client was last switched to, then the local daemon.  A remembered
+profile that has since been deleted is not an error -- the local daemon
+is used and a sentence says why.
+
+Returns the connection.  If a remembered daemon does not answer,
+`cmacs-clawtilla-use-local' is the way out."
+  (interactive)
+  (unless (fboundp 'cmacs-clawtilla--connection-choice)
+    (user-error "This build cannot resume; M-x cmacs-clawtilla-connect"))
+  (let* ((choice (cmacs-clawtilla--parse (cmacs-clawtilla--connection-choice)))
+         (notice (alist-get 'notice choice))
+         (conn (if (eq t (alist-get 'local choice))
+                   (cmacs-clawtilla-connect-local)
+                 (cmacs-clawtilla-connect-profile (alist-get 'name choice)))))
+    (when (stringp notice) (message "clawtilla: %s" notice))
+    (when conn
+      (setf (cmacs-clawtilla-connection-remembered conn)
+            (eq t (alist-get 'from_last choice))))
+    conn))
+
+(defun cmacs-clawtilla-use-local ()
+  "Give up on a remembered daemon that does not answer and use the local one.
+
+Forgets the record too, so the next start is local as well."
+  (interactive)
+  (dolist (conn (copy-sequence cmacs-clawtilla-connections))
+    (when (and (cmacs-clawtilla-connection-remembered conn)
+               (not (cmacs-clawtilla-connection-ever-connected conn)))
+      (cmacs-clawtilla-disconnect conn)))
+  (when (fboundp 'cmacs-clawtilla--remember-connection)
+    (ignore-errors (cmacs-clawtilla--remember-connection nil)))
+  (cmacs-clawtilla-connect-local))
 
 (defun cmacs-clawtilla-status (&optional conn)
   "Report what CONN's daemon says about itself.
