@@ -19,6 +19,7 @@ void ctl_cmd_editor_register (CtlCommandRegistry *registry);
 void ctl_cmd_subsys_register (CtlCommandRegistry *registry);
 void ctl_cmd_gowl_register   (CtlCommandRegistry *registry);
 void ctl_cmd_sb_register     (CtlCommandRegistry *registry);
+void ctl_cmd_tool_register   (CtlCommandRegistry *registry);
 
 static void
 ctl_builtin_register_all (CtlApplication *app)
@@ -32,6 +33,7 @@ ctl_builtin_register_all (CtlApplication *app)
   ctl_cmd_subsys_register (registry);
   ctl_cmd_gowl_register (registry);
   ctl_cmd_sb_register (registry);
+  ctl_cmd_tool_register (registry);
 }
 
 int

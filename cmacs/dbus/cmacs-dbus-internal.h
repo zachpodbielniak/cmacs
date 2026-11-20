@@ -157,6 +157,10 @@ CMACS_DBUS_IFACE_DECL (dbexplorer)
 #endif
 #ifdef HAVE_CMACS_AI_BRIGADE
 CMACS_DBUS_IFACE_DECL (brigade)
+/* The generic capability interface, org.cmacs.Editor1.Tools: every
+ * tool in the brigade registry, with no per-tool method.  See
+ * cmacs-dbus-iface-tools.c. */
+CMACS_DBUS_IFACE_DECL (tools)
 #endif
 #ifdef HAVE_CMACS_SECONDBRAIN
 CMACS_DBUS_IFACE_DECL (secondbrain)
@@ -273,6 +277,9 @@ void cmacs_dbus_emit_properties_changed (const gchar  *path,
 
 void syms_of_cmacs_dbus_emit  (void);
 void syms_of_cmacs_dbus_mpris (void);
+#ifdef HAVE_CMACS_AI_BRIGADE
+void syms_of_cmacs_dbus_tools (void);
+#endif
 
 /* ── Common error helper ─────────────────────────────────────────── */
 

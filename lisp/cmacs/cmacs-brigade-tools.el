@@ -211,27 +211,15 @@ that is ai-glib's soft-error convention, and it matters because a
 signalled error aborts the agent's whole turn while a returned one lets
 the model read what went wrong and try something else."
   (condition-case err
-      (let ((tool (cmacs-brigade--tool-by-wire wire-name)))
-        (unless tool
-          (error "No such brigade tool: %s" wire-name))
-        (when (and allowlist
-                   (fboundp 'cmacs-brigade-tool-allowed-p)
-                   (not (cmacs-brigade-tool-allowed-p allowlist wire-name)))
-          (run-hook-with-args 'cmacs-brigade-tool-denied-functions
-                              (list :tool wire-name :agent agent))
-          (error "Tool %s is not in this agent's allowlist" wire-name))
-        (let* ((alist (cmacs-brigade--parse-args json-args))
-               (req (list :tool wire-name :args alist :agent agent
-                          :task task)))
-          (unless (run-hook-with-args-until-failure
-                   'cmacs-brigade-before-tool-call-functions req)
-            (error "Tool %s vetoed by a before-tool-call hook" wire-name))
-          (unless (cmacs-brigade--confirm tool alist agent)
-            (error "Tool %s declined by the user" wire-name))
-          (let ((result (cmacs-brigade--invoke tool alist)))
-            (run-hook-with-args 'cmacs-brigade-after-tool-call-functions
-                                (append req (list :result result)))
-            result)))
+      (let* ((gated (cmacs-brigade--gate-call wire-name json-args agent
+                                              allowlist task))
+             (tool (nth 0 gated))
+             (alist (nth 1 gated))
+             (req (nth 2 gated)))
+        (let ((result (cmacs-brigade--invoke tool alist)))
+          (run-hook-with-args 'cmacs-brigade-after-tool-call-functions
+                              (append req (list :result result)))
+          result))
     (error
      (let ((msg (format "Error: %s" (error-message-string err))))
        (run-hook-with-args 'cmacs-brigade-after-tool-call-functions
@@ -239,11 +227,124 @@ the model read what went wrong and try something else."
                                  :error err))
        msg))))
 
+(defun cmacs-brigade--gate-call (wire-name json-args agent allowlist task)
+  "Run every gate in front of a call of WIRE-NAME; return (TOOL ALIST REQ).
+
+The gates, in the order every surface applies them: the tool exists, the
+C allowlist admits it (when ALLOWLIST is given), JSON-ARGS parse, no
+`cmacs-brigade-before-tool-call-functions' hook vetoes, and the
+confirmation policy allows it.  Signals on the first that fails.
+
+Shared by `cmacs-brigade-call-tool' and `cmacs-brigade-call-tool-async'
+so the blocking and the non-blocking path cannot come to disagree about
+what a caller is allowed to do.  AGENT and TASK are as there; REQ is the
+plist the hooks receive."
+  (let ((tool (cmacs-brigade--tool-by-wire wire-name)))
+    (unless tool
+      (error "No such brigade tool: %s" wire-name))
+    (when (and allowlist
+               (fboundp 'cmacs-brigade-tool-allowed-p)
+               (not (cmacs-brigade-tool-allowed-p allowlist wire-name)))
+      (run-hook-with-args 'cmacs-brigade-tool-denied-functions
+                          (list :tool wire-name :agent agent))
+      (error "Tool %s is not in this agent's allowlist" wire-name))
+    (let* ((alist (cmacs-brigade--parse-args json-args))
+           (req (list :tool wire-name :args alist :agent agent
+                      :task task)))
+      (unless (run-hook-with-args-until-failure
+               'cmacs-brigade-before-tool-call-functions req)
+        (error "Tool %s vetoed by a before-tool-call hook" wire-name))
+      (unless (cmacs-brigade--confirm tool alist agent)
+        (error "Tool %s declined by the user" wire-name))
+      (list tool alist req))))
+
+(defun cmacs-brigade-call-tool-async (wire-name json-args callback
+                                                &optional agent allowlist task)
+  "Call the tool WIRE-NAME with JSON-ARGS and hand the outcome to CALLBACK.
+
+The non-blocking twin of `cmacs-brigade-call-tool': the same gates, the
+same hooks, the same handler, but an :async tool is not waited for.
+`cmacs-brigade-call-tool' waits in `sit-for', which is right for a
+provider's synchronous tool contract and wrong for an RPC dispatch --
+there the wait runs on the main thread, and under `--gowl' the main
+thread is the compositor.  This one returns as soon as the handler has
+been started.
+
+CALLBACK is called with two arguments, STATUS and TEXT, exactly once:
+
+  ok       TEXT is the tool's result
+  error    TEXT says what went wrong (a gate refused, the handler
+           signalled, or the tool returned an \"Error: ...\" string)
+  timeout  the tool's own :timeout passed before it called `done'
+
+Exactly once is the contract a caller builds on -- a D-Bus method
+invocation must be answered once and only once -- so it is enforced
+here rather than hoped for: a tool that calls `done' twice, or calls it
+after its timeout already fired, has the second call dropped.  For a
+synchronous tool CALLBACK runs before this function returns.
+
+Returns nil.  AGENT, ALLOWLIST and TASK are as in
+`cmacs-brigade-call-tool'."
+  (let* ((settled nil)
+         (timer nil)
+         (req nil)
+         (settle
+          (lambda (status text &optional err)
+            (unless settled
+              (setq settled t)
+              (when (timerp timer) (cancel-timer timer))
+              ;; The audit hook sees the same plist shapes the blocking
+              ;; path gives it.  A hook that signals must not cost the
+              ;; caller its answer, hence the demoted errors.
+              (with-demoted-errors "cmacs-brigade: after-tool-call hook: %S"
+                (run-hook-with-args
+                 'cmacs-brigade-after-tool-call-functions
+                 (if (eq status 'ok)
+                     (append req (list :result text))
+                   (list :tool wire-name :agent agent :task task
+                         :error (or err (list 'error text))))))
+              (funcall callback status text)))))
+    (condition-case err
+        (let* ((gated (cmacs-brigade--gate-call wire-name json-args agent
+                                                allowlist task))
+               (tool (nth 0 gated))
+               (alist (nth 1 gated))
+               (args (cmacs-brigade--tool-args tool alist))
+               ;; The soft-error convention: a handler reports failure by
+               ;; returning \"Error: ...\".  Surfaces with a real error
+               ;; channel want that as a status, not as text to sniff.
+               (finish
+                (lambda (value)
+                  (let ((text (cmacs-brigade--stringify value)))
+                    (if (string-prefix-p "Error: " text)
+                        (funcall settle 'error
+                                 (substring text (length "Error: ")))
+                      (funcall settle 'ok text))))))
+          (setq req (nth 2 gated))
+          (if (not (cmacs-brigade-tool-async tool))
+              (funcall finish (apply (cmacs-brigade-tool-handler tool) args))
+            ;; Armed before the handler starts, so a handler that calls
+            ;; `done' synchronously finds a timer to cancel.
+            (setq timer
+                  (run-at-time
+                   (cmacs-brigade-tool-timeout tool) nil
+                   (lambda ()
+                     (funcall settle 'timeout
+                              (format "%s timed out after %ss"
+                                      (cmacs-brigade-tool-wire-name tool)
+                                      (cmacs-brigade-tool-timeout tool))))))
+            (apply (cmacs-brigade-tool-handler tool) finish args)))
+      (error
+       (funcall settle 'error (error-message-string err) err)))
+    nil))
+
 (defun cmacs-brigade--tool-by-wire (wire-name)
-  "Return the tool registered under WIRE-NAME, or nil."
+  "Return the tool registered under WIRE-NAME, or nil.
+WIRE-NAME may also be one of the tool's :aliases."
   (cl-loop for n in (cmacs-brigade-registry-list 'tool)
            for tool = (cmacs-brigade-registry-get 'tool n)
-           when (equal (cmacs-brigade-tool-wire-name tool) wire-name)
+           when (or (equal (cmacs-brigade-tool-wire-name tool) wire-name)
+                    (member wire-name (cmacs-brigade-tool-aliases tool)))
            return tool))
 
 (defun cmacs-brigade--invoke (tool alist)
@@ -299,7 +400,8 @@ read-only without having to enumerate every tool it must not have."
   (cl-loop for n in (cmacs-brigade-registry-list 'tool)
            for tool = (cmacs-brigade-registry-get 'tool n)
            for wire = (cmacs-brigade-tool-wire-name tool)
-           when (and (or (null (cmacs-brigade-tool-destructive tool))
+           when (and (cmacs-brigade-tool-on-surface-p tool 'agents)
+                     (or (null (cmacs-brigade-tool-destructive tool))
                          include-destructive)
                      (or (not (fboundp 'cmacs-brigade-tool-allowed-p))
                          (cmacs-brigade-tool-allowed-p allowlist wire)))
@@ -339,5 +441,13 @@ and the task it belongs to does not change."
     n))
 
 (provide 'cmacs-brigade-tools)
+
+;; The capability table (D-Bus, emacsctl and the generated reference, all
+;; derived from the registry) and the tool families migrated onto it.
+;; After `provide' because it requires this file back, and here rather
+;; than in a file of its own choosing because this one is loaded eagerly
+;; with the brigade: the migrated families have to be in the registry
+;; before the first MCP session lists its tools.
+(require 'cmacs-capability nil 'noerror)
 
 ;;; cmacs-brigade-tools.el ends here

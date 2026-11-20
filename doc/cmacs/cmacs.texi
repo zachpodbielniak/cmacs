@@ -80,6 +80,7 @@ interaction.
 * CMacs Deixis::                Deictic voice: "move that there" bound to what was pointed at.
 * Gowl Edit Field::             Edit any application's text field in a floating Emacs frame.
 * Agent Desktops::              A private headless desktop per brigade agent.
+* Capability Table::            One tool table behind MCP, D-Bus, emacsctl and menus.
 * CMacs AI and ai-glib 0.13::   ACP agents, steering, limit notices, Codex transport.
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
@@ -13857,6 +13858,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include brigade-desktop.texi
+
+@c ===================================================================
+@include capability.texi
 
 @c ===================================================================
 @include ai-0.13.texi

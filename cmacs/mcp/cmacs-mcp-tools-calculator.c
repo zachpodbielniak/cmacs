@@ -228,6 +228,36 @@ handle_calc_describe (McpServer *server, const gchar *name,
   return eval_to_result (lisp, "calc_describe failed");
 }
 
+/* True when SERVER already serves a tool called NAME.  */
+static gboolean
+calc_tool_present (McpServer *server, const gchar *name)
+{
+  GList *tools = mcp_server_list_tools (server);
+  GList *l;
+  gboolean found = FALSE;
+
+  for (l = tools; l != NULL && !found; l = l->next)
+    found = g_strcmp0 (mcp_tool_get_name (MCP_TOOL (l->data)), name) == 0;
+  g_list_free_full (tools, g_object_unref);
+  return found;
+}
+
+/* Add TOOL unless the capability table already published its name.
+ *
+ * This family was migrated to the tool registry
+ * (lisp/cmacs/cmacs-calculator-tools.el), and the registry's tools are
+ * published before this function runs.  mcp_server_add_tool replaces on
+ * collision, so adding unconditionally would quietly put the
+ * hand-written handler back in front of the registry one.  What is left
+ * here is the fallback for a build without the brigade, or a session
+ * whose Lisp side failed to load: the names are served either way.  */
+static void
+calc_add_tool (McpServer *server, McpTool *tool, McpToolHandler handler)
+{
+  if (!calc_tool_present (server, mcp_tool_get_name (tool)))
+    mcp_server_add_tool (server, tool, handler, NULL, NULL);
+}
+
 void
 cmacs_mcp_tools_calculator_register (McpServer *server)
 {
@@ -249,7 +279,7 @@ cmacs_mcp_tools_calculator_register (McpServer *server)
     "},\"required\":[\"expression\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_calc_eval, NULL, NULL);
+  calc_add_tool (server, tool, handle_calc_eval);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("calc_eval_symbolic",
@@ -264,7 +294,7 @@ cmacs_mcp_tools_calculator_register (McpServer *server)
     "},\"required\":[\"expression\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_calc_eval_symbolic, NULL, NULL);
+  calc_add_tool (server, tool, handle_calc_eval_symbolic);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("calc_convert_units",
@@ -282,7 +312,7 @@ cmacs_mcp_tools_calculator_register (McpServer *server)
     "},\"required\":[\"expression\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_calc_convert_units, NULL, NULL);
+  calc_add_tool (server, tool, handle_calc_convert_units);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("calc_list",
@@ -296,7 +326,7 @@ cmacs_mcp_tools_calculator_register (McpServer *server)
     "},\"required\":[]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_calc_list, NULL, NULL);
+  calc_add_tool (server, tool, handle_calc_list);
   g_object_unref (tool);
 
   tool = mcp_tool_new ("calc_describe",
@@ -309,7 +339,7 @@ cmacs_mcp_tools_calculator_register (McpServer *server)
     "},\"required\":[\"name\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_calc_describe, NULL, NULL);
+  calc_add_tool (server, tool, handle_calc_describe);
   g_object_unref (tool);
 }
 

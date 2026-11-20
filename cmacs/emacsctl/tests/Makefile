@@ -30,7 +30,7 @@ UNITS := ../ctl-error.c ../ctl-result.c ../ctl-json-yaml.c ../ctl-frame.c \
          ../ctl-transport-dbus.c ../ctl-transport-ssh.c \
          ../ctl-formatter.c ../ctl-formatter-table.c \
          ../ctl-formatter-json.c ../ctl-formatter-yaml.c \
-         ../ctl-formatter-raw.c
+         ../ctl-formatter-raw.c ../ctl-tool-args.c
 
 CFLAGS += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
           -I.. -I$(YAMLGLIB_DIR)/src $(PKG_CFLAGS)

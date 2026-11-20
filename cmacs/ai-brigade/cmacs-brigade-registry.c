@@ -104,6 +104,7 @@ cmacs_brigade_registry_lookup (const gchar *name)
       copy->confirm     = found->confirm;
       copy->async       = found->async;
       copy->timeout_ms  = found->timeout_ms;
+      copy->no_mcp      = found->no_mcp;
     }
   g_mutex_unlock (&cmacs_brigade__tool_mutex);
   return copy;
@@ -144,7 +145,9 @@ DEFUN ("cmacs-brigade--mirror-put", Fcmacs_brigade__mirror_put,
 NAME is the wire name (a string such as "call_for_me").  DESCRIPTION is
 the summary shown to a model.  PARAMS-JSON is a JSON array of parameter
 objects, each with name/type/description/required members.  PROPS is a
-plist accepting :group, :destructive, :confirm and :timeout.
+plist accepting :group, :destructive, :confirm, :timeout and :no-mcp
+\(non-nil keeps the tool off the MCP surface; it is still mirrored,
+because the allowlist gate resolves groups from here).
 
 Internal.  Elisp code calls `cmacs-brigade-register-tool', which owns the
 authoritative registry and mirrors here for MCP publication and the
@@ -178,6 +181,7 @@ allowlist gate.  */)
 
   timeout = Fplist_get (props, intern (":timeout"), Qnil);
   tool->timeout_ms = FIXNUMP (timeout) ? (gint) (XFIXNUM (timeout) * 1000) : 0;
+  tool->no_mcp = !NILP (Fplist_get (props, intern (":no-mcp"), Qnil));
 
   g_mutex_lock (&cmacs_brigade__tool_mutex);
   /* replace: re-registering a name is how a user reloads their config */

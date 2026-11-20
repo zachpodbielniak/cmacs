@@ -55,6 +55,9 @@
 #define CTL_IFACE_DBEXPLORER "org.cmacs.Editor1.DbExplorer"
 #define CTL_IFACE_LQL        "org.cmacs.Editor1.Lql"
 #define CTL_IFACE_BRIGADE    "org.cmacs.Editor1.Brigade"
+/* The generic capability interface behind `emacsctl tool': one Call
+ * method for every registered tool (cmacs-dbus-iface-tools.c). */
+#define CTL_IFACE_TOOLS      "org.cmacs.Editor1.Tools"
 #define CTL_IFACE_SECONDBRAIN "org.cmacs.Editor1.SecondBrain"
 #define CTL_IFACE_INSTANCE   "org.cmacs.Editor1.Instance"
 #define CTL_IFACE_LOG        "org.cmacs.Editor1.Log"

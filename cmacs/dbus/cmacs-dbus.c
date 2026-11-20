@@ -140,6 +140,12 @@ static guint reg_iface_lql = 0;
 #ifdef HAVE_CMACS_AI_BRIGADE
 static guint reg_iface_brigade  = 0;
 #endif
+/* CMACS capability table: defined by configure together with the
+   cmacs-dbus-iface-tools.o object, so the calls below only exist in a
+   build that links the file they call into.  */
+#ifdef HAVE_CMACS_DBUS_TOOLS
+static guint reg_iface_tools    = 0;
+#endif
 #ifdef HAVE_CMACS_SECONDBRAIN
 static guint reg_iface_secondbrain = 0;
 #endif
@@ -457,6 +463,12 @@ register_modules (GDBusConnection *conn, GError **error)
   if (reg_iface_brigade == 0) return FALSE;
 #endif
 
+#ifdef HAVE_CMACS_DBUS_TOOLS
+  reg_iface_tools = cmacs_dbus_iface_tools_register (
+    conn, CMACS_DBUS_ROOT_PATH, error);
+  if (reg_iface_tools == 0) return FALSE;
+#endif
+
 #ifdef HAVE_CMACS_SECONDBRAIN
   reg_iface_secondbrain = cmacs_dbus_iface_secondbrain_register (
     conn, CMACS_DBUS_ROOT_PATH, error);
@@ -476,6 +488,11 @@ unregister_modules (GDBusConnection *conn)
       reg_iface_secondbrain = 0; }
 #endif
 #ifdef HAVE_CMACS_AI_BRIGADE
+#ifdef HAVE_CMACS_DBUS_TOOLS
+  if (reg_iface_tools)
+    { cmacs_dbus_iface_tools_unregister (conn, reg_iface_tools);
+      reg_iface_tools = 0; }
+#endif
   if (reg_iface_brigade)
     { cmacs_dbus_iface_brigade_unregister (conn, reg_iface_brigade);
       reg_iface_brigade = 0; }
@@ -860,6 +877,9 @@ syms_of_cmacs_dbus (void)
 
   syms_of_cmacs_dbus_emit ();
   syms_of_cmacs_dbus_mpris ();
+#ifdef HAVE_CMACS_DBUS_TOOLS
+  syms_of_cmacs_dbus_tools ();
+#endif
 }
 
 /* Called once at startup from src/emacs.c::main, after

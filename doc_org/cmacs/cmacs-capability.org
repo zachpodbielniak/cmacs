@@ -1,0 +1,258 @@
+#+title: cmacs-capability: one capability table for every surface
+#+description: How the brigade tool registry drives MCP, D-Bus, emacsctl, the right-click menu and the generated reference from one definition.
+#+STARTUP: showall
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+A capability is written once, as a =cmacs-brigade-deftool= form, and every surface cmacs has reads it from the same place:
+
+| Surface               | How it gets there                                                                              |
+|-----------------------+------------------------------------------------------------------------------------------------|
+| in-process agents     | the tool is installed on the agent's executor (=cmacs-brigade-install-tools=)                  |
+| MCP                   | =cmacs/mcp/cmacs-mcp-tools-brigade.c= publishes the registry to every session and scoped socket |
+| D-Bus                 | =org.cmacs.Editor1.Tools=: =List=, =Describe=, =Call=                                          |
+| =emacsctl=            | =emacsctl tool ...=, built at run time from =Tools.List=                                       |
+| the AI right-click menu | a tool that sets =:menu=                                                                     |
+| documentation         | =M-x cmacs-capability-doc= and the checked-in [[file:cmacs-capability-reference.org][reference]] |
+
+The first, second and fifth existed already.  What =lisp/cmacs/cmacs-capability.el= adds is the rest, and the rule that nothing else holds a second copy: =cmacs-capability-describe= computes the table from the registry each time it is asked, and that value is what D-Bus, the CLI and the docs are derived from.
+
+#+begin_src emacs-lisp
+(cmacs-brigade-deftool desktop-launch
+    "Start a program on the desktop."
+    ((command string "What to run")
+     (wait boolean "Wait for it to exit" :optional t))
+  :group 'desktop
+  (my/launch command wait))
+#+end_src
+
+With no other change anywhere, that tool is an MCP tool called =desktop_launch=, a tool an agent can be granted by name or through the =desktop= group, =org.cmacs.Editor1.Tools.Call "desktop_launch" '{"command":"foot"}'=, =emacsctl tool desktop launch --command foot --wait=, an entry in =emacsctl tool --help=, and a section in the reference.
+
+* The table
+
+** Keys
+
+Every key is optional except the three positional parts of the form (name, description, parameters).  The first seven predate the capability table and mean what they always did; a form written before the rest existed is unchanged.
+
+| Key            | Meaning                                                                                                   |
+|----------------+-----------------------------------------------------------------------------------------------------------|
+| =:group=       | Symbol.  Allowlist vocabulary, and the first CLI word.                                                    |
+| =:destructive= | Non-nil keeps the tool from read-only agents, and off D-Bus and the CLI unless =:surfaces= names them.    |
+| =:confirm=     | =nil=, =ask= or =always=: the call goes through the approval policy first.                                |
+| =:async=       | The body has =done= in scope and calls it with the result later.                                          |
+| =:timeout=     | Seconds an async call may take (default =cmacs-brigade-tool-default-timeout=, 120).                       |
+| =:menu=        | Publish to the AI right-click menu: =t= or a list of target kinds.                                        |
+| =:menu-label=  | Menu text.                                                                                                |
+| =:surfaces=    | List drawn from =mcp dbus cli menu agents=.  Omitted means all of them, with the one exception below.     |
+| =:cli=         | ="GROUP VERB"=, overriding the derived CLI words.                                                         |
+| =:returns=     | =string= (default) or =json=: how a client should render the result.                                      |
+| =:example=     | One sample invocation, shown in the reference and in =--help=.                                            |
+| =:aliases=     | Extra wire names that answer to this tool, for a capability that used to be published under another name. |
+
+Parameter types are =string=, =integer=, =number= and =boolean=.  They are flat on purpose: the providers' function-calling schemas cannot express more.  Structured data is passed as JSON text in a =string= parameter.
+
+** Surfaces
+
+- =agents= :: in-process agent executors.
+- =mcp= :: cmacs's MCP server -- external clients, and CLI agents through the relay and the scoped sockets.
+- =dbus= :: =org.cmacs.Editor1.Tools=.
+- =cli= :: =emacsctl tool=.  It travels over D-Bus, so a tool on =cli= but not =dbus= is on neither.
+- =menu= :: the right-click menu, for a tool that also sets =:menu=.
+
+A tool that gives no =:surfaces= is on all five, *except that a destructive tool is left off =dbus= and =cli=*.  To put a destructive tool there, list them:
+
+#+begin_src emacs-lisp
+(cmacs-brigade-deftool drop-table "Drop a table." ((name string "Table"))
+  :destructive t :confirm 'ask
+  :surfaces '(mcp dbus cli agents)
+  ...)
+#+end_src
+
+The reason is scope.  An in-process agent only ever holds the tools it was built with.  An MCP caller can be handed a scoped socket whose allowlist is enforced by the C gate in the process that owns the tools.  A D-Bus caller cannot be scoped at all: every process on the session bus reaches every method of every interface, =org.cmacs.Editor1.Eval= included, and cmacs has no per-caller policy there to consult.  So the default does not put a destructive capability one =gdbus call= away; its author decides.
+
+This is a guard against accidents, not a security boundary.  Anything on the session bus can already evaluate Lisp.
+
+** The CLI rule
+
+One rule, applied to every tool that does not set =:cli=:
+
+- GROUP is the tool's =:group=.  A tool with no group, or whose group is one of the words =emacsctl tool= keeps for itself (=list=, =describe=, =call=, =help=), is in =misc=.
+- VERB is the wire name with a leading =GROUP_= removed.
+- Underscores are written as hyphens in both.
+
+| Tool               | =:group=  | CLI                                |
+|--------------------+-----------+------------------------------------|
+| =desktop_launch=   | =desktop= | =emacsctl tool desktop launch=     |
+| =agent_spawn=      | =agent=   | =emacsctl tool agent spawn=        |
+| =lql_query=        | =data=    | =emacsctl tool data lql-query=     |
+| =memory_search=    | =memory=  | =emacsctl tool memory search=      |
+| =plain=            | none      | =emacsctl tool misc plain=         |
+
+Wire names are unique, so two tools can only land on one verb through the prefix removal -- =desktop_launch= and =launch=, both in =desktop=.  Then every tool involved keeps its full name (=desktop desktop-launch= and =desktop launch=): both stay reachable and neither silently wins.  =emacsctl tool call NAME= always works by wire name, whatever the CLI words are.
+
+** Reading the table
+
+#+begin_src emacs-lisp
+(cmacs-capability-describe)          ; every tool, as a list of plists
+(cmacs-capability-describe 'dbus)    ; only what is on one surface
+(cmacs-capability-describe-tool "desktop_launch")
+(cmacs-capability-json 'dbus)        ; {"version": 1, "tools": [...]}
+#+end_src
+
+Each entry has =:name :description :group :params :destructive :confirm :async :timeout :surfaces :cli :returns :example :aliases=, with =:params= a list of =(:name :type :description :required [:default] [:enum])=.  The JSON form has the same members; absent values are =null= or =[]=, never missing.  =version= changes only when a member is renamed or removed.
+
+* D-Bus: org.cmacs.Editor1.Tools
+
+Registered at =/org/cmacs/Editor= by =cmacs/dbus/cmacs-dbus-iface-tools.c=.
+
+| Method                                  | Returns                                                     |
+|-----------------------------------------+-------------------------------------------------------------|
+| =List() -> s=                           | The table as JSON, filtered to the tools on =dbus=.         |
+| =Describe(s name) -> s=                 | One tool's entry as JSON.                                   |
+| =Call(s name, s json_args) -> s=        | The tool's result.  =json_args= is a JSON object, or empty. |
+
+A failed call is a D-Bus error, not a result to inspect:
+
+| Error name                             | Meaning                                                                           |
+|----------------------------------------+-----------------------------------------------------------------------------------|
+| =org.cmacs.Editor1.Error.NoSuchTool=   | Nothing is registered under that name.                                            |
+| =org.cmacs.Editor1.Error.NotOnSurface= | The tool is not published on D-Bus.                                               |
+| =org.cmacs.Editor1.Error.BadArguments= | The arguments did not validate; the message names the argument.                   |
+| =org.cmacs.Editor1.Error.ToolFailed=   | A hook vetoed it, confirmation refused it, or the handler failed.                 |
+| =org.cmacs.Editor1.Error.Timeout=      | An async tool did not finish within its =:timeout=.                               |
+| =org.cmacs.Editor1.Error.ServiceStopped= | The D-Bus service stopped while the call was pending.                           |
+
+** Gate order
+
+The same order as MCP, where MCP has the gate:
+
+1. The tool exists.
+2. *Surface.*  Its effective =:surfaces= include =dbus=.
+3. *Scope.*  Nothing to check -- see [[*Surfaces][Surfaces]].  On MCP this is the allowlist of the scoped socket.
+4. *Arguments.*  The JSON object validates against the typed parameters.
+5. The shared gates of every tool call: =cmacs-brigade-before-tool-call-functions= may veto, then the confirmation policy.
+
+** Arguments
+
+The caller's two strings reach Lisp as two string literals, escaped with =cmacs_dispatch_lisp_escape= and read inside the dispatch's =condition-case=.  The JSON is parsed in Lisp by =json-parse-string=, and its values reach the handler as values.  No caller text is ever part of a Lisp form.
+
+Validation is strict here, unlike the lenient coercion a model gets:
+
+- A member that is not a parameter is an error.  The usual cause is a misspelt flag, and ignoring it would run the tool with a default nobody asked for.
+- A required parameter with no default must be present.  JSON =null= counts as absent.
+- =integer= accepts an integer, a float with no fraction, or a string of digits.  =number= accepts a number or a numeric string.  =boolean= accepts =true=/=false= (and the strings).  =string= accepts a string or a number; an array or object given for a string parameter becomes its JSON text.
+- A value outside the parameter's =:enum= is an error.
+
+** Confirmation
+
+Not bypassed, and never a prompt.  A dispatch binds =inhibit-interaction=, so there is nothing to prompt with.  A =:confirm= tool runs when =cmacs-brigade-auto-approve= covers it (the default, =t=, covers everything) or when a registered approval handler says yes; otherwise the call is refused with =ToolFailed= and a message naming =cmacs-brigade-auto-approve=.  This is the same path an MCP caller takes.
+
+(The older =org.cmacs.Editor1.Brigade= interface force-approves its own calls.  That is its behaviour, unchanged; the generic interface does not copy it.)
+
+** Async tools
+
+=Call= is the only method.  For an =:async= tool the reply is simply sent later, when the tool calls =done=.
+
+The alternative was =CallAsync -> token= plus a =ToolFinished(token, result)= signal.  The held reply was chosen because:
+
+- A caller does not need to know which tools are async.  =gdbus call= and every binding's ordinary method call work for all of them.
+- A signal is a broadcast: every process on the bus would be handed every tool's result.  A method reply goes to its caller.
+- Exactly-once has a single owner.  The invocation sits in a table keyed by an integer token; answering it means taking it out, and whoever comes second finds nothing.  A second =done=, a =done= after the timeout, and a timeout after =done= are all no-ops.
+
+The cost is that the caller's method timeout has to cover the tool.  The table carries each tool's =timeout= so a client can set it; =emacsctl= does.  A caller that gives up early loses only its own answer.
+
+Nothing waits on the editor's side.  =Call= starts the tool and returns to the main loop -- which under =--gowl= is the compositor's -- and the reply is sent from =cmacs-capability--dbus-reply= when the tool or its timeout fires.  (The provider-facing =cmacs-brigade-call-tool= still waits in =sit-for=, because a provider's tool contract is synchronous; =cmacs-brigade-call-tool-async= is the non-blocking twin the RPC surface uses, sharing every gate with it.)
+
+#+begin_src sh
+gdbus call --session --dest org.cmacs.Editor --object-path /org/cmacs/Editor \
+      --method org.cmacs.Editor1.Tools.Call calc_eval '{"expression": "2/3*4"}'
+#+end_src
+
+* emacsctl tool
+
+#+begin_src sh
+emacsctl tool list [--group GROUP] [--json]
+emacsctl tool describe NAME [--json]
+emacsctl tool call NAME [--ARG VALUE ...] [--json '{...}']
+emacsctl tool GROUP VERB [--ARG VALUE ...] [--json '{...}']
+emacsctl tool --help            # every group and verb, from the live table
+emacsctl tool GROUP VERB --help # one tool's flags, from the live table
+#+end_src
+
+=emacsctl= has no list of tools.  Every form above asks the running editor for =Tools.List= and builds the verbs, the typed flags and the help text from the answer.  The instance being talked to is the source of truth: two editors with different tools give two different =emacsctl tool --help= outputs, and a tool defined in your init is a subcommand as soon as it is defined.  When no editor answers, =--help= says so and shows the static usage.
+
+Flags are typed by the tool's parameter list:
+
+| Parameter type       | Flag                                                                   |
+|----------------------+------------------------------------------------------------------------|
+| =string=             | =--name VALUE= or =--name=VALUE=; sent as a string even if it is digits |
+| =integer=, =number=  | =--name 3=; anything else is a usage error before a call is made       |
+| =boolean=            | =--name= (true), =--name false=, =--no-name=                           |
+| arrays and objects   | as JSON text in a string parameter, or inside =--json=                 |
+
+A hyphen in a flag stands for an underscore in the parameter name (=--max-rows= is =max_rows=).  =--json '{...}'= supplies the whole argument object; flags given beside it override its members.  A tool parameter whose name collides with a global option (=--timeout=, =--host=, =--instance=, =--output=, =--config=, =--context=, =--watch=, =--quiet=) or is itself called =json= has to be passed inside =--json=.
+
+Exit status: 0 on success; 2 when the arguments are refused, here or by the editor; 3 when the editor has no =Tools= interface; 4 when no instance is found; 1 for any other tool failure.  A tool with =:returns json= is rendered as a document, so =-o yaml= and =-o json= work on it.
+
+* Documentation from the table
+
+- =M-x cmacs-capability-doc= renders this session's registry -- shipped tools and your own -- as an org buffer.
+- =doc_org/cmacs/cmacs-capability-reference.org= and =doc/cmacs/capability-reference.texi= are the same rendering of the tools the shipped =lisp/cmacs= files register.  They are *generated*:
+
+#+begin_src sh
+admin/cmacs-capability-audit.sh --write-docs   # regenerate both
+admin/cmacs-capability-audit.sh --check-docs   # exit 1 if either is stale
+#+end_src
+
+The generator is a batch Emacs with an empty =HOME= that loads every file under =lisp/cmacs= containing a tool registration (found by text, not from a list).  =cmacs-capability-test-reference-is-current= runs it with =--check= and fails when the checked-in files differ, so a tool added without regenerating fails the suite.  A build missing a subsystem cannot load that subsystem's tool file; the generator then refuses to write (exit 2) and the test skips, rather than producing a reference with a family silently missing.
+
+* Migrating a hand-written family
+
+Most of cmacs's RPC surface predates the table and exists three times: a C handler per MCP tool in =cmacs/mcp/=, a D-Bus method per capability in =cmacs/dbus/=, a row per verb in =cmacs/emacsctl/=.  =admin/cmacs-capability-audit.sh= measures what is left:
+
+#+begin_src sh
+admin/cmacs-capability-audit.sh               # counts per surface
+admin/cmacs-capability-audit.sh --families    # MCP C files, cheapest first
+admin/cmacs-capability-audit.sh --hand-written
+#+end_src
+
+As of this writing: 271 MCP tools in C (15 also in the registry), 316 D-Bus methods (32), 306 emacsctl verbs (28).  For D-Bus and the CLI, "in the registry" means a registered tool of the corresponding name exists; a destructive one still needs =:surfaces= to be callable through =Tools.Call=.
+
+** The worked example: the calculator
+
+=lisp/cmacs/cmacs-calculator-tools.el= is the calculator's five tools as =cmacs-brigade-deftool= forms, under the wire names the C handlers used (=calc_eval=, =calc_eval_symbolic=, =calc_convert_units=, =calc_list=, =calc_describe=).  Nothing that called =calc_eval= changes.
+
+What was done, which is the recipe:
+
+1. *Write the tools in Lisp.*  One =cmacs-<subsystem>-tools.el=.  Keep the wire names; where a better name is wanted, keep the old one in =:aliases=.  Copy the descriptions and parameter names from the C schema.  =require= the subsystem inside the body, not at the top: the file is loaded at startup so the tools are listed.
+2. *Drop the escaping.*  The C handlers escape each argument and splice it into a Lisp form, and whitelist the ones that become bare symbols.  A registry handler receives values, so there is nothing to escape; validate names because a good error is better than interning arbitrary text.
+3. *Let errors be errors.*  Do not catch and return ="error: ..."=; signal.  Each surface then reports failure natively (=isError= on MCP, a D-Bus error, a non-zero exit).  This is the one behaviour change: the old calculator tools returned failures as ordinary results.
+4. *Name the file* in =cmacs-capability-migrated-families= with its =IS-CMACS-*= flag, so it is loaded with the brigade -- before the first MCP session lists its tools.
+5. *Make the C stand aside.*  Registry tools are published before the per-subsystem C registrations, and =mcp_server_add_tool= replaces on collision, so an unchanged C file would quietly put its handler back in front.  =cmacs-mcp-tools-calculator.c= now adds a tool only when the server does not already serve that name.
+6. *Regenerate the reference* (=--write-docs=) and add a guard like =cmacs-capability-test-calculator-family-matches-c= while the C still exists.
+
+** Why the C was not deleted
+
+The MCP C handlers remain as the fallback for a build with the calculator but without the brigade (=--with-cmacs-ai= off), where there is no registry to serve the names.  They are dead in a default build and marked =registry= by the audit.
+
+=org.cmacs.Editor1.Calc= and the =emacsctl calc ...= rows also remain: both are public names that scripts may call, and removing them is a compatibility decision rather than a cleanup.  They are duplicates now -- =emacsctl tool calc eval= and =Tools.Call calc_eval= do the same work -- and the audit lists them as such.
+
+** What does not migrate as-is
+
+- Tools that return or take something other than text (screenshots as image content, binary blobs).
+- Handlers that must run in C for a reason -- the gowl tools that take the compositor lock, =cmacs_c_*= introspection.  They can still be *registered* (a deftool whose body calls the DEFUN), which is all the table needs.
+- The privileged set (=eval=, =shell=, =execute_command=, =send_keys=, the C-patching tools).  The allowlist treats them specially by name; migrating them needs that reviewed first.
+
+* Files
+
+| File                                             | Role                                                           |
+|--------------------------------------------------+----------------------------------------------------------------|
+| =lisp/cmacs/cmacs-brigade-registry.el=           | The registry; the new keys and the surface rules               |
+| =lisp/cmacs/cmacs-brigade-tools.el=              | Dispatch; =cmacs-brigade-call-tool-async=                      |
+| =lisp/cmacs/cmacs-capability.el=                 | The table, CLI rule, argument validation, D-Bus entry, docs    |
+| =lisp/cmacs/cmacs-calculator-tools.el=           | The migrated calculator family                                 |
+| =cmacs/dbus/cmacs-dbus-iface-tools.c=            | =org.cmacs.Editor1.Tools=                                      |
+| =cmacs/emacsctl/ctl-cmd-tool.c=, =ctl-tool-args.c= | =emacsctl tool=                                              |
+| =admin/cmacs-capability-audit.sh=                | The migration audit and the doc generator's front end          |
+| =test/cmacs/cmacs-capability-tests.el=           | ERT; =cmacs/emacsctl/tests/test-ctl.c= has the CLI unit tests  |

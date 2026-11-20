@@ -66,6 +66,8 @@ typedef struct
   enum cmacs_brigade_confirm confirm;
   gboolean  async;
   gint      timeout_ms;   /* 0 = use the default */
+  gboolean  no_mcp;       /* :surfaces excludes `mcp': mirrored for the
+                             allowlist gate, never published to MCP */
 } CmacsBrigadeTool;
 
 typedef void (*CmacsBrigadeToolFunc) (const CmacsBrigadeTool *tool,

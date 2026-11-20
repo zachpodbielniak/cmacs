@@ -1,0 +1,866 @@
+#+title: cmacs capability reference
+#+description: Every tool the shipped lisp/cmacs files register, generated from the tool registry.
+
+# GENERATED FILE -- do not edit.  Regenerate with
+#   admin/cmacs-capability-audit.sh --write-docs
+# test/cmacs/cmacs-capability-tests.el fails when this is stale.
+
+63 tools.  Each is reachable by its wire name over MCP and =org.cmacs.Editor1.Tools.Call=, and by the CLI words shown, on the surfaces listed.  See [[file:cmacs-capability.org][cmacs-capability.org]] for how the table works.
+
+* agent
+
+** agent_cancel
+
+Stop a subagent you spawned.
+
+- CLI :: =emacsctl tool agent cancel=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id returned by agent_spawn |
+
+** agent_list
+
+List the agent definitions available to spawn, and every task currently known with its state.
+
+- CLI :: =emacsctl tool agent list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** agent_models
+
+List the models a provider offers, for use as agent_spawn's model argument. The value to pass is "provider/model".
+
+- CLI :: =emacsctl tool agent models=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =provider= | string | yes | Provider name, from agent_providers |
+
+** agent_providers
+
+List the AI providers this cmacs can reach, and whether each looks usable. Use before agent_models when you want to pick a model for a spawn.
+
+- CLI :: =emacsctl tool agent providers=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** agent_result
+
+Collect what a subagent produced. Call it once agent_status reports `done'; on a `failed' task it returns whatever was produced before the failure, which is usually the explanation. For an agent you have sent more than one message to, this returns the answer to the most recent one. Pass `turn' to read an earlier one, or use agent_log to read the whole exchange.
+
+- CLI :: =emacsctl tool agent result=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id returned by agent_spawn |
+| =turn= | integer | no | Which turn's reply to read; omit for the latest |
+
+** agent_spawn
+
+Hand a piece of work to another agent, which runs in parallel with you. Returns a task id immediately -- it does NOT wait for the work to finish. Poll it with agent_status and collect the answer with agent_result once the state is `done'. Spawn several and poll them all rather than spawning one and waiting.
+
+- CLI :: =emacsctl tool agent spawn=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =task= | string | yes | What the subagent should do. Write it as a standalone instruction: the subagent does not see your conversation. |
+| =agent= | string | no | Which agent definition to use; omit for the default |
+| =model= | string | no | Model as provider/model, e.g. claude/claude-sonnet-4-6. Omit to use the agent's own -- call agent_models first if you want to choose one. |
+| =title= | string | no | Short label for the dashboard |
+
+** agent_status
+
+Check on a subagent you spawned. States are draft, queued, starting, running, waiting-input, done, failed, cancelled and over-budget. Only `done' and `failed' are final.
+
+- CLI :: =emacsctl tool agent status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id returned by agent_spawn |
+
+* calc
+
+** calc_convert_units
+
+Evaluate EXPRESSION and convert it to UNITS; with no UNITS, reduce it to base SI. Knows CODATA physical constants (c, G, h, hbar, k, Nav, me, mp), so '2 * G * 1.989e30 kg / c^2' reduces to the Schwarzschild radius of the Sun in metres, and '60 mph' converts to 'm/s'.
+
+- CLI :: =emacsctl tool calc convert-units=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool calc convert-units --expression '60 mph' --units m/s=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =expression= | string | yes | Expression with units, e.g. 60 mph |
+| =units= | string | no | Target units, e.g. m/s; omit to reduce to base SI |
+
+** calc_describe
+
+Describe one calculator by NAME: its title, category, arguments, return value and documentation.
+
+- CLI :: =emacsctl tool calc describe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool calc describe --name bscall=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Calculator name, e.g. bscall |
+
+** calc_eval
+
+Evaluate a calculator EXPRESSION numerically and return the result. Uses desktop-calculator semantics: '/' and '*' associate left to right (so 2/3*4 is 2.667), angles are radians, and symbolic constants fold (e^(i*pi) is -1). Arbitrary precision. All registered calculators are callable as functions, e.g. 'bscall(100,100,0.05,0.2,1)' or 'lorentz(0.9)'. Bad input is reported as an error rather than echoed back unevaluated.
+
+- CLI :: =emacsctl tool calc eval=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool calc eval --expression 'sqrt(5/3*3^4)'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =expression= | string | yes | Expression, e.g. sqrt(5/3*3^4) |
+
+** calc_eval_symbolic
+
+Evaluate a calculator EXPRESSION symbolically, permitting free variables. This is the computer-algebra path: deriv(x^3,x), integ(x^2,x), solve(x^2-4=0,x), taylor(sin(x),x,5), factor, expand. Use calc_eval instead when a number is wanted.
+
+- CLI :: =emacsctl tool calc eval-symbolic=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool calc eval-symbolic --expression 'deriv(x^3, x)'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =expression= | string | yes | Expression, e.g. deriv(x^3 + sin(x), x) |
+
+** calc_list
+
+List the registered calculators, optionally only those in one CATEGORY (financial, physics, relativity, tax, ...). Each is callable as a function from calc_eval.
+
+- CLI :: =emacsctl tool calc list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool calc list --category physics=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =category= | string | no | Category to filter by |
+
+* data
+
+** lql_query
+
+Run an LQL query inside the editor and return the rows as a text table. LQL is a pipeline language: `fetch SOURCE | filter EXPR | fields a, b | sort a DESC | summarize n = count(), by: {a} | limit N'. Sources include files of any format (read "path"), git_log and the other git_* sources, exec, journal, coredumps, sql, Kubernetes, and the editor's own state: buffers, windows, processes, recentf, kill_ring, bookmarks, org_headings, and the user's org notes repository: notes (one row per file: para, scope, area, title, tags, created/updated, todos, backlinks), note_headings, note_links and note_properties. NULL is three-valued: test presence with is_not_null(x), never x != null. Call lql_sources for the full list. Read-only.
+
+- CLI :: =emacsctl tool data lql-query=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | The LQL query |
+| =max_rows= | integer | no | Most rows to return (default 100) |
+
+** lql_sources
+
+List every LQL source lql_query can fetch from, including the editor-state sources cmacs defines.
+
+- CLI :: =emacsctl tool data lql-sources=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+* database
+
+** db_columns
+
+Describe one table: its columns with types and nullability, and its primary key. Use this before writing a query against a table you have not seen.
+
+- CLI :: =emacsctl tool database db-columns=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Connection name from db-connections |
+| =table= | string | yes | Table name |
+| =schema= | string | no | Schema containing the table; omit for the default |
+
+** db_connections
+
+List the databases this Emacs can reach, with their dialect and whether they are read-only. Call this first: every other database tool addresses a connection by the names this returns.
+
+- CLI :: =emacsctl tool database db-connections=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** db_execute
+
+Run a statement that CHANGES the database -- INSERT, UPDATE, DELETE or DDL. Refused outright on a connection marked read-only.
+
+- CLI :: =emacsctl tool database db-execute=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Connection name from db-connections |
+| =sql= | string | yes | The statement to run |
+
+** db_export
+
+Export the results of a query to a file as csv or json.
+
+- CLI :: =emacsctl tool database db-export=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Connection name from db-connections |
+| =sql= | string | yes | The SELECT statement whose results to export |
+| =format= | string | yes | csv or json |
+| =path= | string | yes | Absolute path to write |
+
+** db_query
+
+Run a read-only SQL query and return the rows as JSON. Only reads are permitted: SELECT, VALUES, EXPLAIN, SHOW and read-only pragmas. Results are capped, and the reply says so when it was truncated.
+
+- CLI :: =emacsctl tool database db-query=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Connection name from db-connections |
+| =sql= | string | yes | The SELECT statement to run |
+
+** db_tables
+
+List the tables and views in a database.
+
+- CLI :: =emacsctl tool database db-tables=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Connection name from db-connections |
+| =schema= | string | no | Schema to list; omit for the default |
+
+* deliver
+
+** deliverable_emit
+
+Turn an org file you have written into a finished artifact. KIND is one of sparkpage, slides, pod or clip. Returns the path, or the reasons it was refused.
+
+- CLI :: =emacsctl tool deliver deliverable-emit=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =kind= | string | yes | sparkpage, slides, pod or clip |
+| =source= | string | yes | Path to the org file (or recording, for clip) |
+
+* desktop
+
+** desktop_click
+
+Click at a position on your own desktop. The pointer is moved there first.
+
+- CLI :: =emacsctl tool desktop click=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | integer | yes | Pixels from the left edge |
+| =y= | integer | yes | Pixels from the top edge |
+| =button= | string | no | Which button One of: left, right, middle. Default: left. |
+
+** desktop_key
+
+Press one key or key combination in the focused window of your own desktop. Keys are XKB names: Return, Escape, Tab, BackSpace, space, F5, a. Combinations join with +: Ctrl+s, Alt+F4, Ctrl+Shift+t.
+
+- CLI :: =emacsctl tool desktop key=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =key= | string | yes | The key or combination |
+
+** desktop_launch
+
+Start a program on your own desktop. Returns at once; the program may take a moment to draw its window, so take a screenshot or list the windows to see it.
+
+- CLI :: =emacsctl tool desktop launch=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =command= | string | yes | The command line to run, e.g. "gedit /tmp/notes.txt" |
+
+** desktop_screenshot
+
+Take a picture of your own desktop -- the private screen your GUI programs open on. Returns the path of a PNG file and its size in pixels; the coordinates the other desktop tools take are positions in that picture.
+
+- CLI :: =emacsctl tool desktop screenshot=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 120s)
+
+Takes no arguments.
+
+** desktop_scroll
+
+Scroll at a position on your own desktop. The pointer is moved there first.
+
+- CLI :: =emacsctl tool desktop scroll=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | integer | yes | Pixels from the left edge |
+| =y= | integer | yes | Pixels from the top edge |
+| =direction= | string | yes | Which way One of: up, down, left, right. |
+| =amount= | integer | no | How many notches Default: 1. |
+
+** desktop_text
+
+Read the text shown on your own desktop (OCR). With no arguments it reads the whole screen; give a rectangle to read part of it. Cheaper than a picture when you only need the words.
+
+- CLI :: =emacsctl tool desktop text=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | integer | no | Left edge of the rectangle |
+| =y= | integer | no | Top edge of the rectangle |
+| =width= | integer | no | Width of the rectangle |
+| =height= | integer | no | Height of the rectangle |
+
+** desktop_type
+
+Type text into the focused window of your own desktop, as if at its keyboard. Click the field you mean first.
+
+- CLI :: =emacsctl tool desktop type=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =text= | string | yes | The text to type |
+
+** desktop_windows
+
+List the windows open on your own desktop, with their ids, titles, programs and positions, as JSON.
+
+- CLI :: =emacsctl tool desktop windows=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 120s)
+
+Takes no arguments.
+
+* imgedit
+
+** imgedit_describe
+
+Describe the image the user currently has open.
+
+- CLI :: =emacsctl tool imgedit describe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** imgedit_prompt
+
+Edit the image the user currently has open, by instruction. For example: "crop to the subject and increase contrast slightly".
+
+- CLI :: =emacsctl tool imgedit prompt=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =instruction= | string | yes | What to do to the image |
+
+* mail
+
+** mail_read
+
+Read one message in full, by its message id as reported by mail_search.
+
+- CLI :: =emacsctl tool mail read=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =msgid= | string | yes | The message id |
+
+** mail_search
+
+Search the user's mail. Takes a mu query such as "from:alice AND subject:invoice" or "flag:unread".
+
+- CLI :: =emacsctl tool mail search=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | A mu query |
+| =limit= | integer | no | How many results Default: 20. |
+
+* mailbox
+
+** agent_close
+
+Finish with an agent for good: drop anything still queued for it and release the conversation it was holding. Its log stays readable. Do this when you are done with a subagent you have been going back and forth with, so it is not holding a session open indefinitely.
+
+- CLI :: =emacsctl tool mailbox agent-close=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id, from agent_spawn |
+
+** agent_drop
+
+Remove a message you queued but no longer want delivered. Only works while it is still waiting -- a message already given to the agent cannot be taken back.
+
+- CLI :: =emacsctl tool mailbox agent-drop=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id, from agent_spawn |
+| =index= | integer | no | Which queued message, from agent_inbox. Omit to clear the whole queue. |
+
+** agent_inbox
+
+List the messages queued for an agent that it has not yet been given. Use it to check whether something you sent has been picked up.
+
+- CLI :: =emacsctl tool mailbox agent-inbox=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id, from agent_spawn |
+
+** agent_log
+
+Read the full transaction log of any agent -- every message it was given, every reply, every tool it called, in order. You do NOT need to have spawned it. This is how you inspect an agent that is misbehaving: read its log and see what it actually did, rather than what it says it did. Use from_turn to read only what is new since you last looked.
+
+- CLI :: =emacsctl tool mailbox agent-log=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id of the agent to inspect |
+| =from_turn= | integer | no | Only entries from this turn onward. Omit for all. |
+| =kinds= | string | no | Comma-separated entry kinds to keep: message, reply, tool, state. Omit for all. |
+
+** agent_send
+
+Say something more to an agent. Works whether it is still running -- the message reaches it during its current turn when it can take one mid-turn, and otherwise when that turn ends -- or already finished, in which case it starts again with the same conversation and remembers everything from before. Returns immediately; poll with agent_status and collect with agent_result as usual.
+
+- CLI :: =emacsctl tool mailbox agent-send=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Task id, from agent_spawn |
+| =message= | string | yes | What to say. It continues the existing conversation, so you do not need to repeat context you already gave it. |
+
+* memory
+
+** memory_get
+
+Read a file from the indexed corpora in full, by its path as reported by memory_search. Use this when an excerpt is not enough.
+
+- CLI :: =emacsctl tool memory get=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Path as shown in a memory_search result |
+
+** memory_search
+
+Search the user's notes and other indexed corpora for material relevant to a question. Returns ranked excerpts with their source paths. Use this before answering anything about the user's own decisions, projects, or history.
+
+- CLI :: =emacsctl tool memory search=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | What to look for, phrased as a question or topic |
+| =k= | integer | no | How many results to return Default: 8. |
+
+** memory_stats
+
+Report how much of the user's corpora the memory index currently covers. Call this before concluding that something is absent from the notes -- an empty result from a partial index means nothing.
+
+- CLI :: =emacsctl tool memory stats=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+* office
+
+** office_cells
+
+Read a spreadsheet's non-empty cells as ADDRESS<TAB>VALUE lines. Empty cells are omitted. A cell holding a formula shows its value and then the formula in brackets.
+
+- CLI :: =emacsctl tool office cells=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the spreadsheet |
+| =sheet= | string | no | Sheet name; omit for every sheet |
+
+** office_info
+
+Describe a document without reading all of it: its format, what kind of document it is, its sheet or slide count, and its properties (title, author, dates). Cheap; prefer it before office_read when you only need to know what something is.
+
+- CLI :: =emacsctl tool office info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the document |
+
+** office_outline
+
+List a document's blocks with the anchors needed to edit them. Each line is INDEX, then the heading level or slide number, then the text. Pass an INDEX back to office_set_text to change that block -- this is how you locate what to edit.
+
+- CLI :: =emacsctl tool office outline=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the document |
+
+** office_read
+
+Read the text of a Word document, spreadsheet or presentation -- .docx, .xlsx, .pptx, .odt, .ods or .odp. Returns the readable content: paragraphs for documents, tab-separated rows for spreadsheets, slide text for presentations. Use this instead of guessing at a file you cannot open.
+
+- CLI :: =emacsctl tool office read=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the document |
+
+** office_set_cell
+
+Set one spreadsheet cell and save the file. REF is like "Sheet1!B7", or just "B7" for the first sheet. A VALUE beginning with `=' is stored as a formula. Everything else in the document is preserved byte-for-byte.
+
+- CLI :: =emacsctl tool office set-cell=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the spreadsheet |
+| =ref= | string | yes | Cell reference, e.g. Sheet1!B7 |
+| =value= | string | yes | New value; a leading = makes it a formula |
+
+** office_set_text
+
+Replace the text of one block in a document, and save. INDEX comes from office_outline. For a presentation, pass the slide number as SLIDE too and INDEX is the shape's position on that slide. The block keeps its style; formatting that varied inside it is flattened. Nothing else in the document changes.
+
+- CLI :: =emacsctl tool office set-text=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Absolute path to the document |
+| =index= | integer | yes | Block index from office_outline |
+| =text= | string | yes | Replacement text |
+| =slide= | integer | no | Slide number, for presentations only |
+
+* schedule
+
+** schedule_create
+
+Create a scheduled task that runs a prompt on a cron schedule. Always call schedule_preview first and show the user what the expression means before creating it.
+
+- CLI :: =emacsctl tool schedule create=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =title= | string | yes | Short description, used as the headline |
+| =cron= | string | yes | Cron expression, e.g. '0 8 * * 1-5' or '@daily' |
+| =prompt= | string | yes | The prompt the agent runs each time it fires |
+| =agent= | string | no | Agent definition to base it on |
+| =model= | string | no | Provider/model, e.g. 'claude/claude-sonnet-4-6' |
+| =tools= | string | no | Comma-separated tools the agent may use |
+| =budget= | string | no | Spend ceiling per run, in dollars |
+
+** schedule_delete
+
+Delete a schedule permanently.
+
+- CLI :: =emacsctl tool schedule delete=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Schedule id, from schedule_list |
+
+** schedule_list
+
+List the user's scheduled agent tasks: what each one runs, on what cron expression, and when it next fires.
+
+- CLI :: =emacsctl tool schedule list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** schedule_preview
+
+Check a cron expression before using it: returns it in plain English plus the next few times it would fire. Use this to confirm an expression means what you intended.
+
+- CLI :: =emacsctl tool schedule preview=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =cron= | string | yes | Cron expression, e.g. '0 8 * * 1-5', '@daily', '@every 30m' |
+| =count= | integer | no | How many upcoming times to show |
+
+** schedule_set_enabled
+
+Enable or disable an existing schedule without deleting it.
+
+- CLI :: =emacsctl tool schedule set-enabled=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Schedule id, from schedule_list |
+| =enabled= | boolean | yes | Whether it should run |
+
+* secondbrain
+
+** secondbrain_find
+
+Search the second brain for notes about a query: semantic when the memory index exists, text search otherwise. Returns paths, titles and snippets.
+
+- CLI :: =emacsctl tool secondbrain find=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | What to look for |
+| =limit= | integer | no | Most results to return (default 10) |
+
+** secondbrain_ingest
+
+File a URL, a file (any format: PDF, Office, EPUB, mail, audio, video, YouTube, HTML, Markdown, data) or literal text into the user's second brain as an Org note: summarised, tagged, placed in the PARA tree, linked to related notes and registered in its index. Returns the job's final status as JSON, including note_file. Slow for media (transcription) and long documents (summary); expect tens of seconds.
+
+- CLI :: =emacsctl tool secondbrain ingest=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 900s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =input= | string | yes | A URL, an absolute path, or empty when text is given |
+| =text= | string | no | Literal text to ingest instead of a file or URL |
+| =para= | string | no | inbox, projects, areas, resources or detect (default: configured placement) |
+| =category= | string | no | Sub path under the PARA category, e.g. technical/linux |
+| =tags= | string | no | Comma-separated tags to add |
+| =summary_type= | string | no | Summary template: general, meeting, book, youtube, ... or auto |
+| =title= | string | no | Title to use instead of the material's own |
+| =no_summary= | boolean | no | Skip the AI summary |
+
+** secondbrain_ingest_status
+
+Status of an ingest job by id, as JSON.
+
+- CLI :: =emacsctl tool secondbrain ingest-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Job id, e.g. sbi-3 |
+
+** secondbrain_tree
+
+List the PARA notes tree as root-relative paths. Use this to see where a note could be filed before choosing a category.
+
+- CLI :: =emacsctl tool secondbrain tree=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =para= | string | no | Restrict to one category: inbox, projects, areas, resources, archives |
+| =category= | string | no | Sub path under that category |
+| =files= | boolean | no | Include .org files, not only directories |
+
+* speech
+
+** speech_say
+
+Say TEXT aloud on the user's speakers with the configured voice.
+
+- CLI :: =emacsctl tool speech say=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =text= | string | yes | What to say |
+
+** speech_transcribe
+
+Transcribe an audio or video file (any format ffmpeg reads) and return the text.
+
+- CLI :: =emacsctl tool speech transcribe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 900s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The audio or video file |
+
+** speech_who_spoke
+
+Who spoke when in an audio or video file: a speaker-labelled transcript.
+
+- CLI :: =emacsctl tool speech who-spoke=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 1200s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The audio or video file |
+
+* vidstudio
+
+** video_suggest_cuts
+
+Given a recording that has already been transcribed, propose which spans are worth keeping for a highlight reel. Returns the spans; it does not edit anything.
+
+- CLI :: =emacsctl tool vidstudio video-suggest-cuts=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =file= | string | yes | Path to the recording |
+| =brief= | string | no | Extra direction, e.g. 'only the parts about X' |
+
+* web
+
+** web_lql
+
+Run an LQL query on the libresearch metasearch server and return the rows. LQL is a pipeline over search results, e.g. `search "glib", category: CODE | filter extra.stars > 100 | fields title, url' or the shorthand `gtk docs | filter site("docs.gtk.org")'. With explain, return the plan without running it. Use web_research instead for a plain question.
+
+- CLI :: =emacsctl tool web lql=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | The LQL query |
+| =explain= | boolean | no | Plan the query without running it |
+
+** web_research
+
+Research a question on the web and return a cited answer. A libresearch server searches, reads the most relevant pages and answers with numbered citations [n], followed by the sources it cites (title and URL). Use it for questions that need current or external facts; cite the sources you rely on. Slow: a run takes one to several minutes, longer with deep.
+
+- CLI :: =emacsctl tool web research=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =question= | string | yes | The question to answer, as a full sentence |
+| =deep= | boolean | no | Let the server run follow-up searches (slower, more thorough) |
+| =pages= | integer | no | Pages to read, 1-20; omit for the server's default |
+
+** web_search_show
+
+Open a libresearch web search in a results grid in the user's editor, for the USER to read, sort, mark and act on. Returns at once; it does not return the results to you (use web_research or web_lql for that). Use it when the user asks to see or browse search results.
+
+- CLI :: =emacsctl tool web search-show=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | What to search for |
+| =category= | string | no | A category: general, news, code, science, it, ... |

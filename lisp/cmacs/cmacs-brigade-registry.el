@@ -135,10 +135,95 @@ wire.  Pass structured data as a JSON string parameter.")
   timeout         ; seconds
   handler         ; function
   menu            ; nil | t | (TARGET-KIND...) -- see `cmacs-ai-menu'
-  menu-label)     ; string shown in the menu instead of the tool name
+  menu-label      ; string shown in the menu instead of the tool name
+  ;; Capability-table metadata (see cmacs-capability.el).  New slots go
+  ;; at the END: accessors are compiled to slot indexes, so a stale .elc
+  ;; of some other file keeps reading the right field.
+  surfaces        ; nil (= default set) | list of mcp dbus cli menu agents
+  cli             ; nil (= derived) | "GROUP VERB"
+  returns         ; string | json -- how a client should render the result
+  example         ; nil | string, one sample invocation for the docs
+  aliases)        ; list of extra wire names answering to this tool
 
 (define-error 'cmacs-brigade-tool-error
   "Invalid brigade tool definition" 'cmacs-brigade-error)
+
+(defconst cmacs-brigade-tool-surfaces '(mcp dbus cli menu agents)
+  "Every surface a registered tool can be published on.
+
+  agents  in-process agent executors (`cmacs-brigade-install-tools')
+  mcp     cmacs's MCP server: external clients, and CLI agents through
+          the relay and the scoped sockets
+  dbus    org.cmacs.Editor1.Tools
+  cli     `emacsctl tool ...', which rides the D-Bus interface and so
+          also needs `dbus'
+  menu    the AI right-click menu, for a tool that also sets :menu
+
+A tool that gives no :surfaces is on all of them, with one exception
+decided in `cmacs-brigade-tool-effective-surfaces': a :destructive tool
+stays off `dbus' and `cli' until it names them.")
+
+(defconst cmacs-brigade-tool-cli-reserved '("list" "describe" "call" "help")
+  "Words `emacsctl tool' keeps for itself, so no tool group may be one.")
+
+(defun cmacs-brigade-tool-effective-surfaces (tool)
+  "Return the list of surfaces TOOL is actually published on.
+
+An explicit :surfaces is taken as written.  Without one the answer is
+every surface, except that a destructive tool is left off `dbus' and
+`cli'.  The reason is that those two cannot be scoped: an MCP caller can
+be handed a socket whose allowlist the C gate enforces, an in-process
+agent only ever holds the tools it was built with, but anything on the
+session bus reaches every method of every interface.  So the registry
+does not put a destructive capability one `gdbus call' away by default;
+its author says so explicitly, by listing `dbus' in :surfaces."
+  (or (cmacs-brigade-tool-surfaces tool)
+      (if (cmacs-brigade-tool-destructive tool)
+          (cl-set-difference cmacs-brigade-tool-surfaces '(dbus cli))
+        cmacs-brigade-tool-surfaces)))
+
+(defun cmacs-brigade-tool-on-surface-p (tool surface)
+  "Non-nil when TOOL is published on SURFACE.
+`cli' additionally needs `dbus', which is the wire it travels on."
+  (let ((on (cmacs-brigade-tool-effective-surfaces tool)))
+    (and (memq surface on)
+         (or (not (eq surface 'cli)) (memq 'dbus on))
+         t)))
+
+(defun cmacs-brigade--check-tool-metadata (name surfaces cli returns example
+                                                aliases)
+  "Signal `cmacs-brigade-tool-error' unless the capability keys are valid.
+NAME is the tool being registered; the rest are its SURFACES, CLI,
+RETURNS, EXAMPLE and ALIASES arguments."
+  (unless (and (listp surfaces)
+               (cl-every (lambda (s) (memq s cmacs-brigade-tool-surfaces))
+                         surfaces))
+    (signal 'cmacs-brigade-tool-error
+            (list (format "surfaces must be a list drawn from %S"
+                          cmacs-brigade-tool-surfaces)
+                  name surfaces)))
+  (when cli
+    ;; Exactly GROUP VERB, in the alphabet a shell word needs no quoting
+    ;; for.  The CLI resolves two words and nothing else, so a verb with
+    ;; a space in it could be registered and never be typed.
+    (unless (and (stringp cli)
+                 (string-match-p
+                  "\\`[a-z][a-z0-9-]* [a-z][a-z0-9-]*\\'" cli)
+                 (not (member (car (split-string cli " "))
+                              cmacs-brigade-tool-cli-reserved)))
+      (signal 'cmacs-brigade-tool-error
+              (list "cli must be \"GROUP VERB\" in [a-z0-9-], and GROUP \
+must not be list, describe, call or help" name cli))))
+  (unless (memq returns '(nil string json))
+    (signal 'cmacs-brigade-tool-error
+            (list "returns must be `string' or `json'" name returns)))
+  (unless (or (null example) (stringp example))
+    (signal 'cmacs-brigade-tool-error
+            (list "example must be a string" name example)))
+  (unless (and (listp aliases)
+               (cl-every (lambda (a) (or (stringp a) (symbolp a))) aliases))
+    (signal 'cmacs-brigade-tool-error
+            (list "aliases must be a list of names" name aliases))))
 
 (defun cmacs-brigade--parse-param (spec)
   "Normalise one parameter SPEC into a plist.
@@ -184,7 +269,8 @@ SPEC is (NAME TYPE DOC &rest KEYWORDS) where KEYWORDS may include
 ;;;###autoload
 (cl-defun cmacs-brigade-register-tool
     (&key name description params handler
-          group destructive confirm async timeout menu menu-label)
+          group destructive confirm async timeout menu menu-label
+          surfaces cli returns example aliases)
   "Publish a capability to every brigade agent surface.
 
 NAME is a symbol; the wire name is its snake_case form.  DESCRIPTION is
@@ -212,6 +298,19 @@ Optional keys:
                something the tool itself considers worth asking about.
   MENU-LABEL   menu text, when the tool's name is not what you want to
                read there
+  SURFACES     list of the surfaces to publish on, drawn from
+               `cmacs-brigade-tool-surfaces'.  Omitted means all of
+               them, except that a DESTRUCTIVE tool is kept off `dbus'
+               and `cli' until it lists them -- see
+               `cmacs-brigade-tool-effective-surfaces'
+  CLI          \"GROUP VERB\", the words after `emacsctl tool'.  Omitted
+               means derived from GROUP and NAME -- see
+               `cmacs-capability-cli-verb'
+  RETURNS      `string' (the default) or `json': how a client should
+               render the result
+  EXAMPLE      one sample invocation, shown in the generated reference
+  ALIASES      extra wire names that answer to this tool, for a
+               capability that used to be published under another name
 
 MENU is what makes the extension surface symmetrical: one
 `cmacs-brigade-deftool' form in your init already publishes a capability
@@ -233,25 +332,55 @@ directly when registering tools programmatically."
   (when (and confirm (not (memq confirm '(ask always))))
     (signal 'cmacs-brigade-tool-error
             (list "confirm must be nil, `ask' or `always'" confirm)))
+  (cmacs-brigade--check-tool-metadata name surfaces cli returns example
+                                      aliases)
   (let* ((parsed (mapcar #'cmacs-brigade--parse-param params))
          (wire   (cmacs-brigade-wire-name name))
+         (alias-wires (delete wire
+                              (delete-dups
+                               (mapcar #'cmacs-brigade-wire-name aliases))))
+         ;; A tool that opted out of the menu surface simply has no menu
+         ;; entry: the menu reads this slot, so clearing it here filters
+         ;; that surface without the menu code learning about surfaces.
+         (menu   (and (or (null surfaces) (memq 'menu surfaces)) menu))
          (tool   (cmacs-brigade--make-tool
                   :name name :wire-name wire :description description
                   :params parsed :group group :destructive destructive
                   :confirm confirm :async async
                   :timeout (or timeout cmacs-brigade-tool-default-timeout)
                   :handler handler
-                  :menu menu :menu-label menu-label)))
+                  :menu menu :menu-label menu-label
+                  :surfaces surfaces :cli cli
+                  :returns (or returns 'string) :example example
+                  :aliases alias-wires))
+         (old    (cmacs-brigade-registry-get 'tool name))
+         (props  (list :group group :destructive destructive
+                       :confirm confirm :async async
+                       :timeout (cmacs-brigade-tool-timeout tool)
+                       ;; Read by the MCP publisher: a tool that is not
+                       ;; on the `mcp' surface stays in the mirror (the
+                       ;; allowlist gate resolves groups from it) but is
+                       ;; not offered to MCP clients.
+                       :no-mcp (not (cmacs-brigade-tool-on-surface-p
+                                     tool 'mcp)))))
+    ;; An alias dropped by a re-registration must stop answering.
+    (when (and old (fboundp 'cmacs-brigade--mirror-remove))
+      (dolist (a (cmacs-brigade-tool-aliases old))
+        (unless (member a alias-wires)
+          (funcall 'cmacs-brigade--mirror-remove a))))
     (cmacs-brigade--registry-put 'tool name tool)
     ;; Mirror the metadata into C for MCP publication and the allowlist
     ;; gate.  Absent when brigade is not compiled in, in which case the
     ;; Elisp registry still works for in-process use.
     (when (fboundp 'cmacs-brigade--mirror-put)
-      (funcall 'cmacs-brigade--mirror-put
-               wire description (cmacs-brigade--params-json parsed)
-               (list :group group :destructive destructive
-                     :confirm confirm :async async
-                     :timeout (cmacs-brigade-tool-timeout tool))))
+      (let ((json (cmacs-brigade--params-json parsed)))
+        (funcall 'cmacs-brigade--mirror-put wire description json props)
+        ;; Each alias is mirrored as a tool of its own, so the old name
+        ;; is published, gated and allowlisted exactly like the new one.
+        (dolist (a alias-wires)
+          (funcall 'cmacs-brigade--mirror-put
+                   a (format "%s  (Alias of %s.)" description wire)
+                   json props))))
     (run-hook-with-args 'cmacs-brigade-tool-registered-functions tool)
     name))
 
@@ -261,7 +390,10 @@ directly when registering tools programmatically."
   (let ((had (cmacs-brigade-registry-get 'tool name)))
     (remhash name (cmacs-brigade--registry 'tool))
     (when (fboundp 'cmacs-brigade--mirror-remove)
-      (funcall 'cmacs-brigade--mirror-remove (cmacs-brigade-wire-name name)))
+      (funcall 'cmacs-brigade--mirror-remove (cmacs-brigade-wire-name name))
+      (when had
+        (dolist (a (cmacs-brigade-tool-aliases had))
+          (funcall 'cmacs-brigade--mirror-remove a))))
     (and had t)))
 
 ;;;###autoload
@@ -272,8 +404,9 @@ DESCRIPTION is the model-facing summary.  PARAMS is a list of
 \(PNAME TYPE DOC &rest KEYWORDS) specs; each PNAME is bound in BODY.
 
 BODY may be preceded by keyword options -- :group, :destructive,
-:confirm, :async, :timeout, :menu and :menu-label -- which mean what they
-do in `cmacs-brigade-register-tool'.
+:confirm, :async, :timeout, :menu, :menu-label, :surfaces, :cli,
+:returns, :example and :aliases -- which mean what they do in
+`cmacs-brigade-register-tool'.
 
 :menu is how a tool reaches you as well as your agents:
 

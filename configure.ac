@@ -1150,7 +1150,8 @@ if test "$with_cmacs_ai_brigade" != "no"; then
   dnl builds when BOTH the brigade and cmacs-glib are enabled --- matching
   dnl the file's HAVE_CMACS_GLIB && HAVE_CMACS_AI_BRIGADE guard.
   if test "$with_cmacs_glib" != "no"; then
-    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-brigade.o"
+    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-brigade.o cmacs-dbus-iface-tools.o"
+    AC_DEFINE([HAVE_CMACS_DBUS_TOOLS], 1, [org.cmacs.Editor1.Tools capability interface])
   fi
 fi
 if test "$with_cmacs_libregnum" != "no"; then

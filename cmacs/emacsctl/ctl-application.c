@@ -6,6 +6,7 @@
 /* ctl-application.c --- see ctl-application.h. */
 
 #include "ctl-application.h"
+#include "ctl-cmd-tool.h"
 #include "ctl-config.h"
 #include "ctl-invocation.h"
 
@@ -682,7 +683,14 @@ ctl_application_run (CtlApplication *self, gint argc, gchar **argv)
 
       if (help_requested)
         {
-          code = print_help_for (self, prog, cmd_argv, cmd_argc);
+          /* `tool ...' help is generated from the running editor's
+           * capability table, which no static usage string can know.
+           * -1 means "not mine, or no editor to ask": fall through to
+           * the static help. */
+          code = (cmd_argc > 0 && g_strcmp0 (cmd_argv[0], "tool") == 0)
+            ? ctl_cmd_tool_help (inv, prog, cmd_argv, cmd_argc) : -1;
+          if (code < 0)
+            code = print_help_for (self, prog, cmd_argv, cmd_argc);
           g_strfreev (cmd_argv);
           goto out;
         }

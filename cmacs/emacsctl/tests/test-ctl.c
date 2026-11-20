@@ -13,6 +13,7 @@
 #include "ctl-frame.h"
 #include "ctl-config.h"
 #include "ctl-repl.h"
+#include "ctl-tool-args.h"
 
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -309,6 +310,230 @@ test_repl_is_complete (void)
   g_object_unref (bacon);
 }
 
+/* ── `emacsctl tool': typed flags and help from a capability table ── */
+
+/* A table shaped like org.cmacs.Editor1.Tools.List's, written here so
+ * the test needs no editor.  Caller unrefs the parser. */
+static JsonArray *
+tool_fixture (JsonParser **parser)
+{
+  static const gchar *json =
+    "{\"version\":1,\"tools\":["
+    "{\"name\":\"calc_eval\",\"cli\":\"calc eval\",\"group\":\"calc\","
+    " \"description\":\"Evaluate an expression.  Longer text.\","
+    " \"returns\":\"string\",\"destructive\":false,\"confirm\":null,"
+    " \"async\":false,\"timeout\":120,"
+    " \"surfaces\":[\"mcp\",\"dbus\",\"cli\",\"agents\"],"
+    " \"aliases\":[\"calculate\"],"
+    " \"params\":[{\"name\":\"expression\",\"type\":\"string\","
+    "   \"description\":\"Expression\",\"required\":true}]},"
+    "{\"name\":\"speech_transcribe\",\"cli\":\"speech transcribe\","
+    " \"group\":\"speech\",\"description\":\"Transcribe a file.\","
+    " \"returns\":\"json\",\"destructive\":false,\"confirm\":null,"
+    " \"async\":true,\"timeout\":900,"
+    " \"surfaces\":[\"dbus\",\"cli\"],\"aliases\":[],"
+    " \"params\":["
+    "  {\"name\":\"path\",\"type\":\"string\",\"description\":\"File\","
+    "   \"required\":true},"
+    "  {\"name\":\"max_speakers\",\"type\":\"integer\","
+    "   \"description\":\"Cap\",\"required\":false},"
+    "  {\"name\":\"gain\",\"type\":\"number\",\"description\":\"Gain\","
+    "   \"required\":false},"
+    "  {\"name\":\"timestamps\",\"type\":\"boolean\","
+    "   \"description\":\"Stamp\",\"required\":false}]},"
+    "{\"name\":\"agents_only\",\"cli\":\"misc agents-only\",\"group\":null,"
+    " \"description\":\"Not for the CLI.\",\"returns\":\"string\","
+    " \"destructive\":false,\"confirm\":null,\"async\":false,"
+    " \"timeout\":120,\"surfaces\":[\"dbus\"],\"aliases\":[],"
+    " \"params\":[]}"
+    "]}";
+  GError *error = NULL;
+
+  *parser = json_parser_new ();
+  json_parser_load_from_data (*parser, json, -1, &error);
+  g_assert_no_error (error);
+  return json_object_get_array_member (
+    json_node_get_object (json_parser_get_root (*parser)), "tools");
+}
+
+static void
+test_tool_lookup (void)
+{
+  JsonParser *parser;
+  JsonArray *tools = tool_fixture (&parser);
+  JsonObject *calc = ctl_tool_find_by_name (tools, "calc_eval");
+
+  g_assert_nonnull (calc);
+  /* The registry spelling and an alias reach the same tool. */
+  g_assert_true (ctl_tool_find_by_name (tools, "calc-eval") == calc);
+  g_assert_true (ctl_tool_find_by_name (tools, "calculate") == calc);
+  g_assert_true (ctl_tool_find_by_cli (tools, "calc", "eval") == calc);
+  g_assert_null (ctl_tool_find_by_name (tools, "calc"));
+  g_assert_null (ctl_tool_find_by_cli (tools, "calc", "nope"));
+
+  g_assert_true (ctl_tool_on_surface (calc, "cli"));
+  g_assert_false (ctl_tool_on_surface (
+    ctl_tool_find_by_name (tools, "agents_only"), "cli"));
+
+  /* Only an async tool raises the method timeout, and only upward. */
+  g_assert_cmpint (ctl_tool_timeout_ms (calc, 30000), ==, 30000);
+  g_assert_cmpint (ctl_tool_timeout_ms (calc, -1), ==, -1);
+  g_assert_cmpint (ctl_tool_timeout_ms (
+    ctl_tool_find_by_name (tools, "speech_transcribe"), 30000), ==, 905000);
+  g_assert_cmpint (ctl_tool_timeout_ms (
+    ctl_tool_find_by_name (tools, "speech_transcribe"), 2000000),
+    ==, 2000000);
+
+  g_object_unref (parser);
+}
+
+/* Build args for TOOL from a NULL-terminated word list; returns the
+ * JSON (caller frees) or NULL with *ERROR set. */
+static gchar *
+tool_args (JsonObject *tool, GError **error, ...)
+{
+  GPtrArray *words = g_ptr_array_new ();
+  const gchar *word;
+  gchar *out;
+  va_list ap;
+
+  va_start (ap, error);
+  while ((word = va_arg (ap, const gchar *)) != NULL)
+    g_ptr_array_add (words, (gpointer) word);
+  va_end (ap);
+  out = ctl_tool_build_args (tool, (gchar **) words->pdata,
+                             (gint) words->len, error);
+  g_ptr_array_free (words, TRUE);
+  return out;
+}
+
+static void
+test_tool_build_args (void)
+{
+  JsonParser *parser;
+  JsonArray *tools = tool_fixture (&parser);
+  JsonObject *speech = ctl_tool_find_by_name (tools, "speech_transcribe");
+  JsonObject *calc = ctl_tool_find_by_name (tools, "calc_eval");
+  GError *error = NULL;
+  gchar *json;
+
+  /* Each flag is typed by the table: a string stays a string even when
+   * it looks like a number, an integer becomes a JSON number, a bare
+   * boolean flag is true, and `-' stands for `_'. */
+  json = tool_args (speech, &error, "--path", "42", "--max-speakers", "3",
+                    "--gain=1.5", "--timestamps", NULL);
+  g_assert_no_error (error);
+  g_assert_cmpstr (json, ==, "{\"path\":\"42\",\"max_speakers\":3,"
+                             "\"gain\":1.5,\"timestamps\":true}");
+  g_free (json);
+
+  json = tool_args (speech, &error, "--path", "a.wav", "--no-timestamps",
+                    NULL);
+  g_assert_no_error (error);
+  g_assert_cmpstr (json, ==, "{\"path\":\"a.wav\",\"timestamps\":false}");
+  g_free (json);
+
+  json = tool_args (speech, &error, "--timestamps", "false", "--path", "x",
+                    NULL);
+  g_assert_no_error (error);
+  g_assert_cmpstr (json, ==, "{\"timestamps\":false,\"path\":\"x\"}");
+  g_free (json);
+
+  /* --json supplies the object; a flag beside it overrides a member,
+   * whichever comes first on the line. */
+  json = tool_args (speech, &error, "--max-speakers", "9", "--json",
+                    "{\"path\":\"j.wav\",\"max_speakers\":2}", NULL);
+  g_assert_no_error (error);
+  g_assert_cmpstr (json, ==, "{\"path\":\"j.wav\",\"max_speakers\":9}");
+  g_free (json);
+
+  /* Quotes and backslashes in a value are JSON's problem, not ours. */
+  json = tool_args (calc, &error, "--expression", "a \"b\" \\ c", NULL);
+  g_assert_no_error (error);
+  g_assert_cmpstr (json, ==, "{\"expression\":\"a \\\"b\\\" \\\\ c\"}");
+  g_free (json);
+
+  /* The refusals, each a usage error naming the flag. */
+  g_assert_null (tool_args (speech, &error, "--path", "x",
+                            "--max-speakers", "many", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_assert_nonnull (strstr (error->message, "--max_speakers"));
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--path", "x", "--gain", "1.5x",
+                            NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--path", "x", "--bogus", "1",
+                            NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_assert_nonnull (strstr (error->message, "--bogus"));
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--max-speakers", "2", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_assert_nonnull (strstr (error->message, "--path"));
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--path", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "stray", "--path", "x", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--json", "[1,2]", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_clear_error (&error);
+
+  g_assert_null (tool_args (speech, &error, "--json", "{not json", NULL));
+  g_assert_error (error, CTL_ERROR, CTL_ERROR_USAGE);
+  g_clear_error (&error);
+
+  g_object_unref (parser);
+}
+
+static void
+test_tool_help (void)
+{
+  JsonParser *parser;
+  JsonArray *tools = tool_fixture (&parser);
+  gchar *help;
+
+  /* One tool: its CLI words, every flag with its type, and that it is
+   * async -- all from the table. */
+  help = ctl_tool_help_string (
+    ctl_tool_find_by_name (tools, "speech_transcribe"), "emacsctl");
+  g_assert_nonnull (strstr (help, "emacsctl [OPTION…] tool speech "
+                                  "transcribe --path STRING"));
+  g_assert_nonnull (strstr (help, "[--max_speakers INT]"));
+  g_assert_nonnull (strstr (help, "[--timestamps]"));
+  g_assert_nonnull (strstr (help, "(required) File"));
+  g_assert_nonnull (strstr (help, "within 900s"));
+  g_free (help);
+
+  /* The overview lists what is on the cli surface and nothing else. */
+  help = ctl_tool_group_help_string (tools, "emacsctl", NULL);
+  g_assert_nonnull (strstr (help, "calc:\n"));
+  g_assert_nonnull (strstr (help, "Evaluate an expression."));
+  g_assert_null (strstr (help, "Longer text"));
+  g_assert_null (strstr (help, "agents-only"));
+  g_free (help);
+
+  help = ctl_tool_group_help_string (tools, "emacsctl", "speech");
+  g_assert_nonnull (strstr (help, "transcribe"));
+  g_assert_null (strstr (help, "calc:"));
+  g_free (help);
+
+  g_assert_null (ctl_tool_group_help_string (tools, "emacsctl", "nope"));
+  /* `misc' exists in the table but has nothing on the cli surface. */
+  g_assert_null (ctl_tool_group_help_string (tools, "emacsctl", "misc"));
+
+  g_object_unref (parser);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -324,6 +549,9 @@ main (int argc, char **argv)
   g_test_add_func ("/config/use-context",
                    test_config_use_context_preserves_comments);
   g_test_add_func ("/repl/is-complete", test_repl_is_complete);
+  g_test_add_func ("/tool/lookup", test_tool_lookup);
+  g_test_add_func ("/tool/build-args", test_tool_build_args);
+  g_test_add_func ("/tool/help", test_tool_help);
 
   return g_test_run ();
 }

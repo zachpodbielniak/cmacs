@@ -217,6 +217,13 @@ publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
   g_autoptr (McpTool) mt = NULL;
   g_autoptr (JsonNode) schema = NULL;
 
+  /* The surface filter, and the first gate: a tool whose :surfaces
+   * leave out `mcp' is not offered here at all, so there is nothing for
+   * the allowlist to admit later.  (The capability table applies the
+   * same order on D-Bus: surface, then scope, then arguments.) */
+  if (tool->no_mcp)
+    return;
+
   if (server_has_tool (server, tool->name))
     {
       g_warning ("cmacs-brigade: tool `%s' shadows a built-in MCP tool "
