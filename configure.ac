@@ -985,6 +985,14 @@ if test "$with_cmacs_libreclaw" != "no"; then
       \$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
       $cmacs_libreclaw_dir/deps/htmx-glib/build/release/libhtmx-glib-1.0.a \
       $CMACS_LIBRECLAW_DEPS_LIBS"
+    # ai-glib >= 0.13 probes onnxruntime itself (HAVE_ONNXRUNTIME ?= in
+    # its config.mk, for AiOnnxSpeakerEmbedder) and then its archive
+    # references Ort* symbols.  The probe is repeated here, the same
+    # pkg-config question, so the link line follows whatever the sub-make
+    # decided (libreclaw >= 0.30.5 asks it too, for its own .so).
+    # Harmless when --with-cmacs-ai adds it a second time.
+    PKG_CHECK_EXISTS([libonnxruntime],
+      [CMACS_LIBRECLAW_LIBS="$CMACS_LIBRECLAW_LIBS `$PKG_CONFIG --libs libonnxruntime`"])
     CMACS_LIBRECLAW_BUNDLED=yes
   fi
   AC_DEFINE([HAVE_CMACS_LIBRECLAW], 1, [CMacs libreclaw chat integration])
@@ -1023,6 +1031,16 @@ if test "$with_cmacs_clawtilla" != "no"; then
   # the other way round.
   CMACS_CLAWTILLA_LIBS="$cmacs_clawtilla_dir/build/$cmacs_dep_buildtype/libclawt-1.0.a \
     $CMACS_LIBRECLAW_LIBS"
+  # clawtilla >= 0.5x auto-probes two optional libraries in its config.mk
+  # (QRENCODE ?=, POPPLER ?=) and libclawt-1.0.a then references them:
+  # the pairing QR code and a PDF's first page as a thumbnail.  Same
+  # questions asked here, so the link line matches the archive.
+  PKG_CHECK_EXISTS([libqrencode],
+    [CMACS_CLAWTILLA_LIBS="$CMACS_CLAWTILLA_LIBS `$PKG_CONFIG --libs libqrencode`"],
+    [AC_MSG_NOTICE([libqrencode not found -- clawtilla pairing shows a link, not a QR code])])
+  PKG_CHECK_EXISTS([poppler-glib cairo],
+    [CMACS_CLAWTILLA_LIBS="$CMACS_CLAWTILLA_LIBS `$PKG_CONFIG --libs poppler-glib cairo`"],
+    [AC_MSG_NOTICE([poppler-glib not found -- clawtilla shows no PDF thumbnails])])
   # Handed to clawtilla's sub-make in src/Makefile.in.  clawtilla derives
   # its LR_* paths from its own deps/libreclaw, which reaches for the
   # nested copies of crispy, yaml-glib, mcp-glib and podomation that
@@ -1062,6 +1080,10 @@ if test "$with_cmacs_ai" != "no"; then
   # because the second occurrence resolves zero new undefined symbols.
   CMACS_AI_LIBS="\$(abs_top_srcdir)/deps/ai-glib/build/$cmacs_dep_buildtype/libai-glib-1.0.a \
     $CMACS_AI_DEPS_LIBS"
+  # ai-glib >= 0.13: see the same probe under --with-cmacs-libreclaw.
+  PKG_CHECK_EXISTS([libonnxruntime],
+    [CMACS_AI_LIBS="$CMACS_AI_LIBS `$PKG_CONFIG --libs libonnxruntime`"],
+    [AC_MSG_NOTICE([onnxruntime not found -- ai-glib builds without in-process voiceprints])])
   AC_DEFINE([HAVE_CMACS_AI], 1, [CMacs ai-glib AI subsystem])
   CMACS_AI_OBJ="cmacs-ai-init.o cmacs-ai-defuns.o cmacs-ai-config.o \
     cmacs-ai-client.o cmacs-ai-session.o cmacs-ai-stream.o \

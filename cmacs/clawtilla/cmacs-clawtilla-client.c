@@ -1114,7 +1114,7 @@ cmacs_clawt_link_notice (uint64_t handle, const char *name,
      them apart after it has been disconnected.  */
   link = clawt_daemon_link_state (client, ever_connected ? TRUE : FALSE);
 
-  return clawt_connection_notice_text (link, found, NULL, NULL);
+  return clawt_connection_notice_text (link, found, FALSE, NULL, NULL);
 }
 
 #endif /* HAVE_CMACS_CLAWTILLA */
