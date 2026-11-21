@@ -72,6 +72,11 @@ static const gchar *source_events[] = {
    * kind, label, lat, lon, distance_km, layer. */
   "on_geofence_enter",
   "on_geofence_exit",
+
+  /* A standing LQL query's result changed.  Fired by
+   * `cmacs-lql-watch-sinks.el' for a watch with an :event sink.  Event
+   * data: watch, rows, diff (bounded JSON).  */
+  "on_lql_watch",
   NULL
 };
 

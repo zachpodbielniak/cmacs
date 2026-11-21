@@ -1,0 +1,267 @@
+#+TITLE: cmacs-lql-watch — Standing LQL Queries
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+A query run with ~cmacs-lql-run~ or =M-x cmacs-lql-query= answers once. A *watch* is a query you register once and that calls you when its answer changes. A podomation trigger, a bar item and an agent's "tell me when X" are then all the same thing: a query, and what to do about a change.
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-watch dead-processes
+  "fetch processes | filter status == \"exit\" | fields name | sort name"
+  :every 30 :key "name"
+  :on-change (lambda (_new _old diff)
+               (dolist (row (plist-get diff :added))
+                 (message "%s exited" (cdr (assoc "name" row))))))
+#+end_src
+
+Four things about it, stated plainly:
+
+- *A change is a change in the result, never the passing of time.* The result is hashed; a watch fires only when the hash differs from the last one. The first result is the baseline and fires nothing unless the watch says =:immediate=.
+- *It polls.* LQL has no notion of a source announcing a change, so a watch re-runs its query every =:every= seconds. Everything in [[#cost][What it costs]] exists to make that invisible.
+- *A watch never gets in your way.* One watch query runs at a time, none while you are running a query of your own, and none that touches editor state while you are typing.
+- *An agent's watch sees what the agent may see, and no more.* See [[#agents][Agents]].
+
+Files: =lisp/cmacs/cmacs-lql-watch.el= (the watches and the list buffer), =cmacs-lql-watch-sinks.el= (podomation, the bar, toasts), =cmacs-lql-watch-tools.el= (the agent tools). There is no C: a watch is built on ~cmacs-lql-run~. Requires =--with-cmacs-lql=.
+
+* Defining a watch
+
+~(cmacs-lql-watch NAME QUERY &rest OPTIONS)~ registers one and returns its name as a string; NAME may be a string or a symbol. ~(cmacs-lql-define-watch NAME QUERY OPTIONS...)~ is the same for an init file: NAME is unquoted, and in a cmacs built without LQL it prints a message instead of failing the init file. Registering a name again replaces that watch.
+
+| Option        | Meaning                                                                                               |
+|---------------+-------------------------------------------------------------------------------------------------------|
+| =:every=      | Seconds between runs. Default ~cmacs-lql-watch-default-interval~ (60); never below ~cmacs-lql-watch-min-interval~ (5), a smaller value is raised |
+| =:on-change=  | Function of (NEW-ROWS OLD-ROWS DIFF), called when the result changes                                  |
+| =:key=        | A column name, or a list of them, that identifies a row; lets the diff tell a changed row from one removed and one added |
+| =:on-rows=    | Function of (NEW-ROWS), called on a change that leaves the result non-empty: "when there is something" |
+| =:immediate=  | Fire on the first result too, with OLD-ROWS nil                                                       |
+| =:depends=    | When a tick may be skipped without running: =auto= (default), =sources=, =always=; see [[#generations][Skipping on source generations]] |
+| =:max-rows=   | Rows kept and compared; default and ceiling ~cmacs-lql-watch-max-rows~ (500), itself never above ~cmacs-lql-max-rows~ |
+| =:timeout=    | Seconds one run may take; default ~cmacs-lql-watch-timeout~ (30)                                      |
+| =:paused=     | Register it paused                                                                                    |
+| =:event=      | Emit a podomation event on a change; see [[#podomation][podomation]]                                  |
+| =:bar=        | Drive a gowl bar item; see [[#bar][The gowl bar]]                                                     |
+| =:toast=      | A bar toast on a change; =t= or a template                                                            |
+
+An option that is none of these is an error at registration: a typo in =:on-change= must not produce a watch that silently does nothing.
+
+** Rows and the diff
+
+Rows reach a callback as alists of =(COLUMN-NAME . VALUE)=, the column name a string: ~(cdr (assoc "name" row))~. NULL is =nil= and false is =:false=, as ~cmacs-lql-parse~ has them.
+
+DIFF is a plist, also available as ~(cmacs-lql-watch-diff OLD NEW &optional KEY)~:
+
+| Key          | Value                                                                                      |
+|--------------+--------------------------------------------------------------------------------------------|
+| =:added=     | Rows in the new result and not the old                                                     |
+| =:removed=   | Rows in the old result and not the new                                                     |
+| =:changed=   | With =:key= only: =(OLD-ROW . NEW-ROW)= pairs whose key stayed and whose other columns differ |
+| =:reordered= | =t= when the same rows came back in a different order and nothing else differs             |
+
+Without =:key= rows are compared whole, as a multiset, so a row that changed shows as one removed and one added.
+
+Any difference in the result fires, including order. *Write a query whose result is small and stable*: filter, summarize, and sort. =fetch processes= changes every time a process's status string does; =fetch processes | filter status == "exit" | fields name | sort name= changes when something exits.
+
+** Other functions
+
+| Function                                  | What it does                                                         |
+|-------------------------------------------+----------------------------------------------------------------------|
+| ~cmacs-lql-unwatch NAME~                  | Remove a watch; a run in flight is cancelled and its result ignored  |
+| ~cmacs-lql-watch-list &optional OWNER~    | Every watch as a plist: =:name :query :every :owner :state :rows :total :runs :changes :failures :skipped :last-skip :last-run :last-change :next-due :last-error :callback-error :callback-seconds= |
+| ~cmacs-lql-watch-get NAME PROPERTY~       | One of those, or any option the watch was registered with            |
+| ~cmacs-lql-watch-rows NAME~               | The rows of the last result                                          |
+| ~cmacs-lql-watch-run-now NAME~            | Make it due now, clearing a backoff                                  |
+| ~cmacs-lql-watch-pause~ / ~-resume NAME~  | Stop and restart it                                                  |
+| ~cmacs-lql-watch-diff-json DIFF &optional MAX~ | The diff as bounded JSON, for anything that carries text       |
+
+Hooks, for code that wants every watch rather than one: ~cmacs-lql-watch-change-functions~ (NAME NEW OLD DIFF), ~cmacs-lql-watch-baseline-functions~ (NAME ROWS; the first result, which is not a change), ~cmacs-lql-watch-error-functions~ (NAME MESSAGE; once when a watch starts failing), ~cmacs-lql-watch-removed-functions~ (NAME OWNER). A consumer that gives watches a new option adds its keyword to ~cmacs-lql-watch-extra-keys~. The three shipped consumers are written with exactly these and nothing private.
+
+* The list: =M-x cmacs-lql-watches=
+
+One line per watch: name, state, interval, rows, runs, changes, when it last ran, when it last changed, owner, and the query -- or, for a watch that is failing, its error in place of the query.
+
+| Key   | Action                                                    |
+|-------+-----------------------------------------------------------|
+| =r=   | Run it now (at the next good moment; see below)           |
+| =p=   | Pause, or resume                                          |
+| =d=, =k= | Remove it                                              |
+| =s=   | Save it to ~cmacs-lql-watch-saved~                        |
+| =a=   | Add one: name, query, interval; it toasts on a change     |
+| =RET= | Everything about it: query, counters, errors, last rows   |
+| =g=   | Redraw                                                    |
+
+States: =waiting= (no result yet), =ok=, =running=, =paused=, =error= (=error x3= after three failures in a row). The buffer redraws itself after each run while it is visible.
+
+* What it costs
+:PROPERTIES:
+:CUSTOM_ID: cost
+:END:
+
+LQL runs one query at a time on one worker thread, and an Elisp-defined source (=buffers=, =notes=, =activity=, ...) is snapshotted to JSON on the editor thread before the query is submitted. A watch is therefore work you did not ask for at that moment, twice over. The rules:
+
+- *One timer* for every watch, armed for the earliest one due. No watches, no timer.
+- *One watch query in flight*, across all watches. Queued watch queries would sit in front of the query you are about to run; one cannot delay you by more than its own run. When it lands the next due watch goes.
+- *Never queued twice.* A watch whose last run has not come back is not submitted again. A run that outlives its timeout by ten seconds is cancelled and counted as a failure, so one stuck query cannot stop the rest.
+- *You come first.* Before submitting, the watch asks the engine's try-lock helper whether a query is running (the ~cmacs-lql-busy~ signal). If one is, the tick is skipped and retried in ~cmacs-lql-watch-busy-retry~ seconds (2).
+- *Not under your fingers.* A watch that names an Elisp source waits until Emacs has been idle for ~cmacs-lql-watch-min-idle~ seconds (0.75). Watches that read only engine sources -- files, git, the journal, SQL -- are not held back, since nothing of theirs runs on the editor thread.
+- *Errors back off.* A failing watch waits twice as long after each failure in a row, starting from its own interval, up to ~cmacs-lql-watch-max-backoff~ (an hour). You get one message when it starts failing; after that the error is in the list. A success resets it.
+- *Caps.* ~cmacs-lql-watch-max~ watches (32), ~cmacs-lql-watch-max-per-owner~ per agent task (4), ~cmacs-lql-watch-max-rows~ rows, and ~cmacs-lql-watch-max-result-bytes~ of result JSON (2 MiB; a bigger result is an error on the watch, not a diff).
+- *An unchanged result costs a hash.* The result is parsed into rows only when its hash differs.
+
+** Skipping on source generations
+:PROPERTIES:
+:CUSTOM_ID: generations
+:END:
+
+A source with a generation function (~cmacs-lql-set-source-generation~: =notes= and its siblings, =activity=) can say cheaply whether its rows would differ. When *every* Elisp source a watch names has one and none has moved since the last successful run, the tick is skipped outright: no snapshot, no submit.
+
+That is only sound if the query reads nothing else, so with =:depends auto= the skip also requires that the query mention no engine source or source command (checked against the engine's own list, not assumed) and nothing matching ~cmacs-lql-watch-volatile-regexp~ (=now=, =today=, =random=, ...). And because it is still an inference, it is bounded: after ~cmacs-lql-watch-max-generation-skips~ skips in a row (20) the watch runs anyway. A wrong inference can make a change late; it cannot lose one.
+
+=:depends sources= trusts the generations regardless of what else the query reads. =:depends always= never skips; use it for a query whose result depends on the clock in a way the regexp does not catch.
+
+* Callbacks
+
+Callbacks run on the main thread, when the result arrives. Three guarantees and one limit:
+
+- An error in a callback is caught and recorded on the watch (=:callback-error=, shown in the list). It is never signalled into the timer or into the GLib dispatch that delivered the result, and it does not stop the other consumers of the same change.
+- Callbacks run with ~inhibit-interaction~ bound to =t=. A watch fires at a moment nobody chose, and a callback that opened the minibuffer would take the keyboard from whatever you were doing -- under =emacs --gowl=, from the desktop. A callback that prompts gets an ~inhibited-interaction~ error, recorded like any other.
+- A side effect of that binding: inside a callback you look like a program to anything that asks (the activity journal does). A callback that itself queries =activity= gets no rows unless ~cmacs-journal-expose-to-agents~. Use the rows you were handed.
+- The limit: nothing can preempt a callback that computes for a long time. Keep callbacks quick; long work is a process with a sentinel. =:callback-seconds= records how long the last one took.
+
+* Consumers
+
+** podomation
+:PROPERTIES:
+:CUSTOM_ID: podomation
+:END:
+
+A watch with =:event t= emits the event =on_lql_watch= through the built-in =cmacs= module on every change, when the podomation engine is running.
+
+| Field     | Value (every field is a string)                                                    |
+|-----------+------------------------------------------------------------------------------------|
+| =watch=   | The watch's name                                                                   |
+| =rows=    | Rows in the new result                                                             |
+| =total=   | The result's own total (rows before the row cap)                                   |
+| =added=, =removed=, =changed= | How many rows of each                                          |
+| =row=     | The first row as a JSON object, or empty                                           |
+| =diff=    | ={"added": [...], "removed": [...], "changed": [{"old": ..., "new": ...}], "counts": {...}}=, cut to ~cmacs-lql-watch-event-diff-max~ characters (4096) with ="truncated": true= when cut; =counts= always has the real sizes |
+
+A worked example. In =init.el=:
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300 :event t)
+
+(cmacs-lql-define-watch dead-processes
+  "fetch processes | filter status == \"exit\" | fields name | sort name"
+  :every 30 :key "name" :event t)
+#+end_src
+
+In a =.pod= file:
+
+#+begin_example
+pod c = cmacs->new();
+
+/* The inbox count moved: say so. */
+c->on_lql_watch where event->watch == "inbox"
+    => cmacs->notify("Notes inbox", "now {event->row}");
+
+/* A process died: keep a log, with the rows that appeared. */
+c->on_lql_watch where event->watch == "dead-processes" && event->added != "0"
+    => log->write_warning("processes exited: {event->diff}");
+#+end_example
+
+There is one event name for every watch, told apart by =event->watch=: a module's events are a fixed list and a watch's name is not. Binding works whether or not the =cmacs= module's list names the event; the list is what the podomation REPL completes and prints.
+
+** The gowl bar
+:PROPERTIES:
+:CUSTOM_ID: bar
+:END:
+
+A watch with =:bar= sets the =text= setting of a bar widget on its first result and on every change, through ~cmacs-gowl-bar-push~ -- the same push every Emacs-owned bar item uses. With no bar running it does nothing.
+
+#+begin_src emacs-lisp
+(cmacs-lql-watch-bar-place "label")          ; once: add the widget, right region
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300
+  :bar '(:widget "label" :format "inbox {n}" :empty ""))
+#+end_src
+
+=:bar= is a widget name or a plist: =:widget=, =:format= (a template, or a function of the rows returning the text; default ="{name}: {rows}"=) and =:empty= (the text for a result with no rows). In a template ={rows}= is the row count, ={total}= the result's total, ={name}= the watch's name and ={COLUMN}= that column of the first row. The text is one line, cut at ~cmacs-lql-watch-bar-max-chars~ (80).
+
+~cmacs-lql-watch-bar-place WIDGET &optional REGION~ adds a widget with the bar's amendment keys (=widgets-right-add= and friends), so the rest of your layout is left alone. REGION is =left=, =center=, =right= (default) or those prefixed =bottom-=.
+
+*A limit you should know about.* The only shipped widget whose text can be set from outside is =label= (alias =text=), and its text comes from its spec parameter before its =text= setting -- so =label:something= cannot be driven, only a bare =label= and a bare =text=. That is *two* watch-driven bar items without writing a plugin. Lifting it is a two-line change in gowl's =label_configure= (prefer the =text= setting over the spec parameter, as the comment in =cmacs-lql-watch-sinks.el= describes); a bar plugin of your own that reads a =text= setting has no such limit.
+
+=:toast t= raises a bar toast on every change (=NAME changed= and the counts), or a message where there is no bar. =:toast "template"= uses a template for the summary.
+
+** Agents
+:PROPERTIES:
+:CUSTOM_ID: agents
+:END:
+
+Three brigade tools, in =cmacs-lql-watch-tools.el=:
+
+| Tool          | Parameters                                   | Does                                                         |
+|---------------+----------------------------------------------+--------------------------------------------------------------|
+| =lql_watch=   | =name=, =query=, =every= (opt), =key= (opt)  | Register a watch; the agent is told when its result changes  |
+| =lql_unwatch= | =name=                                       | Remove one of its own                                        |
+| =lql_watches= | --                                           | Its own watches: state, counts, last error, undelivered news |
+
+The rules, all enforced on the editor's side:
+
+- *The owner is the task, and the task is not something the model says.* It is the brigade task the tool call arrived on behalf of, noted from ~cmacs-brigade-before-tool-call-functions~ exactly as the desktop tools do. A call from no task (a chat buffer, an external MCP client, =emacsctl=) is refused: there would be nobody to tell and no run whose end removes the watch.
+- *A watch's real name is =TASK/NAME=.* An agent can neither replace nor remove a watch that is not its own, whatever it calls it; and core refuses to let any owner replace another owner's watch by name.
+- *Bounded.* At most ~cmacs-lql-watch-max-per-owner~ watches per task, never faster than ~cmacs-lql-watch-tools-min-interval~ seconds (30; default 120).
+- *Removed when the run ends* (~cmacs-brigade-run-finished-functions~).
+- *No callbacks, no podomation event, no bar item.* The tools pass none of those options, and the sinks ignore any watch that has an owner.
+- *Delivery* is a message to the task's mailbox (~cmacs-brigade-mailbox-send~), which steers a running agent and wakes a parked one. At most one undelivered message per watch is queued: a watch that changes ten times while its agent is busy costs it one message, and =lql_watches= has the rest. A watch that starts failing tells its agent once.
+
+*** The activity journal
+
+A one-shot =lql_query= from an agent gets no =activity= rows unless ~cmacs-journal-expose-to-agents~, because the source's snapshot is taken inside the tool call and the journal sees that. A watch runs later, from a timer, where nothing marks the caller as an agent -- so a naive watch would have been a way around the setting. It is not, twice over:
+
+1. An owned watch is submitted -- and its sources snapshotted, and their generation functions asked -- inside the same two bindings a tool call runs in (~cmacs-journal--in-tool-call~ and ~inhibit-interaction~). Every source that decides "is an agent asking?" gets the same answer for the watch as for the agent's own query. This covers any source, present or future, not only =activity=.
+2. Registering an owned watch whose query names a source listed in ~cmacs-lql-watch-agent-gated-sources~ (=activity= -> ~cmacs-journal-expose-to-agents~) is refused outright, with the reason, while that variable is nil. This is the lock that explains itself: the agent is told why instead of being handed a watch that is always empty.
+
+Your own watches are submitted as you, and see the journal.
+
+* Saving watches
+
+Watches defined in your init file are code. One made interactively (=a= in the list, or ~cmacs-lql-watch-add~) can be saved with =s= (~cmacs-lql-watch-save~) into the option ~cmacs-lql-watch-saved~, a list of =(NAME QUERY . OPTIONS)=. Only a watch whose options are plain data can be saved -- a named function is fine, a lambda is not. Saved watches are registered by ~cmacs-lql-watch-restore-saved~, which you call from your init file:
+
+#+begin_src emacs-lisp
+(when IS-CMACS-LQL (cmacs-lql-watch-restore-saved))
+#+end_src
+
+An entry that cannot be registered is reported and skipped; the others still are.
+
+* Options
+
+| Option                                    | Default | Meaning                                                  |
+|-------------------------------------------+---------+----------------------------------------------------------|
+| ~cmacs-lql-watch-default-interval~        | 60      | Interval of a watch that names none                      |
+| ~cmacs-lql-watch-min-interval~            | 5       | Floor on any interval                                    |
+| ~cmacs-lql-watch-min-idle~                | 0.75    | Idle seconds before snapshotting an Elisp source; 0 = off |
+| ~cmacs-lql-watch-max~                     | 32      | Watches in total                                         |
+| ~cmacs-lql-watch-max-per-owner~           | 4       | Watches per agent task                                   |
+| ~cmacs-lql-watch-max-rows~                | 500     | Rows kept and compared                                   |
+| ~cmacs-lql-watch-max-result-bytes~        | 2 MiB   | Largest result kept                                      |
+| ~cmacs-lql-watch-timeout~                 | 30      | Seconds per run                                          |
+| ~cmacs-lql-watch-max-backoff~             | 3600    | Longest wait between runs of a failing watch             |
+| ~cmacs-lql-watch-busy-retry~              | 2       | Wait after finding the engine busy                       |
+| ~cmacs-lql-watch-max-generation-skips~    | 20      | Skips in a row before running anyway; 0 = never skip     |
+| ~cmacs-lql-watch-volatile-regexp~         | =now=, =today=, ... | Query text that rules out skipping           |
+| ~cmacs-lql-watch-agent-gated-sources~     | =activity= | Sources an agent's watch may name only when allowed   |
+| ~cmacs-lql-watch-event-name~              | =on_lql_watch= | The podomation event                              |
+| ~cmacs-lql-watch-event-diff-max~          | 4096    | Characters of diff in an event                           |
+| ~cmacs-lql-watch-bar-max-chars~           | 80      | Longest bar text                                         |
+| ~cmacs-lql-watch-tools-min-interval~      | 30      | Floor on an agent's interval                             |
+| ~cmacs-lql-watch-tools-default-interval~  | 120     | An agent's interval when it names none                   |
+| ~cmacs-lql-watch-tools-max-chars~         | 4000    | Characters of diff in a message to an agent              |
+
+* Tests
+
+=test/cmacs/cmacs-lql-watch-tests.el= needs no engine: ~cmacs-lql-run~ is replaced by a stub that hands the test the callback, the timer is never armed, and the clock is the test's. It covers the baseline, a keyed diff, the in-flight rule, the watchdog, the busy skip, the typing skip, the generation skip and its bound, backoff and its cap, contained callbacks (a prompt included), the caps, ownership, the journal gate from both directions, the agent tools' delivery and coalescing, and each sink.

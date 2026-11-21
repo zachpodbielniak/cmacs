@@ -1,0 +1,590 @@
+@c lql-watch.texi --- the Standing LQL Queries chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node LQL Watches
+@chapter LQL Watches: Standing Queries
+
+@cindex LQL watches
+@cindex standing queries
+@cindex subscriptions, LQL
+@findex cmacs-lql-watch
+@findex cmacs-lql-define-watch
+
+A query run with @code{cmacs-lql-run} or @kbd{M-x cmacs-lql-query}
+answers once.  A @dfn{watch} is a query you register once and that
+calls you when its answer changes.  A podomation trigger, a bar item
+and an agent's ``tell me when X'' are then all the same thing: a query,
+and what to do about a change.
+
+@lisp
+(cmacs-lql-define-watch dead-processes
+  "fetch processes | filter status == \"exit\" | fields name | sort name"
+  :every 30 :key "name"
+  :on-change (lambda (_new _old diff)
+               (dolist (row (plist-get diff :added))
+                 (message "%s exited" (cdr (assoc "name" row))))))
+@end lisp
+
+Four things about it, stated plainly:
+
+@itemize @bullet
+@item
+@emph{A change is a change in the result, never the passing of time.}
+The result is hashed; a watch fires only when the hash differs from the
+last one.  The first result is the baseline and fires nothing unless
+the watch says @code{:immediate}.
+@item
+@emph{It polls.}  LQL has no notion of a source announcing a change, so
+a watch re-runs its query every @code{:every} seconds.  Everything in
+@ref{LQL Watch Cost} exists to make that invisible.
+@item
+@emph{A watch never gets in your way.}  One watch query runs at a time,
+none while you are running a query of your own, and none that touches
+editor state while you are typing.
+@item
+@emph{An agent's watch sees what the agent may see, and no more.}
+@xref{LQL Watch Agents}.
+@end itemize
+
+Files: @file{lisp/cmacs/cmacs-lql-watch.el} (the watches and the list
+buffer), @file{cmacs-lql-watch-sinks.el} (podomation, the bar, toasts),
+@file{cmacs-lql-watch-tools.el} (the agent tools).  There is no C: a
+watch is built on @code{cmacs-lql-run}.  Requires
+@option{--with-cmacs-lql}.
+
+@menu
+* LQL Watch Definition::    Registering a watch; rows and the diff.
+* LQL Watch List::          @kbd{M-x cmacs-lql-watches}.
+* LQL Watch Cost::          What a watch costs, and the rules that bound it.
+* LQL Watch Callbacks::     What a callback may and may not do.
+* LQL Watch Podomation::    A watch as a podomation event.
+* LQL Watch Bar::           A watch as a gowl bar item or toast.
+* LQL Watch Agents::        @code{lql_watch} for brigade agents.
+* LQL Watch Saving::        Keeping interactively made watches.
+* LQL Watch Options::       Every option.
+@end menu
+
+@node LQL Watch Definition
+@section Defining a Watch
+
+@code{(cmacs-lql-watch @var{name} @var{query} &rest @var{options})}
+registers a watch and returns its name as a string; @var{name} may be a
+string or a symbol.  @code{(cmacs-lql-define-watch @var{name}
+@var{query} @var{options}@dots{})} is the same for an init file:
+@var{name} is unquoted, and in a cmacs built without LQL it prints a
+message instead of failing the init file.  Registering a name again
+replaces that watch.
+
+@table @code
+@item :every
+Seconds between runs.  Default @code{cmacs-lql-watch-default-interval}
+(60); never below @code{cmacs-lql-watch-min-interval} (5), a smaller
+value is raised.
+@item :on-change
+Function of (@var{new-rows} @var{old-rows} @var{diff}), called when the
+result changes.
+@item :key
+A column name, or a list of them, that identifies a row; lets the diff
+tell a changed row from one removed and one added.
+@item :on-rows
+Function of (@var{new-rows}), called on a change that leaves the result
+non-empty: ``when there is something''.
+@item :immediate
+Fire on the first result too, with @var{old-rows} @code{nil}.
+@item :depends
+When a tick may be skipped without running: @code{auto} (the default),
+@code{sources} or @code{always}.  @xref{LQL Watch Cost}.
+@item :max-rows
+Rows kept and compared; default and ceiling
+@code{cmacs-lql-watch-max-rows} (500), itself never above
+@code{cmacs-lql-max-rows}.
+@item :timeout
+Seconds one run may take; default @code{cmacs-lql-watch-timeout} (30).
+@item :paused
+Register it paused.
+@item :event
+Emit a podomation event on a change.  @xref{LQL Watch Podomation}.
+@item :bar
+Drive a gowl bar item.  @xref{LQL Watch Bar}.
+@item :toast
+A bar toast on a change; @code{t} or a template.
+@end table
+
+An option that is none of these is an error at registration: a typo in
+@code{:on-change} must not produce a watch that silently does nothing.
+
+@subheading Rows and the diff
+
+Rows reach a callback as alists of @code{(@var{column-name}
+. @var{value})}, the column name a string: @code{(cdr (assoc "name"
+row))}.  NULL is @code{nil} and false is @code{:false}, as
+@code{cmacs-lql-parse} has them.
+
+@var{diff} is a plist, also available as @code{(cmacs-lql-watch-diff
+@var{old} @var{new} &optional @var{key})}:
+
+@table @code
+@item :added
+Rows in the new result and not the old.
+@item :removed
+Rows in the old result and not the new.
+@item :changed
+With @code{:key} only: @code{(@var{old-row} . @var{new-row})} pairs
+whose key stayed and whose other columns differ.
+@item :reordered
+@code{t} when the same rows came back in a different order and nothing
+else differs.
+@end table
+
+Without @code{:key} rows are compared whole, as a multiset, so a row
+that changed shows as one removed and one added.
+
+Any difference in the result fires, including order.  @emph{Write a
+query whose result is small and stable}: filter, summarize, and sort.
+@samp{fetch processes} changes every time a process's status string
+does; @samp{fetch processes | filter status == "exit" | fields name |
+sort name} changes when something exits.
+
+@subheading Other functions
+
+@table @code
+@item cmacs-lql-unwatch @var{name}
+Remove a watch; a run in flight is cancelled and its result ignored.
+@item cmacs-lql-watch-list &optional @var{owner}
+Every watch as a plist: @code{:name :query :every :owner :state :rows
+:total :runs :changes :failures :skipped :last-skip :last-run
+:last-change :next-due :last-error :callback-error :callback-seconds}.
+@item cmacs-lql-watch-get @var{name} @var{property}
+One of those, or any option the watch was registered with.
+@item cmacs-lql-watch-rows @var{name}
+The rows of the last result.
+@item cmacs-lql-watch-run-now @var{name}
+Make it due now, clearing a backoff.
+@item cmacs-lql-watch-pause @var{name}
+@itemx cmacs-lql-watch-resume @var{name}
+Stop and restart it.
+@item cmacs-lql-watch-diff-json @var{diff} &optional @var{max}
+The diff as bounded JSON, for anything that carries text.
+@end table
+
+Hooks, for code that wants every watch rather than one:
+@code{cmacs-lql-watch-change-functions} (@var{name} @var{new} @var{old}
+@var{diff}), @code{cmacs-lql-watch-baseline-functions} (@var{name}
+@var{rows}; the first result, which is not a change),
+@code{cmacs-lql-watch-error-functions} (@var{name} @var{message}; once
+when a watch starts failing) and
+@code{cmacs-lql-watch-removed-functions} (@var{name} @var{owner}).  A
+consumer that gives watches a new option adds its keyword to
+@code{cmacs-lql-watch-extra-keys}.  The three shipped consumers are
+written with exactly these and nothing private.
+
+@node LQL Watch List
+@section The List: @kbd{M-x cmacs-lql-watches}
+
+@findex cmacs-lql-watches
+
+One line per watch: name, state, interval, rows, runs, changes, when it
+last ran, when it last changed, owner, and the query---or, for a watch
+that is failing, its error in place of the query.
+
+@table @kbd
+@item r
+Run it now (at the next good moment; @pxref{LQL Watch Cost}).
+@item p
+Pause, or resume.
+@item d
+@itemx k
+Remove it.
+@item s
+Save it to @code{cmacs-lql-watch-saved}.
+@item a
+Add one: name, query, interval; it toasts on a change.
+@item @key{RET}
+Everything about it: query, counters, errors, last rows.
+@item g
+Redraw.
+@end table
+
+States: @code{waiting} (no result yet), @code{ok}, @code{running},
+@code{paused}, @code{error} (@samp{error x3} after three failures in a
+row).  The buffer redraws itself after each run while it is visible.
+
+@node LQL Watch Cost
+@section What It Costs
+
+@cindex LQL watches, cost
+
+LQL runs one query at a time on one worker thread, and an Elisp-defined
+source (@code{buffers}, @code{notes}, @code{activity}, @dots{}) is
+snapshotted to JSON on the editor thread before the query is submitted.
+A watch is therefore work you did not ask for at that moment, twice
+over.  The rules:
+
+@itemize @bullet
+@item
+@emph{One timer} for every watch, armed for the earliest one due.  No
+watches, no timer.
+@item
+@emph{One watch query in flight}, across all watches.  Queued watch
+queries would sit in front of the query you are about to run; one
+cannot delay you by more than its own run.  When it lands the next due
+watch goes.
+@item
+@emph{Never queued twice.}  A watch whose last run has not come back is
+not submitted again.  A run that outlives its timeout by ten seconds is
+cancelled and counted as a failure, so one stuck query cannot stop the
+rest.
+@item
+@emph{You come first.}  Before submitting, the watch asks the engine's
+try-lock helper whether a query is running (the @code{cmacs-lql-busy}
+signal).  If one is, the tick is skipped and retried in
+@code{cmacs-lql-watch-busy-retry} seconds (2).
+@item
+@emph{Not under your fingers.}  A watch that names an Elisp source
+waits until Emacs has been idle for @code{cmacs-lql-watch-min-idle}
+seconds (0.75).  Watches that read only engine sources---files, git,
+the journal, SQL---are not held back, since nothing of theirs runs on
+the editor thread.
+@item
+@emph{Errors back off.}  A failing watch waits twice as long after each
+failure in a row, starting from its own interval, up to
+@code{cmacs-lql-watch-max-backoff} (an hour).  You get one message when
+it starts failing; after that the error is in the list.  A success
+resets it.
+@item
+@emph{Caps.}  @code{cmacs-lql-watch-max} watches (32),
+@code{cmacs-lql-watch-max-per-owner} per agent task (4),
+@code{cmacs-lql-watch-max-rows} rows, and
+@code{cmacs-lql-watch-max-result-bytes} of result JSON (2 MiB; a bigger
+result is an error on the watch, not a diff).
+@item
+@emph{An unchanged result costs a hash.}  The result is parsed into
+rows only when its hash differs.
+@end itemize
+
+@subheading Skipping on source generations
+
+A source with a generation function
+(@code{cmacs-lql-set-source-generation}: @code{notes} and its siblings,
+@code{activity}) can say cheaply whether its rows would differ.  When
+@emph{every} Elisp source a watch names has one and none has moved
+since the last successful run, the tick is skipped outright: no
+snapshot, no submit.
+
+That is only sound if the query reads nothing else, so with
+@code{:depends auto} the skip also requires that the query mention no
+engine source or source command (checked against the engine's own list,
+not assumed) and nothing matching
+@code{cmacs-lql-watch-volatile-regexp} (@code{now}, @code{today},
+@code{random}, @dots{}).  And because it is still an inference, it is
+bounded: after @code{cmacs-lql-watch-max-generation-skips} skips in a
+row (20) the watch runs anyway.  A wrong inference can make a change
+late; it cannot lose one.
+
+@code{:depends sources} trusts the generations regardless of what else
+the query reads.  @code{:depends always} never skips; use it for a
+query whose result depends on the clock in a way the regexp does not
+catch.
+
+@node LQL Watch Callbacks
+@section Callbacks
+
+Callbacks run on the main thread, when the result arrives.  Three
+guarantees and one limit:
+
+@itemize @bullet
+@item
+An error in a callback is caught and recorded on the watch
+(@code{:callback-error}, shown in the list).  It is never signalled
+into the timer or into the GLib dispatch that delivered the result, and
+it does not stop the other consumers of the same change.
+@item
+Callbacks run with @code{inhibit-interaction} bound to @code{t}.  A
+watch fires at a moment nobody chose, and a callback that opened the
+minibuffer would take the keyboard from whatever you were doing---under
+@command{emacs --gowl}, from the desktop.  A callback that prompts gets
+an @code{inhibited-interaction} error, recorded like any other.
+@item
+A side effect of that binding: inside a callback you look like a
+program to anything that asks (the activity journal does).  A callback
+that itself queries @code{activity} gets no rows unless
+@code{cmacs-journal-expose-to-agents}.  Use the rows you were handed.
+@item
+The limit: nothing can preempt a callback that computes for a long
+time.  Keep callbacks quick; long work is a process with a sentinel.
+@code{:callback-seconds} records how long the last one took.
+@end itemize
+
+@node LQL Watch Podomation
+@section podomation
+
+@cindex podomation, LQL watch events
+
+A watch with @code{:event t} emits the event @code{on_lql_watch}
+through the built-in @code{cmacs} module on every change, when the
+podomation engine is running.  Every field is a string.
+
+@table @code
+@item watch
+The watch's name.
+@item rows
+Rows in the new result.
+@item total
+The result's own total (rows before the row cap).
+@item added
+@itemx removed
+@itemx changed
+How many rows of each.
+@item row
+The first row as a JSON object, or empty.
+@item diff
+@code{@{"added": [...], "removed": [...], "changed": [@{"old": ...,
+"new": ...@}], "counts": @{...@}@}}, cut to
+@code{cmacs-lql-watch-event-diff-max} characters (4096) with
+@code{"truncated": true} when cut; @code{counts} always has the real
+sizes.
+@end table
+
+A worked example.  In @file{init.el}:
+
+@lisp
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300 :event t)
+
+(cmacs-lql-define-watch dead-processes
+  "fetch processes | filter status == \"exit\" | fields name | sort name"
+  :every 30 :key "name" :event t)
+@end lisp
+
+In a @file{.pod} file:
+
+@example
+pod c = cmacs->new();
+
+/* The inbox count moved: say so. */
+c->on_lql_watch where event->watch == "inbox"
+    => cmacs->notify("Notes inbox", "now @{event->row@}");
+
+/* A process died: keep a log, with the rows that appeared. */
+c->on_lql_watch where event->watch == "dead-processes" && event->added != "0"
+    => log->write_warning("processes exited: @{event->diff@}");
+@end example
+
+There is one event name for every watch, told apart by
+@code{event->watch}: a module's events are a fixed list and a watch's
+name is not.  Binding works whether or not the @code{cmacs} module's
+list names the event; the list is what the podomation REPL completes
+and prints.
+
+@node LQL Watch Bar
+@section The gowl Bar
+
+@cindex gowl bar, LQL watch items
+@findex cmacs-lql-watch-bar-place
+
+A watch with @code{:bar} sets the @code{text} setting of a bar widget
+on its first result and on every change, through
+@code{cmacs-gowl-bar-push}---the same push every Emacs-owned bar item
+uses.  With no bar running it does nothing.
+
+@lisp
+(cmacs-lql-watch-bar-place "label")   ; once: add the widget, right region
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300
+  :bar '(:widget "label" :format "inbox @{n@}" :empty ""))
+@end lisp
+
+@code{:bar} is a widget name or a plist: @code{:widget},
+@code{:format} (a template, or a function of the rows returning the
+text; default @code{"@{name@}: @{rows@}"}) and @code{:empty} (the text
+for a result with no rows).  In a template @code{@{rows@}} is the row
+count, @code{@{total@}} the result's total, @code{@{name@}} the watch's
+name and @code{@{@var{column}@}} that column of the first row.  The
+text is one line, cut at @code{cmacs-lql-watch-bar-max-chars} (80).
+
+@code{cmacs-lql-watch-bar-place @var{widget} &optional @var{region}}
+adds a widget with the bar's amendment keys (@code{widgets-right-add}
+and friends), so the rest of your layout is left alone.  @var{region}
+is @code{left}, @code{center}, @code{right} (the default) or those
+prefixed @code{bottom-}.
+
+@emph{A limit you should know about.}  The only shipped widget whose
+text can be set from outside is @code{label} (alias @code{text}), and
+its text comes from its spec parameter before its @code{text}
+setting---so @code{label:something} cannot be driven, only a bare
+@code{label} and a bare @code{text}.  That is @emph{two} watch-driven
+bar items without writing a plugin.  Lifting it is a two-line change in
+gowl's @code{label_configure} (prefer the @code{text} setting over the
+spec parameter, as the comment in @file{cmacs-lql-watch-sinks.el}
+describes); a bar plugin of your own that reads a @code{text} setting
+has no such limit.
+
+@code{:toast t} raises a bar toast on every change (@samp{@var{name}
+changed} and the counts), or a message where there is no bar.
+@code{:toast "template"} uses a template for the summary.
+
+@node LQL Watch Agents
+@section Agents
+
+@cindex brigade tools, LQL watches
+@cindex lql_watch
+
+Three brigade tools, in @file{cmacs-lql-watch-tools.el}:
+
+@table @code
+@item lql_watch
+Parameters @code{name}, @code{query}, @code{every} (optional),
+@code{key} (optional).  Register a watch; the agent is told when its
+result changes.
+@item lql_unwatch
+Parameter @code{name}.  Remove one of its own.
+@item lql_watches
+No parameters.  Its own watches: state, counts, last error, undelivered
+news.
+@end table
+
+The rules, all enforced on the editor's side:
+
+@itemize @bullet
+@item
+@emph{The owner is the task, and the task is not something the model
+says.}  It is the brigade task the tool call arrived on behalf of,
+noted from @code{cmacs-brigade-before-tool-call-functions} exactly as
+the desktop tools do.  A call from no task (a chat buffer, an external
+MCP client, @command{emacsctl}) is refused: there would be nobody to
+tell and no run whose end removes the watch.
+@item
+@emph{A watch's real name is @samp{@var{task}/@var{name}}.}  An agent
+can neither replace nor remove a watch that is not its own, whatever it
+calls it; and core refuses to let any owner replace another owner's
+watch by name.
+@item
+@emph{Bounded.}  At most @code{cmacs-lql-watch-max-per-owner} watches
+per task, never faster than @code{cmacs-lql-watch-tools-min-interval}
+seconds (30; default 120).
+@item
+@emph{Removed when the run ends}
+(@code{cmacs-brigade-run-finished-functions}).
+@item
+@emph{No callbacks, no podomation event, no bar item.}  The tools pass
+none of those options, and the sinks ignore any watch that has an
+owner.
+@item
+@emph{Delivery} is a message to the task's mailbox
+(@code{cmacs-brigade-mailbox-send}), which steers a running agent and
+wakes a parked one.  At most one undelivered message per watch is
+queued: a watch that changes ten times while its agent is busy costs it
+one message, and @code{lql_watches} has the rest.  A watch that starts
+failing tells its agent once.
+@end itemize
+
+@subheading The activity journal
+
+A one-shot @code{lql_query} from an agent gets no @code{activity} rows
+unless @code{cmacs-journal-expose-to-agents}, because the source's
+snapshot is taken inside the tool call and the journal sees that.  A
+watch runs later, from a timer, where nothing marks the caller as an
+agent---so a naive watch would have been a way around the setting.  It
+is not, twice over:
+
+@enumerate
+@item
+An owned watch is submitted---and its sources snapshotted, and their
+generation functions asked---inside the same two bindings a tool call
+runs in (@code{cmacs-journal--in-tool-call} and
+@code{inhibit-interaction}).  Every source that decides ``is an agent
+asking?'' gets the same answer for the watch as for the agent's own
+query.  This covers any source, present or future, not only
+@code{activity}.
+@item
+Registering an owned watch whose query names a source listed in
+@code{cmacs-lql-watch-agent-gated-sources} (@code{activity} ->
+@code{cmacs-journal-expose-to-agents}) is refused outright, with the
+reason, while that variable is nil.  This is the lock that explains
+itself: the agent is told why instead of being handed a watch that is
+always empty.
+@end enumerate
+
+Your own watches are submitted as you, and see the journal.
+
+@node LQL Watch Saving
+@section Saving Watches
+
+@findex cmacs-lql-watch-save
+@findex cmacs-lql-watch-restore-saved
+
+Watches defined in your init file are code.  One made interactively
+(@kbd{a} in the list, or @code{cmacs-lql-watch-add}) can be saved with
+@kbd{s} (@code{cmacs-lql-watch-save}) into the option
+@code{cmacs-lql-watch-saved}, a list of @code{(@var{name} @var{query}
+. @var{options})}.  Only a watch whose options are plain data can be
+saved---a named function is fine, a lambda is not.  Saved watches are
+registered by @code{cmacs-lql-watch-restore-saved}, which you call from
+your init file:
+
+@lisp
+(when IS-CMACS-LQL (cmacs-lql-watch-restore-saved))
+@end lisp
+
+An entry that cannot be registered is reported and skipped; the others
+still are.
+
+@node LQL Watch Options
+@section Options
+
+@table @code
+@item cmacs-lql-watch-default-interval
+Interval of a watch that names none.  Default 60.
+@item cmacs-lql-watch-min-interval
+Floor on any interval.  Default 5.
+@item cmacs-lql-watch-min-idle
+Idle seconds before snapshotting an Elisp source; 0 turns the wait off.
+Default 0.75.
+@item cmacs-lql-watch-max
+Watches in total.  Default 32.
+@item cmacs-lql-watch-max-per-owner
+Watches per agent task.  Default 4.
+@item cmacs-lql-watch-max-rows
+Rows kept and compared.  Default 500.
+@item cmacs-lql-watch-max-result-bytes
+Largest result kept.  Default 2 MiB.
+@item cmacs-lql-watch-timeout
+Seconds per run.  Default 30.
+@item cmacs-lql-watch-max-backoff
+Longest wait between runs of a failing watch.  Default 3600.
+@item cmacs-lql-watch-busy-retry
+Wait after finding the engine busy.  Default 2.
+@item cmacs-lql-watch-max-generation-skips
+Skips in a row before running anyway; 0 never skips.  Default 20.
+@item cmacs-lql-watch-volatile-regexp
+Query text that rules out skipping (@code{now}, @code{today}, @dots{}).
+@item cmacs-lql-watch-agent-gated-sources
+Sources an agent's watch may name only when a variable allows
+(@code{activity}).
+@item cmacs-lql-watch-event-name
+The podomation event.  Default @code{on_lql_watch}.
+@item cmacs-lql-watch-event-diff-max
+Characters of diff in an event.  Default 4096.
+@item cmacs-lql-watch-bar-max-chars
+Longest bar text.  Default 80.
+@item cmacs-lql-watch-tools-min-interval
+Floor on an agent's interval.  Default 30.
+@item cmacs-lql-watch-tools-default-interval
+An agent's interval when it names none.  Default 120.
+@item cmacs-lql-watch-tools-max-chars
+Characters of diff in a message to an agent.  Default 4000.
+@end table
+
+@subheading Tests
+
+@file{test/cmacs/cmacs-lql-watch-tests.el} needs no engine:
+@code{cmacs-lql-run} is replaced by a stub that hands the test the
+callback, the timer is never armed, and the clock is the test's.  It
+covers the baseline, a keyed diff, the in-flight rule, the watchdog,
+the busy skip, the typing skip, the generation skip and its bound,
+backoff and its cap, contained callbacks (a prompt included), the caps,
+ownership, the journal gate from both directions, the agent tools'
+delivery and coalescing, and each sink.
