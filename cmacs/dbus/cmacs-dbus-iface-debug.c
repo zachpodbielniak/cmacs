@@ -71,48 +71,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Same symbol whitelist as iface-input: reject splice attempts. */
-static gboolean
-valid_symbol_name (const gchar *s)
-{
-  if (s == NULL || *s == '\0')
-    return FALSE;
-  for (; *s != '\0'; s++)
-    if (!g_ascii_isalnum (*s) && strchr ("-_+*/<>=!?:", *s) == NULL)
-      return FALSE;
-  return TRUE;
-}
-
-static void
-describe_symbol_reply (GDBusMethodInvocation *iv, GVariant *p,
-                       const gchar *elisp_fmt)
-{
-  const gchar *symbol;
-  gchar *expr;
-  gchar *result;
-  GError *err = NULL;
-
-  g_variant_get (p, "(&s)", &symbol);
-  if (!valid_symbol_name (symbol))
-    {
-      g_dbus_method_invocation_return_dbus_error (
-        iv, "org.cmacs.Editor1.Error",
-        "argument must be a plain elisp symbol name");
-      return;
-    }
-  expr = g_strdup_printf (elisp_fmt, symbol);
-  result = cmacs_dispatch_eval_string (expr, &err);
-  g_free (expr);
-  if (result == NULL)
-    {
-      cmacs_dbus_return_gerror (iv, err);
-      return;
-    }
-  g_dbus_method_invocation_return_value (
-    iv, g_variant_new ("(s)", result));
-  g_free (result);
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -120,104 +78,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Backtrace") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(with-output-to-string (backtrace))", NULL, 0);
-  else if (g_strcmp0 (m, "MemoryInfo") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(format \"GC stats: %%S\\nMemory use counts: %%S\""
-      "  (garbage-collect) (memory-use-counts))", NULL, 0);
-  else if (g_strcmp0 (m, "ListHooks") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(let (hooks)"
-      "  (mapatoms"
-      "    (lambda (sym)"
-      "      (when (and (boundp sym)"
-      "                 (string-suffix-p \"-hook\" (symbol-name sym))"
-      "                 (symbol-value sym))"
-      "        (push (format \"%%s: %%S\" sym (symbol-value sym)) hooks))))"
-      "  (mapconcat #'identity (sort hooks #'string<) \"\\n\"))", NULL, 0);
-  else if (g_strcmp0 (m, "DescribeMode") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(format \"Major mode: %%s\\nMinor modes: %%s\""
-      "  (symbol-name major-mode)"
-      "  (mapconcat #'symbol-name minor-mode-list \" \"))", NULL, 0);
-  else if (g_strcmp0 (m, "DescribeFunction") == 0)
-    describe_symbol_reply (iv, p,
-      "(let ((sym '%s))"
-      "  (if (fboundp sym)"
-      "    (format \"%%s\\n\\nArgs: %%s\\n\\n%%s\""
-      "      sym"
-      "      (or (help-function-arglist sym t) \"()\")"
-      "      (or (documentation sym t) \"No documentation.\"))"
-      "    (format \"%%s is not a known function\" sym)))");
-  else if (g_strcmp0 (m, "DescribeVariable") == 0)
-    describe_symbol_reply (iv, p,
-      "(let ((sym '%s))"
-      "  (if (boundp sym)"
-      "    (format \"%%s\\n\\nValue: %%S\\n\\n%%s\""
-      "      sym"
-      "      (symbol-value sym)"
-      "      (or (documentation-property sym 'variable-documentation t)"
-      "          \"No documentation.\"))"
-      "    (format \"%%s is void\" sym)))");
-  else if (g_strcmp0 (m, "Apropos") == 0)
-    {
-      const gchar *pattern;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &pattern);
-      args[0] = pattern;
-      cmacs_dbus_eval_to_reply_string (iv,
-        "(mapconcat #'symbol-name (apropos-internal \"%s\") \"\\n\")",
-        args, 1);
-    }
-  else if (g_strcmp0 (m, "Completions") == 0)
-    {
-      const gchar *prefix;
-      const gchar *args[1];
-      gchar *expr;
-      gchar *result;
-      GError *err = NULL;
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
 
-      g_variant_get (p, "(&s)", &prefix);
-      args[0] = prefix;
-      expr = cmacs_dbus_build_elisp (
-        "(let ((comps (all-completions \"%s\" obarray)))"
-        "  (mapconcat #'identity (seq-take comps 100) \"\\n\"))",
-        args, 1);
-      result = cmacs_dispatch_eval_string (expr, &err);
-      g_free (expr);
-      if (result == NULL)
-        {
-          cmacs_dbus_return_gerror (iv, err);
-          return;
-        }
-      {
-        gchar **lines = g_strsplit (result, "\n", -1);
-        GVariantBuilder b;
-        gint k;
-        g_variant_builder_init (&b, G_VARIANT_TYPE ("as"));
-        for (k = 0; lines[k] != NULL; k++)
-          if (lines[k][0] != '\0')
-            g_variant_builder_add (&b, "s", lines[k]);
-        g_dbus_method_invocation_return_value (
-          iv, g_variant_new ("(as)", &b));
-        g_strfreev (lines);
-      }
-      g_free (result);
-    }
-  else if (g_strcmp0 (m, "ProfilerStart") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(progn (profiler-start 'cpu) \"Profiler started\")", NULL, 0);
-  else if (g_strcmp0 (m, "ProfilerStop") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(progn (profiler-stop) \"Profiler stopped\")", NULL, 0);
-  else if (g_strcmp0 (m, "ProfilerReport") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(with-temp-buffer"
-      "  (profiler-report-cpu)"
-      "  (buffer-substring-no-properties (point-min) (point-max)))",
-      NULL, 0);
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

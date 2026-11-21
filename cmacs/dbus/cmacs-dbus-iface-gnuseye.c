@@ -73,36 +73,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Eval EXPR (already fully built) and reply with the raw string. */
-static void
-ge_reply (GDBusMethodInvocation *iv, gchar *expr)
-{
-  gchar *result;
-  GError *err = NULL;
-
-  result = cmacs_dispatch_eval_string (expr, &err);
-  g_free (expr);
-  if (result == NULL)
-    {
-      cmacs_dbus_return_gerror (iv, err);
-      return;
-    }
-  g_dbus_method_invocation_return_value (
-    iv, g_variant_new ("(s)", result));
-  g_free (result);
-}
-
-/* Quote S as an elisp string literal ("" when empty). */
-static gchar *
-ge_lisp_str (const gchar *s)
-{
-  gchar *esc, *out;
-  esc = cmacs_dbus_lisp_escape (s != NULL ? s : "");
-  out = g_strdup_printf ("\"%s\"", esc);
-  g_free (esc);
-  return out;
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -110,119 +80,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Open") == 0)
-    ge_reply (iv, g_strdup
-      ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye) \"opened\")"));
-  else if (g_strcmp0 (m, "ListLayers") == 0)
-    ge_reply (iv, g_strdup
-      ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye--load-layers)"
-       " (let (r) (maphash (lambda (k v)"
-       "   (push (list k :on (and (cmacs-gnuseye-layer-enabled v) t)"
-       "               :group (cmacs-gnuseye-layer-group v)"
-       "               :title (cmacs-gnuseye-layer-title v)) r))"
-       "  cmacs-gnuseye--layers) (format \"%S\" (nreverse r))))"));
-  else if (g_strcmp0 (m, "ToggleLayer") == 0)
-    {
-      const gchar *name;
-      gchar *qn;
-      g_variant_get (p, "(&s)", &name);
-      qn = ge_lisp_str (name);
-      ge_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye--load-layers)"
-         " (let ((l (gethash (intern %s) cmacs-gnuseye--layers)))"
-         "  (if (null l) \"unknown layer\""
-         "    (if (cmacs-gnuseye-layer-enabled l)"
-         "        (progn (cmacs-gnuseye--disable-layer l)"
-         "               (format \"%%s off\" %s))"
-         "      (progn (cmacs-gnuseye--enable-layer l)"
-         "             (format \"%%s on\" %s))))))",
-         qn, qn, qn));
-      g_free (qn);
-    }
-  else if (g_strcmp0 (m, "FlyTo") == 0)
-    {
-      gdouble lat, lon, range;
-      g_variant_get (p, "(ddd)", &lat, &lon, &range);
-      if (range <= 0.0)
-        range = 14.0;
-      ge_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-gnuseye)"
-         " (if (and cmacs-gnuseye-buffer (buffer-live-p cmacs-gnuseye-buffer))"
-         "   (progn (cmacs-gnuseye-fly-to cmacs-gnuseye-buffer %g %g %g t)"
-         "          (format \"flew to %g,%g\"))"
-         "  \"no globe open\"))",
-         lat, lon, range, lat, lon));
-    }
-  else if (g_strcmp0 (m, "Refresh") == 0)
-    ge_reply (iv, g_strdup
-      ("(progn (require 'cmacs-gnuseye) (cmacs-gnuseye-refresh-all)"
-       " \"refreshing\")"));
-  else if (g_strcmp0 (m, "QueryEntities") == 0)
-    {
-      const gchar *kind;
-      gdouble w, e, so, no;
-      gint limit;
-      gchar *qk;
-      g_variant_get (p, "(&sddddi)", &kind, &w, &e, &so, &no, &limit);
-      if (limit <= 0)
-        limit = 200;
-      qk = (kind != NULL && *kind != '\0')
-        ? ge_lisp_str (kind) : g_strdup ("nil");
-      ge_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-gnuseye)"
-         " (let ((kf %s) (rows nil) (n 0))"
-         "  (catch 'done (maphash (lambda (id e)"
-         "    (when (and (or (null kf) (eq (plist-get e :kind) (intern kf)))"
-         "               (>= (or (plist-get e :lat) 0) %g)"
-         "               (<= (or (plist-get e :lat) 0) %g)"
-         "               (>= (or (plist-get e :lon) 0) %g)"
-         "               (<= (or (plist-get e :lon) 0) %g))"
-         "      (push (list :id id :kind (plist-get e :kind)"
-         "                  :label (plist-get e :label)"
-         "                  :lat (plist-get e :lat)"
-         "                  :lon (plist-get e :lon)) rows)"
-         "      (when (>= (setq n (1+ n)) %d) (throw 'done nil))))"
-         "   cmacs-gnuseye--id-index))"
-         "  (require 'json) (json-encode (nreverse rows))))",
-         qk, so, no, w, e, limit));
-      g_free (qk);
-    }
-  else if (g_strcmp0 (m, "Brief") == 0)
-    ge_reply (iv, g_strdup
-      ("(progn (require 'cmacs-gnuseye)"
-       " (let ((counts (make-hash-table :test 'eq)) (total 0))"
-       "  (maphash (lambda (_ e) (setq total (1+ total))"
-       "    (cl-incf (gethash (or (plist-get e :kind) 'generic) counts 0)))"
-       "   cmacs-gnuseye--id-index)"
-       "  (let (parts)"
-       "   (maphash (lambda (k c) (push (format \"%s:%d\" k c) parts)) counts)"
-       "   (format \"%d entities indexed; by kind: %s\""
-       "     total (string-join (sort parts #'string<) \", \")))))"));
-  else if (g_strcmp0 (m, "AddGeofence") == 0)
-    {
-      const gchar *name;
-      gdouble lat, lon, rad;
-      gchar *qn;
-      g_variant_get (p, "(&sddd)", &name, &lat, &lon, &rad);
-      if (rad <= 0.0)
-        rad = 100.0;
-      qn = ge_lisp_str ((name != NULL && *name != '\0') ? name : "fence");
-      ge_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-geofence)"
-         " (cmacs-gnuseye-add-geofence %s %g %g %g)"
-         " (format \"geofence %%s @ %g,%g r=%gkm\" %s))",
-         qn, lat, lon, rad, lat, lon, rad, qn));
-      g_free (qn);
-    }
-  else if (g_strcmp0 (m, "Cii") == 0)
-    ge_reply (iv, g_strdup
-      ("(progn (require 'cmacs-gnuseye) (require 'cmacs-gnuseye-intel)"
-       " (cmacs-gnuseye-intel--compute-cii)"
-       " (let (r) (maphash (lambda (iso v) (push (cons iso v) r))"
-       "   cmacs-gnuseye-cii--scores)"
-       "  (require 'json)"
-       "  (json-encode (seq-take (sort r (lambda (x y) (> (cdr x) (cdr y))))"
-       "                         15))))"));
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

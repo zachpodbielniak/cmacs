@@ -33,6 +33,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Open") == 0)
     {
       const gchar *path; const gchar *args[1];
@@ -63,17 +69,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         cmacs_dbus_eval_to_reply (iv,
           "(progn (kill-buffer (current-buffer)) \"ok\")", NULL, 0);
     }
-  else if (g_strcmp0 (m, "Recent") == 0)
-    {
-      gint32 n; gchar nbuf[16]; const gchar *args[1];
-      g_variant_get (p, "(i)", &n);
-      g_snprintf (nbuf, sizeof nbuf, "%d", n > 0 ? n : 20);
-      args[0] = nbuf;
-      cmacs_dbus_eval_to_reply (iv,
-        "(progn (require 'recentf)"
-        " (mapconcat #'identity (seq-take recentf-list %s) \"|||\"))",
-        args, 1);
-    }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

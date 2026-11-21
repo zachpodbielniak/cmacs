@@ -37,6 +37,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Set") == 0)
     {
       const gchar *var, *val; const gchar *args[2];
@@ -44,13 +50,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       args[0] = var; args[1] = val;
       cmacs_dbus_eval_to_reply (iv,
         "(progn (set (intern \"%s\") (read \"%s\")) \"ok\")", args, 2);
-    }
-  else if (g_strcmp0 (m, "Get") == 0)
-    {
-      const gchar *var; const gchar *args[1];
-      g_variant_get (p, "(&s)", &var); args[0] = var;
-      cmacs_dbus_eval_to_reply (iv,
-        "(format \"%%S\" (symbol-value (intern \"%s\")))", args, 1);
     }
   else if (g_strcmp0 (m, "Theme") == 0)
     {
@@ -81,6 +80,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         "    (funcall (intern (concat (symbol-name m) \"-mode\")))))"
         " \"ok\")", args, 1);
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

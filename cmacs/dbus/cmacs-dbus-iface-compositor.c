@@ -10,8 +10,12 @@
  * lose the Gowl prefix because the iface name now carries that
  * context.  Available only when --with-cmacs-gowl is enabled.
  *
- * All methods bypass the elisp eval round-trip and call directly
- * into cmacs_dispatch_gowl_* for performance. */
+ * Methods a registry tool provides -- the client list, focus, close,
+ * geometry, layout, workspaces, the screensaver -- are rows of
+ * cmacs-dbus-forward-table.h and have no body here: they are served
+ * by the tool, redaction included (cmacs-dbus-forward.c).  What is
+ * left below has no tool: it calls into cmacs_dispatch_gowl_*, which
+ * takes the compositor lock itself, or evaluates one fixed form. */
 
 #include <config.h>
 #ifdef HAVE_CMACS_GLIB
@@ -213,18 +217,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Validate a "by" selector, defaulting to app-id (mirrors
- * gowl_by_field in cmacs-mcp-tools-gowl.c).  The returned value is
- * spliced into elisp as a quoted symbol, so it MUST come from this
- * whitelist. */
-static const gchar *
-by_field (const gchar *by)
-{
-  if (by != NULL && g_strcmp0 (by, "title") == 0)
-    return "title";
-  return "app-id";
-}
-
 /* CALL_ is substituted INSIDE this block, so the `&err' every caller
    writes binds to the err declared here -- one fresh NULL error per
    invocation, consumed by the same expansion.  on_method therefore has
@@ -249,17 +241,13 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "ListClients") == 0)
-    RETURN_STR (cmacs_dispatch_gowl_list_clients (&err));
-  else if (g_strcmp0 (m, "FocusedClient") == 0)
-    RETURN_STR (cmacs_dispatch_gowl_focused_client (&err));
-  else if (g_strcmp0 (m, "Spawn") == 0)
-    {
-      const gchar *cmd;
-      g_variant_get (p, "(&s)", &cmd);
-      RETURN_STR (cmacs_dispatch_gowl_spawn (cmd, &err));
-    }
-  else if (g_strcmp0 (m, "AddKeybind") == 0)
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  if (g_strcmp0 (m, "AddKeybind") == 0)
     {
       const gchar *key, *arg;
       gint action;
@@ -283,8 +271,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       g_variant_get (p, "(&s)", &key);
       RETURN_STR (cmacs_dispatch_gowl_run_keybind (key, &err));
     }
-  else if (g_strcmp0 (m, "ListKeybinds") == 0)
-    RETURN_STR (cmacs_dispatch_gowl_list_keybinds (&err));
   else if (g_strcmp0 (m, "RunMacro") == 0)
     {
       const gchar *name;
@@ -343,30 +329,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     RETURN_STR (cmacs_dispatch_gowl_lock (&err));
   else if (g_strcmp0 (m, "Unlock") == 0)
     RETURN_STR (cmacs_dispatch_gowl_unlock (&err));
-  else if (g_strcmp0 (m, "SetScreensaverWallpaper") == 0)
-    {
-      const gchar *config;
-      g_variant_get (p, "(&s)", &config);
-      RETURN_STR (cmacs_dispatch_screensaver_set_wallpaper (config, &err));
-    }
-  else if (g_strcmp0 (m, "StopScreensaverWallpaper") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_stop_wallpaper (&err));
-  else if (g_strcmp0 (m, "ListScreensaverConfigs") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_list_configs (&err));
-  else if (g_strcmp0 (m, "ScreensaverStatus") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_status (&err));
-  else if (g_strcmp0 (m, "ScreensaverRestart") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_restart (&err));
-  else if (g_strcmp0 (m, "ScreensaverPause") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_pause (&err));
-  else if (g_strcmp0 (m, "ScreensaverResume") == 0)
-    RETURN_STR (cmacs_dispatch_screensaver_resume (&err));
-  else if (g_strcmp0 (m, "ScreensaverSetFps") == 0)
-    {
-      gint fps;
-      g_variant_get (p, "(i)", &fps);
-      RETURN_STR (cmacs_dispatch_screensaver_set_fps (fps, &err));
-    }
   else if (g_strcmp0 (m, "SetKeyMode") == 0)
     {
       const gchar *mode;
@@ -452,119 +414,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       g_variant_get (p, "(&s)", &property);
       RETURN_STR (cmacs_dispatch_gowl_config_get (property, &err));
     }
-  else if (g_strcmp0 (m, "FindClient") == 0)
-    {
-      const gchar *pattern, *by;
-      g_variant_get (p, "(&s&s)", &pattern, &by);
-      RETURN_STR (cmacs_dispatch_gowl_find_client (pattern, by, &err));
-    }
-  else if (g_strcmp0 (m, "FocusClient") == 0)
-    {
-      const gchar *pattern, *by;
-      const gchar *args[1];
-      gchar *tmpl;
-      g_variant_get (p, "(&s&s)", &pattern, &by);
-      args[0] = pattern;
-      tmpl = g_strdup_printf (
-        "(let ((c (gowl-find-client \"%%s\" '%s)))"
-        "  (if c (progn (gowl-focus-client c) \"focused\")"
-        "    (error \"no client matching pattern\")))",
-        by_field (by));
-      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
-      g_free (tmpl);
-    }
-  else if (g_strcmp0 (m, "CloseClient") == 0)
-    {
-      const gchar *pattern, *by;
-      const gchar *args[1];
-      gchar *tmpl;
-      g_variant_get (p, "(&s&s)", &pattern, &by);
-      args[0] = pattern;
-      tmpl = g_strdup_printf (
-        "(let ((c (gowl-find-client \"%%s\" '%s)))"
-        "  (if c (progn (gowl-close-client c) \"closed\")"
-        "    (error \"no client matching pattern\")))",
-        by_field (by));
-      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
-      g_free (tmpl);
-    }
-  else if (g_strcmp0 (m, "SetClientGeometry") == 0)
-    {
-      const gchar *pattern, *by;
-      gint x, y, w, h;
-      const gchar *args[1];
-      gchar *tmpl;
-      g_variant_get (p, "(&s&siiii)", &pattern, &by, &x, &y, &w, &h);
-      args[0] = pattern;
-      tmpl = g_strdup_printf (
-        "(let ((c (gowl-find-client \"%%s\" '%s)))"
-        "  (if c (progn (gowl-client-set-geometry c %d %d %d %d)"
-        "               \"geometry set\")"
-        "    (error \"no client matching pattern\")))",
-        by_field (by), x, y, w, h);
-      cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 1);
-      g_free (tmpl);
-    }
-  else if (g_strcmp0 (m, "SetLayout") == 0)
-    {
-      const gchar *layout;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &layout);
-      args[0] = layout;
-      cmacs_dbus_eval_to_reply_string (iv,
-        "(progn (gowl-set-layout \"%s\") \"layout set\")", args, 1);
-    }
-  else if (g_strcmp0 (m, "WorkspaceList") == 0)
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(prin1-to-string (gowl-workspace-list))", NULL, 0);
-  else if (g_strcmp0 (m, "WorkspaceSwitch") == 0)
-    {
-      gint id;
-      gchar *tmpl;
-      g_variant_get (p, "(i)", &id);
-      tmpl = g_strdup_printf (
-        "(if (gowl-workspace-switch %d) \"switched\""
-        "  \"workspace unchanged or unknown id\")", id);
-      cmacs_dbus_eval_to_reply_string (iv, tmpl, NULL, 0);
-      g_free (tmpl);
-    }
-  else if (g_strcmp0 (m, "Screenshot") == 0)
-    {
-      const gchar *mode, *client, *by, *file;
-      g_variant_get (p, "(&s&s&s&s)", &mode, &client, &by, &file);
-      if (g_strcmp0 (mode, "desktop") != 0
-          && g_strcmp0 (mode, "window") != 0
-          && g_strcmp0 (mode, "all") != 0)
-        mode = "desktop";
-      if (client != NULL && *client != '\0')
-        {
-          const gchar *args[3];
-          gchar *tmpl;
-          args[0] = client; args[1] = file; args[2] = file;
-          tmpl = g_strdup_printf (
-            "(let ((c (gowl-find-client \"%%s\" '%s)))"
-            "  (if c (let ((shot (gowl-screenshot-client c)))"
-            "          (if shot"
-            "              (progn (apply #'gowl-screenshot-save-png"
-            "                            (append shot (list \"%%s\")))"
-            "                     \"%%s\")"
-            "            (error \"screenshot capture produced no image\")))"
-            "    (error \"no client matching pattern\")))",
-            by_field (by));
-          cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 3);
-          g_free (tmpl);
-        }
-      else
-        {
-          const gchar *args[2];
-          gchar *tmpl;
-          args[0] = file; args[1] = file;
-          tmpl = g_strdup_printf (
-            "(progn (gowl-screenshot '%s \"%%s\" t) \"%%s\")", mode);
-          cmacs_dbus_eval_to_reply_string (iv, tmpl, args, 2);
-          g_free (tmpl);
-        }
-    }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 #undef RETURN_STR

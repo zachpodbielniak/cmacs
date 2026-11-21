@@ -157,9 +157,14 @@ CMACS_DBUS_IFACE_DECL (dbexplorer)
 #endif
 #ifdef HAVE_CMACS_AI_BRIGADE
 CMACS_DBUS_IFACE_DECL (brigade)
+#endif
 /* The generic capability interface, org.cmacs.Editor1.Tools: every
- * tool in the brigade registry, with no per-tool method.  See
- * cmacs-dbus-iface-tools.c. */
+ * tool in the registry, with no per-tool method.  See
+ * cmacs-dbus-iface-tools.c.  The registry is Lisp that every cmacs
+ * ships, so this needs D-Bus and nothing else; HAVE_CMACS_DBUS_TOOLS
+ * is defined by configure together with the object, which keeps the
+ * calls from existing in a build that does not link the file. */
+#ifdef HAVE_CMACS_DBUS_TOOLS
 CMACS_DBUS_IFACE_DECL (tools)
 #endif
 #ifdef HAVE_CMACS_SECONDBRAIN
@@ -220,6 +225,30 @@ gchar *cmacs_dbus_build_elisp (const gchar  *elisp_template,
                                const gchar **args,
                                gint          n_args);
 
+/* ── Forwarding to the capability table (cmacs-dbus-forward.c) ──────
+ *
+ * Every interface's method handler calls this first:
+ *
+ *     if (cmacs_dbus_forward (iface, method, params, invocation))
+ *       return;
+ *
+ * IFACE is the full interface name GDBus passed the handler.  When the
+ * method has a row in cmacs-dbus-forward-table.h it is served from the
+ * registry -- a tool, or a Lisp method function -- and TRUE is
+ * returned: the invocation (transfer-full, as GDBus hands it to a
+ * handler) now belongs to the forwarder, which answers it exactly
+ * once, possibly later.  FALSE means there is no row and nothing was
+ * touched: the caller still owns the invocation and runs its own
+ * body. */
+gboolean cmacs_dbus_forward (const gchar           *iface,
+                             const gchar           *method,
+                             GVariant              *params,
+                             GDBusMethodInvocation *invocation);
+
+/* Answer every forwarded invocation still waiting for an :async tool
+ * with ServiceStopped.  Called when the D-Bus service stops. */
+void cmacs_dbus_forward_stop (void);
+
 /* ── Object Manager: managed-object registry ─────────────────────────
  *
  * Modules that register dynamic objects (Phase 2: buffers, frames,
@@ -277,7 +306,8 @@ void cmacs_dbus_emit_properties_changed (const gchar  *path,
 
 void syms_of_cmacs_dbus_emit  (void);
 void syms_of_cmacs_dbus_mpris (void);
-#ifdef HAVE_CMACS_AI_BRIGADE
+void syms_of_cmacs_dbus_forward (void);
+#ifdef HAVE_CMACS_DBUS_TOOLS
 void syms_of_cmacs_dbus_tools (void);
 #endif
 

@@ -75,54 +75,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Build an elisp alist literal "(list (cons \"k\" \"v\") ...)" from an
- * a{ss} dict iterator.  Returns "nil" when empty.  Mirrors
- * podomation_data_alist in cmacs-mcp-tools-shell.c. */
-static gchar *
-dict_to_alist (GVariantIter *iter)
-{
-  GString *s;
-  const gchar *key, *val;
-  gboolean any = FALSE;
-
-  s = g_string_new ("(list");
-  while (g_variant_iter_loop (iter, "{&s&s}", &key, &val))
-    {
-      gchar *ek = cmacs_dbus_lisp_escape (key);
-      gchar *ev = cmacs_dbus_lisp_escape (val);
-      g_string_append_printf (s, " (cons \"%s\" \"%s\")", ek, ev);
-      g_free (ek);
-      g_free (ev);
-      any = TRUE;
-    }
-  g_string_append_c (s, ')');
-  if (!any)
-    {
-      g_string_free (s, TRUE);
-      return g_strdup ("nil");
-    }
-  return g_string_free (s, FALSE);
-}
-
-/* Eval EXPR (already fully built) and reply with the raw string. */
-static void
-pod_reply (GDBusMethodInvocation *iv, gchar *expr)
-{
-  gchar *result;
-  GError *err = NULL;
-
-  result = cmacs_dispatch_eval_string (expr, &err);
-  g_free (expr);
-  if (result == NULL)
-    {
-      cmacs_dbus_return_gerror (iv, err);
-      return;
-    }
-  g_dbus_method_invocation_return_value (
-    iv, g_variant_new ("(s)", result));
-  g_free (result);
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -130,58 +82,13 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Control") == 0)
-    {
-      const gchar *action;
-      g_variant_get (p, "(&s)", &action);
-      if (g_strcmp0 (action, "start") == 0)
-        pod_reply (iv, g_strdup
-          ("(progn (cmacs-podomation-start) \"engine started\")"));
-      else if (g_strcmp0 (action, "stop") == 0)
-        pod_reply (iv, g_strdup
-          ("(progn (cmacs-podomation-stop) \"engine stopped\")"));
-      else if (g_strcmp0 (action, "status") == 0)
-        pod_reply (iv, g_strdup
-          ("(if (cmacs-podomation-running-p) \"running\" \"stopped\")"));
-      else
-        g_dbus_method_invocation_return_dbus_error (
-          iv, "org.cmacs.Editor1.Error",
-          "action must be one of: start, stop, status");
-    }
-  else if (g_strcmp0 (m, "EmitEvent") == 0)
-    {
-      const gchar *event;
-      GVariantIter *iter;
-      gchar *ee, *alist;
-      g_variant_get (p, "(&sa{ss})", &event, &iter);
-      ee = cmacs_dbus_lisp_escape (event);
-      alist = dict_to_alist (iter);
-      g_variant_iter_free (iter);
-      pod_reply (iv, g_strdup_printf
-        ("(progn (cmacs-podomation-emit-event \"%s\" %s)"
-         "       (format \"emitted %%s\" \"%s\"))",
-         ee, alist, ee));
-      g_free (ee);
-      g_free (alist);
-    }
-  else if (g_strcmp0 (m, "RunPod") == 0)
-    {
-      /* Run pod NAME's rules now (cmacs-podomation-run-pod).  An empty
-         EVENT means the pod's only bound event. */
-      const gchar *pod, *event;
-      gchar *pe, *ee;
-      g_variant_get (p, "(&s&s)", &pod, &event);
-      pe = cmacs_dbus_lisp_escape (pod);
-      ee = cmacs_dbus_lisp_escape (event);
-      pod_reply (iv, g_strdup_printf
-        ("(format \"ran %%s %%s\" \"%s\""
-         " (cmacs-podomation-run-pod \"%s\""
-         "  (and (> (length \"%s\") 0) \"%s\")))",
-         pe, pe, ee, ee));
-      g_free (pe);
-      g_free (ee);
-    }
-  else if (g_strcmp0 (m, "EvalDsl") == 0)
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  if (g_strcmp0 (m, "EvalDsl") == 0)
     {
       const gchar *dsl;
       const gchar *args[1];
@@ -202,42 +109,9 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
         "  (format \"%%s: %%s\" (car r) (or (cdr r) \"\")))",
         args, 1);
     }
-  else if (g_strcmp0 (m, "ListPods") == 0)
-    pod_reply (iv, g_strdup
-      ("(prin1-to-string (cmacs-podomation-list-pods))"));
-  else if (g_strcmp0 (m, "ListModules") == 0)
-    pod_reply (iv, g_strdup
-      ("(prin1-to-string (cmacs-podomation-list-modules))"));
-  else if (g_strcmp0 (m, "LoadFile") == 0)
-    {
-      const gchar *file;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &file);
-      args[0] = file;
-      cmacs_dbus_eval_to_reply_string (iv,
-        "(let ((path (expand-file-name \"%s\")))"
-        "  (cmacs-podomation-load-file path)"
-        "  (format \"loaded %%s\" path))",
-        args, 1);
-    }
-  else if (g_strcmp0 (m, "Reload") == 0)
-    pod_reply (iv, g_strdup
-      ("(progn (cmacs-podomation-reload) \"engine reloaded\")"));
-  else if (g_strcmp0 (m, "SetContext") == 0)
-    {
-      GVariantIter *iter;
-      gchar *alist;
-      g_variant_get (p, "(a{ss})", &iter);
-      alist = dict_to_alist (iter);
-      g_variant_iter_free (iter);
-      pod_reply (iv, g_strdup_printf
-        ("(progn (cmacs-podomation-set-context %s) \"context set\")",
-         alist));
-      g_free (alist);
-    }
-  else if (g_strcmp0 (m, "Stats") == 0)
-    pod_reply (iv, g_strdup
-      ("(prin1-to-string (cmacs-podomation-stats))"));
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

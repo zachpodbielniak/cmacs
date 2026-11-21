@@ -93,20 +93,32 @@ video_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "List") == 0)
-    media_reply (iv, g_strdup ("(prin1-to-string (cmacs-video-list))"));
-  else if (g_strcmp0 (m, "Snapshot") == 0)
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  if (g_strcmp0 (m, "Snapshot") == 0)
     {
       gint64 handle;
       const gchar *file;
       gchar *qf;
       g_variant_get (p, "(x&s)", &handle, &file);
       qf = media_lisp_str (file);
+      /* A frame of a video is a picture of what is on screen: the
+         capture rule is asked first, as the video_snapshot MCP tool
+         asks it, and a refusal is the error it signals.  */
       media_reply (iv, g_strdup_printf
-        ("(progn (cmacs-video-snapshot-to-file %lld %s) %s)",
-         (long long) handle, qf, qf));
+        ("(progn (require 'cmacs-redact)"
+         " (cmacs-redact-capture-guard 'video %lld)"
+         " (cmacs-video-snapshot-to-file %lld %s) %s)",
+         (long long) handle, (long long) handle, qf, qf));
       g_free (qf);
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable video_vtable = {

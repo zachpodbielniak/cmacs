@@ -77,22 +77,33 @@ do_search (const gchar *pattern, GDBusMethodInvocation *iv)
   /* Note: no `;'-comments in this expression -- the elisp reader
      would otherwise eat the rest of the expression because we
      concatenate string fragments with no newlines. */
+  /* The redaction contract (cmacs-redact.el) decides what may be
+     named: this answer goes to whoever asked on the session bus.  A
+     result id is opened by name later, so only a name the rules
+     leave exactly as it is can be offered -- an excluded buffer or
+     file is not listed, and neither is one whose name they rewrite.
+     The `require' is first so that a missing rule engine fails the
+     search rather than answering it unfiltered.  */
   expr = g_strdup_printf (
-    "(let ((re \"%s\") out)"
+    "(progn (require 'cmacs-redact)"
+    " (let ((re \"%s\") out)"
     " (dolist (b (buffer-list))"
     "  (let ((n (buffer-name b)))"
     "   (when (and (> (length n) 0)"
     "              (not (eq (aref n 0) ?\\s))"
-    "              (string-match-p re n))"
+    "              (string-match-p re n)"
+    "              (not (cmacs-redact-buffer-p b))"
+    "              (equal (cmacs-redact-buffer-name n) n))"
     "    (push (concat \"buf:\" n) out))))"
     " (when (boundp 'recentf-list)"
     "  (dolist (f recentf-list)"
-    "    (when (string-match-p re f)"
+    "    (when (and (string-match-p re f)"
+    "               (equal (cmacs-redact-file f) f))"
     "      (push (concat \"file:\" f) out))))"
     " (mapconcat #'identity"
     "  (let ((lst (nreverse out)))"
     "   (if (> (length lst) 20) (cl-subseq lst 0 20) lst))"
-    "  \"|||\"))",
+    "  \"|||\")))",
     pattern);
 
   result = cmacs_dispatch_eval (expr, &err);

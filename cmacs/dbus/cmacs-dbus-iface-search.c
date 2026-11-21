@@ -44,6 +44,12 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Search") == 0)
     {
       const gchar *pat;
@@ -73,25 +79,9 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
         "  (format \"%%d replacement(s)\" c)))",
         args, 2);
     }
-  else if (g_strcmp0 (m, "Occur") == 0)
-    {
-      const gchar *pat;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &pat);
-      args[0] = pat;
-      cmacs_dbus_eval_to_reply (iv,
-        "(save-excursion"
-        " (goto-char (point-min))"
-        " (let (out)"
-        "  (while (re-search-forward \"%s\" nil t)"
-        "    (push (format \"%%d:%%s\" (line-number-at-pos)"
-        "                 (buffer-substring-no-properties"
-        "                  (line-beginning-position)"
-        "                  (line-end-position))) out)"
-        "    (forward-line 1))"
-        "  (mapconcat #'identity (nreverse out) \"\\n\")))",
-        args, 1);
-    }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

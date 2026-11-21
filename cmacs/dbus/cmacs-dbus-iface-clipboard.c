@@ -48,6 +48,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Copy") == 0 || g_strcmp0 (m, "Cut") == 0)
     {
       gint64 start, end;
@@ -67,10 +73,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
     }
   else if (g_strcmp0 (m, "Paste") == 0)
     cmacs_dbus_eval_to_reply (iv, "(progn (yank) \"ok\")", NULL, 0);
-  else if (g_strcmp0 (m, "List") == 0)
-    cmacs_dbus_eval_to_reply (iv,
-      "(mapconcat (lambda (s) (substring s 0 (min 80 (length s))))"
-      " kill-ring \"|||\")", NULL, 0);
   else if (g_strcmp0 (m, "Put") == 0)
     {
       const gchar *text;
@@ -108,31 +110,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         "   (gui-set-selection (intern \"%s\") \"%s\"))"
         " \"ok\")", args, 2);
     }
-  else if (g_strcmp0 (m, "Get") == 0)
-    /* Prefer the system CLIPBOARD over kill-ring head -- matches
-       what `yank' would actually pick up when select-enable-clipboard
-       is t.  Falls back to the kill-ring on terminals / when no
-       gui-get-selection is available. */
-    cmacs_dbus_eval_to_reply (iv,
-      "(or (and (fboundp 'gui-get-selection)"
-      "         (condition-case nil"
-      "           (gui-get-selection 'CLIPBOARD 'STRING)"
-      "           (error nil)))"
-      "    (and kill-ring (car kill-ring))"
-      "    \"\")", NULL, 0);
-  else if (g_strcmp0 (m, "GetSelection") == 0)
-    {
-      const gchar *sel;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &sel);
-      args[0] = sel;
-      cmacs_dbus_eval_to_reply (iv,
-        "(or (and (fboundp 'gui-get-selection)"
-        "         (condition-case nil"
-        "           (gui-get-selection (intern \"%s\") 'STRING)"
-        "           (error nil)))"
-        "    \"\")", args, 1);
-    }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

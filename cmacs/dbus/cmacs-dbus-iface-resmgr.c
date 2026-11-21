@@ -94,56 +94,17 @@ frame_method (GDBusConnection *c, const gchar *s, const gchar *o,
               const gchar *i, const gchar *m, GVariant *p,
               GDBusMethodInvocation *iv, gpointer u)
 {
-  GError *err = NULL;
-  gchar *r;
-  (void) c; (void) s; (void) o; (void) i; (void) p; (void) u;
+  (void) c; (void) s; (void) o; (void) u;
 
-  if (g_strcmp0 (m, "List") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(mapconcat (lambda (f) (format \"%d\" (frame-parameter f 'name)))"
-        " (frame-list) \" \")", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      strip_quotes (r);
-      {
-        GVariantBuilder b;
-        gchar **toks = g_strsplit (r, " ", -1);
-        gsize k;
-        g_variant_builder_init (&b, G_VARIANT_TYPE ("as"));
-        for (k = 0; toks[k] != NULL; k++)
-          if (toks[k][0] != '\0')
-            g_variant_builder_add (&b, "s", toks[k]);
-        g_strfreev (toks); g_free (r);
-        g_dbus_method_invocation_return_value (
-          iv, g_variant_new ("(as)", &b));
-      }
-    }
-  else if (g_strcmp0 (m, "Selected") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(or (cl-position (selected-frame) (frame-list)) -1)", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (
-        iv, g_variant_new ("(i)", (gint32) g_ascii_strtoll (r, NULL, 10)));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "Count") == 0)
-    {
-      r = cmacs_dispatch_eval ("(length (frame-list))", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (
-        iv, g_variant_new ("(i)", (gint32) g_ascii_strtoll (r, NULL, 10)));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "RaiseAll") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(progn (mapc #'raise-frame (frame-list)) t)", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (
-        iv, g_variant_new ("(b)", result_is_t (r)));
-      g_free (r);
-    }
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable frame_vtable = {
@@ -210,96 +171,17 @@ win_method (GDBusConnection *c, const gchar *s, const gchar *o,
             const gchar *i, const gchar *m, GVariant *p,
             GDBusMethodInvocation *iv, gpointer u)
 {
-  GError *err = NULL;
-  gchar *r;
-  (void) c; (void) s; (void) o; (void) i; (void) p; (void) u;
+  (void) c; (void) s; (void) o; (void) u;
 
-  if (g_strcmp0 (m, "List") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(mapconcat (lambda (w) (format \"win-%d\" (window-total-width w)))"
-        " (window-list) \" \")", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      strip_quotes (r);
-      {
-        GVariantBuilder b;
-        gchar **toks = g_strsplit (r, " ", -1);
-        gsize k;
-        g_variant_builder_init (&b, G_VARIANT_TYPE ("as"));
-        for (k = 0; toks[k] != NULL; k++)
-          if (toks[k][0] != '\0')
-            g_variant_builder_add (&b, "s", toks[k]);
-        g_strfreev (toks); g_free (r);
-        g_dbus_method_invocation_return_value (iv,
-          g_variant_new ("(as)", &b));
-      }
-    }
-  else if (g_strcmp0 (m, "Selected") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(format \"win-%d\" (window-total-width (selected-window)))", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      strip_quotes (r);
-      g_dbus_method_invocation_return_value (iv, g_variant_new ("(s)", r));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "Count") == 0)
-    {
-      r = cmacs_dispatch_eval ("(length (window-list))", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (iv,
-        g_variant_new ("(i)", (gint32) g_ascii_strtoll (r, NULL, 10)));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "SplitBelow") == 0
-           || g_strcmp0 (m, "SplitRight") == 0)
-    {
-      const gchar *expr = g_strcmp0 (m, "SplitBelow") == 0
-        ? "(progn (split-window-below) t)"
-        : "(progn (split-window-right) t)";
-      r = cmacs_dispatch_eval (expr, &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (iv,
-        g_variant_new ("(b)", result_is_t (r)));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "Other") == 0)
-    {
-      r = cmacs_dispatch_eval (
-        "(progn (other-window 1) (buffer-name))", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      strip_quotes (r);
-      g_dbus_method_invocation_return_value (iv, g_variant_new ("(s)", r));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "Delete") == 0)
-    {
-      /* MCP parity: delete_window in cmacs-mcp-tools-window.c. */
-      r = cmacs_dispatch_eval ("(progn (delete-window) t)", &err);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (iv,
-        g_variant_new ("(b)", result_is_t (r)));
-      g_free (r);
-    }
-  else if (g_strcmp0 (m, "SelectByBuffer") == 0)
-    {
-      /* MCP parity: select_window in cmacs-mcp-tools-window.c ---
-         selects the window currently displaying BUFFER. */
-      const gchar *buffer;
-      gchar *escaped, *elisp;
-      g_variant_get (p, "(&s)", &buffer);
-      escaped = cmacs_dbus_lisp_escape (buffer);
-      elisp = g_strdup_printf (
-        "(let ((w (get-buffer-window \"%s\" t)))"
-        " (and w (progn (select-window w) t)))", escaped);
-      r = cmacs_dispatch_eval (elisp, &err);
-      g_free (elisp);
-      g_free (escaped);
-      if (r == NULL) { cmacs_dbus_return_gerror (iv, err); return; }
-      g_dbus_method_invocation_return_value (iv,
-        g_variant_new ("(b)", result_is_t (r)));
-      g_free (r);
-    }
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable win_vtable = {

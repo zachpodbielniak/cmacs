@@ -168,8 +168,14 @@ mpris_get_property (GDBusConnection *c, const gchar *s, const gchar *o,
       if (g_strcmp0 (prop, "Metadata") == 0)
         {
           GVariantBuilder b;
+          /* The "track title" is the current buffer's name, and any
+             process on the session bus can read it: an excluded
+             buffer has none (cmacs-redact.el).  */
           gchar *bufname = cmacs_dispatch_eval (
-            "(buffer-name (current-buffer))", NULL);
+            "(progn (require 'cmacs-redact)"
+            " (if (cmacs-redact-buffer-p (current-buffer)) \"\""
+            "   (or (cmacs-redact-buffer-name"
+            "        (buffer-name (current-buffer))) \"\")))", NULL);
           gchar *clean = bufname;
           if (clean) {
             size_t len = strlen (clean);

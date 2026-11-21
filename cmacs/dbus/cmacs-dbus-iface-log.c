@@ -91,7 +91,11 @@ log_tick (gpointer user_data)
     "                        (point-min) %ld)))"
     "        (format \"%%d\\n%%s\" end"
     "                (if (< start end)"
-    "                    (buffer-substring-no-properties start end)"
+    "                    (progn (require 'cmacs-redact)"
+    "                      (if (cmacs-redact-buffer-p (current-buffer))"
+    "                          \"\""
+    "                        (cmacs-redact-text"
+    "                         (buffer-substring-no-properties start end))))"
     "                  \"\"))))"
     "  \"1\\n\")",
     log_last_end, log_last_end, log_last_end);
@@ -155,35 +159,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "RecentMessages") == 0)
-    {
-      gint lines;
-      gchar *expr;
-      gchar *result;
-      GError *err = NULL;
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
 
-      g_variant_get (p, "(i)", &lines);
-      if (lines <= 0)
-        lines = 50;
-      expr = g_strdup_printf (
-        "(with-current-buffer \"*Messages*\""
-        "  (let ((s (max (- (point-max) 1) (point-min))))"
-        "    (save-excursion"
-        "      (goto-char (point-max))"
-        "      (forward-line -%d)"
-        "      (buffer-substring-no-properties (point) (point-max)))))",
-        lines);
-      result = cmacs_dispatch_eval_string (expr, &err);
-      g_free (expr);
-      if (result == NULL)
-        {
-          cmacs_dbus_return_gerror (iv, err);
-          return;
-        }
-      g_dbus_method_invocation_return_value (
-        iv, g_variant_new ("(s)", result));
-      g_free (result);
-    }
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

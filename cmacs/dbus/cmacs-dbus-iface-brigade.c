@@ -28,8 +28,6 @@
 #include "cmacs-eval-dispatch.h"
 
 #include <gio/gio.h>
-#include <json-glib/json-glib.h>
-#include <stdarg.h>
 #include <string.h>
 
 static const gchar *iface_xml =
@@ -98,18 +96,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* An agent name is spliced into elisp as a bare symbol, so unlike the
- * task text it cannot be made safe by escaping -- whitelist it instead.
- * Same pattern as valid_calc_name() in cmacs-dbus-iface-calculator.c.
- * Empty is allowed and means "the default agent". */
-static gboolean
-valid_agent_name (const gchar *s)
-{
-  if (s == NULL || *s == '\0')
-    return TRUE;
-  return g_regex_match_simple ("^[a-zA-Z][a-zA-Z0-9_@:-]*$", s, 0, 0);
-}
-
 /* Evaluate EXPR and reply with the raw string result.  Consumes EXPR. */
 static void
 eval_to_reply (GDBusMethodInvocation *iv, gchar *expr)
@@ -128,68 +114,6 @@ eval_to_reply (GDBusMethodInvocation *iv, gchar *expr)
   g_free (result);
 }
 
-/* Build a JSON object from NULL-terminated key/value pairs, skipping
- * pairs whose value is NULL or empty.  Through json-glib rather than
- * printf because a task description containing a quote or a newline --
- * which is most of them -- would otherwise break out of the argument. */
-static gchar *
-build_args (const gchar *first_key, ...)
-{
-  g_autoptr (JsonBuilder) b = json_builder_new ();
-  g_autoptr (JsonGenerator) gen = json_generator_new ();
-  JsonNode *root;
-  const gchar *key = first_key;
-  gchar *out;
-  va_list ap;
-
-  json_builder_begin_object (b);
-  va_start (ap, first_key);
-  while (key != NULL)
-    {
-      const gchar *val = va_arg (ap, const gchar *);
-      if (val != NULL && *val != '\0')
-        {
-          json_builder_set_member_name (b, key);
-          json_builder_add_string_value (b, val);
-        }
-      key = va_arg (ap, const gchar *);
-    }
-  va_end (ap);
-  json_builder_end_object (b);
-
-  root = json_builder_get_root (b);
-  json_generator_set_root (gen, root);
-  out = json_generator_to_data (gen, NULL);
-  json_node_unref (root);
-  return out;
-}
-
-/* Call the brigade tool NAME the way every other surface does, so a
- * D-Bus caller cannot end up on a different code path from an agent
- * making the same request.
- *
- * Confirmation is bypassed deliberately.  It exists so an *agent* cannot
- * start paid work unattended; a D-Bus caller is the session owner, who
- * already has org.cmacs.Editor1.Eval on the same bus and could just run
- * the elisp.  It also could not work as-is: RPC evals bind
- * `inhibit-interaction', so a confirmation prompt inside a dispatch
- * signals instead of asking, and every Spawn would fail. */
-static void
-call_tool (GDBusMethodInvocation *iv, const gchar *name, const gchar *args_json)
-{
-  gchar *args_q = cmacs_dbus_lisp_escape (args_json ? args_json : "{}");
-
-  eval_to_reply (iv, g_strdup_printf (
-    "(progn (require 'cmacs-brigade)"
-    " (require 'cmacs-brigade-subagent)"
-    " (require 'cmacs-brigade-mailbox nil t)"
-    " (let ((cmacs-brigade-confirm-function (lambda (_) t)))"
-    "  (condition-case e (cmacs-brigade-call-tool \"%s\" \"%s\" \"dbus\")"
-    "   (error (format \"error: %%s\" (error-message-string e))))))",
-    name, args_q));
-  g_free (args_q);
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -197,135 +121,22 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Spawn") == 0)
-    {
-      const gchar *task, *agent, *title, *model;
-      g_autofree gchar *args = NULL;
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
 
-      g_variant_get (p, "(&s&s&s&s)", &task, &agent, &title, &model);
-      if (*task == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing task");
-          return;
-        }
-      if (!valid_agent_name (agent))
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error",
-            "agent must be an agent name ([a-zA-Z][a-zA-Z0-9_@:-]*)");
-          return;
-        }
-      args = build_args ("task", task, "agent", agent, "title", title,
-                         "model", model, NULL);
-      call_tool (iv, "agent_spawn", args);
-    }
-  else if (g_strcmp0 (m, "Status") == 0
-           || g_strcmp0 (m, "Result") == 0
-           || g_strcmp0 (m, "Cancel") == 0
-           || g_strcmp0 (m, "Inbox") == 0
-           || g_strcmp0 (m, "Close") == 0)
-    {
-      const gchar *id;
-      const gchar *tool = (g_strcmp0 (m, "Status") == 0) ? "agent_status"
-                        : (g_strcmp0 (m, "Result") == 0) ? "agent_result"
-                        : (g_strcmp0 (m, "Inbox")  == 0) ? "agent_inbox"
-                        : (g_strcmp0 (m, "Close")  == 0) ? "agent_close"
-                        : "agent_cancel";
-      g_autofree gchar *args = NULL;
-
-      g_variant_get (p, "(&s)", &id);
-      if (*id == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing task id");
-          return;
-        }
-      args = build_args ("id", id, NULL);
-      call_tool (iv, tool, args);
-    }
-  else if (g_strcmp0 (m, "List") == 0)
-    {
-      call_tool (iv, "agent_list", "{}");
-    }
-  else if (g_strcmp0 (m, "Providers") == 0)
-    {
-      call_tool (iv, "agent_providers", "{}");
-    }
-  else if (g_strcmp0 (m, "Models") == 0)
-    {
-      const gchar *provider;
-      g_autofree gchar *args = NULL;
-
-      g_variant_get (p, "(&s)", &provider);
-      if (*provider == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing provider");
-          return;
-        }
-      args = build_args ("provider", provider, NULL);
-      call_tool (iv, "agent_models", args);
-    }
-  else if (g_strcmp0 (m, "Send") == 0)
-    {
-      const gchar *id, *message;
-      g_autofree gchar *args = NULL;
-
-      g_variant_get (p, "(&s&s)", &id, &message);
-      if (*id == '\0' || *message == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "Send needs an id and a message");
-          return;
-        }
-      args = build_args ("id", id, "message", message, NULL);
-      call_tool (iv, "agent_send", args);
-    }
-  else if (g_strcmp0 (m, "Drop") == 0)
-    {
-      const gchar *id, *index;
-      g_autofree gchar *args = NULL;
-
-      g_variant_get (p, "(&s&s)", &id, &index);
-      if (*id == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing task id");
-          return;
-        }
-      /* An empty index is dropped by build_args, which leaves the tool's
-       * own optional argument unset -- and unset means "clear the whole
-       * queue", which is exactly what an omitted index should mean.  The
-       * number arrives as a string and the tool layer coerces it; every
-       * argument on this interface is a string so a shell caller does not
-       * have to think about D-Bus types. */
-      args = build_args ("id", id, "index", index, NULL);
-      call_tool (iv, "agent_drop", args);
-    }
-  else if (g_strcmp0 (m, "Log") == 0)
-    {
-      const gchar *id, *from_turn, *kinds;
-      g_autofree gchar *args = NULL;
-
-      g_variant_get (p, "(&s&s&s)", &id, &from_turn, &kinds);
-      if (*id == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing task id");
-          return;
-        }
-      args = build_args ("id", id, "from_turn", from_turn,
-                         "kinds", kinds, NULL);
-      call_tool (iv, "agent_log", args);
-    }
-  else if (g_strcmp0 (m, "Agents") == 0)
+  if (g_strcmp0 (m, "Agents") == 0)
     {
       eval_to_reply (iv, g_strdup (
         "(progn (require 'cmacs-brigade)"
         " (mapconcat (lambda (a) (format \"%s\" a))"
         "  (cmacs-brigade-registry-list 'agent) \"\\n\"))"));
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

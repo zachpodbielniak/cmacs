@@ -116,13 +116,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* The view: require the feature and find the buffer, or signal --
- * which is a better answer than silently doing nothing. */
-#define SB_BUF                                                          \
-  "(progn (require 'cmacs-secondbrain)"                                 \
-  " (or (get-buffer cmacs-secondbrain-buffer-name)"                     \
-  "     (error \"the second brain is not open; call Open\")))"
-
 /* The ingester, which needs no view. */
 #define SB_INGEST "(progn (require 'cmacs-secondbrain-ingest) "
 
@@ -176,116 +169,13 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 
   /* ── The visualiser ─────────────────────────────────────────────── */
 
-  if (g_strcmp0 (m, "Open") == 0)
-    {
-      gboolean three_d;
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
 
-      g_variant_get (p, "(b)", &three_d);
-      sb_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-secondbrain) (%s) \"opened\")",
-         three_d ? "cmacs-secondbrain-3d" : "cmacs-secondbrain"));
-    }
-  else if (g_strcmp0 (m, "SetLayout") == 0)
-    {
-      const gchar *kind;
-      gchar *k;
-
-      g_variant_get (p, "(&s)", &kind);
-      /* Interned rather than interpolated raw: the value reaches
-       * `intern', and an argument that can name any symbol is an
-       * argument that can name one you did not intend. */
-      k = sb_lisp_str ((kind != NULL && *kind != '\0') ? kind : "rings");
-      sb_reply (iv, g_strdup_printf
-        ("(with-current-buffer %s"
-         " (cmacs-secondbrain-set-layout-interactive (intern %s))"
-         " (format \"%%s\" (cmacs-secondbrain-layout-kind (current-buffer))))",
-         SB_BUF, k));
-      g_free (k);
-    }
-  else if (g_strcmp0 (m, "Search") == 0)
-    {
-      const gchar *query;
-      gboolean semantic;
-      gchar *q;
-
-      g_variant_get (p, "(&sb)", &query, &semantic);
-      if (query == NULL || *query == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "Search: missing query");
-          return;
-        }
-      q = sb_lisp_str (query);
-      sb_reply (iv, g_strdup_printf
-        ("(with-current-buffer %s (%s %s) \"ok\")",
-         SB_BUF,
-         semantic ? "cmacs-secondbrain-search-semantic"
-                  : "cmacs-secondbrain-search",
-         q));
-      g_free (q);
-    }
-  else if (g_strcmp0 (m, "Expand") == 0)
-    {
-      const gchar *id;
-      gboolean collapse;
-
-      g_variant_get (p, "(&sb)", &id, &collapse);
-      if (id == NULL || *id == '\0')
-        sb_reply (iv, g_strdup_printf
-          ("(with-current-buffer %s (cmacs-secondbrain-collapse-all"
-           " (current-buffer) %s 0) \"ok\")",
-           SB_BUF, collapse ? "t" : "nil"));
-      else
-        {
-          gchar *qi = sb_lisp_str (id);
-          sb_reply (iv, g_strdup_printf
-            ("(with-current-buffer %s"
-             " (if (cmacs-secondbrain-set-collapsed (current-buffer) %s %s 0)"
-             "     \"changed\" \"no change\"))",
-             SB_BUF, qi, collapse ? "t" : "nil"));
-          g_free (qi);
-        }
-    }
-  else if (g_strcmp0 (m, "NodeInfo") == 0)
-    {
-      const gchar *id;
-      gchar *qi;
-
-      g_variant_get (p, "(&s)", &id);
-      if (id == NULL || *id == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "NodeInfo: missing id");
-          return;
-        }
-      qi = sb_lisp_str (id);
-      sb_reply (iv, g_strdup_printf
-        ("(with-current-buffer %s"
-         " (format \"%%S\" (cmacs-secondbrain-node-at (current-buffer) %s)))",
-         SB_BUF, qi));
-      g_free (qi);
-    }
-  else if (g_strcmp0 (m, "Stats") == 0)
-    sb_reply (iv, g_strdup_printf
-      ("(with-current-buffer %s"
-       " (format \"nodes=%%s visible=%%s edges=%%s layout=%%s\""
-       "  (cmacs-secondbrain-node-count (current-buffer))"
-       "  (cmacs-secondbrain-visible-count (current-buffer))"
-       "  (cmacs-secondbrain-edge-count (current-buffer))"
-       "  (cmacs-secondbrain-layout-kind (current-buffer))))",
-       SB_BUF));
-  else if (g_strcmp0 (m, "Sources") == 0)
-    sb_reply (iv, g_strdup
-      ("(progn (require 'cmacs-secondbrain)"
-       " (format \"%S\" (cmacs-secondbrain-sources)))"));
-  else if (g_strcmp0 (m, "Refresh") == 0)
-    sb_reply (iv, g_strdup_printf
-      ("(with-current-buffer %s (cmacs-secondbrain-refresh) \"refreshed\")",
-       SB_BUF));
-
-  /* ── The ingester ───────────────────────────────────────────────── */
-
-  else if (g_strcmp0 (m, "Ingest") == 0)
+  if (g_strcmp0 (m, "Ingest") == 0)
     {
       const gchar *inputs, *options;
       gchar *qi, *qo;
@@ -304,73 +194,6 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
       g_free (qi);
       g_free (qo);
     }
-  else if (g_strcmp0 (m, "IngestStatus") == 0)
-    {
-      const gchar *id;
-      gchar *qi;
-
-      g_variant_get (p, "(&s)", &id);
-      qi = sb_lisp_str (id);
-      sb_reply (iv, g_strdup_printf
-        (SB_INGEST "(cmacs-secondbrain-ingest-status-json %s))", qi));
-      g_free (qi);
-    }
-  else if (g_strcmp0 (m, "IngestList") == 0)
-    sb_reply (iv, g_strdup (SB_INGEST "(cmacs-secondbrain-ingest-list-json))"));
-  else if (g_strcmp0 (m, "IngestCancel") == 0)
-    {
-      const gchar *id;
-      gchar *qi;
-
-      g_variant_get (p, "(&s)", &id);
-      qi = sb_lisp_str (id);
-      sb_reply (iv, g_strdup_printf
-        (SB_INGEST "(cmacs-secondbrain-ingest-cancel %s)"
-         " (cmacs-secondbrain-ingest-status-json %s))", qi, qi));
-      g_free (qi);
-    }
-  else if (g_strcmp0 (m, "Tree") == 0)
-    {
-      const gchar *para, *category;
-      gboolean files;
-      gchar *qp, *qc;
-
-      g_variant_get (p, "(&s&sb)", &para, &category, &files);
-      qp = sb_lisp_str_or_nil (para);
-      qc = sb_lisp_str_or_nil (category);
-      sb_reply (iv, g_strdup_printf
-        (SB_INGEST "(json-serialize (vconcat"
-         " (cmacs-secondbrain-ingest-tree nil %s %s %s))))",
-         qp, qc, files ? "t" : "nil"));
-      g_free (qp);
-      g_free (qc);
-    }
-  else if (g_strcmp0 (m, "Find") == 0)
-    {
-      const gchar *query;
-      gint limit;
-      gchar *q;
-
-      g_variant_get (p, "(&si)", &query, &limit);
-      if (query == NULL || *query == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "Find: missing query");
-          return;
-        }
-      if (limit <= 0)
-        limit = 10;
-      q = sb_lisp_str (query);
-      sb_reply (iv, g_strdup_printf
-        (SB_INGEST "(cmacs-secondbrain-ingest-find-json %s %d))", q, limit));
-      g_free (q);
-    }
-  else if (g_strcmp0 (m, "Doctor") == 0)
-    sb_reply (iv, g_strdup
-      (SB_INGEST "(json-serialize (vconcat (mapcar (lambda (e)"
-       "  (list :name (symbol-name (nth 0 e)) :available (and (nth 1 e) t)"
-       "        :detail (nth 2 e)))"
-       " (cmacs-secondbrain-ingest-doctor)))))"));
   else if (g_strcmp0 (m, "Migrate") == 0)
     {
       /* Plans by default; only an options object saying "apply": true
@@ -399,6 +222,9 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
          "  (abbreviate-file-name (expand-file-name cmacs-secondbrain-ingest-drop-directory))))",
          enable ? "1" : "-1"));
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

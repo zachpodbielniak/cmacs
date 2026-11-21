@@ -481,18 +481,26 @@ register_modules (GDBusConnection *conn, GError **error)
 static void
 unregister_modules (GDBusConnection *conn)
 {
+  /* Calls a legacy method forwarded to an :async tool and is still
+     waiting on are answered now (ServiceStopped), whichever interface
+     they came in on.  Before the interfaces go, so the answers leave
+     through a connection that still has them registered.  */
+  cmacs_dbus_forward_stop ();
+
   /* Phase 6 MCP-parity ifaces (reverse registration order). */
 #ifdef HAVE_CMACS_SECONDBRAIN
   if (reg_iface_secondbrain)
     { cmacs_dbus_iface_secondbrain_unregister (conn, reg_iface_secondbrain);
       reg_iface_secondbrain = 0; }
 #endif
-#ifdef HAVE_CMACS_AI_BRIGADE
+  /* Not inside the brigade's guard: the Tools interface exists in
+     every build with D-Bus (see cmacs-dbus-iface-tools.c).  */
 #ifdef HAVE_CMACS_DBUS_TOOLS
   if (reg_iface_tools)
     { cmacs_dbus_iface_tools_unregister (conn, reg_iface_tools);
       reg_iface_tools = 0; }
 #endif
+#ifdef HAVE_CMACS_AI_BRIGADE
   if (reg_iface_brigade)
     { cmacs_dbus_iface_brigade_unregister (conn, reg_iface_brigade);
       reg_iface_brigade = 0; }
@@ -877,6 +885,7 @@ syms_of_cmacs_dbus (void)
 
   syms_of_cmacs_dbus_emit ();
   syms_of_cmacs_dbus_mpris ();
+  syms_of_cmacs_dbus_forward ();
 #ifdef HAVE_CMACS_DBUS_TOOLS
   syms_of_cmacs_dbus_tools ();
 #endif

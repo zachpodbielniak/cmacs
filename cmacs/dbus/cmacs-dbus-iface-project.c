@@ -52,34 +52,13 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Grep") == 0)
-    {
-      const gchar *pat, *dir;
-      const gchar *args[2];
-      g_variant_get (p, "(&s&s)", &pat, &dir);
-      args[0] = pat; args[1] = (dir && *dir) ? dir : ".";
-      cmacs_dbus_eval_to_reply (iv,
-        "(with-temp-buffer"
-        " (call-process \"grep\" nil t nil \"-rn\" \"--\" \"%s\" \"%s\")"
-        " (buffer-string))", args, 2);
-    }
-  else if (g_strcmp0 (m, "Find") == 0)
-    {
-      const gchar *name, *dir;
-      const gchar *args[2];
-      g_variant_get (p, "(&s&s)", &name, &dir);
-      args[0] = (dir && *dir) ? dir : ".";
-      args[1] = name;
-      cmacs_dbus_eval_to_reply (iv,
-        "(with-temp-buffer"
-        " (call-process \"find\" nil t nil \"%s\" \"-name\" \"%s\")"
-        " (buffer-string))", args, 2);
-    }
-  else if (g_strcmp0 (m, "Root") == 0)
-    cmacs_dbus_eval_to_reply (iv,
-      "(or (and (project-current) (project-root (project-current)))"
-      "    default-directory)", NULL, 0);
-  else if (g_strcmp0 (m, "Compile") == 0)
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  if (g_strcmp0 (m, "Compile") == 0)
     {
       const gchar *cmd;
       const gchar *args[1];
@@ -94,24 +73,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
   else if (g_strcmp0 (m, "PrevError") == 0)
     cmacs_dbus_eval_to_reply (iv,
       "(progn (previous-error) \"ok\")", NULL, 0);
-  else if (g_strcmp0 (m, "ListFiles") == 0)
-    /* MCP parity: project_list_files in cmacs-mcp-tools-project.c. */
-    cmacs_dbus_eval_to_reply_string (iv,
-      "(let ((pr (project-current)))"
-      "  (if pr (mapconcat #'identity (project-files pr) \"\\n\")"
-      "    (error \"no project here\")))", NULL, 0);
-  else if (g_strcmp0 (m, "ReadFile") == 0)
-    {
-      /* MCP parity: project_read_file in cmacs-mcp-tools-project.c. */
-      const gchar *path;
-      const gchar *args[1];
-      g_variant_get (p, "(&s)", &path);
-      args[0] = path;
-      cmacs_dbus_eval_to_reply_string (iv,
-        "(with-temp-buffer"
-        " (insert-file-contents (expand-file-name \"%s\"))"
-        " (buffer-string))", args, 1);
-    }
   else if (g_strcmp0 (m, "WriteFile") == 0)
     {
       /* MCP parity: project_write_file in cmacs-mcp-tools-project.c. */
@@ -132,6 +93,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         g_variant_new ("(b)", g_strcmp0 (r, "t") == 0));
       g_free (r);
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

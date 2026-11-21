@@ -56,37 +56,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Calculator and category names are spliced into the elisp as BARE
- * symbols (quote forms), so unlike expressions they cannot be made safe
- * by string-escaping --- whitelist them instead.  Same pattern as
- * valid_provider_name() in cmacs-dbus-iface-ai.c, and the identical
- * regexp the MCP tools use. */
-static gboolean
-valid_calc_name (const gchar *s)
-{
-  if (s == NULL || *s == '\0')
-    return FALSE;
-  return g_regex_match_simple ("^[a-z][a-z0-9-]*$", s, 0, 0);
-}
-
-/* Evaluate EXPR and reply with the raw string result.  Consumes EXPR. */
-static void
-eval_to_reply (GDBusMethodInvocation *iv, gchar *expr)
-{
-  gchar *result;
-  GError *err = NULL;
-
-  result = cmacs_dispatch_eval_string (expr, &err);
-  g_free (expr);
-  if (result == NULL)
-    {
-      cmacs_dbus_return_gerror (iv, err);
-      return;
-    }
-  g_dbus_method_invocation_return_value (iv, g_variant_new ("(s)", result));
-  g_free (result);
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -94,125 +63,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Eval") == 0)
-    {
-      const gchar *expr;
-      gchar *expr_q;
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
 
-      g_variant_get (p, "(&s)", &expr);
-      if (*expr == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing expression");
-          return;
-        }
-      expr_q = cmacs_dbus_lisp_escape (expr);
-      /* The calculator signals on bad input rather than returning it
-         unevaluated, so catch and report instead of failing the call. */
-      eval_to_reply (iv, g_strdup_printf (
-        "(progn (require 'cmacs-calculator)"
-        " (condition-case e (cmacs-calculator-eval \"%s\")"
-        "  (error (format \"error: %%s\" (error-message-string e)))))",
-        expr_q));
-      g_free (expr_q);
-    }
-  else if (g_strcmp0 (m, "EvalSymbolic") == 0)
-    {
-      const gchar *expr;
-      gchar *expr_q;
-
-      g_variant_get (p, "(&s)", &expr);
-      if (*expr == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing expression");
-          return;
-        }
-      expr_q = cmacs_dbus_lisp_escape (expr);
-      eval_to_reply (iv, g_strdup_printf (
-        "(progn (require 'cmacs-calculator)"
-        " (condition-case e (cmacs-calculator-eval-symbolic \"%s\")"
-        "  (error (format \"error: %%s\" (error-message-string e)))))",
-        expr_q));
-      g_free (expr_q);
-    }
-  else if (g_strcmp0 (m, "ConvertUnits") == 0)
-    {
-      const gchar *expr, *units;
-      gchar *expr_q, *units_q;
-
-      g_variant_get (p, "(&s&s)", &expr, &units);
-      if (*expr == '\0')
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error", "missing expression");
-          return;
-        }
-      expr_q = cmacs_dbus_lisp_escape (expr);
-      /* No target units means "reduce to base SI". */
-      if (*units == '\0')
-        eval_to_reply (iv, g_strdup_printf (
-          "(progn (require 'cmacs-calculator)"
-          " (condition-case e (cmacs-calculator-to-base-units \"%s\")"
-          "  (error (format \"error: %%s\" (error-message-string e)))))",
-          expr_q));
-      else
-        {
-          units_q = cmacs_dbus_lisp_escape (units);
-          eval_to_reply (iv, g_strdup_printf (
-            "(progn (require 'cmacs-calculator)"
-            " (condition-case e (cmacs-calculator-convert-units \"%s\" \"%s\")"
-            "  (error (format \"error: %%s\" (error-message-string e)))))",
-            expr_q, units_q));
-          g_free (units_q);
-        }
-      g_free (expr_q);
-    }
-  else if (g_strcmp0 (m, "ListCalculators") == 0)
-    {
-      const gchar *category;
-      gchar *cat_arg;
-
-      g_variant_get (p, "(&s)", &category);
-      /* A category is a bare symbol in the call, so allow only names
-         that cannot alter the form being built; anything else (and the
-         empty string) lists every calculator. */
-      cat_arg = valid_calc_name (category)
-        ? g_strdup_printf ("'%s", category)
-        : g_strdup ("nil");
-
-      eval_to_reply (iv, g_strdup_printf (
-        "(progn (require 'cmacs-calculator)"
-        " (mapconcat (lambda (c) (format \"%%s (%%s) -- %%s\""
-        "   (plist-get c :name) (plist-get c :category)"
-        "   (or (plist-get c :title) \"\")))"
-        "  (cmacs-calculator-list %s) \"\\n\"))",
-        cat_arg));
-      g_free (cat_arg);
-    }
-  else if (g_strcmp0 (m, "Describe") == 0)
-    {
-      const gchar *calc;
-
-      g_variant_get (p, "(&s)", &calc);
-      if (!valid_calc_name (calc))
-        {
-          g_dbus_method_invocation_return_dbus_error (
-            iv, "org.cmacs.Editor1.Error",
-            "name must be a calculator name ([a-z][a-z0-9-]*)");
-          return;
-        }
-
-      eval_to_reply (iv, g_strdup_printf (
-        "(progn (require 'cmacs-calculator)"
-        " (let ((c (cmacs-calculator-get '%s)))"
-        "  (if (null c) \"error: no such calculator\""
-        "   (format \"%%s -- %%s\\ncategory: %%s\\nargs: %%S\\nreturns: %%s\\n%%s\""
-        "    (plist-get c :name) (or (plist-get c :title) \"\")"
-        "    (plist-get c :category) (plist-get c :args)"
-        "    (or (plist-get c :returns) \"\") (or (plist-get c :doc) \"\")))))",
-        calc));
-    }
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

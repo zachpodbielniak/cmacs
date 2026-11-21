@@ -31,6 +31,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Install") == 0)
     {
       const gchar *name; const gchar *args[1];
@@ -48,13 +54,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         " (cadr (assq (intern \"%s\") package-alist))) \"ok\")",
         args, 1);
     }
-  else if (g_strcmp0 (m, "List") == 0)
-    cmacs_dbus_eval_to_reply (iv,
-      "(mapconcat (lambda (p) (symbol-name (car p)))"
-      " package-alist \"|||\")", NULL, 0);
   else if (g_strcmp0 (m, "Refresh") == 0)
     cmacs_dbus_eval_to_reply (iv,
       "(progn (package-refresh-contents) \"ok\")", NULL, 0);
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

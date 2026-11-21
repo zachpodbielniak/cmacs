@@ -46,6 +46,12 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
   if (g_strcmp0 (m, "Insert") == 0)
     {
       const gchar *text, *buffer;
@@ -54,42 +60,6 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       args[0] = buffer; args[1] = buffer; args[2] = text;
       cmacs_dbus_eval_to_reply_string (iv,
         TEXT_IN_BUFFER " (insert \"%s\") \"ok\")", args, 3);
-    }
-  else if (g_strcmp0 (m, "Delete") == 0)
-    {
-      gint64 start, end;
-      const gchar *buffer;
-      gchar sbuf[24], ebuf[24];
-      const gchar *args[6];
-      g_variant_get (p, "(xx&s)", &start, &end, &buffer);
-      g_snprintf (sbuf, sizeof sbuf, "%" G_GINT64_FORMAT, start);
-      g_snprintf (ebuf, sizeof ebuf, "%" G_GINT64_FORMAT, end);
-      args[0] = buffer; args[1] = buffer;
-      args[2] = sbuf; args[3] = ebuf;
-      args[4] = sbuf; args[5] = ebuf;
-      cmacs_dbus_eval_to_reply_string (iv,
-        TEXT_IN_BUFFER
-        " (let ((s (buffer-substring-no-properties %s %s)))"
-        "  (delete-region %s %s) s))",
-        args, 6);
-    }
-  else if (g_strcmp0 (m, "Line") == 0)
-    {
-      gint64 n;
-      const gchar *buffer;
-      gchar nbuf[24];
-      const gchar *args[3];
-      g_variant_get (p, "(x&s)", &n, &buffer);
-      g_snprintf (nbuf, sizeof nbuf, "%" G_GINT64_FORMAT, n);
-      args[0] = buffer; args[1] = buffer; args[2] = nbuf;
-      cmacs_dbus_eval_to_reply_string (iv,
-        TEXT_IN_BUFFER
-        " (save-excursion"
-        "  (goto-char (point-min))"
-        "  (forward-line (1- %s))"
-        "  (buffer-substring-no-properties (line-beginning-position)"
-        "                                   (line-end-position))))",
-        args, 3);
     }
   else if (g_strcmp0 (m, "Append") == 0)
     {
@@ -103,6 +73,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
         " \"ok\")",
         args, 3);
     }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = { on_method, NULL, NULL, { NULL } };

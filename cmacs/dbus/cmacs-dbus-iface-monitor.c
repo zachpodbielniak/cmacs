@@ -86,9 +86,13 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "List") == 0)
-    RETURN_STR (cmacs_dispatch_gowl_list_monitors (&err));
-  else if (g_strcmp0 (m, "Info") == 0)
+  /* Served from the capability table when the method has a row in
+     cmacs-dbus-forward-table.h; the bodies below are the methods
+     that have none.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  if (g_strcmp0 (m, "Info") == 0)
     {
       const gchar *name;
       g_variant_get (p, "(&s)", &name);
@@ -135,14 +139,9 @@ on_method (GDBusConnection *c, const gchar *s, const gchar *o,
       g_variant_get (p, "(&sd)", &name, &scale);
       RETURN_STR (cmacs_dispatch_gowl_set_monitor_scale (name, scale, &err));
     }
-  else if (g_strcmp0 (m, "SetTransform") == 0)
-    {
-      const gchar *name;
-      gint xform;
-      g_variant_get (p, "(&si)", &name, &xform);
-      RETURN_STR (cmacs_dispatch_gowl_set_monitor_transform (name, xform,
-                                                               &err));
-    }
+  else
+    g_dbus_method_invocation_return_dbus_error (
+      iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 #undef RETURN_STR

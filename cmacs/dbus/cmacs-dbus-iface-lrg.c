@@ -23,11 +23,6 @@
 #include <gio/gio.h>
 #include <string.h>
 
-/* Keep in sync with LRG_SHELL_BUF / LRG_EDITOR_BUF in
- * cmacs-mcp-tools-libregnum.c. */
-#define LRG_SHELL_BUF  "*lrgeditor*"
-#define LRG_EDITOR_BUF "*cmacs-libregnum editor*"
-
 static const gchar *iface_xml =
   "<node>"
   "  <interface name='org.cmacs.Editor1.Lrg'>"
@@ -89,58 +84,6 @@ static const gchar *iface_xml =
 
 static GDBusNodeInfo *iface_info = NULL;
 
-/* Eval EXPR (already fully built) and reply with the raw string. */
-static void
-lrg_reply (GDBusMethodInvocation *iv, gchar *expr)
-{
-  gchar *result;
-  GError *err = NULL;
-
-  result = cmacs_dispatch_eval_string (expr, &err);
-  g_free (expr);
-  if (result == NULL)
-    {
-      cmacs_dbus_return_gerror (iv, err);
-      return;
-    }
-  g_dbus_method_invocation_return_value (
-    iv, g_variant_new ("(s)", result));
-  g_free (result);
-}
-
-/* Quote S as an elisp string literal, falling back to FALLBACK when
- * empty. */
-static gchar *
-lrg_lisp_str (const gchar *s, const gchar *fallback)
-{
-  gchar *esc, *out;
-  if (s == NULL || *s == '\0')
-    s = fallback;
-  esc = cmacs_dbus_lisp_escape (s != NULL ? s : "");
-  out = g_strdup_printf ("\"%s\"", esc);
-  g_free (esc);
-  return out;
-}
-
-/* Wrap BODY so it runs with `buf' bound to the active editor buffer,
- * erroring nicely when no editor is open.  Takes ownership of BODY.
- * Mirrors lrg_with_editor in cmacs-mcp-tools-libregnum.c. */
-static gchar *
-lrg_with_editor (gchar *body)
-{
-  gchar *out = g_strdup_printf
-    ("(let* ((sb (get-buffer \"%s\"))"
-     "        (shell (and sb (fboundp 'cmacs-lrgeditor-attached-p)"
-     "                    (cmacs-lrgeditor-attached-p sb)))"
-     "        (buf (or (and shell sb) (get-buffer \"%s\"))))"
-     " (ignore shell)"
-     " (if (and buf (cmacs-libregnum-editor-active-p buf)) (progn %s)"
-     "   \"No libregnum editor open (M-x cmacs-lrgeditor)\"))",
-     LRG_SHELL_BUF, LRG_EDITOR_BUF, body);
-  g_free (body);
-  return out;
-}
-
 static void
 on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
                 const gchar *i, const gchar *m, GVariant *p,
@@ -148,114 +91,15 @@ on_method_call (GDBusConnection *c, const gchar *s, const gchar *o,
 {
   (void) c; (void) s; (void) o; (void) i; (void) u;
 
-  if (g_strcmp0 (m, "Open") == 0)
-    {
-      const gchar *path;
-      gchar *qp;
-      g_variant_get (p, "(&s)", &path);
-      /* An empty path opens the shell on its welcome screen. */
-      qp = (*path != '\0') ? lrg_lisp_str (path, NULL) : g_strdup ("nil");
-      lrg_reply (iv, g_strdup_printf
-        ("(progn (require 'cmacs-lrgeditor) (cmacs-lrgeditor %s)"
-         " \"opened\")", qp));
-      g_free (qp);
-    }
-  else if (g_strcmp0 (m, "Play") == 0)
-    lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(if (if shell (cmacs-lrgeditor-activate-action buf \"play.start\")"
-       "       (cmacs-libregnum-editor-play buf))"
-       "     \"playing\" \"could not instantiate\")")));
-  else if (g_strcmp0 (m, "Stop") == 0)
-    lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(progn (if shell (cmacs-lrgeditor-activate-action buf \"play.stop\")"
-       "         (cmacs-libregnum-editor-stop buf))"
-       " \"stopped\")")));
-  else if (g_strcmp0 (m, "Save") == 0)
-    {
-      const gchar *path;
-      gchar *qp;
-      g_variant_get (p, "(&s)", &path);
-      qp = lrg_lisp_str (path, "level.rlevel");
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(progn (cmacs-libregnum-editor-save buf %s) \"saved\")", qp)));
-      g_free (qp);
-    }
-  else if (g_strcmp0 (m, "Select") == 0)
-    {
-      gint64 id;
-      g_variant_get (p, "(x)", &id);
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(progn (cmacs-libregnum-editor-select buf %" G_GINT64_FORMAT
-         ") \"selected\")", id)));
-    }
-  else if (g_strcmp0 (m, "Move") == 0)
-    {
-      gint64 id;
-      gdouble x, y, z;
-      g_variant_get (p, "(xddd)", &id, &x, &y, &z);
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(progn (cmacs-libregnum-editor-set-position buf %" G_GINT64_FORMAT
-         " %g %g %g) \"moved\")", id, x, y, z)));
-    }
-  else if (g_strcmp0 (m, "Delete") == 0)
-    {
-      gint64 id;
-      g_variant_get (p, "(x)", &id);
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(progn (cmacs-libregnum-editor-delete buf %" G_GINT64_FORMAT
-         ") \"deleted\")", id)));
-    }
-  else if (g_strcmp0 (m, "AddPrimitive") == 0)
-    {
-      gint64 prim;
-      const gchar *name;
-      gchar *qn;
-      g_variant_get (p, "(x&s)", &prim, &name);
-      qn = lrg_lisp_str (name, "Object");
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(format \"added node %%S\""
-         " (cmacs-libregnum-editor-add-primitive buf %" G_GINT64_FORMAT
-         " %s))", prim, qn)));
-      g_free (qn);
-    }
-  else if (g_strcmp0 (m, "AddVisual") == 0)
-    {
-      gint64 kind;
-      const gchar *asset, *name;
-      gchar *qa, *qn;
-      g_variant_get (p, "(x&s&s)", &kind, &asset, &name);
-      qa = (*asset != '\0') ? lrg_lisp_str (asset, NULL) : g_strdup ("nil");
-      qn = lrg_lisp_str (name, "Object");
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(format \"added node %%S\""
-         " (cmacs-libregnum-editor-add-visual buf %" G_GINT64_FORMAT
-         " %s %s))", kind, qa, qn)));
-      g_free (qa);
-      g_free (qn);
-    }
-  else if (g_strcmp0 (m, "ObjectTree") == 0)
-    lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(format \"%S\" (cmacs-libregnum-tree-nodes buf))")));
-  else if (g_strcmp0 (m, "Action") == 0)
-    {
-      const gchar *id;
-      gchar *qi;
-      g_variant_get (p, "(&s)", &id);
-      qi = lrg_lisp_str (id, NULL);
-      lrg_reply (iv, lrg_with_editor (g_strdup_printf
-        ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
-         " (if (cmacs-lrgeditor-activate-action buf %s) \"done\""
-         "   \"unknown or disabled action\"))", qi)));
-      g_free (qi);
-    }
-  else if (g_strcmp0 (m, "Actions") == 0)
-    lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(if (not shell) \"The lrgeditor shell is not open (M-x cmacs-lrgeditor)\""
-       " (mapconcat #'identity (cmacs-lrgeditor-actions buf) \"\\n\"))")));
-  else if (g_strcmp0 (m, "Socket") == 0)
-    lrg_reply (iv, lrg_with_editor (g_strdup
-      ("(or (and shell (cmacs-lrgeditor-socket buf))"
-       " \"not serving the editor protocol\")")));
+  /* Every method of this interface has a row in
+     cmacs-dbus-forward-table.h and is served from the capability
+     table: there is no per-method code here.  The fallback below is
+     for a method added to the XML above without a row or a body.  */
+  if (cmacs_dbus_forward (i, m, p, iv))
+    return;
+
+  g_dbus_method_invocation_return_dbus_error (
+    iv, "org.freedesktop.DBus.Error.UnknownMethod", m);
 }
 
 static const GDBusInterfaceVTable vtable = {

@@ -20,6 +20,14 @@
  * through lisp/cmacs/cmacs-capability.el.  A tool added in Lisp is
  * callable here, and from `emacsctl tool', with no C change.
  *
+ * The other interfaces' methods are, where a tool provides them, rows
+ * of cmacs-dbus-forward-table.h that reach the same registry by the
+ * same gates (cmacs-dbus-forward.c).  The difference is only the
+ * door: a legacy method keeps its name and typed signature, and a
+ * row may grant that one method the reach it has always had.  This
+ * interface grants nothing: a tool is callable here when its surfaces
+ * say `dbus'.
+ *
  * ── Why Call holds the invocation ───────────────────────────────────
  *
  * A tool may be :async -- it starts work and calls `done' later.  The
@@ -58,7 +66,11 @@
 
 #include <config.h>
 
-#if defined(HAVE_CMACS_GLIB) && defined(HAVE_CMACS_AI_BRIGADE)
+/* Not gated on the brigade: the registry this serves is Lisp that
+   every cmacs ships (cmacs-brigade-registry.el, cmacs-capability.el),
+   and nothing below calls a brigade C entry point.  configure defines
+   HAVE_CMACS_DBUS_TOOLS together with this file's object.  */
+#if defined(HAVE_CMACS_GLIB) && defined(HAVE_CMACS_DBUS_TOOLS)
 
 #include "lisp.h"
 #include "cmacs-dbus.h"
@@ -397,4 +409,4 @@ syms_of_cmacs_dbus_tools (void)
   defsubr (&Scmacs_capability__dbus_pending);
 }
 
-#endif /* HAVE_CMACS_GLIB && HAVE_CMACS_AI_BRIGADE */
+#endif /* HAVE_CMACS_GLIB && HAVE_CMACS_DBUS_TOOLS */
