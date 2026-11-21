@@ -56,6 +56,17 @@ static const gchar *const cmacs_brigade__privileged[] = {
   "shell",
   "execute_command",
   "send_keys",
+  /* The same power by other doors: text into a subprocess (a shell is
+   * a subprocess), any introspected C function, and keys typed into
+   * the focused window by the hotkey module's Send.  A file of
+   * podomation DSL is `podomation_eval_dsl' with one more step.  */
+  "send_to_process",
+  "gi_call",
+  "gowl_hotkey_send",
+  "podomation_load_file",
+  /* Spelled with underscores; the MCP names are dotted
+   * ("cmacs.c.patch_defun") and cmacs_brigade_tool_privileged compares
+   * them with the dots folded.  */
   "cmacs_c_patch_defun",
   "cmacs_c_unpatch_defun",
   "cmacs_c_unpatch_all",
@@ -105,8 +116,25 @@ cmacs_brigade_tool_privileged (const gchar *tool_name)
 
   if (tool_name == NULL) return TRUE;   /* fail closed */
   for (i = 0; cmacs_brigade__privileged[i] != NULL; i++)
-    if (strcmp (tool_name, cmacs_brigade__privileged[i]) == 0)
-      return TRUE;
+    {
+      const gchar *a = tool_name;
+      const gchar *b = cmacs_brigade__privileged[i];
+
+      /* `.' and `_' are the same character here.  The C-patching tools
+       * are published as "cmacs.c.patch_defun" and listed above as
+       * "cmacs_c_patch_defun"; an exact comparison never matched, so a
+       * "*" grant reached every one of them.  Some MCP clients also
+       * rewrite the dots before sending the name back, and both
+       * spellings have to land on the same entry.  */
+      while (*a != '\0' && *b != '\0'
+             && ((*a == '.' ? '_' : *a) == (*b == '.' ? '_' : *b)))
+        {
+          a++;
+          b++;
+        }
+      if (*a == '\0' && *b == '\0')
+        return TRUE;
+    }
   return FALSE;
 }
 
