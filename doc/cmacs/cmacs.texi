@@ -77,8 +77,12 @@ interaction.
 * CMacs Transcode::             Native ffmpeg batch video/audio transcoder.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Journal::               Local activity journal with privacy filters.
+* CMacs Journal Restore::       Put me back where I was: checkpoints and restore.
+* CMacs Redact::                One privacy rule set for every model-facing surface.
 * CMacs Deixis::                Deictic voice: "move that there" bound to what was pointed at.
 * Gowl Edit Field::             Edit any application's text field in a floating Emacs frame.
+* Gowl AI Field::               AI commands on any application's text field.
+* LQL Watches::                 Standing LQL queries that fire when their result changes.
 * Agent Desktops::              A private headless desktop per brigade agent.
 * Capability Table::            One tool table behind MCP, D-Bus, emacsctl and menus.
 * CMacs AI and ai-glib 0.13::   ACP agents, steering, limit notices, Codex transport.
@@ -13851,10 +13855,22 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @include journal.texi
 
 @c ===================================================================
+@include journal-restore.texi
+
+@c ===================================================================
+@include redact.texi
+
+@c ===================================================================
 @include deixis.texi
 
 @c ===================================================================
 @include gowl-edit-field.texi
+
+@c ===================================================================
+@include gowl-ai-field.texi
+
+@c ===================================================================
+@include lql-watch.texi
 
 @c ===================================================================
 @include brigade-desktop.texi
@@ -14771,7 +14787,7 @@ button.  @kbd{C-c C-k} cancels.  The colon commands are @code{:help},
 @item @code{kill_ring} @tab index, length, text @tab @code{kill-ring}
 @item @code{bookmarks} @tab name, file, position @tab @code{bookmark-alist}
 @item @code{org_headings} @tab file, line, level, heading, todo, priority, tags, scheduled, deadline, id @tab @code{org-agenda-files}, bounded by @code{cmacs-lql-org-max-files}
-@item @code{gowl_clients} @tab client @tab gowl's windows
+@item @code{gowl_clients} @tab client, app_id, title, pid, tags, floating @tab gowl's windows
 @end multitable
 
 A source function runs on the editor thread, only when a query names its

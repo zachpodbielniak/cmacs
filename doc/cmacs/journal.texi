@@ -254,6 +254,13 @@ Matching ignores case by default
 (@code{cmacs-journal-filter-case-fold}): a rule that matches too much
 loses a title, and a rule that matches too little records one.
 
+The same rule set is also what every model-facing surface is filtered
+by, whether or not the journal is on; @pxref{CMacs Redact}.  For that
+there is one more field, @code{text}: the journal never has it (it
+records no text), so a rule on @code{text} changes nothing here.  It is
+the field of free text shown to a model---a clipboard entry, text read
+off the screen.
+
 @subsection The two layers, and why there are two
 
 The rules come from three places and are merged into one set.
@@ -448,6 +455,15 @@ it, marking the span that covers the moment.
 exist and hands its URLs to @code{browse-url}.  Windows of other
 programs are listed, not started again: the journal knows a title, not
 a command line.  Fields a filter hashed or blanked are skipped.
+
+@kbd{M-x cmacs-journal-restore} goes further: with
+@code{cmacs-journal-checkpoint-mode} on, the journal also records what
+was open and how it was arranged, and a moment (``an hour ago'',
+``Tuesday 3pm'') can be put back---files, the Emacs window layout,
+pages, and applications on their tags---after you confirm a plan.
+@kbd{R} on a line of @code{cmacs-journal-at} output, or @kbd{C-c C-r} on
+a row of a report by day, shows that plan.  @xref{CMacs Journal
+Restore}.
 
 @subsection Org clock
 

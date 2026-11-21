@@ -108,6 +108,8 @@ Three properties are kept on purpose:
 
 Matching ignores case by default (~cmacs-journal-filter-case-fold~): a rule that matches too much loses a title, and a rule that matches too little records one.
 
+The same rule set is also what every model-facing surface is filtered by, whether or not the journal is on; see [[file:cmacs-redact.org][cmacs-redact]]. For that there is one more field, =text=: the journal never has it (it records no text), so a rule on =text= changes nothing here. It is the field of free text shown to a model -- a clipboard entry, text read off the screen.
+
 ** The two layers, and why there are two
 
 The rules come from three places and are merged into one set.
@@ -214,6 +216,8 @@ What this is *not*: a sandbox. An agent you have allowed to evaluate Lisp or to 
 ~M-x cmacs-journal-at~ reads a date and time the Org way and lists what the journal has within ~cmacs-journal-at-window~ seconds of it, marking the span that covers the moment.
 
 ~M-x cmacs-journal-reopen~ visits that moment's files that still exist and hands its URLs to ~browse-url~. Windows of other programs are listed, not started again: the journal knows a title, not a command line. Fields a filter hashed or blanked are skipped.
+
+~M-x cmacs-journal-restore~ goes further: with ~cmacs-journal-checkpoint-mode~ on, the journal also records what was open and how it was arranged, and a moment ("an hour ago", "Tuesday 3pm") can be put back -- files, the Emacs window layout, pages, and applications on their tags -- after you confirm a plan. =R= on a line of ~cmacs-journal-at~ output, or =C-c C-r= on a row of a report by day, shows that plan. See [[file:cmacs-journal-restore.org][cmacs-journal-restore]].
 
 ** Org clock
 
