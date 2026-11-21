@@ -840,6 +840,93 @@ with a task must still find the journal closed."
                    '(("emacs" . 900.0) ("firefox" . 300.0))))
     (should (equal (cmacs-journal--format-duration 5400) "1:30"))))
 
+(ert-deftest cmacs-journal-test-summarize-by-context ()
+  (let* ((switch (lambda (time title)
+                   (list :kind 'context :app "emacs" :title title
+                         :detail "switch" :time time :end time :duration 0)))
+         (events (list (list :kind 'buffer :app "emacs" :project "p"
+                             :time 100.0 :end 400.0 :duration 300.0)
+                       (funcall switch 400.0 "deep")
+                       ;; Crosses the switch at 600: split there.
+                       (list :kind 'focus :app "firefox"
+                             :time 400.0 :end 1000.0 :duration 600.0)
+                       (funcall switch 600.0 "mail")
+                       (list :kind 'idle :time 1000.0 :end 2000.0
+                             :duration 1000.0)
+                       ;; A switch whose title a filter dropped.
+                       (list :kind 'context :time 2000.0 :end 2000.0
+                             :duration 0)
+                       (list :kind 'buffer :app "emacs"
+                             :time 2000.0 :end 2100.0 :duration 100.0))))
+    (should (equal (cmacs-journal-summarize events 'context)
+                   '(("mail" . 400.0) ("(none)" . 400.0) ("deep" . 200.0))))
+    ;; Switches are not time, under any grouping.
+    (should (equal (cmacs-journal-summarize events 'kind)
+                   '(("focus" . 600.0) ("buffer" . 400.0))))
+    (let ((parts (cmacs-journal-attribute-contexts events "before")))
+      (should-not (cl-some (lambda (e) (eq (plist-get e :kind) 'context))
+                           parts))
+      (should (equal (mapcar (lambda (e)
+                               (list (plist-get e :context)
+                                     (plist-get e :time) (plist-get e :end)
+                                     (plist-get e :duration)))
+                             parts)
+                     '(("before" 100.0 400.0 300.0)
+                       ("deep" 400.0 600.0 200.0)
+                       ("mail" 600.0 1000.0 400.0)
+                       ("mail" 1000.0 2000.0 1000.0)
+                       (nil 2000.0 2100.0 100.0))))
+      ;; Attributing what is already attributed changes nothing.
+      (should (equal (cmacs-journal-attribute-contexts parts "other") parts))
+      (should (equal (cmacs-journal-summarize parts 'context)
+                     '(("mail" . 400.0) ("before" . 300.0) ("deep" . 200.0)
+                       ("(none)" . 100.0)))))
+    ;; Rows, for LQL: nothing is split and nothing is left out.
+    (let ((rows (cmacs-journal-attribute-contexts events nil t)))
+      (should (= (length rows) (length events)))
+      (should (equal (mapcar (lambda (e) (plist-get e :context)) rows)
+                     '(nil "deep" "deep" "mail" "mail" nil nil)))
+      (should (= (plist-get (nth 2 rows) :duration) 600.0)))))
+
+(ert-deftest cmacs-journal-test-context-report-looks-back ()
+  (cmacs-journal-tests--with-journal
+    (let ((cmacs-journal-context-lookback-days 7)
+          (today (cmacs-journal--day-start)))
+      ;; Switched two days ago; nothing since.
+      (cmacs-journal--ensure-directory)
+      (let ((then (- today (* 2 86400) -3600)))
+        (cmacs-journal--write-lines
+         (cmacs-journal--day-file (cmacs-journal--day then))
+         (list (list :kind 'context :app "emacs" :title "client"
+                     :detail "switch" :time then :end then :duration 0))
+         nil))
+      (setq cmacs-journal-tests--clock (+ today 3600))
+      (cmacs-journal--observe (list :kind 'buffer :app "emacs" :project "p"))
+      (cmacs-journal-tests--advance 600)
+      (cmacs-journal--observe nil)
+      (should (equal (cmacs-journal-context-at (+ today 10)) "client"))
+      (should (equal (cmacs-journal-summarize
+                      (cmacs-journal-context-events
+                       today cmacs-journal-tests--clock)
+                      'context)
+                     '(("client" . 600.0))))
+      (with-temp-buffer
+        (cmacs-journal--insert-table 'today 'context)
+        (should (string-match-p "| Context | Time |" (buffer-string)))
+        (should (string-match-p "| client | 0:10 | 100 |" (buffer-string))))
+      ;; The LQL rows carry it too, without changing their number.
+      (let ((rows (cmacs-journal--lql-rows)))
+        (should (equal (mapcar (lambda (r) (plist-get r :context)) rows)
+                       '("client" "client")))
+        (should (equal (mapcar (lambda (r) (plist-get r :kind)) rows)
+                       '(context buffer))))
+      ;; Beyond the lookback it is not searched for.
+      (let ((cmacs-journal-context-lookback-days 1))
+        (should (null (cmacs-journal-context-at (+ today 10)))))
+      ;; And an agent is told nothing.
+      (let ((inhibit-interaction t))
+        (should (null (cmacs-journal-context-at (+ today 10))))))))
+
 (ert-deftest cmacs-journal-test-dynamic-block-writes-a-table ()
   (cmacs-journal-tests--with-journal
     (cmacs-journal--observe (list :kind 'buffer :app "emacs" :project "cmacs"))

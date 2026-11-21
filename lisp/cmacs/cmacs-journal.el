@@ -149,6 +149,10 @@ read the day files directly."
   :type 'string
   :group 'cmacs-journal)
 
+(declare-function cmacs-journal-attribute-contexts "cmacs-journal-report"
+                  (events &optional initial no-split))
+(declare-function cmacs-journal-context-at "cmacs-journal-report" (time))
+
 (defvar cmacs-journal-time-function #'float-time
   "Function returning the current time in seconds.  Tests rebind it.")
 
@@ -1124,7 +1128,8 @@ For `cmacs-journal-filter-test'; nothing is recorded by calling it."
   '(("time" timestamp) ("end" timestamp) ("duration" duration)
     ("kind" string) ("app" string) ("title" string) ("buffer" string)
     ("file" string) ("mode" string) ("project" string) ("url" string)
-    ("tags" array) ("monitor" string) ("detail" string))
+    ("tags" array) ("monitor" string) ("detail" string)
+    ("context" string))
   "Columns of the LQL `activity' source.")
 
 (defun cmacs-journal--lql-rows ()
@@ -1150,9 +1155,22 @@ yet written.  No rows for an agent unless
              ;; without a null check.
              :tags (vconcat (plist-get event :tags))
              :monitor (plist-get event :monitor)
-             :detail (plist-get event :detail))))
-   (cmacs-journal-events
-    (- (cmacs-journal--now) (* 86400 (max 1 cmacs-journal-lql-days))))))
+             :detail (plist-get event :detail)
+             ;; The named context active when the row began (nil for
+             ;; none).  It is the title of a `context' event, which went
+             ;; through the filters when it was recorded like every
+             ;; other field here.
+             :context (plist-get event :context))))
+   (let* ((from (- (cmacs-journal--now)
+                   (* 86400 (max 1 cmacs-journal-lql-days))))
+          (events (cmacs-journal-events from)))
+     ;; Rows are not split at a switch: a row stays the span that was
+     ;; recorded, in the context it started in.  The report file
+     ;; requires this one, so it is loaded here and not at top level.
+     (if (and events (require 'cmacs-journal-report nil t))
+         (cmacs-journal-attribute-contexts
+          events (cmacs-journal-context-at from) t)
+       events))))
 
 (defun cmacs-journal--lql-generation ()
   "What the `activity' source's cached snapshot is keyed on.

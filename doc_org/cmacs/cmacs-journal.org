@@ -178,7 +178,7 @@ When cmacs has LQL (~--with-cmacs-lql~) and the journal is loaded, the source =a
 | =time=     | timestamp |
 | =end=      | timestamp |
 | =duration= | duration (seconds) |
-| =kind=, =app=, =title=, =buffer=, =file=, =mode=, =project=, =url=, =monitor=, =detail= | string |
+| =kind=, =app=, =title=, =buffer=, =file=, =mode=, =project=, =url=, =monitor=, =detail=, =context= | string |
 | =tags=     | array     |
 
 The snapshot is cached on a generation counter that moves when a span closes, is written, or is forgotten, so repeated queries do not re-read the files.
@@ -200,7 +200,9 @@ What this is *not*: a sandbox. An agent you have allowed to evaluate Lisp or to 
 
 ** Reports
 
-~M-x cmacs-journal-report~ asks for a span (=today=, =yesterday=, =week=, =month=, a number of days, or a =YYYY-MM-DD= date) and a grouping (=project=, =app=, =day=, =kind=) and shows an Org table of time and share. Only the kinds in ~cmacs-journal-report-kinds~ (focus, buffer, url) count; idle time and agent runs are left out. Time outside any project is listed under the app it went to.
+~M-x cmacs-journal-report~ asks for a span (=today=, =yesterday=, =week=, =month=, a number of days, or a =YYYY-MM-DD= date) and a grouping (=project=, =app=, =day=, =kind=, =context=) and shows an Org table of time and share. Only the kinds in ~cmacs-journal-report-kinds~ (focus, buffer, url) count; idle time and agent runs are left out. Time outside any project is listed under the app it went to.
+
+By =context=, time goes to the named context ([[file:cmacs-context.org][cmacs-context]]) that was active: the one whose switch event (kind =context=, a point with no duration, never counted as time) most recently precedes the span. A span that crosses a switch is split at the switch. Time before the first switch known is under =(none)=; the context already active when the range begins is looked for in the ~cmacs-journal-context-lookback-days~ (7) days before it and no further. ~cmacs-journal-at~ names the context of its moment, and the LQL =activity= source has a =context= column: the context a row started in (rows are not split; =null= for none).
 
 ** Org dynamic block
 

@@ -377,7 +377,7 @@ those not yet written.
 @headitem Column @tab Type
 @item @code{time}, @code{end} @tab timestamp
 @item @code{duration} @tab duration (seconds)
-@item @code{kind}, @code{app}, @code{title}, @code{buffer}, @code{file}, @code{mode}, @code{project}, @code{url}, @code{monitor}, @code{detail} @tab string
+@item @code{kind}, @code{app}, @code{title}, @code{buffer}, @code{file}, @code{mode}, @code{project}, @code{url}, @code{monitor}, @code{detail}, @code{context} @tab string
 @item @code{tags} @tab array
 @end multitable
 
@@ -434,6 +434,19 @@ the first place.
 the kinds in @code{cmacs-journal-report-kinds} (focus, buffer, url)
 count; idle time and agent runs are left out.  Time outside any project
 is listed under the app it went to.
+
+@vindex cmacs-journal-context-lookback-days
+The grouping @code{context} is also offered.  Time then goes to the
+named context (@pxref{CMacs Context}) that was active: the one whose
+switch event (kind @code{context}, a point with no duration, never
+counted as time) most recently precedes the span.  A span that crosses
+a switch is split at the switch.  Time before the first switch known is
+under @samp{(none)}; the context already active when the range begins
+is looked for in the @code{cmacs-journal-context-lookback-days} (7) days
+before it and no further.  @code{cmacs-journal-at} names the context of
+its moment, and the LQL @code{activity} source has a @code{context}
+column: the context a row started in (rows are not split; null for
+none).
 
 @subsection Org dynamic block
 

@@ -35,6 +35,7 @@
 (declare-function org-table-align "org-table" ())
 (declare-function org-mode "org" ())
 (declare-function cmacs-journal-restore-at-point "cmacs-journal-restore" ())
+(declare-function cmacs-journal-daily "cmacs-journal-daily" (&optional day))
 
 (defvar cmacs-journal-moment-map
   (let ((map (make-sparse-keymap)))
@@ -101,6 +102,115 @@ times already."
   (let ((minutes (round seconds 60)))
     (format "%d:%02d" (/ minutes 60) (% minutes 60))))
 
+;;;; Named contexts
+
+(defcustom cmacs-journal-context-lookback-days 7
+  "Days before a range that are searched for the context already active.
+A report over today starts in whatever context was switched to last --
+perhaps yesterday, perhaps last week.  Only this many days of the
+journal are read to find it; with nothing there the range starts in no
+context.  The whole journal is never read for this."
+  :type 'integer
+  :group 'cmacs-journal)
+
+(defun cmacs-journal--context-label (event)
+  "The context a `context' EVENT switches to, or nil for an unnamed one.
+Nil when a filter dropped the title: time after it is in no named
+context, which is what the rule asked for."
+  (let ((title (plist-get event :title)))
+    (and (stringp title) (not (string-empty-p title)) title)))
+
+(defun cmacs-journal-attribute-contexts (events &optional initial no-split)
+  "Return EVENTS with each one's active named context as `:context'.
+
+EVENTS is oldest first and may hold `context' events -- the one point
+event cmacs-context.el writes per switch.  Every other event gets a
+`:context': the title of the switch that most recently precedes its
+start, INITIAL (a string or nil) before the first switch.  A span that
+crosses a switch is split at the switch into parts, each with its own
+context, times and duration, unless NO-SPLIT, in which case it is one
+event in the context it started in.  The `context' events themselves
+are left out unless NO-SPLIT: they have no duration and are not time.
+
+An event that already has a `:context' is returned as it is, so
+attributing twice changes nothing.  The switches are searched by
+bisection: O(n log n) in the events, plus the splits."
+  (let* ((switches
+          (vconcat
+           (sort (delq nil
+                       (mapcar (lambda (e)
+                                 (and (eq (plist-get e :kind) 'context)
+                                      (cons (plist-get e :time)
+                                            (cmacs-journal--context-label e))))
+                               events))
+                 (lambda (a b) (< (car a) (car b))))))
+         (count (length switches))
+         ;; Index of the last switch at or before TIME, or -1.
+         (before (lambda (time)
+                   (let ((lo 0) (hi count))
+                     (while (< lo hi)
+                       (let ((mid (/ (+ lo hi) 2)))
+                         (if (<= (car (aref switches mid)) time)
+                             (setq lo (1+ mid))
+                           (setq hi mid))))
+                     (1- lo))))
+         (label (lambda (index)
+                  (if (< index 0) initial (cdr (aref switches index)))))
+         (out nil))
+    (dolist (event events)
+      (cond
+       ((eq (plist-get event :kind) 'context)
+        ;; Kept as a row only where rows are wanted: in the context it
+        ;; switches to.
+        (when no-split
+          (push (append (list :context (cmacs-journal--context-label event))
+                        event)
+                out)))
+       ((plist-member event :context) (push event out))
+       (t
+        (let* ((start (plist-get event :time))
+               (end (or (plist-get event :end) start))
+               (index (funcall before start)))
+          (if (or no-split
+                  (>= (1+ index) count)
+                  (>= (car (aref switches (1+ index))) end))
+              ;; The common case: no switch inside the span.
+              (push (append (list :context (funcall label index)) event) out)
+            (let ((from start))
+              (while (< from end)
+                (let* ((next (and (< (1+ index) count)
+                                  (car (aref switches (1+ index)))))
+                       (to (if (and next (< next end)) next end))
+                       (part (copy-sequence event)))
+                  (setq part (plist-put part :time from))
+                  (setq part (plist-put part :end to))
+                  (setq part (plist-put part :duration (- to from)))
+                  (push (append (list :context (funcall label index)) part)
+                        out)
+                  (setq from to index (1+ index))))))))))
+    (nreverse out)))
+
+(defun cmacs-journal-context-at (time)
+  "The named context active at TIME according to the journal, or nil.
+The last `context' event in the `cmacs-journal-context-lookback-days'
+days up to TIME.  Nil to an agent, like every read of the journal."
+  (let ((found nil))
+    (dolist (event (cmacs-journal-events
+                    (- time (* 86400 (max 0 cmacs-journal-context-lookback-days)))
+                    time))
+      (when (and (eq (plist-get event :kind) 'context)
+                 (<= (plist-get event :time) time))
+        (setq found event)))
+    (and found (cmacs-journal--context-label found))))
+
+(defun cmacs-journal-context-events (from to)
+  "The journal's events in FROM..TO, each with its `:context'.
+As `cmacs-journal-events', then `cmacs-journal-attribute-contexts'
+starting from the context that was already active at FROM."
+  (cmacs-journal-attribute-contexts
+   (cmacs-journal-events from to)
+   (and from (cmacs-journal-context-at from))))
+
 ;;;; Aggregation
 
 (defun cmacs-journal--group-key (event by)
@@ -108,6 +218,7 @@ times already."
   (pcase by
     ('day (cmacs-journal--day (plist-get event :time)))
     ('kind (symbol-name (plist-get event :kind)))
+    ('context (or (plist-get event :context) "(none)"))
     ('app (or (plist-get event :app) "(none)"))
     ('project (or (plist-get event :project)
                   ;; Time outside any project is still time; say where
@@ -121,10 +232,18 @@ times already."
 
 (defun cmacs-journal-summarize (events by)
   "Total the durations of EVENTS grouped BY; return ((KEY . SECONDS) ...).
-BY is `project', `app', `day', `kind' or any other event field.  Largest
-first, except by day, which is in date order.  Only kinds in
-`cmacs-journal-report-kinds' count."
+BY is `project', `app', `day', `kind', `context' or any other event
+field.  Largest first, except by day, which is in date order.  Only
+kinds in `cmacs-journal-report-kinds' count.
+
+By `context', time goes to the named context that was active (see
+`cmacs-journal-attribute-contexts'): EVENTS should hold the `context'
+events of the range, or already carry `:context' as
+`cmacs-journal-context-events' returns them.  Time before the first
+switch known is under \"(none)\"."
   (let ((totals (make-hash-table :test #'equal)) out)
+    (when (eq by 'context)
+      (setq events (cmacs-journal-attribute-contexts events)))
     (dolist (event events)
       (when (memq (plist-get event :kind) cmacs-journal-report-kinds)
         (let ((key (cmacs-journal--group-key event by)))
@@ -140,7 +259,12 @@ first, except by day, which is in date order.  Only kinds in
   "Insert an Org table of the journal over SPAN grouped BY at point."
   (let* ((range (cmacs-journal--span-range span))
          (rows (cmacs-journal-summarize
-                (cmacs-journal-events (car range) (cdr range)) by))
+                (if (eq by 'context)
+                    ;; With the context that was active before the
+                    ;; range began.
+                    (cmacs-journal-context-events (car range) (cdr range))
+                  (cmacs-journal-events (car range) (cdr range)))
+                by))
          (total (apply #'+ (mapcar #'cdr rows)))
          (start nil))
     (setq start (point))
@@ -162,7 +286,7 @@ first, except by day, which is in date order.  Only kinds in
         (goto-char end)
         (set-marker end nil)))))
 
-(defconst cmacs-journal--report-bys '("project" "app" "day" "kind")
+(defconst cmacs-journal--report-bys '("project" "app" "day" "kind" "context")
   "Groupings `cmacs-journal-report' offers.")
 
 (defconst cmacs-journal--report-spans '("today" "yesterday" "week" "month")
@@ -170,9 +294,10 @@ first, except by day, which is in date order.  Only kinds in
 
 ;;;###autoload
 (defun cmacs-journal-report (span by)
-  "Show time by project, app, day or kind over SPAN as an Org table.
+  "Show time by project, app, day, kind or context over SPAN as an Org table.
 SPAN is `today', `yesterday', `week', `month', a number of days or a
-YYYY-MM-DD date; BY is `project', `app', `day' or `kind'."
+YYYY-MM-DD date; BY is `project', `app', `day', `kind' or `context' (the
+named context of cmacs-context.el that was active)."
   (interactive
    (list (completing-read "Span (or days, or a date): "
                           cmacs-journal--report-spans nil nil nil nil "today")
@@ -196,6 +321,9 @@ YYYY-MM-DD date; BY is `project', `app', `day' or `kind'."
       (let ((map (make-sparse-keymap)))
         (set-keymap-parent map (current-local-map))
         (define-key map (kbd "C-c C-r") #'cmacs-journal-restore-at-point)
+        ;; The day's note (cmacs-journal-daily.el): today's, or with a
+        ;; prefix argument the note of a date that is asked for.
+        (define-key map (kbd "C-c C-d") #'cmacs-journal-daily)
         (use-local-map map))
       (goto-char (point-min))
       (set-buffer-modified-p nil))
@@ -256,8 +384,11 @@ TIME is in seconds; interactively, a date and time read the Org way."
   (cmacs-journal-flush)
   (let ((events (cmacs-journal--around time)))
     (with-help-window "*cmacs-journal-at*"
-      (princ (format "The journal around %s\n\n"
+      (princ (format "The journal around %s\n"
                      (format-time-string "%Y-%m-%d %H:%M" time)))
+      (let ((context (cmacs-journal-context-at time)))
+        (when context (princ (format "Context: %s\n" context))))
+      (princ "\n")
       (if (null events)
           (princ "Nothing recorded: the journal was off, paused, locked, or a filter excluded it.\n")
         (dolist (event events)

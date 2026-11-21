@@ -1,0 +1,236 @@
+#+TITLE: cmacs-journal-daily — The Day's Note, Written from the Journal
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=cmacs-journal-daily= writes "what I worked on today" as an Org note in your PARA notes tree, from the activity journal ([[file:cmacs-journal.org][cmacs-journal]]). The note has two parts, and only one of them needs a model.
+
+#+begin_src emacs-lisp
+(cmacs-journal-mode 1)          ; the journal: what had the focus
+#+end_src
+
+Then =M-x cmacs-journal-daily=. The note is =~/Documents/notes/02_areas/dailies/YYYY-MM-DD.org=.
+
+Five things about it, stated plainly:
+
+- *The facts need no model.* Time per project, application and site, a timeline, the longest stretches, files, pages and finished agent runs are computed in Elisp from the journal's spans. The totals are the ones ~cmacs-journal-report~ shows, because both call ~cmacs-journal-summarize~.
+- *A summary is optional, off by default, and local by default.* With ~cmacs-journal-daily-summary~ a model adds a few sentences written from those facts. The default provider is ollama. A provider that is not local is refused unless ~cmacs-journal-daily-allow-remote~ says otherwise, and then it asks first.
+- *Today's privacy rules apply to old spans.* A span was filtered when it was recorded. It is filtered again, under the rules as they are now, before a single total is computed -- so a title recorded last week, before you wrote the rule that hides it, is in neither the note nor the prompt.
+- *The file is yours.* A daily you wrote by hand is never reordered or overwritten. One subtree, marked with the property =CMACS_JOURNAL_DAILY=, belongs to this feature and is replaced in place. Nothing else in the file is touched.
+- *It is human-only.* There is no brigade tool, no MCP tool and no D-Bus method, and the commands refuse to run for an agent or a remote caller.
+
+Part of the journal: built with ~--with-cmacs-journal~, pure Elisp. The summary needs ~--with-cmacs-ai~; everything else does not.
+
+* The note
+
+A note this creates looks like this (shortened):
+
+#+begin_src org
+:PROPERTIES:
+:ID:       3c1f6d1e-8a0b-4c56-9a0e-0d6a2f4b7c11
+:END:
+,#+title: 2026-03-10
+,#+description: Daily note for 2026-03-10, started from the activity journal.
+,#+authors: Zach Podbielniak
+,#+categories: dailies
+,#+created: 2026-03-10T20:00:00-0400
+,#+updated: 2026-03-10T20:00:00-0400
+,#+version: 1.0.0
+
+,* Activity
+:PROPERTIES:
+:CUSTOM_ID: cmacs-journal-daily
+:CMACS_JOURNAL_DAILY: t
+:CMACS_JOURNAL_UPDATED: 2026-03-10T20:00:00-0400
+:END:
+First activity 09:00, last 14:30. Active 3:20, idle 1:00, not recorded 1:10. Computed from the activity journal; this subtree is rewritten when the note is regenerated and nothing else in the file is touched.
+
+,** Time by project
+| Project | Time | %  |
+|---------+------+----|
+| beta    | 1:30 | 45 |
+| alpha   | 1:28 | 44 |
+| (gsurf) | 0:20 | 10 |
+| (chat)  | 0:02 | 1  |
+
+,** Timeline
+- 09:00--10:30 (1:28) alpha
+- 10:30--10:50 (0:20) gsurf
+- 13:00--14:30 (1:30) beta
+
+,** Files touched
+- [[file:~/src/beta/beta.c][beta.c]] (1:30)
+
+,** Pages visited
+- [[https://docs.gtk.org/glib/index.html][GLib Reference]] (0:20)
+
+,** Agent runs finished
+- 14:10 reviewer: Review beta (done)
+#+end_src
+
+The sections, in order; one with nothing to say is left out:
+
+| Section                 | What it holds                                                                                              |
+|-------------------------+------------------------------------------------------------------------------------------------------------|
+| (the first paragraph)   | First and last activity, active time, recorded idle time, time not recorded, and how many checkpoints.     |
+| Summary                 | A model's prose, when ~cmacs-journal-daily-summary~ is on, with a line saying which model wrote it.         |
+| Time by day             | Weekly notes only.                                                                                         |
+| Time by context         | Time per named context ([[file:cmacs-context.org][cmacs-context]]), as the report by =context=. Only when a context applies to the range; otherwise left out. |
+| Time by project         | As ~cmacs-journal-report~ by project. Time outside any project is shown under the application, in parens.   |
+| Time by application     | As the report by app.                                                                                      |
+| Time by site            | Time in pages, by host.                                                                                    |
+| Timeline                | The day's blocks (below). Daily notes only.                                                                |
+| Longest focus stretches | The longest blocks, ~cmacs-journal-daily-stretches~ of them.                                                |
+| Files touched           | Files that had the selected buffer, longest first, as =file:= links -- or =id:= links for notes.            |
+| Pages visited           | URLs with their titles, longest first, as Org links.                                                       |
+| Agent runs finished     | The journal's =agent= events: when, which agent, the task's title, how it ended.                           |
+
+Prose is never hard-wrapped: a paragraph is one line. Tables are aligned when they are written, so realigning one in Org changes nothing.
+
+** Blocks
+
+The journal records spans: every change of focus ends one and starts another. A day is hundreds of them. The timeline merges them into *blocks*, each labelled by project, or by application where there is no project:
+
+- spans with the same label no more than ~cmacs-journal-daily-block-gap~ seconds apart (default 300) are one block;
+- so are two such spans with something else between them, when that something else is over within the same gap -- a minute in a chat window in the middle of an afternoon's work is part of the afternoon. The time in brackets is the time actually spent on the label, without the interruption;
+- a block with less than ~cmacs-journal-daily-block-min~ seconds (default 60) of active time is not listed. Its time still counts in every table.
+
+Recorded idle time is not a span of anything, so it ends a block on its own.
+
+When named contexts were in use, a block also ends at a switch of context, and its line ends with the context in brackets: =- 09:30--10:30 (0:58) alpha [writing]=. A context's name is the title of a journal event and goes through today's rules like every other string: a rule can rename it, and a switch a rule excludes never happened.
+
+** Links
+
+- A file is a =[[file:...]]= link, by the name the journal recorded (=~/...=). No file is looked at to make it.
+- A touched file that is itself a note -- a local =.org= file inside ~cmacs-para-roots~ -- is linked by =id:= instead, read from the first 2000 characters of that file. ~cmacs-journal-daily-link-notes~ nil turns this off, and then nothing on disk is read at all.
+- A URL is an Org link described by the page title.
+- Projects are plain text.
+- A name a privacy rule hashed or rewrote is no longer a path or a URL, and stays plain text.
+
+* A file you already have
+
+If the day's file exists -- you write dailies by hand, or something else does -- nothing in it is overwritten or reordered.
+
+- The first run appends the subtree at the end of the file. No header is added, and the file's own =#+updated:= is not changed.
+- Every later run finds the subtree by its =CMACS_JOURNAL_DAILY= property and replaces it where it stands. Text before it and after it, down to the blank lines, is byte for byte what you had. You can move the subtree anywhere in the file; it is found by the property, not by position or title, so you can rename the heading too.
+- When the facts in the file are already the facts of the day, nothing is written at all: the file's modification time does not change.
+
+What happens when the file is open in a buffer:
+
+| The buffer                         | What is done                                                                                                           |
+|------------------------------------+------------------------------------------------------------------------------------------------------------------------|
+| has unsaved edits                  | The subtree goes into the buffer, which stays modified. The disk is not touched. A message says saving is left to you. |
+| matches the disk                   | The same edit is made in the buffer and the file is written from it, so both still agree. Save hooks are not run.      |
+| was already out of date            | The file is edited; the buffer is left as it was, and Emacs asks what it always asks about a file changed on disk.     |
+
+Save hooks are not run on purpose: a =before-save-hook= that reformats or restamps a file would be touching "everything else".
+
+A new note gets a bullet in the directory's =00_index.org=, once. The bullet goes where the index's own layout says: under a heading for the note's month (=** March 2026=) among that month's bullets, newest first unless they plainly run the other way; else under a new heading for that month, placed among the other months; else after the last =id:= bullet. A directory with no index gets one. An existing daily you wrote by hand is assumed to be in the index already and is not added.
+
+* The summary
+
+#+begin_src emacs-lisp
+(setq cmacs-journal-daily-summary t)        ; default nil: facts only
+(setq cmacs-journal-daily-provider 'ollama) ; the default
+(setq cmacs-journal-daily-model "qwen3.5:9b")
+#+end_src
+
+The facts are written first, at once. The model is asked asynchronously (~cmacs-ai-chat-stream~); when it answers, a =** Summary= section is added to the same subtree, followed by a line naming the provider and model. If the model fails, is refused, returns nothing or takes longer than ~cmacs-journal-daily-summary-timeout~ seconds, the facts stay as they are and a message says why there is no summary.
+
+What the model is given is the facts -- the lines of the sections above as plain text -- and the system prompt ~cmacs-journal-daily-summary-prompt~. Nothing else: not the rest of your note, not raw journal events, not window titles beyond what the fact lists already show.
+
+What it sends back is treated as untrusted text. Reasoning printed inside =<think>= is removed, each paragraph becomes one line, a line that would start a heading, a keyword or a drawer loses the characters that would make it one, and the result goes through the privacy rules once more.
+
+** Local, and what that means
+
+~cmacs-journal-daily-provider-local-p~ decides. Local are:
+
+- =ollama=, when the server it talks to is on a local host: what the =OLLAMA_HOST= environment variable says, and unset means localhost;
+- a name in ~cmacs-ai-openai-compatible-endpoints~ whose =:base-url= is on a local host (a llama.cpp or vLLM of your own).
+
+Everything else is not local: the hosted APIs, and the CLI agents (=claude-code=, =codex-cli=, ...), which call hosted models. Local hosts are ~cmacs-journal-daily-local-hosts~ (=localhost=, =127.0.0.1=, =::1=, any =127.x=). Add a machine of your own there only if a day's facts going to it is the same to you as staying here. When in doubt the answer is "not local".
+
+One limit: a base URL for ollama set in ai-glib's own configuration file, or with ~cmacs-ai-config-set-base-url~, cannot be read back from Lisp today. If you point ollama at another machine that way and not with =OLLAMA_HOST=, this check does not see it.
+
+** A provider that is not local
+
+~cmacs-journal-daily-allow-remote~ is its own option, apart from the provider, so that changing the provider can never by itself send a day anywhere.
+
+| Value    | What happens with a provider that is not local                                                                                     |
+|----------+------------------------------------------------------------------------------------------------------------------------------------|
+| =nil=    | The default. The facts are written, the summary is left out, and the message says why. Nobody is asked.                            |
+| =t=      | A yes-or-no question naming the provider and saying it is not a local model, each time. An automatic note cannot ask: no summary.  |
+| =always= | Sent without asking, automatic notes included.                                                                                     |
+
+* Privacy
+
+- *Fail closed.* While the journal's filter rules cannot be loaded (~cmacs-journal-filter-ready-p~ nil) nothing is read and nothing is written. The mode tries that day again at its next look.
+- *Rules are applied again.* Every event read goes through ~cmacs-redact-event~ as model-facing text does, before any total. An event today's rules exclude is as if it had never been recorded: its time is in no table. A rule that rewrites a title rewrites it in the note. Then every line of the model prompt goes through ~cmacs-redact-text~, which also applies free-text rules. See [[file:cmacs-redact.org][cmacs-redact]].
+- *This follows* ~cmacs-redact-mode~. With that mode off, or its =prompt= surface removed, the second pass does nothing, as everywhere else. The spans on disk were still filtered when they were recorded.
+- *A hash rule can hash twice.* A field a rule hashed when it was recorded is hashed again if the rule still matches on another field. It is still a hash, and still groups the same way within one note.
+- *The note is a file in your notes.* Whatever reads your notes -- an index, an agent with a notes tool, a sync -- reads it. That is why the facts are filtered under today's rules too, not only the prompt.
+- *No agent door.* The commands signal an error for an agent or a remote caller (~cmacs-journal-agent-context-p~), and the mode's timer does nothing while one is being served. An agent reading the journal itself is governed by ~cmacs-journal-expose-to-agents~, as before.
+
+* When
+
+| Command                       | What it does                                                                                              |
+|-------------------------------+-----------------------------------------------------------------------------------------------------------|
+| ~cmacs-journal-daily~         | Today's note. With =C-u=, a date read the Org way (~org-read-date~).                                       |
+| ~cmacs-journal-weekly~        | The ISO week's note, =YYYY-Www.org= in the same directory. With =C-u=, the week of a date.                 |
+| ~cmacs-journal-daily-preview~ | The subtree in a buffer. Nothing is written and no model is asked. =C-u= a date, =C-u C-u= the week.       |
+| ~cmacs-journal-daily-mode~    | Global, off by default: writes notes from a timer.                                                        |
+
+~cmacs-journal-daily-mode~ looks at the clock every ~cmacs-journal-daily-check-interval~ seconds (300) and writes:
+
+- *yesterday's note*, once the journal has recorded some activity today (~cmacs-journal-daily-write-yesterday~, default on). Waiting for the first activity means yesterday's last span has closed, so the note is the whole day;
+- *today's note* at ~cmacs-journal-daily-time~ (="HH:MM"=, default nil: not written).
+
+Each is dealt with once per Emacs session. Restarting Emacs looks again, finds the same facts in the file and writes nothing -- and does not ask a model again for a summary that is already there. A day with no events writes nothing, silently. All of it runs from a timer, never from a compositor hook.
+
+A day is local midnight to local midnight, cut at now for today. A span that crosses midnight is cut at midnight and belongs to both days, a part to each.
+
+Other doors, all thin:
+
+- =C-c C-d= in the =*cmacs-journal*= report buffer runs ~cmacs-journal-daily~.
+- The voice commands "write up my day", "write up my week" and "write up yesterday" (~cmacs-journal-daily-voice~, registered when voice commands load).
+
+* Options
+
+| Option                                | Default              | Meaning                                                                    |
+|---------------------------------------+----------------------+----------------------------------------------------------------------------|
+| ~cmacs-journal-daily-directory~       | ="02_areas/dailies"= | Where notes go; relative to the first of ~cmacs-para-roots~.                |
+| ~cmacs-journal-daily-heading~         | ="Activity"=         | Heading of the owned subtree in a daily note.                              |
+| ~cmacs-journal-daily-weekly-heading~  | ="Activity this week"= | The same, weekly.                                                        |
+| ~cmacs-journal-daily-author~          | nil                  | =#+authors:= of a new note; nil works it out.                              |
+| ~cmacs-journal-daily-categories~      | ="dailies"=          | =#+categories:= of a new note.                                             |
+| ~cmacs-journal-daily-link-notes~      | t                    | Link touched notes by =id:=.                                               |
+| ~cmacs-journal-daily-block-gap~       | 300                  | Seconds of gap a block may span.                                           |
+| ~cmacs-journal-daily-block-min~       | 60                   | Blocks shorter than this are not listed.                                   |
+| ~cmacs-journal-daily-max-rows~        | 12                   | Rows per time table; the rest become =(other)=.                            |
+| ~cmacs-journal-daily-max-files~       | 25                   | Files listed.                                                              |
+| ~cmacs-journal-daily-max-urls~        | 25                   | Pages listed.                                                              |
+| ~cmacs-journal-daily-stretches~       | 3                    | Longest stretches named.                                                   |
+| ~cmacs-journal-daily-summary~         | nil                  | Ask a model for a summary.                                                 |
+| ~cmacs-journal-daily-provider~        | =ollama=             | The cmacs-ai provider for it.                                              |
+| ~cmacs-journal-daily-model~           | ="qwen3.5:9b"=       | The model; nil for the provider's default.                                 |
+| ~cmacs-journal-daily-allow-remote~    | nil                  | nil, t (ask) or =always=.                                                  |
+| ~cmacs-journal-daily-local-hosts~     | localhost, 127.0.0.1, ::1 | Hosts that count as this machine.                                     |
+| ~cmacs-journal-daily-summary-timeout~ | 600                  | Seconds to wait for the model.                                             |
+| ~cmacs-journal-daily-summary-prompt~  | (a paragraph)        | The system prompt.                                                         |
+| ~cmacs-journal-daily-write-yesterday~ | t                    | The mode writes yesterday's note.                                          |
+| ~cmacs-journal-daily-time~            | nil                  | ="HH:MM"= at which the mode writes today's note.                           |
+| ~cmacs-journal-daily-check-interval~  | 300                  | Seconds between the mode's looks at the clock.                             |
+
+Which kinds of event count as activity is the report's ~cmacs-journal-report-kinds~.
+
+* Internals
+
+- ~cmacs-journal-daily-facts~ (=FROM TO &optional SPAN=) returns everything the note says as a plist; ~cmacs-journal-daily-render~ turns it into the subtree and ~cmacs-journal-daily-prompt~ into the model's text. Both render from the same section list, which is how the prompt cannot hold what the note does not.
+- ~cmacs-journal-daily-blocks~ is the block merger, a single pass with a stack.
+- Every change to a file goes through one function that takes "the text" and returns "replace these characters by this string", applied to the visiting buffer or to the file as the table above says. The note and the index use the same one.
+- The owned subtree is located with Org's own parser (~org-find-property~, ~org-end-of-subtree~) in a temporary buffer with no hooks, on the text of the file or of the visiting buffer -- never by running Org commands in your buffer.
+- A new =:ID:= comes from ~org-id-uuid~, not ~org-id-new~, which runs =uuidgen= as a synchronous subprocess.
+- A summary in flight is a job held by an integer id; the stream's callback holds the id, so a job that timed out is gone and its late callback finds nothing to do.
+
+Tests: =test/cmacs/cmacs-journal-daily-tests.el=. Every test binds the journal directory and ~cmacs-para-roots~ to a temporary directory; none writes into real notes, and the model is a stub.
