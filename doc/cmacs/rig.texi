@@ -1,0 +1,370 @@
+@c rig.texi --- the CMacs Rig chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c
+@c The Info counterpart of doc_org/cmacs/cmacs-rig.org.  Keep the two
+@c in step: they say the same thing.
+
+@node CMacs Rig
+@chapter CMacs Rig: A Private cmacs --gowl Session to Test Against
+
+@cindex rig
+@cindex end-to-end tests
+@cindex headless compositor, testing against
+
+The rig is a second cmacs, started as @samp{emacs --gowl -Q} on
+wlroots' headless backend, with its own MCP server, its own D-Bus
+session bus and real Wayland clients inside it.  Tests drive it from
+the outside, over the real MCP socket, the way an agent or
+@command{emacsctl} does.  Nothing is stubbed: a @code{tools/call} goes
+through the socket, the publisher, the registry and the dispatch that a
+user's call goes through; a text field is a real text-input-v3 client;
+a window is a window.
+
+It exists because features were landing with unit tests that called
+the Lisp handler directly and stubbed the C primitives.  Two bugs were
+found only when one test talked to a real socket: migrated Lisp tools
+were not replacing their C twins, and a @code{tools/call} with no
+@code{"arguments"} crashed the editor.  Neither is reachable from a
+test that never leaves its own process.
+
+Three files, all in @file{test/cmacs/}:
+
+@table @file
+@item cmacs-rig.el
+The harness: start and stop the child, an MCP client,
+@code{cmacs-rig-eval} and @code{cmacs-rig-do}, client spawning,
+screenshots.
+@item cmacs-rig-field.c
+The text-field client: a Wayland window that is one text-input-v3
+field, built by the test at run time.
+@item cmacs-rig-tests.el
+The ERT tests.
+@end table
+
+@menu
+* Running the Rig::             The recipe, and why it is not in check-cmacs.
+* Rig Isolation::               What keeps it off the live session.
+* Rig Coverage::                What the tests assert.
+* Writing a Rig Case::          The macro, the two callers, the rules.
+* Rig Field Client::            Why it uses no toolkit.
+* Rig Findings::                Bugs the first runs found.
+@end menu
+
+@node Running the Rig
+@section Running It
+
+@example
+just test-rig                 # the whole file
+just test-rig 'edit-field'    # tests whose name matches a regexp
+@end example
+
+@noindent
+which is
+
+@example
+CMACS_RIG=1 src/emacs --batch -Q -L lisp/cmacs -L test/cmacs \
+  --eval '(setq load-prefer-newer t)' -l ert \
+  -l test/cmacs/cmacs-rig-tests.el -f ert-run-tests-batch-and-exit
+@end example
+
+A run takes about two minutes, most of it the sweep that calls every
+migrated tool twice.
+
+It is @emph{not} part of @samp{make -C test check-cmacs}.  That target
+loads every @file{.el} in @file{test/cmacs/}, these two included, so
+both must be harmless there: @file{cmacs-rig.el} defines no tests, and
+every test in @file{cmacs-rig-tests.el} skips unless @env{CMACS_RIG} is
+set in the environment.  It is separate because it is slower than the
+unit suites, compiles a C program and launches processes, and needs
+@command{gcc}, @command{pkg-config}, @command{wayland-scanner},
+wayland-protocols, @command{dbus-daemon} and @command{timeout}.  A test
+whose requirement is missing skips and says which.
+
+@table @env
+@item CMACS_RIG
+Set to anything: run the tests.  Unset: every test skips.
+@item CMACS_RIG_SHOTS
+A directory.  Each scenario saves @file{@var{NN}-scenario-step.png}
+there at its meaningful moments, and a test that does not pass saves
+@file{@var{NN}-not-passed-@var{name}.png}.  Unset: no pictures.
+@item CMACS_RIG_KEEP
+Set: the rig's directory (log, client logs, dump files) is left behind
+and its name printed.  A rig that fails to start is always kept.
+@item CMACS_RIG_RENDERER
+@env{WLR_RENDERER} of the child; default @samp{pixman}, which needs no
+GPU.  @samp{gles2} exercises the effect modules where a render node
+exists.
+@item CMACS_RIG_DISABLE
+Set: no rig starts (every test skips).
+@end table
+
+With @env{CMACS_RIG_SHOTS} set, @code{cmacs-rig-shot} saves a PNG of
+the child's headless output.  The picture is taken @emph{inside} the
+child, by its own @code{gowl-screenshot} of its own output, from its
+main loop rather than over RPC, so it also shows the states a
+model-facing screenshot is refused in.  The pixman renderer draws real
+frames: the bar, the Emacs frame, the client windows and their text
+are all there.  The field client draws its title and text when
+pangocairo is installed and is a plain rectangle otherwise.
+
+@node Rig Isolation
+@section The Isolation Guarantees
+
+The developer's desktop is itself a @samp{cmacs --gowl} session, so a
+rig that reached it could kill it.  Each of these is enforced in
+@file{cmacs-rig.el}, and @code{cmacs-rig-test-isolation} checks the
+result from @file{/proc/@var{pid}/environ} of the child: what the
+kernel says the child was started with, not what the harness believes
+it passed.
+
+@itemize
+@item
+@strong{The environment is built, not inherited.}  Five names are
+copied (@env{PATH}, @env{TZ}, @env{USER}, @env{LOGNAME},
+@env{LD_LIBRARY_PATH}); everything else is set by the harness.
+@env{DBUS_SESSION_BUS_ADDRESS} of the parent cannot leak: it is not on
+the list.
+@item
+@strong{@env{WAYLAND_DISPLAY}, @env{WAYLAND_SOCKET} and @env{DISPLAY}
+are explicitly unset.}  When @code{process-environment} has no entry
+for @env{DISPLAY}, Emacs hands a subprocess the @env{DISPLAY} of
+@code{initial-environment}, which is the live session's X server.  The
+isolation test found exactly that in the first version of the harness.
+@item
+@strong{Private directories.}  @env{XDG_RUNTIME_DIR} (mode 0700),
+@env{HOME} and the four XDG base directories are fresh directories
+under one @code{make-temp-file} directory.  No user init, journal,
+gabbrev or bar state is read or written.  The parent of that directory
+is the user's runtime directory when there is one, because a socket
+path has 108 bytes; the rig's runtime directory is a new directory
+inside it, never it.
+@item
+@strong{Headless.}  @samp{WLR_BACKENDS=headless},
+@samp{WLR_HEADLESS_OUTPUTS=1}, @samp{WLR_RENDERER=pixman},
+@samp{GOWL_DISABLE_SYSTEMD=1}: the launch recipe of
+@code{cmacs-gowl-tests--run-headless}.  No DRM, no parent compositor,
+no input devices.
+@item
+@strong{A bus of its own.}  A @samp{dbus-daemon --session} listening
+in the private runtime directory.  @env{NO_AT_BRIDGE},
+@samp{GSETTINGS_BACKEND=memory}, @samp{GIO_USE_VFS=local} and
+@env{GVFS_DISABLE_FUSE} keep the desktop's services from being
+activated on it.
+@item
+@strong{It refuses before it starts.}  @code{cmacs-rig--assert-private}
+signals @code{cmacs-rig-unsafe} if a computed directory is one of the
+live session's, is outside the rig, is not 0700, already holds a
+socket, is too long for a socket path, or if the environment names a
+display or a bus that is not the rig's.  The tests treat that signal as
+a failure, never as a skip.
+@item
+@strong{Clients see one display.}  A program started with
+@code{cmacs-rig-spawn} gets the rig's environment plus the
+@env{WAYLAND_DISPLAY} of the child compositor.
+@item
+@strong{Processes are known by PID and signalled by PID.}  Before a
+PID that is not one of this Emacs's own process objects is signalled,
+@file{/proc/@var{pid}/environ} must name the rig's runtime directory.
+The last step of a stop sweeps every process of this user whose
+environment does, which catches a program the child spawned itself.
+Nothing is ever killed by name or pattern.
+@item
+@strong{Every wait has a deadline.}  Starting, each MCP request, each
+poll.  The child ends itself when the Emacs that started it disappears,
+and @command{timeout} ends it after @code{cmacs-rig-lifetime} seconds
+whatever happens.
+@item
+@strong{On failure it says where the evidence is.}  The rig's
+directory, the child's PID and the tail of its log are in every error
+the harness signals.
+@end itemize
+
+Two things the rig does @emph{not} isolate: the network (a tool that
+fetches from the internet will; the sweep leaves those out by name, see
+@code{cmacs-rig-tests-sweep-excluded}), and @file{/tmp} (anything in
+cmacs that writes to a fixed path there writes to the real one;
+@code{cmacs-c-compile} no longer does, @code{cmacs-print}'s spool
+directory still does).
+
+@node Rig Coverage
+@section What It Covers
+
+@table @asis
+@item The rig (@code{isolation}, @code{dbus-private-bus})
+The child's environment and sockets are private; it serves
+@samp{org.cmacs.Editor} on its own bus.
+@item MCP wire (@code{wire-lists-migrated-tools}, @code{wire-no-argument-sweep}, @code{wire-tools-with-arguments})
+Every migrated tool is listed once.  Every migrated tool with no
+required parameter answers a real @code{tools/call}, with an empty
+@code{"arguments"} and with none; the child survives.  A few tools
+with arguments give the right answer.
+@item Which side answers (@code{wire-registry-serves-migrated-tool}, @code{wire-eval-cannot-be-replaced})
+A migrated tool is dispatched by the registry (the sweep checks this
+for all of them); a registry tool called @code{eval} never replaces the
+built-in.
+@item Redaction (@code{redaction-*})
+With a rule file in the child's own
+@file{~/.config/cmacs/journal-filters.yaml}, an excluded window and
+buffer appear in no model-facing answer over MCP or D-Bus, a screenshot
+is refused while the window is visible, and a rule file that does not
+load shows nothing at all.
+@item Text fields (@code{text-field-*}, @code{edit-field-*})
+@code{gowl-text-field-read} returns what the application holds and
+@code{gowl-text-field-replace} changes it (non-ASCII, checked against
+the application's own dump).  The edit-field command opens a floating
+editor without moving any tiled window, and finishing writes back.
+@item AI field (@code{ai-field-*})
+Field text goes to the model and its answer comes back into the field;
+the model is a function inside the child.  Focus moved meanwhile:
+nothing is typed anywhere.
+@item Journal (@code{journal-*})
+Focus changes become spans in the child's own journal directory
+(0700/0600); an agent sees none of it; a checkpoint lists the rig's
+windows; a restore relaunches a closed window on its recorded tag.
+@item LQL watch (@code{lql-watch-fires-once})
+A watch on @code{buffers} fires once when a buffer appears and not on
+idle ticks.
+@item Deixis (@code{deixis-pointer-history})
+The pointer ring answers ``where was it at time T'' with the right
+window after injected motion.
+@end table
+
+@node Writing a Rig Case
+@section Writing a Case
+
+@lisp
+(cmacs-rig-deftest my-feature ()
+  "What must be true."
+  (skip-unless (cmacs-rig-field-client))
+  (let ((field (cmacs-rig-spawn-field rig :title "rig-mine"
+                                      :text "hello")))
+    (cmacs-rig-focus rig (plist-get field :id))
+    (cmacs-rig-do rig '(my-command))
+    (cmacs-rig-shot rig "my-feature-after")
+    (cmacs-rig-wait-field-text rig field "HELLO")))
+@end lisp
+
+@code{rig} is bound in the body.  The macro skips without
+@env{CMACS_RIG}, starts the shared rig if need be, resets it
+afterwards, and asserts the child is still alive.
+
+There are two callers, on purpose:
+
+@table @code
+@item cmacs-rig-call
+@itemx cmacs-rig-tool-text
+@itemx cmacs-rig-request
+An MCP client: what an agent sees.
+@item cmacs-rig-eval
+The MCP @code{eval} tool, inside the RPC dispatch.  For reading state
+and setting things up.  @code{inhibit-interaction} is bound and
+redaction is in force.
+@item cmacs-rig-do
+A zero timer in the child's main loop: a command as the person at the
+keyboard runs it.  No RPC, no redaction, not ``an agent''.
+@item cmacs-rig-dbus
+@command{gdbus} on the rig's bus: the D-Bus surface.
+@end table
+
+The difference is the point of several tests.
+@code{cmacs-journal-events} answers @code{cmacs-rig-do} and returns
+nothing to @code{cmacs-rig-eval}; the redaction functions are the
+identity for one and active for the other.  A command tested only
+through @code{cmacs-rig-eval} is tested as an agent would run it, which
+is not how it is reached.
+
+The MCP @code{eval} tool evaluates with dynamic binding: a
+@code{lambda} in a form sent through @code{cmacs-rig-eval} closes over
+nothing.  @code{cmacs-rig-do} evaluates lexically.
+
+The rules:
+
+@itemize
+@item
+The child never waits.  Poll from the parent with
+@code{cmacs-rig-wait-for}; never send a form that sleeps.
+@item
+Name everything a test creates @samp{rig-...}: the reset kills buffers
+by that prefix and closes every window that is not the child's own
+frame.
+@item
+A test for a bug that is not fixed yet is marked
+@code{:expected-result :failed} with a comment naming the bug.  The
+file stays green, and turns red (``unexpectedly passed'') the day the
+bug is fixed and the marker should go.
+@item
+A value returned through @code{cmacs-rig-eval} must print readably:
+select fields rather than returning a client object.
+@end itemize
+
+@node Rig Field Client
+@section The Text-Field Client
+
+@file{cmacs-rig-field.c} speaks text-input-v3 itself and uses no
+toolkit.  A GTK entry was the first attempt and cannot work in the rig:
+GTK enables its text input only while its window has keyboard focus,
+which it learns from @code{wl_keyboard.enter}, and a headless gowl has
+no keyboard device, so its seat advertises no @code{wl_keyboard} at
+all.  A virtual keyboard did not change that either.  Both are fixed
+in gowl (a virtual keyboard counts, and @env{GOWL_SEAT_KEYBOARD=always}
+forces the capability; @file{deps/gowl/docs/configuration.org},
+@emph{Machines without a keyboard}), so a toolkit client can now be
+hosted once the rig sets that variable; the field client stays
+toolkit-free because it needs no toolkit.
+
+What it does is what a toolkit does: on @code{enter} it enables the
+text input and reports its surrounding text; on
+@code{delete_surrounding_text}, @code{commit_string} and @code{done} it
+applies one edit; on @code{leave} it disables.  It rewrites a dump file
+whenever the text changes, which is what the @emph{application} holds,
+as opposed to what the compositor believes.
+
+By default it sends the compositor a @code{wl_display.sync} every 20
+ms, as a desktop with anything alive on it does.  @code{:idle t} turns
+that off; the difference is a bug (@pxref{Rig Findings}).
+
+@node Rig Findings
+@section What It Found
+
+The first runs found these.  Each has a test marked
+@code{:expected-result :failed}, or is noted where no test could be
+written.
+
+@itemize
+@item
+@code{gowl-text-field-read} and @code{gowl-text-field-replace} do not
+flush the client after entering the borrowed text input.  On an idle
+desktop the @code{enter} is written only when the operation's own 250
+ms timeout turns the event loop, which then gives up: about half the
+calls report @code{no-field}.  Test:
+@code{text-field-read-on-an-idle-desktop}.
+@item
+@code{cmacs-gowl-ai-field--withheld-p} asks @code{cmacs-redact-window}
+without @code{cmacs-redact-as-model}.  From a key binding the redaction
+functions are the identity, so an excluded window's field is sent to
+the model and rewritten.  Test:
+@code{ai-field-excluded-window-is-withheld}.
+@item
+D-Bus @code{Compositor.ListClients} and @code{Compositor.FocusedClient}
+are composed in C and never redacted.  Test:
+@code{redaction-dbus-compositor-clients}.
+@item
+D-Bus @code{BufferManager.List} names excluded buffers.  Test:
+@code{redaction-dbus-buffer-list}.
+@item
+No migrated tool sets @code{destructiveHint}, @code{delete_window}
+included; the sweep's exclusion list exists because of it.
+@item
+@code{gnuseye_list_layers} and its siblings fetch textures from the
+network when first called; they are excluded from the sweep by name.
+@emph{Fixed:} nothing is fetched until a globe is open
+(@file{test/cmacs/cmacs-load-quiet-tests.el}); the exclusion can go.
+@item
+A headless or keyboard-less seat advertises no @code{wl_keyboard}, even
+with a virtual keyboard: injected keys reach no client.  This is why
+the field client uses no toolkit.  @emph{Fixed in gowl:} a virtual
+keyboard counts, and @env{GOWL_SEAT_KEYBOARD=always} forces the
+capability (@file{deps/gowl/tests/test-seat-keyboard.c},
+@file{test/cmacs/cmacs-gowl-seat-keyboard-tests.el}).
+@end itemize
