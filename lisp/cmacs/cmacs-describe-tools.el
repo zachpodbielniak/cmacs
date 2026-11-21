@@ -18,7 +18,11 @@
 ;;
 ;; Redaction (cmacs-redact.el): `describe_variable' prints a variable's
 ;; value, which can be anything the session holds, so its answer goes
-;; through the free-text rules.
+;; through the free-text rules.  And some variables are never printed:
+;; the privacy rule set itself, and holders of secrets.  Which ones is
+;; the registry's business (`cmacs-redact-variable-p'), not a list here;
+;; for those the answer is one fixed sentence that does not say whether
+;; the variable is even bound.
 
 ;;; Code:
 
@@ -28,6 +32,8 @@
 (declare-function cmacs-core-tools-text "cmacs-core-tools" (string))
 (declare-function help-function-arglist "help"
                   (def &optional preserve-names))
+(declare-function cmacs-redact-variable-p "cmacs-redact" (symbol))
+(defvar cmacs-redact-variable-refusal)
 
 (defconst cmacs-describe-tools-completions-limit 100
   "The most candidates `completions' returns, as in the C handler.")
@@ -60,18 +66,23 @@
     ((symbol string "Variable symbol name"))
   :group 'elisp
   (require 'cmacs-core-tools)
+  (require 'cmacs-redact)
   (let* ((name (cmacs-describe-tools--name symbol "symbol"))
          (sym (intern-soft name)))
     (cmacs-core-tools-print
-     (if (and sym (boundp sym))
-         (cmacs-core-tools-text
-          (format "%s\n\nValue: %S\n\n%s"
-                  sym
-                  (symbol-value sym)
-                  (or (documentation-property
-                       sym 'variable-documentation t)
-                      "No documentation.")))
-       (format "%s is void" name)))))
+     (cond
+      ;; Asked by NAME, before anything is looked at: the answer for a
+      ;; sensitive variable is the same bound, void or never interned.
+      ((cmacs-redact-variable-p name) cmacs-redact-variable-refusal)
+      ((and sym (boundp sym))
+       (cmacs-core-tools-text
+        (format "%s\n\nValue: %S\n\n%s"
+                sym
+                (symbol-value sym)
+                (or (documentation-property
+                     sym 'variable-documentation t)
+                    "No documentation."))))
+      (t (format "%s is void" name))))))
 
 (cmacs-brigade-deftool apropos
   "Search for Emacs symbols matching a pattern. Returns one symbol per line."

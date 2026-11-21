@@ -117,24 +117,69 @@ What is covered, and how. "Refused" means the request fails without saying why; 
 | Screen inventory (=cmacs-ai-view=): chat system prompt and per-turn block, both libreclaw send paths, the =current_view= MCP tool | yes     | An excluded buffer is not listed, not counted, not inlined, not remembered as "the last one". Names, files and page titles are rewritten. Inlined text goes through the free-text rules |
 | ~cmacs-ai-view-attach~ (=C-c C-a=)                                                       | yes     | Same as the inventory, although it is your own command: what it inserts is sent to a model. Paste by hand to send something verbatim             |
 | MCP resources =buffer://=, =file://=, =process://=                                       | yes     | An excluded buffer, file, or process buffer is refused (reported as not found). Text of a buffer or file that is /not/ excluded is returned verbatim |
-| MCP resources =messages://=, =variable://=                                               | yes     | =messages://= is refused when =*Messages*= is excluded; both pass their text through the free-text rules                                         |
+| MCP resources =messages://=, =variable://=                                               | yes     | =messages://= is refused when =*Messages*= is excluded; both pass their text through the free-text rules. =variable://= is refused for a sensitive variable ([[*Sensitive variables][Sensitive variables]]), reported as not found |
+| Tools =describe_variable=, =list_hooks=                                                  | yes     | A sensitive variable's value is never printed: =describe_variable= answers with one fixed sentence, =list_hooks= leaves it out. Other values go through the free-text rules |
 | MCP resource =screenshot://frame=, tool =gowl_screenshot=                                | yes     | Refused while an excluded window or buffer is on screen; a single-window capture asks about that window                                          |
 | Tool =lrgterm_dump_screen=                                                              | yes     | Refused while a visible buffer of the frame is excluded                                                                                         |
 | Tool =video_snapshot=                                                                   | yes     | Refused when the video plays in an excluded buffer; when its buffer is unknown, while anything excluded is on screen                             |
 | Tools =gsurf_snapshot=, =gsurf_print_pdf=                                                | yes     | Refused for a page excluded by URL, title or buffer (checked in ~cmacs-gsurf-mcp-snapshot~ / ~-print-pdf~, which both the C and Lisp tools reach) |
 | gowl window lists, focused window, clipboard history, =gowl_screen_text=                | by contract | These tools are Lisp and call ~cmacs-redact-window~ / ~cmacs-redact-text~. The calls live in their own files, not here                        |
 | The journal's LQL source =activity=                                                     | yes     | Filtered before it is stored; hidden from agents unless ~cmacs-journal-expose-to-agents~                                                         |
-| =eval=, =crispy_eval=, =bacon_eval=, shell tools, =execute_command=, =send_keys=, =cmacs_c_*=, =gi_call= | *no*    | These can compute anything. Not a sandbox; keep them out of an agent's allowlist if the rules matter                                             |
+| =eval=, =crispy_eval=, =bacon_eval=, shell tools, =execute_command=, =send_keys=, =cmacs_c_*=, =gi_call= | *no*    | These can compute anything, a sensitive variable's value included. Not a sandbox; keep them out of an agent's allowlist if the rules matter      |
+| D-Bus =Config.Get=, =Debug.DescribeVariable=, and the C fallback of =describe_variable= (a build without the brigade) | *no, yet* | Composed in C from a variable name; they do not ask the registry of sensitive variables. The one-line change each needs is to begin its form with ~(cmacs-redact-variable-guard NAME)~ |
 | Buffer and file *tools* (=list_buffers=, =get_buffer_content=, =search_buffer=, =project_read_file=, ...) | *only where the tool calls the contract* | A tool that lists or reads buffers must call ~cmacs-redact-buffer-p~ itself. The C fallback handlers of tools that have a Lisp replacement do not |
 | gsurf text tools (=gsurf_extract_text=, =gsurf_get_uri=, =gsurf_get_title=, =gsurf_eval_js=, =gsurf_list=) | *only where the tool calls the contract* | Same: ~cmacs-redact-url~ / ~cmacs-redact-buffer-p~ exist for them                                                              |
 | LQL sources defined in Elisp (=buffers=, =windows=, =processes=, =gowl_clients=, =kill_ring=, =recentf=, =bookmarks=, =org_headings=, =notes=, =note_headings=, =note_links=, =note_properties=, and any source a user or subsystem defines), through =lql_query=, =ai_lql=, an agent's LQL watch, D-Bus and =emacsctl lql= | yes     | Redacted at the snapshot, once for every surface that can run a query: rows of excluded buffers, files, notes, URLs and windows are dropped, names rewritten, free-text columns through the free-text rules. See [[*LQL sources][LQL sources]] |
 | LQL engine sources that are not defined in Elisp (files, git, exec, journald, coredumps, k8s, SQL)                 | *no*    | The engine reads these itself, off the editor thread; nothing there asks the rules. A query can read a file the rules hide                       |
 | Brigade memory index and second-brain search over the notes repo                        | *no*    | Indexed text is not filtered by these rules                                                                                                     |
-| C-only RPC answers that never run Lisp (=keybinds://=, the D-Bus compositor client list behind =emacsctl get clients=) | *no*    | Nothing there asks the rules                                                                                                                    |
+| D-Bus methods served from the capability table: =Compositor.ListClients= / =.FocusedClient= / =.FindClient= (what =emacsctl get clients= prints), =Monitor.List=, =Edit.GetContent= / =.Search= / =.GetOrgContent=, every =Gsurf= method, =Debug.DescribeVariable= / =.ListHooks=, =Log.RecentMessages=, =WindowManager.Other= | yes | Rows of =cmacs-dbus-forward-table.h=: they call the tool, so they show what it shows.  See /D-Bus: the legacy interfaces/ in [[file:cmacs-capability.org][cmacs-capability]] |
+| D-Bus =BufferManager.*=, =FrameManager.List=, =WindowManager.SelectByBuffer=, =Project.ListFiles= / =.ReadFile= / =.Find=, =Search.Occur=, =Text.Line= / =.Delete=, =File.Recent=, =Clipboard.List= / =.Get= / =.GetSelection=, =Bookmark.List=, =Config.Get= | yes | Lisp method functions in =cmacs-dbus-forward.el= that call the contract: an excluded buffer is absent (=Find= is false, =PointFor= is -1, a read is the missing-buffer error), file names go through ~cmacs-redact-file~, clipboard text through ~cmacs-redact-text~, a sensitive variable is refused |
+| D-Bus =Compositor.Screenshot=, =Video.Snapshot= | yes | Refused by the capture rule; a single named window that is excluded is "no client matching pattern" |
+| D-Bus GNOME Shell search provider, the MPRIS track title, the =Log.Line= signal | yes | An excluded buffer or file is not offered as a result (nor one whose name a rule rewrites, since a result is opened by name); an excluded buffer has no title; message text goes through the free-text rules |
+| D-Bus =VC.Status= / =.Diff= / =.Log= / =.Blame= | *no* | git's output for the repository, read by a subprocess: file names and diffs of excluded files appear |
+| D-Bus =Events.Recent= and the =Events= signals, the =Compositor= signals (=ClientAdded=, =FocusChanged=, =ClientTitleChanged=: app id and title) | *no* | Broadcasts composed where the event happens, not for a caller.  Anything on the session bus can subscribe |
+| =keybinds://=; the bacon IPC and podomation gowl module's client list and focused window (=cmacs_dispatch_gowl_list_clients= and friends, called from C); the MCP prompts that inline the client list | *no* | C that never runs Lisp: nothing there asks the rules |
 | =cad_snapshot=, =vidstudio_render_frame=, imgedit renders                                | *no*    | Pictures of a document the agent is editing, not of the screen                                                                                   |
 | Text of a buffer or file that is not excluded                                           | *no*    | Returned as it is when read on request; only free-text surfaces are rewritten. An agent editing a file needs the real text                       |
 | Files an agent reads with its own tools (a CLI agent's shell, its own file reader)       | *no*    | Outside cmacs                                                                                                                                   |
 | Screen sharing through the portal, recordings, anything not addressed to a model         | *no*    | Out of scope                                                                                                                                    |
+
+* Sensitive variables
+
+A variable has no window, buffer or file for a rule to name, so the rules cannot say "not this one". Two kinds of variable must never be printed for a model all the same:
+
+- *The rule set itself.* What a person excludes is exactly what the rule files are kept out of a dotfiles repository to protect, and nothing may reveal the rule set or which rule matched. =describe_variable cmacs-journal-filter--rules= used to print every rule to any agent that asked.
+- *Holders of secrets*: an API key in an option, an auth-source answer kept in a variable, the process environment.
+
+So there is a registry, and every surface that prints a variable's value asks it.
+
+| Option | Holds |
+|--------+-------|
+| ~cmacs-redact-default-sensitive-variables~ | What ships: the journal's rule options (~cmacs-journal-default-filters~, ~cmacs-journal-filters~, ~cmacs-journal-filter-files~), its hash key, everything named =cmacs-journal-filter--...=, redaction's own copies of the rules and key, these two lists themselves, ~cmacs-ai-search-api-key~, ~cmacs-ai-openai-compatible-endpoints~, the GNU's Eye key tables, ~process-environment~ and ~initial-environment~, ~auth-sources~ and the auth-source caches, ~password-data~, and any variable whose name contains =api-key=, =password= / =passwd=, =secret=, =credential= or an =access= / =auth= / =bearer= / =refresh= =-token= |
+| ~cmacs-redact-sensitive-variables~ | Yours. Empty by default |
+
+Both are lists of symbols (that variable) and strings (a regexp matched, case-sensitively, against variable names), consulted together:
+
+#+begin_src emacs-lisp
+(setq cmacs-redact-sensitive-variables
+      '(my-work-vpn-settings "\\`my-private-"))
+#+end_src
+
+A subsystem that keeps a secret in a variable adds it with ~add-to-list~. Leave the shipped list alone and add to your own, so that a later version's additions reach you.
+
+What follows for a sensitive variable, for a model-facing caller:
+
+- =describe_variable= answers =This variable is withheld by your privacy rules= and nothing else: not the value, not the documentation. The sentence is the same for a variable that is bound, one that is void, and a name that was never a variable, so it says nothing about what the session holds.
+- The =variable://= resource is refused the way an excluded buffer is: reported as not found.
+- =list_hooks= leaves the variable out.
+- An *alias* is as sensitive as what it names.
+- *It fails closed.* An entry that is neither a symbol nor a valid regexp makes every variable sensitive until it is fixed.
+
+What it does not do:
+
+- It is not asked of you. ~M-x describe-variable~ and your own Lisp see everything; like the rest of this file it acts for model-facing callers only (~cmacs-redact-active-p~).
+- *=eval= is out of scope.* It is privileged: an agent you have granted =eval= (or =crispy_eval=, a shell, =cmacs_c_*=) can read any variable, these included. The registry protects the read-only surfaces an agent gets by default.
+- It protects variables by *name*. A secret copied into a variable with an ordinary name is not found; the free-text rules (a =text= rule for =sk-...=) are what catch a value wherever it appears.
 
 * LQL sources
 
@@ -204,6 +249,8 @@ The C callers fail closed too: each asks through the dispatch with a form that b
 | ~cmacs-redact-text-field-rules~    | t                    | Field rules' =replace= entries and hashed match regexps also apply to free text          |
 | ~cmacs-redact-resolve-projects~    | t                    | Look a buffer's project up (once per buffer and directory, never remote) for =project= rules |
 | ~cmacs-redact-check-interval~      | 2.0                  | Seconds between looks at whether a filter file changed                                   |
+| ~cmacs-redact-default-sensitive-variables~ | (see [[*Sensitive variables][above]]) | Variables shipped as never printed for a model: symbols and name regexps |
+| ~cmacs-redact-sensitive-variables~ | nil                  | Your own additions to that list                                                          |
 
 The rules themselves are the journal's options: ~cmacs-journal-default-filters~, ~cmacs-journal-filters~, ~cmacs-journal-filter-files~, ~cmacs-journal-filter-case-fold~.
 
@@ -226,6 +273,9 @@ Put ~(declare-function cmacs-redact-... "cmacs-redact")~ at top level and ~(requ
 | ~(cmacs-redact-capture-refused-p WHAT &optional TARGET)~ | non-nil when an image must not be captured. WHAT: =desktop= =all= =window= =client= =frame= =buffer= =gsurf= =video= |
 | ~(cmacs-redact-capture-guard WHAT &optional TARGET)~ | the same, signalling                                                                            |
 | ~(cmacs-redact-resource-guard KIND &optional NAME)~ | signals unless the MCP resource may be read                                                      |
+| ~(cmacs-redact-variable-p SYMBOL)~               | non-nil when a variable (a symbol or a name) must not be printed: answer with ~cmacs-redact-variable-refusal~ and nothing else |
+| ~(cmacs-redact-variable-guard SYMBOL)~           | the same, signalling: what a handler written in C begins its form with                              |
+| ~(cmacs-redact-sensitive-variable-p SYMBOL)~     | the registry alone, whoever is asking                                                               |
 | ~(cmacs-redact-as-model BODY...)~                | macro: BODY composes something a model will read                                                    |
 
 Rules for a new surface:
@@ -233,6 +283,7 @@ Rules for a new surface:
 - List only what ~cmacs-redact-window~ / ~cmacs-redact-buffer-p~ let through, and print the rewritten values, not the originals.
 - Never report that something was left out: no "3 windows hidden", no placeholder row. A count is a fact about the rule set.
 - Never put a rule, a regexp or a rule number in an error.
+- A surface that prints the value of a variable chosen by the caller asks ~cmacs-redact-variable-p~ first, by name, before looking at whether the variable is bound.
 - Text produced later (a sentinel, a timer) by an async brigade tool is covered by the =tool= surface. Text produced later by anything else is not: wrap its composition in ~cmacs-redact-as-model~.
 - A tool handler written in C asks through the dispatch, with the form beginning =(require 'cmacs-redact)= and names escaped by =cmacs_dispatch_lisp_escape=.
 
@@ -244,4 +295,5 @@ Rules for a new surface:
 - *Loaded from inside a tool call.* Callers require the file in a function body, so the first load may happen inside a tool call the advice was too late to wrap. The file looks at the backtrace when it loads and, if it finds a brigade call on it, counts that call as in flight for a minute.
 - *The hash key is never changed here.* ~cmacs-journal-filter-hash-key~ is bound, not set, around each application, so a session key standing in for a missing journal key can never end up in a journal file.
 - *LQL.* =cmacs-lql.el= redacts in ~cmacs-lql--snapshot-1~ and keys ~cmacs-lql--snapshot-cache~ by =(NAME . REDACTED)=. =test/cmacs/cmacs-lql-redact-tests.el= covers the roles, the default, fail closed, that the two snapshots never share an entry or a generation, and that every shipped source declares every string column.
+- *Sensitive variables.* The registry is two lists and one predicate; ~cmacs-redact-resource-guard~ asks it for the =variable= kind, which is how the C resource handler is covered with no change to the C. =test/cmacs/cmacs-redact-variables-tests.el= covers the registry (including that every rule-holding variable of =cmacs-journal-filter.el= is in it, read from the source), the three surfaces, and a source guard: a tool family file that reads a variable chosen at run time must mention ~cmacs-redact-variable-p~.
 - *Tests.* =test/cmacs/cmacs-redact-tests.el=: each contract function against rules; fail closed; who is asking, including the async window; the screen inventory; captures and resources; that no result or error contains the rule; and a source guard that every C image handler and resource handler still asks first.

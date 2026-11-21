@@ -809,6 +809,161 @@ are C that evaluates a Lisp form, and this is the first thing in it."
     (error "%s" cmacs-redact-capture-refusal))
   nil)
 
+;;;; Sensitive variables
+
+;; A variable has no window, buffer or file for a rule to name, so the
+;; journal's rules cannot say "not this one".  Two kinds of variable must
+;; never be printed for a model all the same:
+;;
+;;   * the rule set itself.  "What a person excludes" is exactly what the
+;;     rule files are kept out of a dotfiles repository to protect, and
+;;     the journal's invariant is that nothing reveals the rule set or
+;;     which rule matched.  `describe_variable
+;;     cmacs-journal-filter--rules' did.
+;;   * holders of secrets: an API key in an option, an auth-source lookup
+;;     kept in a variable, the process environment.
+;;
+;; So there is a registry of such variables here, and every surface that
+;; can print a variable's value asks it: the `describe_variable' and
+;; `list_hooks' tools, the `variable://' resource (through
+;; `cmacs-redact-resource-guard').  `eval' is not such a surface -- it is
+;; privileged, and an agent granted it can read anything.
+
+(defcustom cmacs-redact-default-sensitive-variables
+  '(;; The rule set, as the user wrote it and as it is compiled.
+    cmacs-journal-default-filters
+    cmacs-journal-filters
+    cmacs-journal-filter-files
+    cmacs-journal-filter-hash-key
+    "\\`cmacs-journal-filter--"
+    ;; This file's own copies: the rule list held by `eq' for the
+    ;; generation counter, the session hash key, and these two lists
+    ;; (what a person calls sensitive is a fact about that person).
+    cmacs-redact--rules-seen
+    cmacs-redact--session-key
+    cmacs-redact-default-sensitive-variables
+    cmacs-redact-sensitive-variables
+    ;; Secrets held in cmacs's own variables.
+    cmacs-ai-search-api-key
+    cmacs-ai-openai-compatible-endpoints ; :api-key in each entry
+    cmacs-gnuseye--keys
+    cmacs-gnuseye--secret-memo         ; auth-source answers, memoised
+    ;; The environment is where provider keys live (ANTHROPIC_API_KEY,
+    ;; BRAVE_API_KEY, ...).
+    process-environment
+    initial-environment
+    ;; auth-source and its caches.
+    auth-sources
+    "\\`auth-source-.*cache"
+    password-data
+    ;; And by the shape of the name, for everything not listed.
+    "api[-_]?keys?\\(?:\\'\\|-\\)"
+    "passw\\(?:or\\)?d"
+    "secret"
+    "credential"
+    "\\(?:access\\|auth\\|bearer\\|refresh\\)[-_]token")
+  "Variables shipped as never printed for a model.
+
+A list whose elements are symbols (that variable) and strings (a regexp
+matched, case-sensitively, against a variable's name).  A variable is
+sensitive when it or the variable it is an alias of is listed here or in
+`cmacs-redact-sensitive-variables'; see `cmacs-redact-variable-p' for
+what follows from that.
+
+Put your own in `cmacs-redact-sensitive-variables' and leave this list
+to the shipped defaults, so that a later version's additions reach you."
+  :type '(repeat (choice (symbol :tag "Variable")
+                         (regexp :tag "Name regexp"))))
+
+(defcustom cmacs-redact-sensitive-variables nil
+  "Your own variables that must never be printed for a model.
+
+Same form as `cmacs-redact-default-sensitive-variables', and consulted
+together with it: symbols, and regexps matched against variable names.
+
+  (setq cmacs-redact-sensitive-variables
+        \\='(my-work-vpn-settings \"\\\\`my-private-\"))
+
+A subsystem that keeps a secret in a variable adds it with `add-to-list'.
+An entry that is neither a symbol nor a valid regexp makes EVERY
+variable sensitive until it is fixed: a typo here must not become \"show
+everything\"."
+  :type '(repeat (choice (symbol :tag "Variable")
+                         (regexp :tag "Name regexp"))))
+
+(defconst cmacs-redact-variable-refusal
+  "This variable is withheld by your privacy rules"
+  "The one answer every surface gives for a sensitive variable.
+The same words for a variable that is bound, void, or does not exist,
+so the answer says nothing about what the session holds.")
+
+;;;###autoload
+(defun cmacs-redact-sensitive-variable-p (symbol)
+  "Non-nil when SYMBOL is a variable that must not be printed for a model.
+
+SYMBOL is a symbol or a variable name (a string; it is never interned).
+It is sensitive when its name, or the name of the variable it is an
+alias of, is listed in `cmacs-redact-default-sensitive-variables' or
+`cmacs-redact-sensitive-variables'.
+
+This is the registry alone: it does not ask who is calling.  Surfaces
+call `cmacs-redact-variable-p', which does.  Non-nil too when a list
+holds something that is neither a symbol nor a valid regexp."
+  (let* ((name (cond ((stringp symbol) symbol)
+                     ((symbolp symbol) (symbol-name symbol))))
+         (sym (cond ((stringp symbol) (intern-soft symbol))
+                    ((symbolp symbol) symbol)))
+         ;; An alias is as sensitive as what it names.  A cyclic alias
+         ;; chain signals; it is then judged by its own name.
+         (target (and sym (ignore-errors (indirect-variable sym))))
+         (names (delete-dups
+                 (delq nil (list name (and target (symbolp target)
+                                           (symbol-name target))))))
+         (case-fold-search nil))
+    (and
+     names
+     (condition-case nil
+         (cl-some
+          (lambda (entry)
+            (cond
+             ((null entry) nil)
+             ((symbolp entry) (member (symbol-name entry) names))
+             ((stringp entry)
+              (cl-some (lambda (n) (string-match-p entry n)) names))
+             ;; Fail closed on an entry of an unknown kind.
+             (t t)))
+          (append cmacs-redact-default-sensitive-variables
+                  cmacs-redact-sensitive-variables))
+       ;; An invalid regexp, a list that is not a list: fail closed.
+       (error t))
+     t)))
+
+;;;###autoload
+(defun cmacs-redact-variable-p (symbol)
+  "Non-nil when variable SYMBOL must not be printed for a model.
+
+SYMBOL is a symbol or a variable name.  Non-nil when the caller is
+model-facing (`cmacs-redact-active-p') and the variable is sensitive
+\(`cmacs-redact-sensitive-variable-p').  A surface that gets non-nil
+answers with `cmacs-redact-variable-refusal' and nothing else: not the
+value, not the documentation, not whether the variable is bound.
+
+Always nil when the caller is not model-facing."
+  (and (cmacs-redact-active-p)
+       (cmacs-redact-sensitive-variable-p symbol)))
+
+;;;###autoload
+(defun cmacs-redact-variable-guard (symbol)
+  "Signal an error unless variable SYMBOL may be printed for a model.
+SYMBOL is a symbol or a variable name.  The error carries
+`cmacs-redact-variable-refusal' and nothing else.  Returns nil when the
+variable may be printed.  For handlers written in C, whose Lisp form
+begins with this the way an image handler's begins with
+`cmacs-redact-capture-guard'."
+  (when (cmacs-redact-variable-p symbol)
+    (error "%s" cmacs-redact-variable-refusal))
+  nil)
+
 ;;;###autoload
 (defun cmacs-redact-resource-guard (kind &optional name)
   "Signal an error unless the MCP resource KIND://NAME may be read.
@@ -816,8 +971,9 @@ are C that evaluates a Lisp form, and this is the first thing in it."
 KIND is a string: \"buffer\" (NAME a buffer name), \"file\" (a path),
 \"process\" (a process name, judged by its buffer), \"messages\" (the
 *Messages* buffer) or \"variable\".  A variable has no window, buffer
-or file for a rule to name, so it is never refused here; what it holds
-is redacted as free text by `cmacs-redact-text'.
+or file for a rule to name; it is refused when it is one of the
+sensitive variables (`cmacs-redact-variable-p'), and what any other
+variable holds is redacted as free text by `cmacs-redact-text'.
 
 Returns nil when the read may go ahead.  The error says the resource is
 withheld and never why."
@@ -832,7 +988,7 @@ withheld and never why."
                            (buffer (and process (process-buffer process))))
                       (and (buffer-live-p buffer)
                            (cmacs-redact-buffer-p buffer))))
-                   ("variable" nil)
+                   ("variable" (cmacs-redact-variable-p (or name "")))
                    (_ t))))
     (error "This resource is withheld by your privacy rules"))
   nil)

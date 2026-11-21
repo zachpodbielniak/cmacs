@@ -351,6 +351,10 @@ from a callback, where an error has nobody to reach."
 
 ;;;; Privacy
 
+;; Special in cmacs-redact.el; declared here so the binding below is
+;; dynamic when this file is compiled without that one loaded.
+(defvar cmacs-redact--as-model)
+
 (defun cmacs-gowl-ai-field--withheld-p (target)
   "Return non-nil if the redaction rules keep TARGET's window from a model.
 TARGET is a plist from `cmacs-gowl-edit-field-focused-target'.  The
@@ -360,9 +364,18 @@ asked at all."
   (condition-case nil
       (progn
         (require 'cmacs-redact)
-        (null (cmacs-redact-window (plist-get target :app-id)
-                                   (plist-get target :title)
-                                   (plist-get target :pid))))
+        ;; As a model: this runs from the user's own key, where the
+        ;; redaction functions are deliberately no-ops, and without the
+        ;; binding the question "may a model see this window" was
+        ;; answered "yes" for every window -- an excluded one had its
+        ;; field read and sent.  Found by the rig
+        ;; (ai-field-excluded-window-is-withheld).  Bound by variable,
+        ;; not through the `cmacs-redact-as-model' macro, because this
+        ;; file loads cmacs-redact only when it is first needed.
+        (let ((cmacs-redact--as-model t))
+          (null (cmacs-redact-window (plist-get target :app-id)
+                                     (plist-get target :title)
+                                     (plist-get target :pid)))))
     (error t)))
 
 ;;;; The job

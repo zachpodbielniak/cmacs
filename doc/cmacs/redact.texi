@@ -79,6 +79,7 @@ does.
 * Redact Policy::       Who counts as a model.
 * Redact Rules::        What the rules mean on each kind of thing.
 * Redact Surfaces::     What is covered, and what is not.
+* Redact Variables::    Variables that are never printed.
 * Redact LQL::          LQL sources as a model sees them.
 * Redact Fail Closed::  When the rules cannot be loaded.
 * Redact Checking::     Seeing what a model would see.
@@ -302,7 +303,15 @@ returned verbatim.
 @item MCP resources @code{messages://}, @code{variable://}
 @tab yes
 @tab @code{messages://} is refused when @file{*Messages*} is excluded;
-both pass their text through the free-text rules.
+both pass their text through the free-text rules.  @code{variable://}
+is refused for a sensitive variable (@pxref{Redact Variables}), reported
+as not found.
+@item Tools @code{describe_variable}, @code{list_hooks}
+@tab yes
+@tab A sensitive variable's value is never printed:
+@code{describe_variable} answers with one fixed sentence,
+@code{list_hooks} leaves it out.  Other values go through the free-text
+rules.
 @item MCP resource @code{screenshot://frame}, tool @code{gowl_screenshot}
 @tab yes
 @tab Refused while an excluded window or buffer is on screen; a
@@ -332,8 +341,14 @@ and Lisp tools reach).
 @code{execute_command}, @code{send_keys}, @code{cmacs_c_*},
 @code{gi_call}
 @tab @strong{no}
-@tab These can compute anything.  Not a sandbox; keep them out of an
-agent's allowlist if the rules matter.
+@tab These can compute anything, a sensitive variable's value included.
+Not a sandbox; keep them out of an agent's allowlist if the rules matter.
+@item D-Bus @code{Config.Get}, @code{Debug.DescribeVariable}, and the C
+fallback of @code{describe_variable} (a build without the brigade)
+@tab @strong{no, yet}
+@tab Composed in C from a variable name; they do not ask the registry of
+sensitive variables.  The one-line change each needs is to begin its
+form with @code{(cmacs-redact-variable-guard NAME)}.
 @item Buffer and file @emph{tools} (@code{list_buffers},
 @code{get_buffer_content}, @code{search_buffer},
 @code{project_read_file}, @dots{})
@@ -365,10 +380,54 @@ asks the rules.  A query can read a file the rules hide.
 @item Brigade memory index and second-brain search over the notes repo
 @tab @strong{no}
 @tab Indexed text is not filtered by these rules.
-@item C-only RPC answers that never run Lisp (@code{keybinds://}, the
-D-Bus compositor client list behind @command{emacsctl get clients})
+@item D-Bus methods served from the capability table:
+@code{Compositor.ListClients}, @code{.FocusedClient} and
+@code{.FindClient} (what @command{emacsctl get clients} prints),
+@code{Monitor.List}, @code{Edit.GetContent}, @code{.Search} and
+@code{.GetOrgContent}, every @code{Gsurf} method,
+@code{Debug.DescribeVariable} and @code{.ListHooks},
+@code{Log.RecentMessages}, @code{WindowManager.Other}
+@tab yes
+@tab Rows of @file{cmacs-dbus-forward-table.h}: they call the tool, so
+they show what it shows (@pxref{Capability D-Bus Legacy}).
+@item D-Bus @code{BufferManager.*}, @code{FrameManager.List},
+@code{WindowManager.SelectByBuffer}, @code{Project.ListFiles},
+@code{.ReadFile} and @code{.Find}, @code{Search.Occur},
+@code{Text.Line} and @code{.Delete}, @code{File.Recent},
+@code{Clipboard.List}, @code{.Get} and @code{.GetSelection},
+@code{Bookmark.List}, @code{Config.Get}
+@tab yes
+@tab Lisp method functions in @file{cmacs-dbus-forward.el} that call the
+contract: an excluded buffer is absent (@code{Find} is false,
+@code{PointFor} is -1, a read is the missing-buffer error), file names
+go through @code{cmacs-redact-file}, clipboard text through
+@code{cmacs-redact-text}, a sensitive variable is refused.
+@item D-Bus @code{Compositor.Screenshot}, @code{Video.Snapshot}
+@tab yes
+@tab Refused by the capture rule; a single named window that is
+excluded is ``no client matching pattern''.
+@item D-Bus GNOME Shell search provider, the MPRIS track title, the
+@code{Log.Line} signal
+@tab yes
+@tab An excluded buffer or file is not offered as a result (nor one
+whose name a rule rewrites, since a result is opened by name); an
+excluded buffer has no title; message text goes through the free-text
+rules.
+@item D-Bus @code{VC.Status}, @code{.Diff}, @code{.Log}, @code{.Blame}
 @tab @strong{no}
-@tab Nothing there asks the rules.
+@tab git's output for the repository, read by a subprocess: file names
+and diffs of excluded files appear.
+@item D-Bus @code{Events.Recent} and the @code{Events} signals, the
+@code{Compositor} signals (@code{ClientAdded}, @code{FocusChanged},
+@code{ClientTitleChanged}: app id and title)
+@tab @strong{no}
+@tab Broadcasts composed where the event happens, not for a caller.
+Anything on the session bus can subscribe.
+@item @code{keybinds://}; the bacon IPC and podomation gowl module's
+client list and focused window; the MCP prompts that inline the client
+list
+@tab @strong{no}
+@tab C that never runs Lisp: nothing there asks the rules.
 @item @code{cad_snapshot}, @code{vidstudio_render_frame}, imgedit
 renders
 @tab @strong{no}
@@ -386,6 +445,102 @@ addressed to a model
 @tab @strong{no}
 @tab Out of scope.
 @end multitable
+
+@node Redact Variables
+@section Sensitive Variables
+
+@cindex sensitive variables
+@vindex cmacs-redact-default-sensitive-variables
+@vindex cmacs-redact-sensitive-variables
+
+A variable has no window, buffer or file for a rule to name, so the
+rules cannot say ``not this one''.  Two kinds of variable must never be
+printed for a model all the same:
+
+@itemize @bullet
+@item
+@emph{The rule set itself.}  What a person excludes is exactly what the
+rule files are kept out of a dotfiles repository to protect, and nothing
+may reveal the rule set or which rule matched.
+@code{describe_variable cmacs-journal-filter--rules} used to print every
+rule to any agent that asked.
+@item
+@emph{Holders of secrets}: an API key in an option, an auth-source
+answer kept in a variable, the process environment.
+@end itemize
+
+So there is a registry, and every surface that prints a variable's value
+asks it.
+
+@defopt cmacs-redact-default-sensitive-variables
+What ships: the journal's rule options
+(@code{cmacs-journal-default-filters}, @code{cmacs-journal-filters},
+@code{cmacs-journal-filter-files}), its hash key, everything named
+@code{cmacs-journal-filter--@dots{}}, redaction's own copies of the
+rules and key, these two lists themselves,
+@code{cmacs-ai-search-api-key},
+@code{cmacs-ai-openai-compatible-endpoints}, the GNU's Eye key tables,
+@code{process-environment} and @code{initial-environment},
+@code{auth-sources} and the auth-source caches, @code{password-data},
+and any variable whose name contains @samp{api-key}, @samp{password} /
+@samp{passwd}, @samp{secret}, @samp{credential} or an @samp{access} /
+@samp{auth} / @samp{bearer} / @samp{refresh} @samp{-token}.
+@end defopt
+
+@defopt cmacs-redact-sensitive-variables
+Yours.  Empty by default.
+@end defopt
+
+Both are lists of symbols (that variable) and strings (a regexp matched,
+case-sensitively, against variable names), consulted together:
+
+@lisp
+(setq cmacs-redact-sensitive-variables
+      '(my-work-vpn-settings "\\`my-private-"))
+@end lisp
+
+A subsystem that keeps a secret in a variable adds it with
+@code{add-to-list}.  Leave the shipped list alone and add to your own,
+so that a later version's additions reach you.
+
+What follows for a sensitive variable, for a model-facing caller:
+
+@itemize @bullet
+@item
+@code{describe_variable} answers @samp{This variable is withheld by your
+privacy rules} and nothing else: not the value, not the documentation.
+The sentence is the same for a variable that is bound, one that is void,
+and a name that was never a variable, so it says nothing about what the
+session holds.
+@item
+The @code{variable://} resource is refused the way an excluded buffer
+is: reported as not found.
+@item
+@code{list_hooks} leaves the variable out.
+@item
+An @emph{alias} is as sensitive as what it names.
+@item
+@emph{It fails closed.}  An entry that is neither a symbol nor a valid
+regexp makes every variable sensitive until it is fixed.
+@end itemize
+
+What it does not do:
+
+@itemize @bullet
+@item
+It is not asked of you.  @kbd{M-x describe-variable} and your own Lisp
+see everything; like the rest of this chapter it acts for model-facing
+callers only (@code{cmacs-redact-active-p}).
+@item
+@emph{@code{eval} is out of scope.}  It is privileged: an agent you have
+granted @code{eval} (or @code{crispy_eval}, a shell, @code{cmacs_c_*})
+can read any variable, these included.  The registry protects the
+read-only surfaces an agent gets by default.
+@item
+It protects variables by @emph{name}.  A secret copied into a variable
+with an ordinary name is not found; the free-text rules (a @code{text}
+rule for @samp{sk-@dots{}}) are what catch a value wherever it appears.
+@end itemize
 
 @node Redact LQL
 @section LQL Sources
@@ -570,6 +725,13 @@ remote) for @code{project} rules.
 @item @code{cmacs-redact-check-interval}
 @tab 2.0
 @tab Seconds between looks at whether a filter file changed.
+@item @code{cmacs-redact-default-sensitive-variables}
+@tab (@pxref{Redact Variables})
+@tab Variables shipped as never printed for a model: symbols and name
+regexps.
+@item @code{cmacs-redact-sensitive-variables}
+@tab @code{nil}
+@tab Your own additions to that list.
 @end multitable
 
 The rules themselves are the journal's options:
@@ -642,6 +804,19 @@ The same, signalling.
 Signals unless the MCP resource may be read.
 @end defun
 
+@defun cmacs-redact-variable-p symbol
+Non-nil when a variable (a symbol or a name) must not be printed: answer
+with @code{cmacs-redact-variable-refusal} and nothing else.
+@end defun
+
+@defun cmacs-redact-variable-guard symbol
+The same, signalling: what a handler written in C begins its form with.
+@end defun
+
+@defun cmacs-redact-sensitive-variable-p symbol
+The registry alone, whoever is asking.
+@end defun
+
 @defmac cmacs-redact-as-model body@dots{}
 @var{body} composes something a model will read.
 @end defmac
@@ -657,6 +832,10 @@ Never report that something was left out: no ``3 windows hidden'', no
 placeholder row.  A count is a fact about the rule set.
 @item
 Never put a rule, a regexp or a rule number in an error.
+@item
+A surface that prints the value of a variable chosen by the caller asks
+@code{cmacs-redact-variable-p} first, by name, before looking at whether
+the variable is bound.
 @item
 Text produced later (a sentinel, a timer) by an async brigade tool is
 covered by the @code{tool} surface.  Text produced later by anything

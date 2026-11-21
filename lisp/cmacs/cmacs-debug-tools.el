@@ -29,6 +29,7 @@
 
 (declare-function cmacs-core-tools-print "cmacs-core-tools" (value))
 (declare-function cmacs-core-tools-text "cmacs-core-tools" (string))
+(declare-function cmacs-redact-variable-p "cmacs-redact" (symbol))
 (declare-function profiler-start "profiler" (mode))
 (declare-function profiler-stop "profiler" ())
 (declare-function profiler-report-cpu "profiler" ())
@@ -103,12 +104,16 @@ System: %s\nFeatures: %d loaded"
     ()
   :group 'debug
   (require 'cmacs-core-tools)
+  (require 'cmacs-redact)
   (let (hooks)
     (mapatoms
      (lambda (sym)
        (when (and (boundp sym)
                   (string-suffix-p "-hook" (symbol-name sym))
-                  (symbol-value sym))
+                  (symbol-value sym)
+                  ;; A sensitive variable is not listed at all, value
+                  ;; or name: this tool prints values.
+                  (not (cmacs-redact-variable-p sym)))
          (push (format "%s: %S" sym (symbol-value sym)) hooks))))
     (cmacs-core-tools-print
      (mapconcat #'identity (sort hooks #'string<) "\n"))))
