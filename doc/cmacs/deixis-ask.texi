@@ -211,11 +211,21 @@ the gowl tools' @code{cmacs-gowl-tools--screen-text} --- what the
 it, so its guard refuses a region that shows a window the rules
 withhold.
 
-@emph{(c) The picture.}  Not implemented, because the interface does
-not exist: @code{cmacs-ai-chat-stream} and
-@code{cmacs-ai-session-append-message} take text only, so a cropped
-image cannot be handed to a multimodal model.  Where OCR finds no text
-the question is reported as unanswerable.
+@emph{(c) The picture.}  When @code{cmacs-deixis-ask-images} is on
+(the default) and the model takes images
+(@code{cmacs-ai-vision-supported-p} for @code{cmacs-deixis-ask-provider}
+/ @code{-model}, else the text operations'), the same OCR box is also
+captured as a PNG, in memory (@code{cmacs-ai-capture-region}), and sent
+@emph{with} whatever OCR read: OCR helps with small text, the picture
+with everything else.  OCR may then find nothing and the question is
+still answerable --- the picture is its material.  The capture is
+refused, and the question with it, while a window the rules exclude is
+visible in the box.  The window's title and app id stay home as before.
+``Compare this and that'' over two windows sends two crops, numbered in
+the prompt (``attached image 1'', ``attached image 2'') in spoken
+order; ``and that one?'' sends its crop with the follow-up.  When the
+model cannot take images nothing changes: OCR text only, and no text
+read is still unanswerable.  @xref{CMacs AI Images}.
 
 @subheading Adding an extractor
 
@@ -366,6 +376,12 @@ rewrite them.  A web page's URL and title are sent, the URL as
 @code{cmacs-redact-url} rewrites it, the title through
 @code{cmacs-redact-text}.
 @item
+A picture of the OCR box is refused while a window the rules exclude is
+visible in it, or while it covers one of this Emacs's frames that shows
+an excluded buffer; the question is then refused whole.  The picture is
+never redacted --- an image cannot be rewritten the way text can --- so
+the answer is all or nothing.  It is held in memory only.
+@item
 When the rules cannot be asked, the answer is a refusal (fail closed),
 in the gate and in the text.
 @end itemize
@@ -428,6 +444,9 @@ How much text the element under the pointer should have (200).
 The edit-field deny list also stops OCR (@code{t}).
 @item cmacs-deixis-ask-send-window-identity
 Send a window's app id and title (@code{nil}).
+@item cmacs-deixis-ask-images
+Also send another window's OCR box as a picture when the model takes
+images (@code{t}).
 @item cmacs-deixis-ask-extract-timeout
 Seconds to read one thing (45).
 @item cmacs-deixis-ask-followup-seconds

@@ -208,16 +208,24 @@ DEFUN ("cmacs-ai-session-free", Fcmacs_ai_session_free,
 
 DEFUN ("cmacs-ai-session-append-message",
        Fcmacs_ai_session_append_message,
-       Scmacs_ai_session_append_message, 3, 3, 0,
+       Scmacs_ai_session_append_message, 3, 4, 0,
        doc: /* Append a message to SESSION.
 ROLE is either the symbol `user' or the symbol `assistant'.  TEXT is the
 message content as a string.  Returns t.
+
+Optional IMAGES, for a `user' message only, are pictures sent with it:
+a list of plists (:file PATH) or (:data UNIBYTE-STRING :mime TYPE), or
+one such plist (see `cmacs-ai-image-parts' for the rules an image must
+pass).  Whether the session's provider can take them is the caller's
+question -- `cmacs-ai-vision-check' asks it; this only builds the
+message.
 
 There is deliberately no `system' role here: a system prompt belongs to
 the client, not to the message list, and is set with
 `cmacs-ai-client-set-system-prompt'.  This docstring used to offer
 `system' anyway, which meant the obvious call signalled.  */)
-  (Lisp_Object session, Lisp_Object role, Lisp_Object text)
+  (Lisp_Object session, Lisp_Object role, Lisp_Object text,
+   Lisp_Object images)
 {
   CHECK_FIXNAT (session);
   CHECK_SYMBOL (role);
@@ -226,9 +234,19 @@ the client, not to the message list, and is set with
   if (s == NULL) error ("cmacs-ai: bad session handle");
   AiMessage *m;
   if (EQ (role, intern ("user")))
-    m = ai_message_new_user (SSDATA (text));
+    {
+      /* Last of the checks: it may signal, and after it the list is
+       * ours to free -- nothing between here and the free signals. */
+      GList *imgs = cmacs_ai_images_from_lisp (images);
+      m = cmacs_ai_user_message_new (SSDATA (text), imgs);
+      cmacs_ai_images_free (imgs);
+    }
   else if (EQ (role, intern ("assistant")))
-    m = ai_message_new_assistant (SSDATA (text));
+    {
+      if (!NILP (images))
+        error ("cmacs-ai: only a user message carries images");
+      m = ai_message_new_assistant (SSDATA (text));
+    }
   else
     error ("cmacs-ai: role must be 'user or 'assistant");
   cmacs_ai_session_append_message_obj (s, m);

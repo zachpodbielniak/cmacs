@@ -30,6 +30,10 @@
 (require 'cmacs-gowl-edit-field nil t)
 (require 'cmacs-gowl-ai-field nil t)
 (require 'cmacs-gowl-tools nil t)
+
+;; Special in cmacs-deixis-ask.el; said here too, so a binary whose dump
+;; predates the option still compiles the let-binding below as dynamic.
+(defvar cmacs-deixis-ask-images)
 (require 'cmacs-ai-textops nil t)
 
 ;; Variables of files this suite does not load.
@@ -62,7 +66,11 @@
 `cmacs-redact-window' and friends; the defaults show everything.  Each
 stub notes whether it ran inside `cmacs-redact-as-model'."
   (declare (indent 1))
-  `(let ((spec ,plist))
+  `(let ((spec ,plist)
+         ;; Pictures of windows have their own suite
+         ;; (cmacs-ai-images-tests.el); here a window is read as text,
+         ;; which is what these tests were written against.
+         (cmacs-deixis-ask-images nil))
      (setq cmacs-deixis-ask-tests--as-model nil)
      (cl-letf (((symbol-function 'cmacs-redact-window)
                 (lambda (app title &rest _)

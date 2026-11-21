@@ -98,7 +98,7 @@ A gsurf buffer has no text in it, so it has its own extractor, ahead of =buffer=
 
 *(b) The screen.*  =cmacs-deixis-ask-ocr-region= is a box of =cmacs-deixis-ask-ocr-box= (900x420 layout pixels) centred on the pointed position and moved to lie inside the window, so it never reaches into a neighbour; a smaller window, and "what is this window", read the whole window.  The capture and the asynchronous tesseract run are the gowl tools' =cmacs-gowl-tools--screen-text= -- what the =gowl_screen_text= tool calls -- entered as a model would enter it, so its guard refuses a region that shows a window the rules withhold.
 
-*(c) The picture.*  Not implemented, because the interface does not exist: =cmacs-ai-chat-stream= and =cmacs-ai-session-append-message= take text only (=ai_message_new_user= with a string), so a cropped image cannot be handed to a multimodal model.  Where OCR finds no text the question is reported as unanswerable.
+*(c) The picture.*  When =cmacs-deixis-ask-images= is on (the default) and the model takes images (=cmacs-ai-vision-supported-p= for =cmacs-deixis-ask-provider= / =-model=, else the text operations'), the same OCR box is also captured as a PNG, in memory (=cmacs-ai-capture-region=), and sent /with/ whatever OCR read: OCR helps with small text, the picture with everything else -- a chart, an icon, a layout, a photo.  OCR may then find nothing at all and the question is still answerable; the picture is its material.  The capture is refused, and with it the question, while a window the rules exclude is visible in the box.  The window's title and app id stay home as before.  "Compare this and that" over two windows sends two crops, numbered in the prompt ("attached image 1", "attached image 2") in spoken order; "and that one?" sends its crop with the follow-up (=cmacs-ai-output-followup-images=).  When the model cannot take images nothing changes: OCR text only, and no text read is still reported as unanswerable.  See [[file:cmacs-ai-images.org][cmacs-ai images]].
 
 ** Adding an extractor
 
@@ -198,6 +198,7 @@ Decided before any text is read, and again on what was read.  All of it runs und
 | text of an Emacs buffer                      | sent as it is                                                                                                                     |
 | a window's title and app id                  | not sent unless =cmacs-deixis-ask-send-window-identity=, and then as the rules rewrite them                                       |
 | a web page's URL and title                   | sent, the URL as =cmacs-redact-url= rewrites it, the title through =cmacs-redact-text=                                            |
+| a picture of the OCR box                     | refused while an excluded window is visible in the box, or the box covers this Emacs's frame showing an excluded buffer; never redacted (a picture cannot be), held in memory only |
 | the rules cannot be asked                    | refused (fail closed), in the gate and in the text                                                                                |
 
 A refusal is /visible/ (the echo area, and a toast on the gowl bar -- the echo area is not in view while another program has the screen; =cmacs-deixis-ask-toast=) and /spoken/ when the question was.  Every privacy refusal reads =cmacs-deixis-ask-refusal-text=, the same words whatever was matched, so a refusal says nothing about the rule set.  A refused spoken question is still /taken/: it does not go on to another model by the chat route.
@@ -228,6 +229,7 @@ Under =emacs --gowl= all of this runs on the compositor's thread.  The field rea
 | =cmacs-deixis-ask-web-min-chars=        | 200                    | how much text the element under the pointer should have              |
 | =cmacs-deixis-ask-deny-applies-to-ocr=  | =t=                    | the edit-field deny list also stops OCR                              |
 | =cmacs-deixis-ask-send-window-identity= | nil                    | send a window's app id and title                                     |
+| =cmacs-deixis-ask-images=               | =t=                    | also send another window's OCR box as a picture, when the model takes images |
 | =cmacs-deixis-ask-extract-timeout=      | 45                     | seconds to read one thing                                            |
 | =cmacs-deixis-ask-followup-seconds=     | 300                    | how long "and that one?" continues an answer                         |
 | =cmacs-deixis-ask-provider=, =-model=   | nil                    | override the text operations' provider and model                     |
@@ -251,5 +253,7 @@ Stated so that a change there knows about here.  The voice path sets the loop's 
 * Tests
 
 =test/cmacs/cmacs-deixis-ask-tests.el= is pure ERT, 37 tests.  The compositor, gsurf, the edit-field session, tesseract, the model and the voice loop are stubs; the redaction functions are stubbed too, so the result does not depend on the privacy rules of the machine running the suite.  The buffer extractor, the question table, the prompt, =cmacs-ai-textops-stream= and the result window's follow-up path are the real code.  Covered: extractor selection per referent kind and the open registry; the thing chosen at a position (function, paragraph, lone line, Org subtree, region, compilation error) and its size limits; diagnostics; refusal of an excluded buffer, window, URL, denied window, closed window and of everything when the rules signal, each before any read; redaction of foreign text; the OCR box arithmetic; field selection falling through to OCR; the web view; the question table, including what is *not* taken; two referents end to end; a spoken answer shown and spoken; "and that one?" reusing the session; barge-in; the door by hand, the menu card and the AI menu entry.
+
+The picture path is covered in =test/cmacs/cmacs-ai-images-tests.el= (crop plus OCR text, a picture with no text, a refused capture, a model without vision unchanged, two crops for a comparison) and end to end in =test/cmacs/cmacs-rig-image-tests.el=.
 
 Not covered, and needing a live session: the text-input read against a real application, tesseract on real pixels, a page's JavaScript in WebKit, a real provider's stream (in particular what a cancelled stream delivers), and speech with a real barge-in.

@@ -44,6 +44,8 @@
 
 (declare-function cmacs-ai-set-search-provider "cmacs-ai"
                   (executor provider &optional api-key))
+(declare-function cmacs-ai-vision-check "cmacs-ai-vision"
+                  (provider model images))
 
 (defun cmacs-ai-define-tool (name description params callback)
   "Return a tool spec usable in `cmacs-ai-call' :tools.
@@ -98,6 +100,11 @@ KEYS is a plist:
                        Without it they use Emacs's own directory, which
                        is wherever you last visited a file -- almost
                        never what the model meant by a relative path.
+  :images LIST         pictures sent with PROMPT: plists (:file PATH)
+                       or (:data UNIBYTE-STRING :mime TYPE) -- see
+                       `cmacs-ai-image-parts'.  Refused before anything
+                       is sent when the provider and model cannot take
+                       images (`cmacs-ai-vision-check'); never dropped.
 
 Note: any tool-enabled call also carries the built-in tools, since a
 cmacs tool executor always includes them; custom tools are added on top.
@@ -115,9 +122,16 @@ the call -- keep tool loops short, especially under `emacs --gowl'."
          (mcp      (plist-get keys :mcp-bridge))
          (search   (plist-get keys :search-provider))
          (dir      (plist-get keys :directory))
+         (images   (plist-get keys :images))
          (want-tools (or tools builtin mcp search dir)))
+    ;; Before an executor exists: a refusal must cost nothing.
+    (when images
+      (require 'cmacs-ai-vision)
+      (cmacs-ai-vision-check provider model images))
     (if (not want-tools)
-        (cmacs-ai--call prompt provider system model nil maxtok)
+        (if images
+            (cmacs-ai--call prompt provider system model nil maxtok images)
+          (cmacs-ai--call prompt provider system model nil maxtok))
       (let ((executor (cmacs-ai-tools-new)))
         (unwind-protect
             (progn
@@ -134,7 +148,11 @@ the call -- keep tool loops short, especially under `emacs --gowl'."
                 (cmacs-ai-tools-set-working-directory executor dir))
               (dolist (spec tools)
                 (cmacs-ai--register-tool executor spec))
-              (cmacs-ai--call prompt provider system model executor maxtok))
+              (if images
+                  (cmacs-ai--call prompt provider system model executor
+                                  maxtok images)
+                (cmacs-ai--call prompt provider system model executor
+                                maxtok)))
           (cmacs-ai-tools-free executor))))))
 
 (provide 'cmacs-ai-call)

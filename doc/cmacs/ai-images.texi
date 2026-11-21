@@ -1,0 +1,177 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs AI Images
+@chapter CMacs AI Images: Pictures In
+
+cmacs-ai used to be text in, text out, so no model could look at a
+screenshot and ``explain that'' (@pxref{CMacs Deixis Ask}) fell back to
+OCR.  ai-glib already had image content (@code{AiImageContent}) and its
+providers serialise it; this is the cmacs half: images on every path
+that builds a user message (@file{cmacs/ai/cmacs-ai-vision.c}), deciding
+whether a model can see them, in-memory captures behind the redaction
+rules, image links in a chat, and the @code{images} parameter of
+@code{ai_prompt} and @code{ai_call} (@file{lisp/cmacs/cmacs-ai-vision.el}).
+
+@menu
+* AI Images Specs::        What an image is, and the checks it passes.
+* AI Images Vision::       Whether a model can see it.
+* AI Images Capture::      Screen captures, in memory, behind the rules.
+* AI Images Chat::         Image links and @kbd{C-c C-i}.
+* AI Images Agents::       The @code{images} tool parameter.
+* AI Images Options::      Options, and what is not done.
+@end menu
+
+@node AI Images Specs
+@section An image
+
+An image is a plist, @code{(:file PATH)} or @code{(:data BYTES :mime
+TYPE)} with @var{bytes} a unibyte string, and everything that takes
+images takes a list of them (one plist alone is a list of one):
+@code{cmacs-ai-call}'s @code{:images}; the fifth argument of
+@code{cmacs-ai-chat-stream}; the fourth of
+@code{cmacs-ai-session-append-message} (user messages only); the seventh
+of @code{cmacs-ai--call}; the third of @code{cmacs-ai-harness-send-input};
+the sixth of @code{cmacs-ai-textops-stream}.
+
+The C checks each one on the main thread before anything joins a
+conversation:
+
+@itemize
+@item
+@emph{The bytes decide the type.}  PNG, JPEG, GIF and WebP are
+recognised by their magic numbers; anything else is refused.  The type
+put on the image is always the sniffed one --- exactly
+@code{image/png}, @code{image/jpeg}, @code{image/gif} or
+@code{image/webp}, the four Claude accepts.  A declared @code{:mime} is
+only compared, after dropping parameters and reading @code{image/jpg}
+as @code{image/jpeg}; one that disagrees with the bytes is refused.  An
+empty image cannot pass.  BMP and SVG are refused, not converted.
+@item
+@emph{A file is bounded before it is read:} opened
+@code{O_NONBLOCK}, a regular file, no larger than
+@code{cmacs-ai-image-max-bytes} (10 MB) by its size, and refused if it
+grows past that while read.
+@item
+At most @code{cmacs-ai-image-max-count} (16) per message.
+@end itemize
+
+A refusal signals @code{cmacs-ai-error} and leaves the session as it
+was.  @code{cmacs-ai-image-parts} runs the checks without sending, and
+@code{cmacs-ai-session-message-parts} shows the blocks of a message in a
+session.
+
+@node AI Images Vision
+@section Can this model see it?
+
+ai-glib has no ``accepts image input'' capability (its
+@code{AiImageCapabilities} are about generating images; an
+@code{ai_provider_accepts_images (provider, model)} is proposed, not
+built).  @code{cmacs-ai-vision-supported-p} decides, first answer wins:
+
+@enumerate
+@item
+@code{cmacs-ai-vision-model-overrides}, @code{(PROVIDER REGEXP .
+BOOLEAN)} on the model name.
+@item
+@code{cmacs-ai-vision-providers}, @code{(PROVIDER . BOOLEAN)}.
+@item
+ollama: the model must match @code{cmacs-ai-vision-ollama-models}, a
+documented @emph{guess} at the vision families; no model named is a no.
+@item
+An HTTP provider: @code{cmacs-ai-provider-image-input} builds a request
+holding a small marked image through the client's own
+@code{build_request} and looks for the image in the JSON --- what the
+linked ai-glib really does, cached per client class.  When it cannot
+tell, @code{cmacs-ai-vision-http-fallback}.
+@item
+A CLI provider: @code{cmacs-ai-vision-cli-providers} --- claude-code,
+codex-cli, antigravity and acp yes; opencode, claude-tmux, cursor and
+grok-build no (they take only a text prompt).
+@item
+Anything else: no.
+@end enumerate
+
+An image is never dropped silently: @code{cmacs-ai-vision-check} refuses
+before sending, naming the provider and model, the providers here that
+can, and the option that says otherwise.
+
+@node AI Images Capture
+@section Capture, in memory, behind the rules
+
+@code{cmacs-ai-capture-region} (a screen region),
+@code{cmacs-ai-capture-client} (one window),
+@code{cmacs-ai-capture-frame} (this Emacs frame) and
+@code{cmacs-ai-capture-clipboard} return @code{(:data PNG :mime
+"image/png")}.  Every screen capture is decided as a model would ask,
+because it is going to one: a region is refused while an excluded
+window is focused or visible in it (the gowl tools' region guard), or
+while it covers this Emacs's frame and a frame shows an excluded
+buffer; a window when the rules exclude it; a frame when it shows an
+excluded buffer.  A failure deciding is a refusal, signalled as
+@code{cmacs-ai-capture-refused} with the redaction layer's one fixed
+sentence.  A picture is never redacted: all or nothing.
+
+@code{cmacs-ai-png-encode} turns gowl's pixels into PNG bytes in memory
+(Cairo, a memory stream), scaled to @code{cmacs-ai-image-max-side}.
+Nothing touches the disk unless @code{cmacs-ai-capture-save-directory}
+names a directory.
+
+@node AI Images Chat
+@section In a chat
+
+Image links in the compose area --- @code{[[file:x.png]]},
+@code{[[./x.jpg]]}, @code{[[attachment:x.png]]} --- are sent as images
+with the message, in order; the link text stays, so the model and the
+transcript can tell them apart.
+
+@kbd{C-c C-i} (@code{cmacs-ai-chat-attach-image}) attaches a file, a
+region of the screen (default @code{cmacs-ai-capture-box} around the
+pointer), a window, this frame or the clipboard image.  A capture
+becomes @code{[[cmacs-image:N][...]]}, a link to bytes the buffer holds
+in memory.  It shadows @code{org-ctrl-c-tab} in chat buffers.  A model
+that cannot see is refused before anything is captured or sent, and the
+compose area is left as it was.
+
+@node AI Images Agents
+@section For agents
+
+@code{ai_prompt} and @code{ai_call} take @code{images}, an array of
+@code{@{"path": P@}} or @code{@{"data": BASE64, "mime": TYPE@}}.  A path
+is held to what @code{project_read_file} reads: inside the workspace
+root by true name, not excluded by the redaction rules, a regular file.
+Data is bounded before decoding.  A provider that cannot see is a failed
+call.  @command{emacsctl tool ai call} passes @code{images} through; the
+D-Bus @code{Ai.Call} method (@code{(ssssb)}) forwards to @code{ai_call}
+but cannot carry images, and @command{emacsctl ai call} uses it.
+
+@node AI Images Options
+@section Options, and what is not done
+
+@table @code
+@item cmacs-ai-image-max-bytes
+Largest image (10 MB).
+@item cmacs-ai-image-max-count
+Most images per message (16).
+@item cmacs-ai-image-max-side
+Captures scaled to this longer side (1568); @code{nil} for full size.
+@item cmacs-ai-vision-providers
+@itemx cmacs-ai-vision-model-overrides
+Your answers, per provider and per model.
+@item cmacs-ai-vision-ollama-models
+ollama models taken to see.
+@item cmacs-ai-vision-cli-providers
+@itemx cmacs-ai-vision-http-fallback
+@itemx cmacs-ai-vision-cli-programs
+The tables behind the decision and the suggestions.
+@item cmacs-ai-capture-save-directory
+Where captures are also saved; @code{nil} keeps them in memory.
+@item cmacs-ai-capture-box
+The region offered around the pointer (@code{(900 . 420)}).
+@end table
+
+Not done: the harness's Lisp does not attach images yet (its primitive
+takes them); a retried or promoted request rebuilt from text carries no
+images; no format conversion; frame captures are not scaled.

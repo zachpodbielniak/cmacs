@@ -60,9 +60,16 @@
 (declare-function cmacs-ai-session-new "cmacs-ai-session.c" (client-handle))
 (declare-function cmacs-ai-session-free "cmacs-ai-session.c" (handle))
 (declare-function cmacs-ai-session-append-message "cmacs-ai-session.c"
-                  (handle role text))
+                  (handle role text &optional images))
 (declare-function cmacs-ai-chat-stream "cmacs-ai-stream.c"
-                  (session prompt callback &optional executor))
+                  (session prompt callback &optional executor images))
+(declare-function cmacs-ai-vision-refusal "cmacs-ai-vision"
+                  (provider &optional model))
+(declare-function cmacs-ai-image-parts "cmacs-ai-vision.c" (images))
+(declare-function cmacs-project-tools--resolve "cmacs-project-tools" (path))
+(declare-function cmacs-project-tools--hidden-p "cmacs-project-tools"
+                  (file root))
+(defvar cmacs-ai-image-max-bytes)
 (declare-function cmacs-ai-tools-new "cmacs-ai-tools.c" ())
 (declare-function cmacs-ai-tools-free "cmacs-ai-tools.c" (handle))
 (declare-function cmacs-ai-tools-run-async "cmacs-ai-tools.c"
@@ -114,6 +121,66 @@ new symbol on the way to finding out that it names nothing."
   (concat "Error: " (if (stringp message) message (format "%s" message))))
 
 
+;;;; Images an agent names
+
+;; `images' on ai_prompt and ai_call is an array of objects, each
+;; {"path": P} or {"data": BASE64, "mime": TYPE}.  An agent reading
+;; arbitrary image files off this disk and handing them to a remote model
+;; is exfiltration by another name, so a path is held to exactly what
+;; project_read_file would read: resolved against the workspace root,
+;; refused when it escapes it (true names compared, so a symlink out
+;; counts), refused when the redaction rules exclude it -- one answer for
+;; "excluded" and "unreadable".  Bytes the agent sends itself are its
+;; own; they pass the same size and type checks in C.
+
+(defun cmacs-ai-tools--images (images)
+  "Turn the tool argument IMAGES into image plists for the C primitives.
+IMAGES is the registry's Lisp form of the JSON array: a list of alists.
+Signals, naming the offending element, for anything refused."
+  (let ((n 0))
+    (mapcar
+     (lambda (entry)
+       (setq n (1+ n))
+       (let ((path (alist-get 'path entry))
+             (data (alist-get 'data entry))
+             (mime (alist-get 'mime entry)))
+         (cond
+          ((and (cmacs-ai-tools--text path) (null data))
+           (require 'cmacs-project-tools)
+           (require 'cmacs-core-tools)
+           (pcase-let ((`(,root . ,target) (cmacs-project-tools--resolve path)))
+             (unless (and (file-regular-p target)
+                          (file-readable-p target)
+                          (not (cmacs-project-tools--hidden-p target root)))
+               (error "images[%d]: file not readable: %s" n path))
+             (list :file target)))
+          ((and (cmacs-ai-tools--text data) (null path))
+           ;; Bounded before decoding: base64 is 4 characters per 3 bytes.
+           (when (> (* 3 (/ (length data) 4))
+                    (if (boundp 'cmacs-ai-image-max-bytes)
+                        cmacs-ai-image-max-bytes
+                      (* 10 1024 1024)))
+             (error "images[%d]: image over the size limit" n))
+           (let ((bytes (condition-case nil
+                            (base64-decode-string data)
+                          (error (error "images[%d]: data is not base64" n)))))
+             (append (list :data bytes)
+                     (and (cmacs-ai-tools--text mime) (list :mime mime)))))
+          (t (error "images[%d]: give exactly one of path and data" n)))))
+     images)))
+
+(defun cmacs-ai-tools--check-images (images provider model)
+  "Signal unless IMAGES may go to PROVIDER with MODEL; return IMAGES.
+Each is read and checked by the C (size, type) and the provider is
+asked whether it can take pictures: refused, nothing is sent."
+  (when images
+    (require 'cmacs-ai-vision)
+    (when-let* ((why (cmacs-ai-vision-refusal provider model)))
+      (error "%s" why))
+    (cmacs-ai-image-parts images))
+  images)
+
+
 ;;;; One prompt, asynchronously
 
 (defun cmacs-ai-tools--release (client session executor)
@@ -122,8 +189,10 @@ new symbol on the way to finding out that it names nothing."
   (when session (ignore-errors (cmacs-ai-session-free session)))
   (when client (ignore-errors (cmacs-ai-client-free client))))
 
-(defun cmacs-ai-tools--one-shot (done prompt provider system model tools)
+(defun cmacs-ai-tools--one-shot (done prompt provider system model tools
+                                       &optional images)
   "Send PROMPT to a model and call DONE with its answer; return at once.
+IMAGES, image plists already checked, go with PROMPT.
 
 PROVIDER is a provider symbol or nil for `cmacs-ai-default-provider'.
 SYSTEM and MODEL are strings or nil.  With TOOLS non-nil the model is
@@ -162,7 +231,10 @@ unwinding."
                 (setq executor (cmacs-ai-tools-new))
                 ;; The loop sends the session as it stands, so the
                 ;; prompt has to be in it first.
-                (cmacs-ai-session-append-message session 'user prompt)
+                (if images
+                    (cmacs-ai-session-append-message session 'user prompt
+                                                     images)
+                  (cmacs-ai-session-append-message session 'user prompt))
                 (cmacs-ai-tools-run-async
                  session executor
                  (lambda (payload)
@@ -171,7 +243,8 @@ unwinding."
                                 (or (cadr payload) "")
                               (cmacs-ai-tools--failure
                                (or (cadr payload) "the tool loop failed")))))))
-            (cmacs-ai-chat-stream
+            (apply
+             #'cmacs-ai-chat-stream
              session prompt
              (lambda (payload)
                (pcase (car-safe payload)
@@ -187,7 +260,10 @@ unwinding."
                  (:error
                   (funcall settle
                            (cmacs-ai-tools--failure
-                            (or (cadr payload) "the model failed")))))))))
+                            (or (cadr payload) "the model failed"))))))
+             ;; Only with images, so the call without them is the
+             ;; three-argument call it always was.
+             (and images (list nil images)))))
       (error
        ;; Nothing was started, or starting it failed: free now and let
        ;; the caller report the error.
@@ -200,43 +276,75 @@ unwinding."
 Optional 'provider' (claude / openai / gemini / grok / ollama / \
 claude-code / opencode / claude-tmux / grok-build / antigravity / \
 cursor) overrides the default; optional 'system' is a system prompt; \
-optional 'model' overrides the provider's default model."
+optional 'model' overrides the provider's default model.  Optional \
+'images' sends pictures with the prompt; a provider that cannot take \
+them is refused, never sent text alone."
     ((prompt string "User prompt")
      (provider string "Provider name" :optional t)
      (system string "System prompt" :optional t)
-     (model string "Model name" :optional t))
+     (model string "Model name" :optional t)
+     (images array "Images sent with the prompt: each {path} (a file \
+in the workspace, as project_read_file reads it) or {data, mime} \
+(base64 PNG/JPEG/GIF/WebP bytes)"
+             :optional t
+             :items (object
+                     :properties
+                     ((path string "Image file, relative to the workspace root"
+                            :optional t)
+                      (data string "Base64 image bytes" :optional t)
+                      (mime string "MIME type of data, e.g. image/png"
+                            :optional t)))))
   :group 'ai :surfaces '(mcp dbus cli) :async t :timeout 600
   :destructive t
   :example "emacsctl tool ai prompt --prompt 'Name three GLib main-loop sources'"
-  (cmacs-ai-tools--one-shot
-   done
-   (cmacs-ai-tools--required prompt "ai_prompt" "prompt")
-   (cmacs-ai-tools--provider provider)
-   (cmacs-ai-tools--text system)
-   (cmacs-ai-tools--text model)
-   nil))
+  (let ((provider (cmacs-ai-tools--provider provider))
+        (model (cmacs-ai-tools--text model)))
+    (cmacs-ai-tools--one-shot
+     done
+     (cmacs-ai-tools--required prompt "ai_prompt" "prompt")
+     provider
+     (cmacs-ai-tools--text system)
+     model
+     nil
+     (cmacs-ai-tools--check-images (cmacs-ai-tools--images images)
+                                   provider model))))
 
 (cmacs-brigade-deftool ai-call
   "Send PROMPT to an AI provider and return the final answer.  Like \
 ai_prompt, but with 'tools':true the model is given the built-in agent \
 tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a \
 multi-turn tool loop on a worker thread.  Optional 'provider' / \
-'system' / 'model' behave as for ai_prompt."
+'system' / 'model' / 'images' behave as for ai_prompt."
     ((prompt string "User prompt")
      (provider string "Provider name" :optional t)
      (system string "System prompt" :optional t)
      (model string "Model name" :optional t)
-     (tools boolean "Give the model the built-in agent tools" :optional t))
+     (tools boolean "Give the model the built-in agent tools" :optional t)
+     (images array "Images sent with the prompt: each {path} (a file \
+in the workspace, as project_read_file reads it) or {data, mime} \
+(base64 PNG/JPEG/GIF/WebP bytes)"
+             :optional t
+             :items (object
+                     :properties
+                     ((path string "Image file, relative to the workspace root"
+                            :optional t)
+                      (data string "Base64 image bytes" :optional t)
+                      (mime string "MIME type of data, e.g. image/png"
+                            :optional t)))))
   :group 'ai :surfaces '(mcp dbus cli) :async t :timeout 1800
   :destructive t
   :example "emacsctl tool ai call --prompt 'What is in ./README.org?' --tools"
-  (cmacs-ai-tools--one-shot
-   done
-   (cmacs-ai-tools--required prompt "ai_call" "prompt")
-   (cmacs-ai-tools--provider provider)
-   (cmacs-ai-tools--text system)
-   (cmacs-ai-tools--text model)
-   tools))
+  (let ((provider (cmacs-ai-tools--provider provider))
+        (model (cmacs-ai-tools--text model)))
+    (cmacs-ai-tools--one-shot
+     done
+     (cmacs-ai-tools--required prompt "ai_call" "prompt")
+     provider
+     (cmacs-ai-tools--text system)
+     model
+     tools
+     (cmacs-ai-tools--check-images (cmacs-ai-tools--images images)
+                                   provider model))))
 
 
 ;;;; Images

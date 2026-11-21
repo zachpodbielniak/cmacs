@@ -570,6 +570,14 @@ question again on a new session.  `C-c C-c' is what continues."
       (funcall cmacs-ai-output--retry)
     (user-error "cmacs-ai: nothing to re-run here")))
 
+(defvar cmacs-ai-output-followup-images nil
+  "Images for the next follow-up sent from a result window, or nil.
+Bound around `cmacs-ai-output-send-followup' by a caller that composes
+the follow-up itself and has pictures to go with it -- \"and that one?\"
+in cmacs-deixis-ask.el, pointing at another window.  A list of image
+plists (see `cmacs-ai-image-parts'); the caller has already asked
+whether the provider takes images.")
+
 (defun cmacs-ai-output-send-followup ()
   "Send the follow-up you typed, continuing the same conversation."
   (interactive)
@@ -585,7 +593,8 @@ question again on a new session.  `C-c C-c' is what continues."
             (append cmacs-ai-output--turns (list (cons 'user text))))
       (setq cmacs-ai-output--anchor (cmacs-ai-output--open-answer text))
       (setq cmacs-ai-output--done nil)
-      (cmacs-ai-chat-stream
+      (apply
+       #'cmacs-ai-chat-stream
        (cdr pair) text
        (lambda (payload)
          (pcase (car-safe payload)
@@ -601,7 +610,10 @@ question again on a new session.  `C-c C-c' is what continues."
             (cmacs-ai-output--settle-followup buf nil))
            (:error
             (cmacs-ai-output--settle-followup
-             buf (or (cadr payload) "stream error")))))))))
+             buf (or (cadr payload) "stream error")))))
+       ;; Only when there are images: an older primitive takes four.
+       (and cmacs-ai-output-followup-images
+            (list nil cmacs-ai-output-followup-images))))))
 
 (defun cmacs-ai-output--settle-followup (buf error-message)
   "Close a follow-up turn in BUF, noting ERROR-MESSAGE when it failed."

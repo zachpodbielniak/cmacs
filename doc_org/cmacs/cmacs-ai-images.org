@@ -1,0 +1,153 @@
+#+title: cmacs-ai images: pictures in
+#+description: Image input for cmacs-ai -- images on every path that builds a user message, deciding whether a model can see them, in-memory screen captures behind the redaction rules, image links in a chat, and the images parameter of ai_prompt and ai_call
+#+authors: Zach Podbielniak
+#+categories: cmacs, ai, images, privacy
+#+created: [2026-11-21 Sat]
+#+updated: [2026-11-21 Sat]
+#+version: 0.1.0
+#+options: toc:2 num:nil
+
+* Overview
+
+cmacs-ai used to be text in, text out: =cmacs-ai-chat-stream=, =cmacs-ai-session-append-message= and =cmacs-ai-call= took a string, so no model could look at a screenshot and "explain that" had to fall back to OCR -- and report a picture with no readable text as unanswerable.  ai-glib already had image content (=AiImageContent=) and its providers already serialise it.  This chapter is the cmacs half.
+
+| Piece                | Where                                       | What                                                                                     |
+|----------------------+---------------------------------------------+------------------------------------------------------------------------------------------|
+| image specs          | =cmacs/ai/cmacs-ai-vision.c=                | a plist becomes an =AiImageContent=, checked; every message-building DEFUN takes a list   |
+| can it see?          | =cmacs-ai-vision.c= + =cmacs-ai-vision.el=  | the request-builder probe, the CLI table, the ollama model guess, your overrides          |
+| capture              | =lisp/cmacs/cmacs-ai-vision.el=             | region / window / frame / clipboard as PNG bytes in memory, behind the redaction rules    |
+| chat                 | =cmacs-ai-chat.el=, =cmacs-ai-vision.el=    | image links in the compose area are sent; =C-c C-i= attaches                              |
+| agents               | =lisp/cmacs/cmacs-ai-tools.el=              | =images= on =ai_prompt= and =ai_call=, paths held to the workspace                        |
+| "explain that"       | =lisp/cmacs/cmacs-deixis-ask.el=            | a crop of the pointed window goes with its OCR text                                       |
+
+* An image
+
+An image is a plist, one of
+
+#+begin_src emacs-lisp
+(:file "~/shots/build.png")
+(:data PNG-BYTES :mime "image/png")   ; PNG-BYTES a unibyte string
+#+end_src
+
+and anything that takes images takes a list of them (one plist alone is accepted as a list of one):
+
+| Function                                                  | Images argument      |
+|-----------------------------------------------------------+----------------------|
+| =(cmacs-ai-call PROMPT ... :images LIST)=                 | keyword              |
+| =(cmacs-ai-chat-stream SESSION PROMPT CALLBACK EXECUTOR IMAGES)= | fifth         |
+| =(cmacs-ai-session-append-message SESSION 'user TEXT IMAGES)=    | fourth, user only |
+| =(cmacs-ai--call PROMPT PROVIDER SYSTEM MODEL EXECUTOR MAX-TOKENS IMAGES)= | seventh |
+| =(cmacs-ai-harness-send-input HANDLE LINE IMAGES)=        | third                |
+| =(cmacs-ai-textops-stream TITLE SUBTITLE SYSTEM PROMPT RETRY IMAGES)= | sixth   |
+
+The C reads and checks each one at the DEFUN boundary, on the main thread, before anything is added to a conversation:
+
+- *The bytes decide the type.*  PNG, JPEG, GIF and WebP are recognised by their magic numbers; anything else is refused ("x is not a PNG, JPEG, GIF or WebP image").  The type put on the image is always the one sniffed -- exactly =image/png=, =image/jpeg=, =image/gif= or =image/webp=, the four Claude accepts and the only spellings ai-glib 0.13.1 lets through to it.  A declared =:mime= is only compared: parameters (="image/png; q=1"=) are dropped and =image/jpg= is read as =image/jpeg= first, and a declaration that disagrees with the bytes is refused.  An empty image cannot pass (there are no magic bytes), so no request ever carries =data: ""=.  A BMP or SVG is refused, not converted.
+- *A file is bounded before it is read.*  It is opened =O_NONBLOCK= (a FIFO named as an image must not wedge the main thread -- under =emacs --gowl= the compositor's), must be a regular file, and is refused from its size when over =cmacs-ai-image-max-bytes= (10 MB).  A file that grows past the limit while being read is refused too.  The read itself is on the calling thread: bounded, and cheaper than a worker for a few megabytes.  A remote (Tramp) name is not read.
+- *A list is bounded too*: =cmacs-ai-image-max-count= (16) per message.
+- =:data= must be unibyte: a multibyte string would be read as its internal UTF-8, which is not the picture.
+
+A refusal signals =cmacs-ai-error= and leaves the session as it was.  =(cmacs-ai-image-parts IMAGES)= runs the same checks and describes the blocks without sending anything -- =((:mime "image/png" :bytes 70))= -- and =(cmacs-ai-session-message-parts SESSION)= shows the blocks of a message already in a session, which is how the tests see that bytes really reached an =AiImageContent=.
+
+* Can this model see it?
+
+ai-glib has no "accepts image input" capability.  Its =AiImageCapabilities= are about /generating/ images; a function such as =ai_provider_accepts_images (provider, model)= is the API this wants, and it has been proposed to ai-glib, not built.  So cmacs decides, in layers, first answer wins:
+
+1. =cmacs-ai-vision-model-overrides=: =(PROVIDER REGEXP . BOOLEAN)= entries matched against the model name (PROVIDER nil for any).
+2. =cmacs-ai-vision-providers=: =(PROVIDER . BOOLEAN)=.
+3. *ollama by model.*  ollama carries an image for any model, and a text-only model then answers as though there were none (or the server errors).  The model name has to match =cmacs-ai-vision-ollama-models= -- =llava=, =vision=, =bakllava=, =moondream=, =qwen…vl=, =gemma3=, =minicpm-v=, =llama4=, =mistral-small3=.  *This is a guess*, stated as one: ollama can say per model (=/api/show= lists a =vision= capability) but asking is a request per check.  An ollama call with no model named is refused -- which model the server would use is not known here.
+4. *An HTTP provider: ask its request builder.*  Every ai-glib HTTP provider is an =AiClient= with a public =build_request= vfunc.  =(cmacs-ai-provider-image-input PROVIDER)= builds a request holding a small marked image and looks for the image's base64 in the JSON: what the linked library really does, cached per client class.  Claude, OpenAI, OpenAI-compatible endpoints, Gemini, Grok and ollama all keep it in ai-glib 0.13.  A client that could not build a request answers =unknown= and =cmacs-ai-vision-http-fallback= decides (claude, openai, gemini, ollama, openai-compatible: yes).
+5. *A CLI provider: the table.*  A CLI builds no body to inspect.  =cmacs-ai-vision-cli-providers=: =claude-code= (stream-json image content), =codex-cli= and =antigravity= (image arguments), =acp= (ACP image blocks; whether the agent looks is its business) yes; =opencode=, =claude-tmux=, =cursor=, =grok-build= no -- they take a text prompt, in which ai-glib would write "[Image: …; binary content is not representable]": the model would be told an image existed and never see it.
+6. Anything else: no.
+
+A name from =cmacs-ai-acp-agents= is =acp=; one from =cmacs-ai-openai-compatible-endpoints= is =openai-compatible=.  On a binary built before image input, every image is refused ("This cmacs was built without image input").
+
+** Never dropped silently
+
+=cmacs-ai-vision-check= refuses before anything is sent, with one sentence that names the provider and model, the providers here that can (an HTTP provider ai-glib has credentials for, a CLI whose program is on =exec-path=; =cmacs-ai-vision-cli-programs=), and the option that says otherwise:
+
+#+begin_example
+opencode/big-model cannot take images, so nothing was sent.  Providers here that can: claude, openai, claude-code.  If this one can, say so in `cmacs-ai-vision-providers'.
+#+end_example
+
+=cmacs-ai-call=, the chat, the tools and "explain that" all ask it.  The low-level primitives do not: a caller of =cmacs-ai-chat-stream= with images asks first.
+
+* Capture, in memory, behind the rules
+
+| Function                          | Captures                                   | Refused while                                                                  |
+|-----------------------------------+--------------------------------------------+--------------------------------------------------------------------------------|
+| =(cmacs-ai-capture-region X Y W H)= | a screen region, layout pixels            | an excluded window is focused or visible in the region; or the region covers this Emacs's frame while a frame shows an excluded buffer |
+| =(cmacs-ai-capture-client CLIENT)= | one window's own pixels                    | the rules exclude that window                                                   |
+| =(cmacs-ai-capture-frame)=        | this Emacs frame (=x-export-frames=)        | a visible frame shows an excluded buffer                                        |
+| =(cmacs-ai-capture-clipboard)=    | the clipboard image                         | never: you put it there                                                         |
+
+Each returns =(:data PNG :mime "image/png")=.  Every screen capture is decided as a model would ask (=cmacs-redact--as-model=), because it is going to one; the region case is the gowl tools' region guard -- what =gowl_screen_text= asks -- plus a check of the buffer rules where the region covers an Emacs frame (a frame is one window to the compositor, so the window rules cannot see the buffers in it).  Anything that goes wrong deciding is a refusal, and a refusal is =cmacs-ai-capture-refused= with the one fixed sentence the redaction layer uses for every refused image, so it says nothing about the rule set.  A picture is never redacted: an image cannot be rewritten the way a title can, so it is all or nothing.
+
+The pixels gowl returns are encoded with =(cmacs-ai-png-encode W H DATA MAX-SIDE)=, Cairo writing to a memory stream: *nothing touches the disk*.  Captures are scaled down to =cmacs-ai-image-max-side= (1568 pixels on the longer side, the size several vision models resize to anyway).  =cmacs-ai-capture-save-directory= (nil) is the only way a capture is also written, mode 0600.
+
+* In a chat
+
+Image links in the compose area are sent as images with the message, in the order they appear; the link text stays in the message, so the model and the saved transcript can tell which picture is which:
+
+#+begin_example
+why does [[file:~/shots/build.png]] differ from [[./expected.png][this]]?
+#+end_example
+
+=[[file:…]]= and =[[./…]]= links to a =.png=, =.jpg=, =.jpeg=, =.gif= or =.webp=, and =[[attachment:…]]= image links, are sent.  A link to anything else is text.
+
+=C-c C-i= (=cmacs-ai-chat-attach-image=) adds one: a file, a region of the screen (default: =cmacs-ai-capture-box=, 900x420, around the pointer), a window, this Emacs frame, or the clipboard image.  A file becomes a =[[file:…]]= link.  A capture becomes =[[cmacs-image:N][screen region …]]=, a link to bytes the chat buffer holds in memory -- the screenshot is never a file, and it is gone with the buffer.  =C-c C-i= shadows =org-ctrl-c-tab= in chat buffers, for the reason =C-c C-a= shadows =org-attach=.
+
+When the chat's model cannot take images, =C-c C-i= refuses before capturing anything, and =C-c C-c= refuses with the compose area untouched.
+
+* For agents: =images= on =ai_prompt= and =ai_call=
+
+Both tools take =images=, an array of objects =\{"path": P\}= or =\{"data": BASE64, "mime": TYPE\}=:
+
+#+begin_src json
+{"prompt": "What does this dialog say?",
+ "provider": "claude",
+ "images": [{"path": "shots/dialog.png"}]}
+#+end_src
+
+An agent reading arbitrary image files off this disk and sending them to a remote model is exfiltration by another name, so a =path= is held to exactly what =project_read_file= reads: resolved against the workspace root (=cmacs-mcp-workspace-root=, else the project, else =default-directory=), refused when its true name escapes the root, refused -- with the same answer as an unreadable file -- when the redaction rules exclude it, and it must be a regular file.  =data= is the agent's own bytes; it is bounded before decoding and passes the same type and size checks.  A provider that cannot take images is a failed call, never a text-only one.
+
+| Surface                             | Gets =images=?                                                                                              |
+|-------------------------------------+-------------------------------------------------------------------------------------------------------------|
+| MCP =ai_prompt= / =ai_call=         | yes                                                                                                         |
+| =emacsctl tool ai call=             | yes, as far as the generic tool path passes an array argument through (not tried)                           |
+| D-Bus =org.cmacs.Editor1.Ai.Call= =(ssssb)= | no: it forwards to =ai_call=, but its signature is fixed and names no images                        |
+| =emacsctl ai call=                  | not yet: it calls the D-Bus method; an =--image FILE= flag that reads the file locally and sends =data= is proposed |
+
+The =ai_*= tools are not offered to in-process agents (a model handed =ai_prompt= can call itself), as before.
+
+* "Explain that"
+
+=cmacs-deixis-ask.el= sends a crop of the pointed window with its OCR text when the model can see; see [[file:cmacs-deixis-ask.org][cmacs-deixis-ask]], /(c) The picture/.
+
+* Options
+
+| Variable                            | Default        | What                                                                 |
+|-------------------------------------+----------------+----------------------------------------------------------------------|
+| =cmacs-ai-image-max-bytes=          | 10 MB          | largest image read or sent                                           |
+| =cmacs-ai-image-max-count=          | 16             | most images in one message                                           |
+| =cmacs-ai-image-max-side=           | 1568           | captures scaled to this longer side; nil for full size               |
+| =cmacs-ai-vision-providers=         | nil            | =(PROVIDER . BOOLEAN)= overrides                                     |
+| =cmacs-ai-vision-model-overrides=   | nil            | =(PROVIDER REGEXP . BOOLEAN)= overrides                              |
+| =cmacs-ai-vision-ollama-models=     | vision families | ollama models taken to see (a guess)                                |
+| =cmacs-ai-vision-cli-providers=     | table          | which CLI providers are handed images                                |
+| =cmacs-ai-vision-http-fallback=     | table          | HTTP answers when the probe cannot tell                              |
+| =cmacs-ai-vision-cli-programs=      | table          | a CLI provider's program, for suggestions                            |
+| =cmacs-ai-capture-save-directory=   | nil            | where captures are also saved; nil keeps them in memory              |
+| =cmacs-ai-capture-box=              | =(900 . 420)=  | the region offered around the pointer                                |
+| =cmacs-deixis-ask-images=           | t              | "explain that" also sends a picture                                  |
+
+* What is not done
+
+- The harness's Lisp (=cmacs-ai-harness.el=) does not yet attach images from its prompt; the primitive (=cmacs-ai-harness-send-input=) takes them.
+- A follow-up in a result window and promote-to-chat carry the conversation's images in the session, but a /retried/ or promoted request rebuilt from its text has none.
+- No conversion: a BMP or SVG is refused, not converted to PNG.
+- A frame capture (=x-export-frames=) is not scaled down.
+
+* Tests
+
+=test/cmacs/cmacs-ai-images-tests.el=: the decision table, the refusal sentence, =cmacs-ai-call= with and without =:images=, region and frame capture refused under the rules (the encoder never reached), saving only when asked, compose-area links, a chat refusal leaving the compose area alone, tool paths held to the workspace, =ai_prompt= streaming its images, and "explain that" (crop plus OCR, a picture without text, a refused capture, no picture for a text-only model, two crops for a comparison).  With this round's C in the binary it also reads a real PNG through =cmacs-ai-image-parts=, puts it on a real session and reads the =AiImageContent= back, encodes a capture, and asks the probe about =openai=, =claude= and =claude-code=.  =test/cmacs/cmacs-rig-image-tests.el= runs against a private =cmacs --gowl=: a capture over an excluded window is refused over the real redaction rules, and "what is that" over a real window sends a PNG crop to a model function in the child.

@@ -154,6 +154,11 @@
 (declare-function compilation--loc->line "compile" (cl-x) t)
 (declare-function compilation--loc->file-struct "compile" (cl-x) t)
 (declare-function compilation--file-struct->file-spec "compile" (cl-x) t)
+(declare-function cmacs-ai-vision-supported-p "cmacs-ai-vision"
+                  (provider &optional model))
+(declare-function cmacs-ai-capture-region "cmacs-ai-vision"
+                  (x y width height))
+(declare-function cmacs-ai-output-send-followup "cmacs-ai-output" ())
 
 ;; Special variables of other files that are let-bound or set here.
 (defvar cmacs-voice-loop-mode)
@@ -288,6 +293,20 @@ came from.  Non-nil adds the app id and title, as
 always sent (through `cmacs-redact-url' and `cmacs-redact-text'): they
 are what the page is."
   :type 'boolean)
+
+(defcustom cmacs-deixis-ask-images t
+  "Whether another program's window is also sent as a picture.
+When non-nil and the model takes images (`cmacs-ai-vision-supported-p'
+for `cmacs-deixis-ask-provider' / `-model', else the text operations'),
+the OCR box around the pointed position -- `cmacs-deixis-ask-ocr-box',
+inside the window -- is captured as a PNG, in memory, and sent with
+whatever text OCR read: OCR helps with small text, the picture with
+everything else (a chart, an icon, a layout, a photo).  A region in
+which a window the privacy rules exclude is visible is refused, as OCR
+of it is.  nil, or a model that cannot take images: OCR text only."
+  :type 'boolean)
+
+(defvar cmacs-ai-output-followup-images)
 
 (defcustom cmacs-deixis-ask-extract-timeout 45
   "Seconds one pointed thing may take to be read before it is given up.
@@ -533,7 +552,9 @@ AROUND, a character index, is kept in view; without it the head is."
         (cons (substring text start (+ start max)) t)))))
 
 (defun cmacs-deixis-ask--finalise (result)
-  "Make extractor RESULT fit to send: redact foreign text, trim, clip."
+  "Make extractor RESULT fit to send: redact foreign text, trim, clip.
+A result carrying an :image may have no text: the picture is the
+content then."
   (if (or (null result) (plist-get result :failed) (plist-get result :refused))
       result
     (let* ((foreign (plist-get result :foreign))
@@ -542,7 +563,7 @@ AROUND, a character index, is kept in view; without it the head is."
       (when foreign
         (setq text (cmacs-deixis-ask--redact text)
               extra (and extra (cmacs-deixis-ask--redact extra))))
-      (if (string-empty-p text)
+      (if (and (string-empty-p text) (not (plist-get result :image)))
           (list :failed "There is no text there to ask about.")
         (let ((clip (cmacs-deixis-ask--clip text)))
           (append (list :text (car clip)
@@ -1056,43 +1077,112 @@ lie inside the window; a window smaller than the box is read whole."
                  (y (max gy (min (- (+ gy gh) h) (- (round py) (/ h 2))))))
             (list x y w h)))))))
 
+(defun cmacs-deixis-ask--provider-model ()
+  "(PROVIDER . MODEL) a question is asked of, as `--ask' will choose."
+  (cons (or cmacs-deixis-ask-provider
+            (bound-and-true-p cmacs-ai-textops-provider))
+        (or cmacs-deixis-ask-model
+            (bound-and-true-p cmacs-ai-textops-model))))
+
+(defun cmacs-deixis-ask--images-p ()
+  "Non-nil when a picture of another window should go with the question.
+`cmacs-deixis-ask-images' is on and the model takes images.  A failure
+deciding is a no: the question then goes as text, as it always did."
+  (and cmacs-deixis-ask-images
+       (require 'cmacs-ai-vision nil t)
+       (let ((pm (cmacs-deixis-ask--provider-model)))
+         (ignore-errors (cmacs-ai-vision-supported-p (car pm) (cdr pm))))))
+
+(defun cmacs-deixis-ask--capture (region)
+  "A PNG image plist of REGION (X Y W H), or :refused, or nil.
+Taken as a model would take it: refused -- :refused, nothing captured --
+while a window the rules exclude is visible in the region.  nil when it
+could not be taken for any other reason (the question then goes with
+the OCR text alone)."
+  (condition-case nil
+      (cmacs-deixis-ask--as-model
+        (apply #'cmacs-ai-capture-region region))
+    (cmacs-ai-capture-refused :refused)
+    (error nil)))
+
 (defun cmacs-deixis-ask--extract-ocr (referent scope done)
   "The OCR extractor: tesseract over a region of REFERENT's window.
 The capture and the asynchronous tesseract run are the gowl tools'
 \(`cmacs-gowl-tools--screen-text', what the `gowl_screen_text' tool
 calls), entered as a model would enter it, so its guard refuses a region
-that shows a window the rules withhold."
+that shows a window the rules withhold.
+
+When the model takes images (`cmacs-deixis-ask--images-p') the same
+region is also captured as a picture, in memory, and sent with whatever
+OCR read -- OCR may then find nothing at all, and the picture is the
+answer's whole material.  The window's title and app id stay home
+either way (`cmacs-deixis-ask-send-window-identity')."
   (let ((region (cmacs-deixis-ask-ocr-region referent scope)))
     (if (null region)
         (funcall done (list :failed "That window has no place on screen."))
       (require 'cmacs-gowl-tools)
-      (cmacs-deixis-ask--as-model
-        (cmacs-gowl-tools--screen-text
-         (lambda (text)
-           (funcall
-            done
-            (cond
-             ((not (stringp text)) (list :failed "The screen could not be read."))
-             ((string-prefix-p "Error: " text)
-              (list :failed (substring text 7)))
-             ((string-empty-p (string-trim text))
-              ;; This is where a picture would be sent instead, if the
-              ;; model interface took one.
-              (list :failed "No text could be read there, and a picture \
-of it cannot be sent to the model."))
-             (t
-              (list :source 'ocr
-                    :foreign t
-                    :description
-                    (format "text read by OCR off %s of another program%s; \
-expect recognition errors and neighbouring text"
-                            (if (eq scope 'whole) "a window"
-                              "the part of a window around the pointed \
-position")
-                            (cmacs-deixis-ask--identity referent))
-                    :text text)))))
-         (nth 0 region) (nth 1 region) (nth 2 region) (nth 3 region)
-         cmacs-deixis-ask-ocr-language nil)))))
+      (let ((image (and (cmacs-deixis-ask--images-p)
+                        (cmacs-deixis-ask--capture region)))
+            (where (if (eq scope 'whole) "a window"
+                     "the part of a window around the pointed position")))
+        (if (eq image :refused)
+            (funcall done (list :refused cmacs-deixis-ask-refusal-text))
+          (cl-labels
+              ((answer (text)
+                 (funcall
+                  done
+                  (cond
+                   ;; OCR found nothing, or failed, but there is a
+                   ;; picture: that is enough to ask about.
+                   ((and image
+                         (or (not (stringp text))
+                             (string-prefix-p "Error: " text)
+                             (string-empty-p (string-trim text))))
+                    (list :source 'image
+                          :foreign t
+                          :image image
+                          :description
+                          (format "a picture of %s of another program%s; \
+no text could be read off it" where (cmacs-deixis-ask--identity referent))
+                          :text ""))
+                   ((not (stringp text))
+                    (list :failed "The screen could not be read."))
+                   ((string-prefix-p "Error: " text)
+                    (list :failed (substring text 7)))
+                   ((string-empty-p (string-trim text))
+                    (list :failed (if (cmacs-deixis-ask--images-p)
+                                      "No text could be read there, and \
+the picture of it could not be taken."
+                                    "No text could be read there, and \
+this model does not take pictures.")))
+                   (t
+                    (append
+                     (list :source (if image 'ocr+image 'ocr)
+                           :foreign t
+                           :description
+                           (format "text read by OCR off %s of another \
+program%s; expect recognition errors and neighbouring text%s"
+                                   where
+                                   (cmacs-deixis-ask--identity referent)
+                                   (if image
+                                       ".  A picture of the same region is \
+attached"
+                                     ""))
+                           :text text)
+                     (and image (list :image image))))))))
+            (condition-case err
+                (cmacs-deixis-ask--as-model
+                  (cmacs-gowl-tools--screen-text
+                   #'answer
+                   (nth 0 region) (nth 1 region) (nth 2 region)
+                   (nth 3 region)
+                   cmacs-deixis-ask-ocr-language nil))
+              (error
+               ;; No tesseract, say: with a picture in hand that is not
+               ;; the end of the question.
+               (if image
+                   (answer nil)
+                 (signal (car err) (cdr err)))))))))))
 
 (cmacs-deixis-ask-register-extractor
  'ocr
@@ -1335,18 +1425,30 @@ question a follow-up continues)."
                    (format " (\"%s\")" (plist-get props :previous))
                  "")))
      (when instruction (concat "\n" instruction "\n"))
-     (mapconcat
-      (lambda (cell)
-        (let ((n (car cell)) (c (cdr cell)))
-          (concat
-           (format "\n%s %s\n<<<\n%s\n>>>\n"
-                   (cmacs-deixis--marker-string n)
-                   (plist-get c :description)
-                   (plist-get c :text))
-           (when-let* ((extra (plist-get c :extra)))
-             (concat extra "\n")))))
-      (cl-loop for c in contexts for n from 1 collect (cons n c))
-      ""))))
+     (let ((picture 0))
+       (mapconcat
+        (lambda (cell)
+          (let ((n (car cell)) (c (cdr cell)))
+            (concat
+             (format "\n%s %s%s\n<<<\n%s\n>>>\n"
+                     (cmacs-deixis--marker-string n)
+                     (plist-get c :description)
+                     ;; Pictures go after the text, in context order;
+                     ;; say which one is this thing's.
+                     (if (plist-get c :image)
+                         (format " (attached image %d)" (cl-incf picture))
+                       "")
+                     (if (string-empty-p (or (plist-get c :text) ""))
+                         "(no text; see the attached image)"
+                       (plist-get c :text)))
+             (when-let* ((extra (plist-get c :extra)))
+               (concat extra "\n")))))
+        (cl-loop for c in contexts for n from 1 collect (cons n c))
+        "")))))
+
+(defun cmacs-deixis-ask-images (contexts)
+  "The image plists CONTEXTS carry, in context order."
+  (delq nil (mapcar (lambda (c) (plist-get c :image)) contexts)))
 
 
 ;;;; Speaking the answer
@@ -1468,12 +1570,13 @@ answer is no older than `cmacs-deixis-ask-followup-seconds'."
                     (bound-and-true-p cmacs-ai-output--request))))
          buf)))
 
-(defun cmacs-deixis-ask--send-followup (buf prompt)
+(defun cmacs-deixis-ask--send-followup (buf prompt &optional images)
   "Send PROMPT as a follow-up on BUF's session, as `C-c C-c' there would.
 PROMPT goes through the window's own compose region, so the turn is
 rendered, sealed, recorded for promote-to-chat and streamed exactly as a
 typed follow-up is -- and what was sent, context included, is there to
-read.  A draft the user had in the compose region is put back."
+read.  A draft the user had in the compose region is put back.  IMAGES
+go with it (`cmacs-ai-output-followup-images')."
   (with-current-buffer buf
     (let* ((start (marker-position cmacs-ai-output--compose-marker))
            (draft (string-trim
@@ -1482,7 +1585,8 @@ read.  A draft the user had in the compose region is put back."
         (delete-region start (point-max))
         (goto-char (point-max))
         (insert prompt))
-      (cmacs-ai-output-send-followup)
+      (let ((cmacs-ai-output-followup-images images))
+        (cmacs-ai-output-send-followup))
       (unless (string-empty-p draft)
         (save-excursion
           (goto-char (point-max))
@@ -1519,12 +1623,14 @@ Local to the window, never sent."
                         :previous previous)))
          (speak (and voice (cmacs-deixis-ask--loop-p)
                      (bound-and-true-p cmacs-voice-loop-speak)))
+         (images (cmacs-deixis-ask-images contexts))
          (buf nil))
     (condition-case err
         (progn
           (setq buf
                 (if followup
-                    (cmacs-deixis-ask--send-followup followup prompt)
+                    (cmacs-deixis-ask--send-followup followup prompt
+                                                     images)
                   (require 'cmacs-ai-textops)
                   (let ((cmacs-ai-textops-provider
                          (or cmacs-deixis-ask-provider
@@ -1549,7 +1655,8 @@ Local to the window, never sent."
                      (lambda ()
                        (cmacs-deixis-ask--ask
                         (append (list :voice nil :followup nil) job)
-                        contexts))))))
+                        contexts))
+                     images))))
           ;; A follow-up keeps the question it continues.
           (unless (and (plist-get job :followup) cmacs-deixis-ask--last)
             (setq cmacs-deixis-ask--last

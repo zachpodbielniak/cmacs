@@ -33,6 +33,12 @@
 (declare-function cmacs-ai-client-provider-name
                   "cmacs-ai-client.c" (handle))
 (declare-function cmacs-ai-tools-new "cmacs-ai-tools.c" ())
+(declare-function cmacs-ai-vision-compose-images "cmacs-ai-vision"
+                  (text &optional directory))
+(declare-function cmacs-ai-vision-check "cmacs-ai-vision"
+                  (provider model images))
+(autoload 'cmacs-ai-chat-attach-image "cmacs-ai-vision"
+  "Attach an image to this chat's next message." t)
 ;; Loaded lazily with `require ... noerror', so these may legitimately be
 ;; absent (a build without image support, or a stripped lisp/cmacs).
 (declare-function cmacs-ai-image-chat-register "cmacs-ai-image-chat"
@@ -157,6 +163,10 @@ not described again in full on every turn.")
     ;; "attach" means the buffers you are looking at, not a file
     ;; drawer on a heading you do not have.
     (define-key m (kbd "C-c C-a") #'cmacs-ai-view-attach)
+    ;; Shadows `org-ctrl-c-tab' (C-c TAB is the same key) for the same
+    ;; reason: in a chat, the next thing to attach after what you are
+    ;; looking at is a picture of it.
+    (define-key m (kbd "C-c C-i") #'cmacs-ai-chat-attach-image)
     m)
   "Keymap for `cmacs-ai-chat-mode'.")
 
@@ -1280,6 +1290,28 @@ directory you are working in.  Treat it as standing instructions.\n\n%s"
           (cmacs-ai-client-set-system-prompt client (string-join parts "\n\n")))
         (car boot)))))
 
+(defun cmacs-ai-chat--compose-images ()
+  "The images the compose area's links send, checked; nil for none.
+Read without touching the compose area, so a refusal -- the chat's model
+cannot take images, a file is too large or not an image -- leaves what
+you typed where it was.  See `cmacs-ai-vision-compose-images'."
+  (when cmacs-ai-chat--compose-marker
+    (let ((text (buffer-substring-no-properties cmacs-ai-chat--compose-marker
+                                                (point-max))))
+      ;; Cheap test first: most messages link nothing.
+      (when (string-search "[[" text)
+        (require 'cmacs-ai-vision)
+        (let ((images (cmacs-ai-vision-compose-images text)))
+          (when images
+            (let* ((client (car-safe cmacs-ai-chat-session-pair))
+                   (model (and client
+                               (ignore-errors
+                                 (cmacs-ai-client-effective-model client)))))
+              (condition-case err
+                  (cmacs-ai-vision-check cmacs-ai-chat-provider model images)
+                (error (user-error "%s" (error-message-string err))))))
+          images)))))
+
 (defun cmacs-ai-chat-send-compose ()
   "Send the contents of the compose region and stream the reply.
 
@@ -1293,9 +1325,15 @@ buffer always shows exactly what the user typed.
 When `cmacs-ai-chat-tool-executor' is non-nil, ai-glib's built-in
 tool set is advertised to the model and the chat layer auto-runs
 the tool-use loop: model emits tool_use -> we execute, render the
-result, and continue the stream until the model stops."
+result, and continue the stream until the model stops.
+
+Image links in the compose area -- [[file:x.png]], an image
+attachment, a capture from \[cmacs-ai-chat-attach-image] -- send the
+pictures with the message.  When the chat's model cannot take images
+nothing is sent and the compose area is left as it was."
   (interactive)
-  (let ((text (cmacs-ai-chat--read-compose)))
+  (let* ((images (cmacs-ai-chat--compose-images))
+         (text (cmacs-ai-chat--read-compose)))
     (unless text (user-error "Compose is empty"))
     (if (progn
           ;; The slash-command handlers live in lazily loaded files;
@@ -1334,11 +1372,19 @@ result, and continue the stream until the model stops."
                                text)
                      text))
              (sent (cmacs-ai-chat--apply-pre-prompt body)))
-        (cmacs-ai-chat-stream
-         session sent
-         (lambda (payload)
-           (cmacs-ai-chat--stream-callback buf payload))
-         executor)))))
+        (if images
+            ;; The links stay in the text, so the model -- and the saved
+            ;; transcript -- can tell which picture is which.
+            (cmacs-ai-chat-stream
+             session sent
+             (lambda (payload)
+               (cmacs-ai-chat--stream-callback buf payload))
+             executor images)
+          (cmacs-ai-chat-stream
+           session sent
+           (lambda (payload)
+             (cmacs-ai-chat--stream-callback buf payload))
+           executor))))))
 
 (defun cmacs-ai-chat-cancel-stream ()
   "Cancel any in-flight chat request on this buffer."

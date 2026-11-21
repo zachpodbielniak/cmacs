@@ -548,7 +548,7 @@ on_stream_finished (GObject *source, GAsyncResult *res, gpointer user)
 static Lisp_Object
 cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
                         Lisp_Object executor, bool append_user_msg,
-                        Lisp_Object prompt)
+                        Lisp_Object prompt, Lisp_Object images)
 {
   CHECK_FIXNAT (session);
   CmacsAiSession *sess = cmacs_ai_session_lookup (XFIXNUM (session));
@@ -561,7 +561,13 @@ cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
   if (append_user_msg)
     {
       CHECK_STRING (prompt);
-      AiMessage *m = ai_message_new_user (SSDATA (prompt));
+      /* The images are read and checked here, after every other
+       * argument of the turn so far: this can signal (an oversize file,
+       * bytes that are no image), and must do it before the turn is in
+       * the history.  Nothing between the parse and the free signals. */
+      GList *imgs = cmacs_ai_images_from_lisp (images);
+      AiMessage *m = cmacs_ai_user_message_new (SSDATA (prompt), imgs);
+      cmacs_ai_images_free (imgs);
       cmacs_ai_session_append_message_obj (sess, m);
       g_object_unref (m);
     }
@@ -629,7 +635,7 @@ cmacs_ai__start_stream (Lisp_Object session, Lisp_Object callback,
 }
 
 DEFUN ("cmacs-ai-chat-stream", Fcmacs_ai_chat_stream,
-       Scmacs_ai_chat_stream, 3, 4, 0,
+       Scmacs_ai_chat_stream, 3, 5, 0,
        doc: /* Stream a chat completion for SESSION.
 SESSION is a session handle.  PROMPT is the user-turn text (appended to
 history before sending).  CALLBACK is a function called repeatedly with
@@ -643,12 +649,21 @@ Optional EXECUTOR is a tool-executor handle (from `cmacs-ai-tools-new');
 when provided, the executor's tool list is advertised to the model so
 it can emit tool_use blocks.  The :end / :error payload always closes
 the stream; subsequent calls will not fire.  Returns t.  Use
-`cmacs-ai-chat-cancel' to abort.  */)
+`cmacs-ai-chat-cancel' to abort.
+
+Optional IMAGES are pictures sent with PROMPT in the same user turn: a
+list of plists (:file PATH) or (:data UNIBYTE-STRING :mime TYPE), or one
+such plist.  They are read and checked before anything is sent (see
+`cmacs-ai-image-parts'); a bad one signals `cmacs-ai-error' and nothing
+is added to the session.  This does not ask whether the provider can
+take images -- a client that cannot drops them -- so callers ask first
+with `cmacs-ai-vision-check'.  */)
   (Lisp_Object session, Lisp_Object prompt, Lisp_Object callback,
-   Lisp_Object executor)
+   Lisp_Object executor, Lisp_Object images)
 {
   return cmacs_ai__start_stream (session, callback, executor,
-                                  /* append_user_msg = */ true, prompt);
+                                  /* append_user_msg = */ true, prompt,
+                                  images);
 }
 
 DEFUN ("cmacs-ai-chat-continue-stream",
@@ -661,7 +676,7 @@ and EXECUTOR have the same semantics as `cmacs-ai-chat-stream'.  */)
   (Lisp_Object session, Lisp_Object callback, Lisp_Object executor)
 {
   return cmacs_ai__start_stream (session, callback, executor,
-                                  /* append_user_msg = */ false, Qnil);
+                                  /* append_user_msg = */ false, Qnil, Qnil);
 }
 
 DEFUN ("cmacs-ai-chat-cancel", Fcmacs_ai_chat_cancel,
@@ -777,7 +792,7 @@ history.  */)
 }
 
 DEFUN ("cmacs-ai--call", Fcmacs_ai_call,
-       Scmacs_ai_call, 1, 6, 0,
+       Scmacs_ai_call, 1, 7, 0,
        doc: /* Send PROMPT to an AI provider and return the final answer.
 This is the low-level primitive; user configs normally use the
 `cmacs-ai-call' Elisp wrapper (plist API + executor lifecycle) instead.
@@ -794,22 +809,36 @@ provider's default model; EXECUTOR is a tool-executor handle (nil = no
 tools, identical to `cmacs-ai-prompt-sync'); MAX-TOKENS caps each turn's
 response.  Signals `cmacs-ai-error' on failure.
 
+IMAGES are pictures sent with PROMPT: a list of plists (:file PATH) or
+\(:data UNIBYTE-STRING :mime TYPE), or one such plist (see
+`cmacs-ai-image-parts').  With IMAGES and no EXECUTOR the call is still
+one turn with no tools, made through an executor that has none.  Whether
+the provider can take images is not asked here; `cmacs-ai-call' asks
+first.
+
 Runs synchronously and blocks Emacs for the duration of the loop -- keep
 tool loops short, especially under `emacs --gowl' where the main thread
 is the Wayland compositor.  */)
   (Lisp_Object prompt, Lisp_Object provider, Lisp_Object system,
-   Lisp_Object model, Lisp_Object executor, Lisp_Object max_tokens)
+   Lisp_Object model, Lisp_Object executor, Lisp_Object max_tokens,
+   Lisp_Object images)
 {
   CHECK_STRING (prompt);
 
-  /* No executor: stateless single-shot, identical to prompt-sync. */
-  if (NILP (executor))
+  /* No executor and no images: stateless single-shot, identical to
+   * prompt-sync.  `ai_simple_prompt' takes text only, so a call with
+   * images goes through the executor path below with an empty one. */
+  if (NILP (executor) && NILP (images))
     return Fcmacs_ai_prompt_sync (prompt, provider, system, model);
 
-  CHECK_FIXNAT (executor);
-  AiToolExecutor *exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
-  if (exec == NULL)
-    error ("cmacs-ai: bad executor handle");
+  AiToolExecutor *exec = NULL;
+  if (!NILP (executor))
+    {
+      CHECK_FIXNAT (executor);
+      exec = cmacs_ai_tools_lookup (XFIXNUM (executor));
+      if (exec == NULL)
+        error ("cmacs-ai: bad executor handle");
+    }
 
   gint maxtok = 0;
   if (!NILP (max_tokens))
@@ -825,13 +854,28 @@ is the Wayland compositor.  */)
       sys = SSDATA (system);
     }
 
+  /* The images first, under an unwind that frees them: everything
+   * after this that can signal (an unknown provider, a refused CLI
+   * account) then releases them on the way out, and a normal return
+   * releases them through `unbind_to'. */
+  specpdl_ref count = SPECPDL_INDEX ();
+  GList *imgs = cmacs_ai_images_from_lisp (images);
+  record_unwind_protect_ptr (cmacs_ai_images_unwind, imgs);
+
   /* Resolve the provider BEFORE pushing the private context: this can
    * longjmp on an unknown symbol, which must not leave the thread-default
    * stack unbalanced. */
   AiSimple *ai = cmacs_ai__simple_for (provider, model);
   AiProvider *prov = ai_simple_get_provider (ai);
 
-  AiMessage *umsg = ai_message_new_user (SSDATA (prompt));
+  /* Images with no tools: one turn through an executor that has none.
+   * `ai_tool_executor_new_empty' rather than the default executor, which
+   * would hand the model ai-glib's built-in bash/read/write. */
+  AiToolExecutor *own_exec = NULL;
+  if (exec == NULL)
+    exec = own_exec = ai_tool_executor_new_empty ();
+
+  AiMessage *umsg = cmacs_ai_user_message_new (SSDATA (prompt), imgs);
   GList *messages = g_list_append (NULL, umsg);
 
   /* Drive the blocking, multi-turn tool loop on a PRIVATE thread-default
@@ -850,10 +894,12 @@ is the Wayland compositor.  */)
   g_main_context_unref (ctx);
   g_list_free (messages);
   g_object_unref (umsg);
+  g_clear_object (&own_exec);
 
   if (out == NULL)
     {
-      /* xsignal longjmps past manual cleanup -- release ai + err first. */
+      /* xsignal longjmps past manual cleanup -- release ai + err first.
+       * The images go with the unwind. */
       Lisp_Object msg = cmacs_ai__error_message (err, "cmacs-ai-call failed");
       g_clear_error (&err);
       g_object_unref (ai);
@@ -862,7 +908,7 @@ is the Wayland compositor.  */)
   g_object_unref (ai);
   Lisp_Object result = build_string (out);
   g_free (out);
-  return result;
+  return unbind_to (count, result);
 }
 
 /* ── Model listing (sync wrapper over the async provider API) ───── */

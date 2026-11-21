@@ -245,7 +245,8 @@ minibuffer.  Returns the result buffer."
      (lambda () (cmacs-ai-textops-run op target refinement)))))
 
 ;;;###autoload
-(defun cmacs-ai-textops-stream (title subtitle system prompt &optional retry)
+(defun cmacs-ai-textops-stream (title subtitle system prompt
+                                      &optional retry images)
   "Stream SYSTEM/PROMPT into a result window called TITLE.
 
 The plumbing every AI action that produces prose shares: make a session,
@@ -257,6 +258,10 @@ The session is NOT freed when the answer lands -- `cmacs-ai-output\='
 keeps it so `C-c C-c\' in the window continues the conversation, and
 frees it when the window is closed.  So every action routed through
 here gets follow-ups without knowing anything about them.
+
+IMAGES, a list of image plists (see `cmacs-ai-image-parts'), go with
+PROMPT in the first turn.  The caller asks first whether the provider
+can take them (`cmacs-ai-vision-check'); this only sends.
 
 Public because it is the way to add an action that answers in prose
 without writing this loop again."
@@ -281,7 +286,8 @@ without writing this loop again."
     (when retry
       (cmacs-ai-output-set-retry buf (lambda () (interactive) (funcall retry))))
     (cmacs-ai-output-show buf)
-    (cmacs-ai-chat-stream
+    (apply
+     #'cmacs-ai-chat-stream
      (cdr pair) prompt
      (lambda (payload)
        (pcase (car-safe payload)
@@ -301,7 +307,10 @@ without writing this loop again."
               (cmacs-ai-output-append buf final)))
           (cmacs-ai-output-finish buf nil))
          (:error
-          (cmacs-ai-output-finish buf (or (cadr payload) "stream error"))))))
+          (cmacs-ai-output-finish buf (or (cadr payload) "stream error")))))
+     ;; The image list only when there is one: an older binary's
+     ;; primitive takes four arguments.
+     (and images (list nil images)))
     buf))
 
 ;;;; Interactive commands ----------------------------------------------

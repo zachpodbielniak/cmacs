@@ -171,6 +171,29 @@ extern GCancellable *cmacs_ai_session_install_cancellable (CmacsAiSession *s);
 extern void        cmacs_ai_session_clear_cancellable  (CmacsAiSession *s);
 extern void        cmacs_ai_session_cancel_current     (CmacsAiSession *s);
 
+/* ── Image input (cmacs-ai-vision.c) ─────────────────────────────────
+ *
+ * IMAGES is what every image-taking DEFUN accepts: a list of plists
+ * (:file PATH) or (:data UNIBYTE-STRING :mime TYPE), or one plist.
+ * Returns a GList of AiImageContent the caller owns (free with
+ * cmacs_ai_images_free), or NULL for nil.  Signals `cmacs-ai-error' --
+ * having allocated nothing -- for an image that is not a PNG/JPEG/GIF/
+ * WebP by its bytes, a file that is not a regular file or is over
+ * `cmacs-ai-image-max-bytes', or more than `cmacs-ai-image-max-count'
+ * images.  Main thread only.
+ *
+ * A caller that may signal after this returns registers
+ * cmacs_ai_images_unwind with record_unwind_protect_ptr. */
+extern GList *cmacs_ai_images_from_lisp (Lisp_Object images);
+extern void   cmacs_ai_images_free      (GList *images);
+extern void   cmacs_ai_images_unwind    (void *images);
+
+/* A user message holding TEXT and then IMAGES (transfer none: each
+ * block is referenced).  With IMAGES NULL this is exactly
+ * ai_message_new_user (TEXT). */
+extern AiMessage *cmacs_ai_user_message_new (const char *text,
+                                             GList *images);
+
 /* Auto-load AiGlib-1.0 typelib so gi-require / cmacsgi find it
  * without manual GI_TYPELIB_PATH setup (cmacs-ai-typelib.c). */
 extern void   cmacs_ai_typelib_autoload      (void);

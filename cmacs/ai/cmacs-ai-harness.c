@@ -559,7 +559,7 @@ on_input_sent (GObject *source, GAsyncResult *result, gpointer user)
 }
 
 DEFUN ("cmacs-ai-harness-send-input", Fcmacs_ai_harness_send_input,
-       Scmacs_ai_harness_send_input, 2, 2, 0,
+       Scmacs_ai_harness_send_input, 2, 3, 0,
        doc: /* Send LINE through harness HANDLE's input pipeline.
 
 Returns t.  The work is asynchronous; watch the callback registered with
@@ -573,16 +573,27 @@ one-line question under the file it pulled in, and hiding it would make
 a surprising answer impossible to explain.
 
 A line resolving to a built-in is not sent at all; it comes back to the
-callback as (:builtin NAME ARGUMENTS).  */)
-  (Lisp_Object handle, Lisp_Object line)
+callback as (:builtin NAME ARGUMENTS).  A built-in sends no images
+either: keep them for the next line.
+
+Optional IMAGES are pictures sent with LINE: a list of plists
+\(:file PATH) or (:data UNIBYTE-STRING :mime TYPE), or one such plist
+\(see `cmacs-ai-image-parts').  They are read and checked now, before
+anything is sent; a bad one signals `cmacs-ai-error'.  */)
+  (Lisp_Object handle, Lisp_Object line, Lisp_Object images)
 {
   CmacsAiHarness *h = cmacs_ai_harness__lookup (handle);
+  GList *imgs;
 
   CHECK_STRING (line);
 
-  ai_conversation_send_input_async (h->conversation, SSDATA (line),
-                                    NULL, on_input_sent,
-                                    GUINT_TO_POINTER (h->handle));
+  /* Last, because it may signal; ai-glib references the blocks it
+   * keeps (transfer none), so the list is ours to free at once. */
+  imgs = cmacs_ai_images_from_lisp (images);
+  ai_conversation_send_input_images_async (h->conversation, SSDATA (line),
+                                           imgs, NULL, on_input_sent,
+                                           GUINT_TO_POINTER (h->handle));
+  cmacs_ai_images_free (imgs);
   return Qt;
 }
 
