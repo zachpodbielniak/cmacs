@@ -96,8 +96,13 @@ handle_dump_screen (McpServer *s, const gchar *n, JsonObject *a, gpointer u)
                                 "cannot create a scratch file for the dump");
       return result;
     }
+  /* CMACS redact: the frame is every visible buffer at once, so one
+     buffer the user's privacy rules exclude refuses the dump.  The
+     guard signals, which comes back as the tool's error.  */
   elisp = lt_with_frame (g_strdup_printf
-    ("(progn (redisplay t) (lrg-capture-screen \"%s\" f) \"ok\")", epath));
+    ("(progn (require 'cmacs-redact)"
+     " (cmacs-redact-capture-guard 'frame f)"
+     " (redisplay t) (lrg-capture-screen \"%s\" f) \"ok\")", epath));
   out = cmacs_dispatch_eval (elisp, &error);
   if (out == NULL || g_strcmp0 (out, "ok") != 0
       || !g_file_test (path, G_FILE_TEST_EXISTS))

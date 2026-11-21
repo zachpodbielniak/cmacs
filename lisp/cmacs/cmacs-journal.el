@@ -63,6 +63,7 @@
 (declare-function cmacs-lql-define-source "cmacs-lql"
                   (name columns function &optional description))
 (declare-function cmacs-lql-set-source-generation "cmacs-lql" (name function))
+(declare-function cmacs-lql-set-source-redaction "cmacs-lql" (name redaction))
 (declare-function project-root "project" (project))
 (declare-function project-name "project" (project))
 (declare-function org-read-date "org" (&rest args))
@@ -1169,7 +1170,12 @@ never be the one handed to an agent."
      "activity" cmacs-journal--lql-columns #'cmacs-journal--lql-rows
      "The activity journal: spans of focused windows, buffers and URLs.")
     (cmacs-lql-set-source-generation
-     "activity" #'cmacs-journal--lql-generation)))
+     "activity" #'cmacs-journal--lql-generation)
+    ;; CMACS redact: these rows went through the rule set when they were
+    ;; recorded, and an agent gets none of them unless allowed.  Putting
+    ;; them through it again would apply every `replace' twice.
+    (when (fboundp 'cmacs-lql-set-source-redaction)
+      (cmacs-lql-set-source-redaction "activity" 'none))))
 
 (with-eval-after-load 'cmacs-lql
   (cmacs-journal--define-lql-source))

@@ -1,0 +1,714 @@
+@c redact.texi --- the CMacs Redact chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c
+@c The Info counterpart of doc_org/cmacs/cmacs-redact.org.  Keep the two
+@c in step: they say the same thing.
+
+@node CMacs Redact
+@chapter CMacs Redact: One Redaction Table for Every Model-Facing Surface
+
+@cindex redaction
+@cindex privacy rules
+@cindex model-facing surfaces
+@cindex cmacs-redact
+
+The activity journal has a rule set that says what must not be kept:
+exclude this window, drop that title, rewrite account numbers, hash a
+project name (@pxref{Journal Filters}).  Those rules used to protect the
+journal and nothing else.  The same window title still reached a model
+through the window list, the screen inventory in a chat prompt, a
+screenshot, the clipboard.
+
+@code{cmacs-redact} makes that rule set the @emph{one} policy for
+everything a model is shown.  There is no second rule format and no
+second matcher: every function here builds an event in the journal's own
+shape and hands it to the journal's filter engine.
+
+Four things about it, stated plainly:
+
+@itemize @bullet
+@item
+@strong{It is on by default.}  @code{cmacs-redact-mode} is a global
+minor mode that starts enabled.  Nothing has to be configured for the
+shipped rules (password managers, private browser windows,
+authentication prompts, @file{.gpg} and @file{.authinfo} files,
+@file{~/.ssh}) to apply.
+@item
+@strong{It does not need the journal.}  The rules are the journal's,
+loaded on first use.  @code{cmacs-journal-mode} can stay off; nothing is
+recorded by redacting.
+@item
+@strong{It fails closed.}  When the rules cannot be loaded, model-facing
+surfaces show nothing until they can.
+@item
+@strong{It never says which rule matched.}  A refusal reads the same
+whatever caused it.
+@end itemize
+
+And one thing it is not: @emph{a sandbox}.  An agent you have allowed to
+evaluate Lisp, run a shell command or read arbitrary files can get at
+anything you can.  Redaction covers the surfaces listed in
+@ref{Redact Surfaces}; that table also says, line by line, what is not covered.
+
+@lisp
+;; The rules are the journal's.  Elisp:
+(setq cmacs-journal-filters
+      '((:match ((:app . "^org\\.keepassxc")) :exclude t)
+        (:match ((:title . "Invoice"))
+         :replace ((:title "[0-9]\\@{6,\\@}" "***")))
+        (:match ((:text . "sk-[A-Za-z0-9]\\@{20,\\@}"))
+         :replace ((:text "sk-[A-Za-z0-9]\\@{20,\\@}" "[api key]")))))
+(cmacs-journal-filters-reload)
+@end lisp
+
+@example
+# ~/.config/cmacs/journal-filters.yaml -- outside your tracked dotfiles
+filters:
+  - match: @{file: '/clients/'@}
+    exclude: true
+  - match: @{text: 'sk-[A-Za-z0-9]@{20,@}'@}
+    replace: [@{field: text, regexp: 'sk-[A-Za-z0-9]@{20,@}', with: '[api key]'@}]
+@end example
+
+It is pure Elisp (@file{lisp/cmacs/cmacs-redact.el}) and has no
+configure flag of its own: it ships wherever the journal's filter engine
+does.
+
+@menu
+* Redact Policy::       Who counts as a model.
+* Redact Rules::        What the rules mean on each kind of thing.
+* Redact Surfaces::     What is covered, and what is not.
+* Redact LQL::          LQL sources as a model sees them.
+* Redact Fail Closed::  When the rules cannot be loaded.
+* Redact Checking::     Seeing what a model would see.
+* Redact Options::      The options.
+* Redact API::          For code that shows something to a model.
+* Redact Internals::    How it is put together.
+@end menu
+
+@node Redact Policy
+@section Who Counts as a Model
+
+@cindex cmacs-redact-surfaces
+@cindex cmacs-redact-as-model
+
+The functions act only for a @dfn{model-facing} caller.  While
+@code{cmacs-redact-mode} is on, a caller is model-facing when any of
+these holds:
+
+@table @code
+@item tool
+A brigade tool call is running: inside @code{cmacs-brigade-call-tool} or
+@code{cmacs-brigade-call-tool-async}, and, for an asynchronous call,
+until it has delivered its result.
+@item rpc
+@code{inhibit-interaction} is bound, which cmacs's RPC dispatch does
+around everything arriving over MCP, D-Bus, @command{emacsctl} and
+bacon.
+@item prompt
+The code composing a model prompt said so with the macro
+@code{cmacs-redact-as-model}.  @code{cmacs-ai-view} does.
+@end table
+
+@code{cmacs-redact-surfaces} is the list of those three symbols;
+removing one stops redaction for that kind of caller and nothing else.
+
+Otherwise---a command you ran, your own Lisp---nothing is redacted.  The
+rules are about what leaves for a model, not about what you may see on
+your own machine.
+
+Three consequences worth knowing:
+
+@itemize @bullet
+@item
+@strong{Your own @command{emacsctl} from a terminal is redacted.}  Over
+the RPC channel you are indistinguishable from a program, and the
+program is assumed.  The journal makes the same assumption about its
+rows.
+@item
+@strong{While an asynchronous tool call is in flight, everything is
+treated as the tool's.}  An async tool finishes in a process sentinel,
+far outside the call that started it, and that is exactly where OCR text
+or a clipboard entry gets redacted.  A sentinel cannot be told from a
+timer, so for those seconds a redaction function called from anywhere
+acts.  It errs toward redacting.
+@item
+@strong{A chat turn is a model prompt even though you sent it.}  That is
+what @code{cmacs-redact-as-model} is for: the screen inventory is
+composed inside it.
+@end itemize
+
+Callers do not decide any of this.  They call the function;
+@code{cmacs-redact-active-p} decides.
+
+@node Redact Rules
+@section What the Rules Mean on Each Kind of Thing
+
+A rule is written against fields (@code{kind}, @code{app}, @code{title},
+@code{pid}, @code{tags}, @code{monitor}, @code{buffer}, @code{file},
+@code{mode}, @code{project}, @code{url}, @code{detail}, @code{text}).
+Each kind of thing is put to the rules as the event the journal would
+record for it, so a rule written for the journal matches here without
+change.
+
+@table @asis
+@item Window
+@code{kind} @samp{focus}, with @code{app}, @code{title}, @code{pid}.
+@item Buffer
+@code{kind} @samp{buffer}, @code{app} @samp{emacs}, with @code{buffer},
+@code{file}, @code{mode}, @code{project}.  A Dired buffer's directory
+and an indirect buffer's base file stand in as @code{file}.
+@item Web page
+A gsurf buffer is @code{kind} @samp{url}, @code{app} @samp{gsurf}, with
+@code{url}, @code{title}, @code{buffer}, @code{mode}, and @code{detail}
+@samp{container:NAME}.  A bare URL is @code{kind} @samp{url} with
+@code{url} alone.
+@item File
+The buffer visiting it, when there is one; else @code{kind}
+@samp{buffer} with @code{file} and the base name as @code{buffer}.
+Judged under its own name and, for a local file, with symbolic links
+resolved.
+@item Free text
+@code{kind} @samp{text}, with @code{text}.
+@end table
+
+What each action does:
+
+@table @code
+@item exclude
+The thing is not shown at all.  An excluded window is not listed and
+cannot be captured; an excluded buffer is not listed and cannot be read;
+an excluded URL is @code{nil}.
+@item drop
+The field is blanked.  A window with its title dropped is still listed,
+without a title.
+@item replace
+@itemx hash
+The field is rewritten, exactly as the journal would store it.  Without
+the journal's per-install key (it is created when the journal is first
+turned on) a hash is keyed with a random key that lives only as long as
+this Emacs.
+@end table
+
+One of this Emacs's own frames is a window to the compositor, titled
+with the buffer in it.  Such a window is also excluded when a buffer on
+that frame is, since the rules that hide the buffer are written on its
+file or mode, not on a window title.
+
+@subsection Free text
+
+@cindex free text, redacting
+@cindex cmacs-redact-text-field-rules
+
+A clipboard entry, text read off the screen, a buffer inlined into a
+prompt: none of it has fields.  @code{cmacs-redact-text} applies two
+things, in this order.
+
+@enumerate
+@item
+@strong{Rules on the @code{text} field.}  The text is the event
+@code{(:kind text :text STRING)}, so a rule matching on @code{text} does
+to it what any rule does to its field: @code{exclude} replaces the whole
+text with @samp{[withheld by your privacy rules]}, @code{drop} gives the
+empty string, @code{replace} and @code{hash} rewrite it.  Write these
+for things that are sensitive wherever they appear: API keys, private
+key blocks, card numbers.
+@item
+@strong{What the other rules call sensitive inside a field}
+(@code{cmacs-redact-text-field-rules}, on by default).  Every
+@code{replace} entry is applied to the text whatever field it names and
+whether or not its rule's match holds---free text has no fields to hold
+it against.  And for every field a rule both matches on and hashes, each
+occurrence of that match regexp in the text becomes its hash.  So a rule
+that rewrites account numbers in window titles rewrites them in a
+screenshot's text too, without being written twice.
+@end enumerate
+
+The limits of the second part, on purpose:
+
+@itemize @bullet
+@item
+A regexp that can match the empty string (@samp{.*}, @samp{[0-9]*})
+means ``the whole field'' where it was written and means nothing inside
+a larger text.  It is skipped.
+@item
+A regexp anchored to the start or end of its field only matches at the
+start or end of the whole text.
+@item
+An @code{exclude} or @code{drop} written for another field has nothing
+in free text to act on.  A window being excluded does not remove its
+title from OCR text of a screenshot; what removes it is that the
+screenshot is refused (below).
+@item
+A rule whose match is a predicate function is only ever applied through
+part 1.
+@end itemize
+
+Set @code{cmacs-redact-text-field-rules} to @code{nil} when a field rule
+is too broad to be searched for in running text; then only @code{text}
+rules touch free text.
+
+YAML and Elisp stay in step: @code{text} is a field name like any other
+in both (@samp{match: @{text: ...@}}, @samp{replace: [@{field: text,
+...@}]}, @samp{:match ((:text . ...))}).  The journal never builds an
+event with a @code{text} field, so such a rule changes nothing the
+journal keeps.
+
+@subsection Images
+
+@cindex screenshots, refusing
+
+An image cannot be rewritten the way a title can, so the answer is
+whole: if something the rules exclude would be in the picture, there is
+no picture.  The tool returns the error @samp{a window excluded by your
+privacy rules is visible; nothing was captured}, the same words whatever
+matched.
+
+``On screen'' for a desktop capture means the windows on a tag some
+monitor is showing, plus the buffers in this Emacs's visible frames.  A
+password manager parked on a hidden tag does not block screenshots.
+When the shown tags cannot be read, every window counts as on screen.  A
+capture of a single named window asks about that window only, and an
+excluded one is reported exactly like a pattern that matched nothing.
+
+@node Redact Surfaces
+@section Surfaces
+
+@cindex surfaces covered by redaction
+
+What is covered, and how.  ``Refused'' means the request fails without
+saying why; ``rewritten'' means @code{drop}, @code{replace} and
+@code{hash} are applied.
+
+@multitable @columnfractions .34 .14 .52
+@headitem Surface @tab Covered @tab How
+@item Screen inventory (@code{cmacs-ai-view}): chat system prompt and
+per-turn block, both libreclaw send paths, the @code{current_view} MCP
+tool
+@tab yes
+@tab An excluded buffer is not listed, not counted, not inlined, not
+remembered as ``the last one''.  Names, files and page titles are
+rewritten.  Inlined text goes through the free-text rules.
+@item @code{cmacs-ai-view-attach} (@kbd{C-c C-a})
+@tab yes
+@tab Same as the inventory, although it is your own command: what it
+inserts is sent to a model.  Paste by hand to send something verbatim.
+@item MCP resources @code{buffer://}, @code{file://}, @code{process://}
+@tab yes
+@tab An excluded buffer, file, or process buffer is refused (reported as
+not found).  Text of a buffer or file that is @emph{not} excluded is
+returned verbatim.
+@item MCP resources @code{messages://}, @code{variable://}
+@tab yes
+@tab @code{messages://} is refused when @file{*Messages*} is excluded;
+both pass their text through the free-text rules.
+@item MCP resource @code{screenshot://frame}, tool @code{gowl_screenshot}
+@tab yes
+@tab Refused while an excluded window or buffer is on screen; a
+single-window capture asks about that window.
+@item Tool @code{lrgterm_dump_screen}
+@tab yes
+@tab Refused while a visible buffer of the frame is excluded.
+@item Tool @code{video_snapshot}
+@tab yes
+@tab Refused when the video plays in an excluded buffer; when its buffer
+is unknown, while anything excluded is on screen.
+@item Tools @code{gsurf_snapshot}, @code{gsurf_print_pdf}
+@tab yes
+@tab Refused for a page excluded by URL, title or buffer (checked in
+@code{cmacs-gsurf-mcp-snapshot} / @code{-print-pdf}, which both the C
+and Lisp tools reach).
+@item gowl window lists, focused window, clipboard history,
+@code{gowl_screen_text}
+@tab by contract
+@tab These tools are Lisp and call @code{cmacs-redact-window} /
+@code{cmacs-redact-text}.  The calls live in their own files, not here.
+@item The journal's LQL source @code{activity}
+@tab yes
+@tab Filtered before it is stored; hidden from agents unless
+@code{cmacs-journal-expose-to-agents}.
+@item @code{eval}, @code{crispy_eval}, @code{bacon_eval}, shell tools,
+@code{execute_command}, @code{send_keys}, @code{cmacs_c_*},
+@code{gi_call}
+@tab @strong{no}
+@tab These can compute anything.  Not a sandbox; keep them out of an
+agent's allowlist if the rules matter.
+@item Buffer and file @emph{tools} (@code{list_buffers},
+@code{get_buffer_content}, @code{search_buffer},
+@code{project_read_file}, @dots{})
+@tab @strong{only where the tool calls the contract}
+@tab A tool that lists or reads buffers must call
+@code{cmacs-redact-buffer-p} itself.  The C fallback handlers of tools
+that have a Lisp replacement do not.
+@item gsurf text tools (@code{gsurf_extract_text}, @code{gsurf_get_uri},
+@code{gsurf_get_title}, @code{gsurf_eval_js}, @code{gsurf_list})
+@tab @strong{only where the tool calls the contract}
+@tab Same: @code{cmacs-redact-url} / @code{cmacs-redact-buffer-p} exist
+for them.
+@item LQL sources defined in Elisp (@code{buffers}, @code{windows},
+@code{processes}, @code{gowl_clients}, @code{kill_ring}, @code{recentf},
+@code{bookmarks}, @code{org_headings}, @code{notes},
+@code{note_headings}, @code{note_links}, @code{note_properties}, and any
+source a user or subsystem defines), through @code{lql_query},
+@code{ai_lql}, an agent's LQL watch, D-Bus and @command{emacsctl lql}
+@tab yes
+@tab Redacted at the snapshot, once for every surface that can run a
+query: rows of excluded buffers, files, notes, URLs and windows are
+dropped, names rewritten, free-text columns through the free-text rules.
+@xref{Redact LQL}.
+@item LQL engine sources that are not defined in Elisp (files, git,
+exec, journald, coredumps, k8s, SQL)
+@tab @strong{no}
+@tab The engine reads these itself, off the editor thread; nothing there
+asks the rules.  A query can read a file the rules hide.
+@item Brigade memory index and second-brain search over the notes repo
+@tab @strong{no}
+@tab Indexed text is not filtered by these rules.
+@item C-only RPC answers that never run Lisp (@code{keybinds://}, the
+D-Bus compositor client list behind @command{emacsctl get clients})
+@tab @strong{no}
+@tab Nothing there asks the rules.
+@item @code{cad_snapshot}, @code{vidstudio_render_frame}, imgedit
+renders
+@tab @strong{no}
+@tab Pictures of a document the agent is editing, not of the screen.
+@item Text of a buffer or file that is not excluded
+@tab @strong{no}
+@tab Returned as it is when read on request; only free-text surfaces are
+rewritten.  An agent editing a file needs the real text.
+@item Files an agent reads with its own tools (a CLI agent's shell, its
+own file reader)
+@tab @strong{no}
+@tab Outside cmacs.
+@item Screen sharing through the portal, recordings, anything not
+addressed to a model
+@tab @strong{no}
+@tab Out of scope.
+@end multitable
+
+@node Redact LQL
+@section LQL Sources
+
+@cindex LQL sources, redacting
+@findex cmacs-lql-set-source-redaction
+@findex cmacs-lql-redact-rows
+
+An agent that can run a query can read the editor-state sources, so they
+are redacted where every query passes: the snapshot.  A Lisp source's
+rows are turned into JSON on the editor thread just before a query is
+submitted, inside the dynamic extent of whoever submitted it.  When that
+is a model-facing caller the rows go through the rules first; your own
+queries (@kbd{M-x cmacs-lql-query}, the REPL, a results buffer) never
+do.
+
+A source says what its columns @emph{are}, and the rules do the rest.
+The declaration is the fifth argument of @code{cmacs-lql-define-source},
+or @code{cmacs-lql-set-source-redaction} afterwards:
+
+@lisp
+(cmacs-lql-define-source
+ "tickets" '(("file" string) ("dir" string) ("summary" string) ("state" string))
+ #'my-ticket-rows "My tickets."
+ '(("file" . file) ("dir" . derived) ("summary" . text) ("state" . plain)))
+@end lisp
+
+@multitable @columnfractions .16 .36 .48
+@headitem Role @tab The column is @tab For a model
+@item @code{buffer}
+@tab A buffer name
+@tab The row goes when the buffer is excluded; else the name as the
+rules rewrite it.
+@item @code{file}
+@tab A file name
+@tab The row goes when the file is excluded, judged by its name alone;
+else the name as rewritten.
+@item @code{url}
+@tab A URL
+@tab Likewise.
+@item @code{app}, @code{title}, @code{pid}
+@tab Together, one window
+@tab The row goes when the window is excluded; else app and title as
+rewritten.
+@item @code{text}
+@tab Free text (a string, or a list of strings)
+@tab Through the free-text rules.
+@item @code{derived}
+@tab Computed from this row's buffer, file, URL or window: a directory,
+a relative path, a base name
+@tab Kept when the rules left those alone; blanked when they rewrote
+one.
+@item @code{plain}
+@tab Not sensitive: a mode, a state, an id
+@tab As it is.
+@end multitable
+
+Instead of an alist the declaration may be a function of the rows
+(alists keyed by column name) returning the rows a model may see, for a
+source whose rule is not a matter of roles; it can call
+@code{cmacs-lql-redact-rows} for the part that is.  @code{windows} does:
+its @code{frame} column is the title of one of this Emacs's frames.  Or
+the symbol @code{none}, for rows that are already safe: the journal's
+@code{activity} was filtered when it was recorded.
+
+@strong{A source that declares nothing} is not left open.  In a
+model-facing query every string in every one of its rows---in any
+column, declared in the schema or not, and inside lists---goes through
+the free-text rules.  Nothing can be dropped that way, since nothing
+says which column names a file; declare the roles to get that.  In a
+declared source an undeclared string column is @code{text} as well.
+
+What keeps this safe and cheap:
+
+@itemize @bullet
+@item
+@strong{The two snapshots never meet.}  A source with a generation
+function has its snapshot cached.  The cache is keyed by source name
+@emph{and} by whether the snapshot was made for a model, so the user's
+rows and a model's rows are different entries, and a model's entry also
+carries the rule set's generation: new rules, new snapshot.
+@item
+@strong{It fails closed.}  When the rules are not usable, or a source's
+redaction signals, a model's query sees that source with no rows.  You
+still see yours.
+@item
+@strong{No disk.}  Files are judged by name: nothing is opened, no
+symbolic link is followed, no project is looked up (one the editor
+already knows is used).  Values are memoised across a snapshot, since a
+column repeats itself down a table.  Redacting @code{buffers} costs a
+few tenths of a millisecond per buffer.
+@item
+@strong{Nothing is counted.}  A dropped row leaves no placeholder and
+the query is not told how many there were.
+@end itemize
+
+The limits: a @code{file} role does not see through a symbolic link
+(reading the file is still refused, by @code{cmacs-redact-file-p});
+@code{gowl_clients} rows now carry @code{app_id}, @code{title},
+@code{pid}, @code{tags} and @code{floating} beside @code{client},
+because a window cannot be judged by an opaque object; and the engine's
+own sources are not Lisp and are not covered (see the table above).
+
+@node Redact Fail Closed
+@section Failing Closed
+
+@cindex fail closed, redaction
+
+The rule set is unusable when a listed YAML file exists but cannot be
+read or parsed, or any rule holds a key, action, field or regexp the
+engine does not understand (@pxref{Journal Filters}).  While it is:
+
+@multitable @columnfractions .55 .45
+@headitem Function @tab Answers
+@item @code{cmacs-redact-window}, @code{cmacs-redact-url},
+@code{cmacs-redact-event}, @code{cmacs-redact-buffer}
+@tab @code{nil}: excluded
+@item @code{cmacs-redact-buffer-p}, @code{cmacs-redact-file-p},
+@code{cmacs-redact-capture-refused-p}
+@tab non-@code{nil}: excluded
+@item @code{cmacs-redact-text}
+@tab @samp{[withheld: redaction rules failed to load]} (the empty string
+stays empty)
+@item @code{cmacs-redact-capture-guard},
+@code{cmacs-redact-resource-guard}
+@tab signal
+@end multitable
+
+So the inventory is empty, resources are refused, screenshots are
+refused.  The warning that says which file and why is the journal's
+(@file{*Warnings*}); fix it and run @kbd{M-x
+cmacs-journal-filters-reload}.
+
+A failed load is not retried on every call---that would re-read a broken
+file thousands of times.  It is retried when a filter file changes: the
+journal watches its files only while its mode is on, so redaction
+compares their modification times itself, at most every
+@code{cmacs-redact-check-interval} seconds (2).  A change to
+@code{cmacs-journal-filters} in Elisp needs
+@code{cmacs-journal-filters-reload}, as it always did.
+
+The C callers fail closed too: each asks through the dispatch with a
+form that begins @code{(require 'cmacs-redact)} and a guard that
+signals, so a missing file, a broken guard and a refusal are the same
+answer.
+
+@node Redact Checking
+@section Checking
+
+@findex cmacs-redact-test
+
+@kbd{M-x cmacs-redact-test} shows what a model would be given of what
+you are looking at---the focused window under gowl, else the selected
+buffer---as it is and as it would be shown.  With a prefix argument it
+asks for the fields of a sample instead, and optionally a line of free
+text, so you can check a rule against a title you would rather not have
+on screen.  It shows the result and never which rule produced it.  It
+answers as a model would see it even though you ran it.
+
+@kbd{M-x cmacs-journal-filter-test} is the same question for the
+journal.
+
+@node Redact Options
+@section Options
+
+@multitable @columnfractions .38 .2 .42
+@headitem Option @tab Default @tab Meaning
+@item @code{cmacs-redact-mode}
+@tab on
+@tab Global minor mode.  Off: every function is the identity.
+@item @code{cmacs-redact-surfaces}
+@tab @code{(tool rpc prompt)}
+@tab Which callers are model-facing.
+@item @code{cmacs-redact-text-field-rules}
+@tab @code{t}
+@tab Field rules' @code{replace} entries and hashed match regexps also
+apply to free text.
+@item @code{cmacs-redact-resolve-projects}
+@tab @code{t}
+@tab Look a buffer's project up (once per buffer and directory, never
+remote) for @code{project} rules.
+@item @code{cmacs-redact-check-interval}
+@tab 2.0
+@tab Seconds between looks at whether a filter file changed.
+@end multitable
+
+The rules themselves are the journal's options:
+@code{cmacs-journal-default-filters}, @code{cmacs-journal-filters},
+@code{cmacs-journal-filter-files}, @code{cmacs-journal-filter-case-fold}.
+
+@node Redact API
+@section For Code That Shows Something to a Model
+
+Put @code{(declare-function cmacs-redact-... "cmacs-redact")} at top
+level and @code{(require 'cmacs-redact)} in the body, then just call.
+Do not test who is asking.
+
+@defun cmacs-redact-window app title &optional pid
+@code{nil} when the window must not be shown; else @code{(@var{app}
+. @var{title})}, either half possibly rewritten or @code{nil}.
+@end defun
+
+@defun cmacs-redact-buffer-p buffer-or-name
+Non-@code{nil} when the buffer must not be listed or read.
+@end defun
+
+@defun cmacs-redact-buffer buffer-or-name
+@code{nil} when excluded; else a plist (@code{:buffer} @code{:file}
+@code{:mode} @code{:project}, @code{:url} @code{:title}) to print from.
+@end defun
+
+@defun cmacs-redact-file-p file
+Non-@code{nil} when the file must not be read.
+@end defun
+
+@defun cmacs-redact-file file
+For listing: @code{nil} when excluded, else the name, possibly
+rewritten.  By name only; never touches the disk.
+@end defun
+
+@defun cmacs-redact-buffer-name name
+@code{nil} when excluded, else the name, possibly rewritten.
+@end defun
+
+@defun cmacs-redact-generation
+A value that changes when redacted output could: for the key of a cache
+of redacted things.
+@end defun
+
+@defun cmacs-redact-url url
+@code{nil} when excluded; else the URL, possibly rewritten.
+@end defun
+
+@defun cmacs-redact-text string
+The string with the free-text rules applied; never @code{nil} for a
+string.
+@end defun
+
+@defun cmacs-redact-event plist
+The general form: the filtered plist, or @code{nil}.
+@end defun
+
+@defun cmacs-redact-capture-refused-p what &optional target
+Non-@code{nil} when an image must not be captured.  @var{what} is one of
+@code{desktop}, @code{all}, @code{window}, @code{client}, @code{frame},
+@code{buffer}, @code{gsurf}, @code{video}.
+@end defun
+
+@defun cmacs-redact-capture-guard what &optional target
+The same, signalling.
+@end defun
+
+@defun cmacs-redact-resource-guard kind &optional name
+Signals unless the MCP resource may be read.
+@end defun
+
+@defmac cmacs-redact-as-model body@dots{}
+@var{body} composes something a model will read.
+@end defmac
+
+Rules for a new surface:
+
+@itemize @bullet
+@item
+List only what @code{cmacs-redact-window} / @code{cmacs-redact-buffer-p}
+let through, and print the rewritten values, not the originals.
+@item
+Never report that something was left out: no ``3 windows hidden'', no
+placeholder row.  A count is a fact about the rule set.
+@item
+Never put a rule, a regexp or a rule number in an error.
+@item
+Text produced later (a sentinel, a timer) by an async brigade tool is
+covered by the @code{tool} surface.  Text produced later by anything
+else is not: wrap its composition in @code{cmacs-redact-as-model}.
+@item
+A tool handler written in C asks through the dispatch, with the form
+beginning @code{(require 'cmacs-redact)} and names escaped by
+@code{cmacs_dispatch_lisp_escape}.
+@end itemize
+
+@node Redact Internals
+@section Internals
+
+@itemize @bullet
+@item
+@strong{One engine.}  @file{cmacs-redact.el} calls
+@code{cmacs-journal-filter-apply} for events and
+@code{cmacs-journal-filter-apply-text} for free text; both live in
+@file{cmacs-journal-filter.el}.  The only change to the engine is the
+@code{text} field and the free-text function.
+@item
+@strong{One event shape.}  A buffer is described by
+@code{cmacs-journal--buffer-event}, the function the journal records it
+with.  Loading @file{cmacs-journal.el} for that turns nothing on.
+@item
+@strong{The advice.}  @code{cmacs-brigade-call-tool} gets an around
+advice that binds a variable; @code{cmacs-brigade-call-tool-async} gets
+one that also wraps the callback, so the call counts as in flight until
+that function's exactly-once callback runs.  A lost callback is
+forgotten after fifteen minutes.
+@item
+@strong{Loaded from inside a tool call.}  Callers require the file in a
+function body, so the first load may happen inside a tool call the
+advice was too late to wrap.  The file looks at the backtrace when it
+loads and, if it finds a brigade call on it, counts that call as in
+flight for a minute.
+@item
+@strong{The hash key is never changed here.}
+@code{cmacs-journal-filter-hash-key} is bound, not set, around each
+application, so a session key standing in for a missing journal key can
+never end up in a journal file.
+@item
+@strong{LQL.}  @file{cmacs-lql.el} redacts in
+@code{cmacs-lql--snapshot-1} and keys @code{cmacs-lql--snapshot-cache}
+by @code{(NAME . REDACTED)}.
+@file{test/cmacs/cmacs-lql-redact-tests.el} covers the roles, the
+default, fail closed, that the two snapshots never share an entry or a
+generation, and that every shipped source declares every string column.
+@item
+@strong{Tests.}  @file{test/cmacs/cmacs-redact-tests.el}: each contract
+function against rules; fail closed; who is asking, including the async
+window; the screen inventory; captures and resources; that no result or
+error contains the rule; and a source guard that every C image handler
+and resource handler still asks first.
+@end itemize

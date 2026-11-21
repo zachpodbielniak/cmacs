@@ -44,6 +44,17 @@
 ;; drops the visible buffers into the compose area as ordinary editable
 ;; text, so you can trim it before sending and it stays in the saved
 ;; transcript.
+;;
+;; WHAT IS NEVER SENT
+;;
+;; Everything here ends up in front of a model, so all of it goes through
+;; `cmacs-redact' -- the journal's privacy rules, applied to every
+;; model-facing surface.  A buffer those rules exclude is not in the
+;; inventory at all (not listed, not counted, not inlined, not
+;; remembered as "the last one"); the names, files and page titles of
+;; the others are printed as the rules rewrite them; inlined text passes
+;; through the free-text rules.  When the rules cannot be loaded nothing
+;; is listed.  The listing never says that something was left out.
 
 ;;; Code:
 
@@ -53,6 +64,10 @@
 (declare-function cmacs-ai-target-at "cmacs-ai-target" (&optional click))
 (declare-function cmacs-ai-target-p "cmacs-ai-target" (obj))
 (declare-function cmacs-ai-target-prompt-context "cmacs-ai-target" (target))
+(declare-function cmacs-redact-buffer "cmacs-redact" (buffer-or-name))
+(declare-function cmacs-redact-buffer-p "cmacs-redact" (buffer-or-name))
+(declare-function cmacs-redact-text "cmacs-redact" (string))
+(defvar cmacs-redact--as-model)
 
 (defgroup cmacs-ai-view nil
   "What the model is told about the user's screen."
@@ -146,6 +161,37 @@ answer to \"what were you just looking at\".")
               (cl-some (lambda (re) (string-match-p re name))
                        cmacs-ai-view-exclude-name-regexps))))))
 
+(defun cmacs-ai-view--withheld-p (buffer)
+  "Non-nil when the user's privacy rules keep BUFFER from a model.
+
+Separate from `cmacs-ai-view--excluded-p' on purpose.  That one is
+cheap and runs on a window hook; this one asks `cmacs-redact', which may
+look a project up on disk the first time it sees a buffer, so it is
+asked only when a listing is actually being composed.
+
+Everything this file composes is for a model, whoever started it -- a
+chat turn is sent by a command the user ran -- so the question is asked
+as one (`cmacs-redact--as-model').  With `cmacs-redact-mode' off, or its
+`prompt' surface deselected, the answer is always nil."
+  (require 'cmacs-redact)
+  (let ((cmacs-redact--as-model t))
+    (cmacs-redact-buffer-p buffer)))
+
+(defun cmacs-ai-view--shown (buffer)
+  "The name and file a model may be told BUFFER has, as (NAME . FILE).
+Either may be nil: a rule dropped it.  BUFFER is one that
+`cmacs-ai-view--withheld-p' let through."
+  (require 'cmacs-redact)
+  (let* ((cmacs-redact--as-model t)
+         (event (cmacs-redact-buffer buffer)))
+    (cons (plist-get event :buffer) (plist-get event :file))))
+
+(defun cmacs-ai-view--redact (text)
+  "TEXT of a visible buffer as a model may be sent it."
+  (require 'cmacs-redact)
+  (let ((cmacs-redact--as-model t))
+    (cmacs-redact-text text)))
+
 (defun cmacs-ai-view--record-selection (&optional _window)
   "Remember the selected buffer when it is one the model may be told about."
   (let ((buf (current-buffer)))
@@ -178,7 +224,8 @@ user is looking at, not two."
       (let ((buf (window-buffer win)))
         (unless (or (gethash buf seen)
                     (and (not include-current) (eq win selected))
-                    (cmacs-ai-view--excluded-p buf))
+                    (cmacs-ai-view--excluded-p buf)
+                    (cmacs-ai-view--withheld-p buf))
           (puthash buf t seen)
           (push win wins))))
     (cl-flet ((rank (win)
@@ -201,6 +248,7 @@ a chat filling the frame still knows what it was opened from."
         (and (buffer-live-p cmacs-ai-view--last)
              (not (eq cmacs-ai-view--last (current-buffer)))
              (not (cmacs-ai-view--excluded-p cmacs-ai-view--last))
+             (not (cmacs-ai-view--withheld-p cmacs-ai-view--last))
              (list cmacs-ai-view--last)))))
 
 ;;;; Describing them ----------------------------------------------------
@@ -216,9 +264,15 @@ a chat filling the frame still knows what it was opened from."
                 (line-number-at-pos (min end (point-max)))))))))
 
 (defun cmacs-ai-view--describe-buffer (buf &optional win)
-  "One inventory line for BUF, shown in WIN."
+  "One inventory line for BUF, shown in WIN.
+The name and the file are the ones `cmacs-redact' lets a model see,
+which for most buffers are simply its name and its file."
   (with-current-buffer buf
-    (let* ((file (buffer-file-name))
+    (let* ((shown (cmacs-ai-view--shown buf))
+           ;; Only a file the buffer visits: the rules also see a Dired
+           ;; buffer's directory as its file, which is not what this
+           ;; column has ever meant.
+           (file (and (buffer-file-name) (cdr shown)))
            (lines (count-lines (point-min) (point-max)))
            (visible (and win (cmacs-ai-view--visible-lines win)))
            (region (and (region-active-p)
@@ -226,8 +280,8 @@ a chat filling the frame still knows what it was opened from."
                               (line-number-at-pos (region-end))))))
       (string-join
        (delq nil
-             (list (buffer-name)
-                   (and file (abbreviate-file-name file))
+             (list (or (car shown) "(name withheld)")
+                   file
                    (symbol-name major-mode)
                    (format "%d lines" lines)
                    (format "point on line %d" (line-number-at-pos (point)))
@@ -287,10 +341,16 @@ is `cmacs-ai-target-max-chars', already applied per target."
       (when (buffer-live-p buf)
         (let ((target (with-current-buffer buf
                         (save-excursion (cmacs-ai-target-at)))))
-          (when (and target (cmacs-ai-target-p target))
+          ;; BUFFERS may be the caller's own choice (an explicit attach),
+          ;; so the rules are asked again here rather than trusted to
+          ;; have been applied when the list was made.
+          (when (and target (cmacs-ai-target-p target)
+                     (not (cmacs-ai-view--withheld-p buf)))
             (push (format "--- %s ---\n%s"
-                          (buffer-name buf)
-                          (cmacs-ai-target-prompt-context target))
+                          (or (car (cmacs-ai-view--shown buf))
+                              "(name withheld)")
+                          (cmacs-ai-view--redact
+                           (cmacs-ai-target-prompt-context target)))
                   parts)))))
     (when parts
       (string-join (nreverse parts) "\n\n"))))

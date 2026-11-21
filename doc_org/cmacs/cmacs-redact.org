@@ -1,0 +1,247 @@
+#+TITLE: cmacs-redact — One Redaction Table for Every Model-Facing Surface
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+The activity journal has a rule set that says what must not be kept: exclude this window, drop that title, rewrite account numbers, hash a project name ([[file:cmacs-journal.org][cmacs-journal]], /Filters/). Those rules used to protect the journal and nothing else. The same window title still reached a model through the window list, the screen inventory in a chat prompt, a screenshot, the clipboard.
+
+=cmacs-redact= makes that rule set the *one* policy for everything a model is shown. There is no second rule format and no second matcher: every function here builds an event in the journal's own shape and hands it to the journal's filter engine.
+
+Four things about it, stated plainly:
+
+- *It is on by default.* ~cmacs-redact-mode~ is a global minor mode that starts enabled. Nothing has to be configured for the shipped rules (password managers, private browser windows, authentication prompts, =.gpg= and =.authinfo= files, =~/.ssh=) to apply.
+- *It does not need the journal.* The rules are the journal's, loaded on first use. ~cmacs-journal-mode~ can stay off; nothing is recorded by redacting.
+- *It fails closed.* When the rules cannot be loaded, model-facing surfaces show nothing until they can.
+- *It never says which rule matched.* A refusal reads the same whatever caused it.
+
+And one thing it is not: *a sandbox*. An agent you have allowed to evaluate Lisp, run a shell command or read arbitrary files can get at anything you can. Redaction covers the surfaces listed under [[*Surfaces][Surfaces]]; that table also says, line by line, what is not covered.
+
+#+begin_src emacs-lisp
+;; The rules are the journal's.  Elisp:
+(setq cmacs-journal-filters
+      '((:match ((:app . "^org\\.keepassxc")) :exclude t)
+        (:match ((:title . "Invoice"))
+         :replace ((:title "[0-9]\\{6,\\}" "***")))
+        (:match ((:text . "sk-[A-Za-z0-9]\\{20,\\}"))
+         :replace ((:text "sk-[A-Za-z0-9]\\{20,\\}" "[api key]")))))
+(cmacs-journal-filters-reload)
+#+end_src
+
+#+begin_src yaml
+# ~/.config/cmacs/journal-filters.yaml -- outside your tracked dotfiles
+filters:
+  - match: {file: '/clients/'}
+    exclude: true
+  - match: {text: 'sk-[A-Za-z0-9]{20,}'}
+    replace: [{field: text, regexp: 'sk-[A-Za-z0-9]{20,}', with: '[api key]'}]
+#+end_src
+
+It is pure Elisp (=lisp/cmacs/cmacs-redact.el=) and has no configure flag of its own: it ships wherever the journal's filter engine does.
+
+* Who counts as a model
+
+The functions act only for a *model-facing* caller. While ~cmacs-redact-mode~ is on, a caller is model-facing when any of these holds:
+
+| Surface  | When                                                                                                                                                              |
+|----------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =tool=   | A brigade tool call is running: inside ~cmacs-brigade-call-tool~ or ~cmacs-brigade-call-tool-async~, and, for an asynchronous call, until it has delivered its result |
+| =rpc=    | ~inhibit-interaction~ is bound, which cmacs's RPC dispatch does around everything arriving over MCP, D-Bus, =emacsctl= and bacon                                    |
+| =prompt= | The code composing a model prompt said so with the macro ~cmacs-redact-as-model~. =cmacs-ai-view= does                                                              |
+
+~cmacs-redact-surfaces~ is the list of those three symbols; removing one stops redaction for that kind of caller and nothing else.
+
+Otherwise -- a command you ran, your own Lisp -- nothing is redacted. The rules are about what leaves for a model, not about what you may see on your own machine.
+
+Three consequences worth knowing:
+
+- *Your own =emacsctl= from a terminal is redacted.* Over the RPC channel you are indistinguishable from a program, and the program is assumed. The journal makes the same assumption about its rows.
+- *While an asynchronous tool call is in flight, everything is treated as the tool's.* An async tool finishes in a process sentinel, far outside the call that started it, and that is exactly where OCR text or a clipboard entry gets redacted. A sentinel cannot be told from a timer, so for those seconds a redaction function called from anywhere acts. It errs toward redacting.
+- *A chat turn is a model prompt even though you sent it.* That is what ~cmacs-redact-as-model~ is for: the screen inventory is composed inside it.
+
+Callers do not decide any of this. They call the function; ~cmacs-redact-active-p~ decides.
+
+* What the rules mean on each kind of thing
+
+A rule is written against fields (=kind=, =app=, =title=, =pid=, =tags=, =monitor=, =buffer=, =file=, =mode=, =project=, =url=, =detail=, =text=). Each kind of thing is put to the rules as the event the journal would record for it, so a rule written for the journal matches here without change.
+
+| Thing     | Event it is matched as                                                                                                                                                             |
+|-----------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Window    | =kind= =focus=, with =app=, =title=, =pid=                                                                                                                                          |
+| Buffer    | =kind= =buffer=, =app= =emacs=, with =buffer=, =file=, =mode=, =project=. A Dired buffer's directory and an indirect buffer's base file stand in as =file=                          |
+| Web page  | A gsurf buffer is =kind= =url=, =app= =gsurf=, with =url=, =title=, =buffer=, =mode=, and =detail= =container:NAME=. A bare URL is =kind= =url= with =url= alone                      |
+| File      | The buffer visiting it, when there is one; else =kind= =buffer= with =file= and the base name as =buffer=. Judged under its own name and, for a local file, with symbolic links resolved |
+| Free text | =kind= =text=, with =text=                                                                                                                                                          |
+
+What each action does:
+
+- =exclude= :: The thing is not shown at all. An excluded window is not listed and cannot be captured; an excluded buffer is not listed and cannot be read; an excluded URL is nil.
+- =drop= :: The field is blanked. A window with its title dropped is still listed, without a title.
+- =replace= / =hash= :: The field is rewritten, exactly as the journal would store it. Without the journal's per-install key (it is created when the journal is first turned on) a hash is keyed with a random key that lives only as long as this Emacs.
+
+One of this Emacs's own frames is a window to the compositor, titled with the buffer in it. Such a window is also excluded when a buffer on that frame is, since the rules that hide the buffer are written on its file or mode, not on a window title.
+
+** Free text
+
+A clipboard entry, text read off the screen, a buffer inlined into a prompt: none of it has fields. ~cmacs-redact-text~ applies two things, in this order.
+
+1. *Rules on the =text= field.* The text is the event =(:kind text :text STRING)=, so a rule matching on =text= does to it what any rule does to its field: =exclude= replaces the whole text with =[withheld by your privacy rules]=, =drop= gives the empty string, =replace= and =hash= rewrite it. Write these for things that are sensitive wherever they appear: API keys, private key blocks, card numbers.
+2. *What the other rules call sensitive inside a field* (~cmacs-redact-text-field-rules~, on by default). Every =replace= entry is applied to the text whatever field it names and whether or not its rule's match holds -- free text has no fields to hold it against. And for every field a rule both matches on and hashes, each occurrence of that match regexp in the text becomes its hash. So a rule that rewrites account numbers in window titles rewrites them in a screenshot's text too, without being written twice.
+
+The limits of the second part, on purpose:
+
+- A regexp that can match the empty string (=.*=, =[0-9]*=) means "the whole field" where it was written and means nothing inside a larger text. It is skipped.
+- A regexp anchored to the start or end of its field only matches at the start or end of the whole text.
+- An =exclude= or =drop= written for another field has nothing in free text to act on. A window being excluded does not remove its title from OCR text of a screenshot; what removes it is that the screenshot is refused (below).
+- A rule whose match is a predicate function is only ever applied through part 1.
+
+Set ~cmacs-redact-text-field-rules~ to nil when a field rule is too broad to be searched for in running text; then only =text= rules touch free text.
+
+YAML and Elisp stay in step: =text= is a field name like any other in both (=match: {text: ...}=, =replace: [{field: text, ...}]=, =:match ((:text . ...))=). The journal never builds an event with a =text= field, so such a rule changes nothing the journal keeps.
+
+** Images
+
+An image cannot be rewritten the way a title can, so the answer is whole: if something the rules exclude would be in the picture, there is no picture. The tool returns the error =a window excluded by your privacy rules is visible; nothing was captured=, the same words whatever matched.
+
+"On screen" for a desktop capture means the windows on a tag some monitor is showing, plus the buffers in this Emacs's visible frames. A password manager parked on a hidden tag does not block screenshots. When the shown tags cannot be read, every window counts as on screen. A capture of a single named window asks about that window only, and an excluded one is reported exactly like a pattern that matched nothing.
+
+* Surfaces
+:PROPERTIES:
+:CUSTOM_ID: surfaces
+:END:
+
+What is covered, and how. "Refused" means the request fails without saying why; "rewritten" means =drop=, =replace= and =hash= are applied.
+
+| Surface                                                                                | Covered | How                                                                                                                                             |
+|----------------------------------------------------------------------------------------+---------+-------------------------------------------------------------------------------------------------------------------------------------------------|
+| Screen inventory (=cmacs-ai-view=): chat system prompt and per-turn block, both libreclaw send paths, the =current_view= MCP tool | yes     | An excluded buffer is not listed, not counted, not inlined, not remembered as "the last one". Names, files and page titles are rewritten. Inlined text goes through the free-text rules |
+| ~cmacs-ai-view-attach~ (=C-c C-a=)                                                       | yes     | Same as the inventory, although it is your own command: what it inserts is sent to a model. Paste by hand to send something verbatim             |
+| MCP resources =buffer://=, =file://=, =process://=                                       | yes     | An excluded buffer, file, or process buffer is refused (reported as not found). Text of a buffer or file that is /not/ excluded is returned verbatim |
+| MCP resources =messages://=, =variable://=                                               | yes     | =messages://= is refused when =*Messages*= is excluded; both pass their text through the free-text rules                                         |
+| MCP resource =screenshot://frame=, tool =gowl_screenshot=                                | yes     | Refused while an excluded window or buffer is on screen; a single-window capture asks about that window                                          |
+| Tool =lrgterm_dump_screen=                                                              | yes     | Refused while a visible buffer of the frame is excluded                                                                                         |
+| Tool =video_snapshot=                                                                   | yes     | Refused when the video plays in an excluded buffer; when its buffer is unknown, while anything excluded is on screen                             |
+| Tools =gsurf_snapshot=, =gsurf_print_pdf=                                                | yes     | Refused for a page excluded by URL, title or buffer (checked in ~cmacs-gsurf-mcp-snapshot~ / ~-print-pdf~, which both the C and Lisp tools reach) |
+| gowl window lists, focused window, clipboard history, =gowl_screen_text=                | by contract | These tools are Lisp and call ~cmacs-redact-window~ / ~cmacs-redact-text~. The calls live in their own files, not here                        |
+| The journal's LQL source =activity=                                                     | yes     | Filtered before it is stored; hidden from agents unless ~cmacs-journal-expose-to-agents~                                                         |
+| =eval=, =crispy_eval=, =bacon_eval=, shell tools, =execute_command=, =send_keys=, =cmacs_c_*=, =gi_call= | *no*    | These can compute anything. Not a sandbox; keep them out of an agent's allowlist if the rules matter                                             |
+| Buffer and file *tools* (=list_buffers=, =get_buffer_content=, =search_buffer=, =project_read_file=, ...) | *only where the tool calls the contract* | A tool that lists or reads buffers must call ~cmacs-redact-buffer-p~ itself. The C fallback handlers of tools that have a Lisp replacement do not |
+| gsurf text tools (=gsurf_extract_text=, =gsurf_get_uri=, =gsurf_get_title=, =gsurf_eval_js=, =gsurf_list=) | *only where the tool calls the contract* | Same: ~cmacs-redact-url~ / ~cmacs-redact-buffer-p~ exist for them                                                              |
+| LQL sources defined in Elisp (=buffers=, =windows=, =processes=, =gowl_clients=, =kill_ring=, =recentf=, =bookmarks=, =org_headings=, =notes=, =note_headings=, =note_links=, =note_properties=, and any source a user or subsystem defines), through =lql_query=, =ai_lql=, an agent's LQL watch, D-Bus and =emacsctl lql= | yes     | Redacted at the snapshot, once for every surface that can run a query: rows of excluded buffers, files, notes, URLs and windows are dropped, names rewritten, free-text columns through the free-text rules. See [[*LQL sources][LQL sources]] |
+| LQL engine sources that are not defined in Elisp (files, git, exec, journald, coredumps, k8s, SQL)                 | *no*    | The engine reads these itself, off the editor thread; nothing there asks the rules. A query can read a file the rules hide                       |
+| Brigade memory index and second-brain search over the notes repo                        | *no*    | Indexed text is not filtered by these rules                                                                                                     |
+| C-only RPC answers that never run Lisp (=keybinds://=, the D-Bus compositor client list behind =emacsctl get clients=) | *no*    | Nothing there asks the rules                                                                                                                    |
+| =cad_snapshot=, =vidstudio_render_frame=, imgedit renders                                | *no*    | Pictures of a document the agent is editing, not of the screen                                                                                   |
+| Text of a buffer or file that is not excluded                                           | *no*    | Returned as it is when read on request; only free-text surfaces are rewritten. An agent editing a file needs the real text                       |
+| Files an agent reads with its own tools (a CLI agent's shell, its own file reader)       | *no*    | Outside cmacs                                                                                                                                   |
+| Screen sharing through the portal, recordings, anything not addressed to a model         | *no*    | Out of scope                                                                                                                                    |
+
+* LQL sources
+
+An agent that can run a query can read the editor-state sources, so they are redacted where every query passes: the snapshot. A Lisp source's rows are turned into JSON on the editor thread just before a query is submitted, inside the dynamic extent of whoever submitted it. When that is a model-facing caller the rows go through the rules first; your own queries (=M-x cmacs-lql-query=, the REPL, a results buffer) never do.
+
+A source says what its columns /are/, and the rules do the rest. The declaration is the fifth argument of ~cmacs-lql-define-source~, or ~cmacs-lql-set-source-redaction~ afterwards:
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-source
+ "tickets" '(("file" string) ("dir" string) ("summary" string) ("state" string))
+ #'my-ticket-rows "My tickets."
+ '(("file" . file) ("dir" . derived) ("summary" . text) ("state" . plain)))
+#+end_src
+
+| Role      | The column is                                                                 | For a model                                                                                              |
+|-----------+-------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------|
+| =buffer=  | A buffer name                                                                 | The row goes when the buffer is excluded; else the name as the rules rewrite it                          |
+| =file=    | A file name                                                                   | The row goes when the file is excluded, judged by its name alone; else the name as rewritten             |
+| =url=     | A URL                                                                         | Likewise                                                                                                 |
+| =app=, =title=, =pid= | Together, one window                                              | The row goes when the window is excluded; else app and title as rewritten                                |
+| =text=    | Free text (a string, or a list of strings)                                    | Through the free-text rules                                                                              |
+| =derived= | Computed from this row's buffer, file, URL or window: a directory, a relative path, a base name | Kept when the rules left those alone; blanked when they rewrote one                     |
+| =plain=   | Not sensitive: a mode, a state, an id                                         | As it is                                                                                                 |
+
+Instead of an alist the declaration may be a function of the rows (alists keyed by column name) returning the rows a model may see, for a source whose rule is not a matter of roles; it can call ~cmacs-lql-redact-rows~ for the part that is. =windows= does: its =frame= column is the title of one of this Emacs's frames. Or the symbol =none=, for rows that are already safe: the journal's =activity= was filtered when it was recorded.
+
+*A source that declares nothing* is not left open. In a model-facing query every string in every one of its rows -- in any column, declared in the schema or not, and inside lists -- goes through the free-text rules. Nothing can be dropped that way, since nothing says which column names a file; declare the roles to get that. In a declared source an undeclared string column is =text= as well.
+
+What keeps this safe and cheap:
+
+- *The two snapshots never meet.* A source with a generation function has its snapshot cached. The cache is keyed by source name /and/ by whether the snapshot was made for a model, so the user's rows and a model's rows are different entries, and a model's entry also carries the rule set's generation: new rules, new snapshot.
+- *It fails closed.* When the rules are not usable, or a source's redaction signals, a model's query sees that source with no rows. You still see yours.
+- *No disk.* Files are judged by name: nothing is opened, no symbolic link is followed, no project is looked up (one the editor already knows is used). Values are memoised across a snapshot, since a column repeats itself down a table. Redacting =buffers= costs a few tenths of a millisecond per buffer.
+- *Nothing is counted.* A dropped row leaves no placeholder and the query is not told how many there were.
+
+The limits: a =file= role does not see through a symbolic link (reading the file is still refused, by ~cmacs-redact-file-p~); =gowl_clients= rows now carry =app_id=, =title=, =pid=, =tags= and =floating= beside =client=, because a window cannot be judged by an opaque object; and the engine's own sources are not Lisp and are not covered (see the table above).
+
+* Failing closed
+
+The rule set is unusable when a listed YAML file exists but cannot be read or parsed, or any rule holds a key, action, field or regexp the engine does not understand (see /Fail closed/ in [[file:cmacs-journal.org][cmacs-journal]]). While it is:
+
+| Function                                              | Answers                                             |
+|-------------------------------------------------------+-----------------------------------------------------|
+| ~cmacs-redact-window~, ~cmacs-redact-url~, ~cmacs-redact-event~, ~cmacs-redact-buffer~ | nil: excluded                     |
+| ~cmacs-redact-buffer-p~, ~cmacs-redact-file-p~, ~cmacs-redact-capture-refused-p~      | non-nil: excluded                 |
+| ~cmacs-redact-text~                                     | =[withheld: redaction rules failed to load]= (the empty string stays empty) |
+| ~cmacs-redact-capture-guard~, ~cmacs-redact-resource-guard~ | signal                                         |
+
+So the inventory is empty, resources are refused, screenshots are refused. The warning that says which file and why is the journal's (=*Warnings*=); fix it and run ~M-x cmacs-journal-filters-reload~.
+
+A failed load is not retried on every call -- that would re-read a broken file thousands of times. It is retried when a filter file changes: the journal watches its files only while its mode is on, so redaction compares their modification times itself, at most every ~cmacs-redact-check-interval~ seconds (2). A change to ~cmacs-journal-filters~ in Elisp needs ~cmacs-journal-filters-reload~, as it always did.
+
+The C callers fail closed too: each asks through the dispatch with a form that begins =(require 'cmacs-redact)= and a guard that signals, so a missing file, a broken guard and a refusal are the same answer.
+
+* Checking
+
+~M-x cmacs-redact-test~ shows what a model would be given of what you are looking at -- the focused window under gowl, else the selected buffer -- as it is and as it would be shown. With a prefix argument it asks for the fields of a sample instead, and optionally a line of free text, so you can check a rule against a title you would rather not have on screen. It shows the result and never which rule produced it. It answers as a model would see it even though you ran it.
+
+~M-x cmacs-journal-filter-test~ is the same question for the journal.
+
+* Options
+
+| Option                             | Default              | Meaning                                                                                  |
+|------------------------------------+----------------------+------------------------------------------------------------------------------------------|
+| ~cmacs-redact-mode~                | on                   | Global minor mode. Off: every function is the identity                                   |
+| ~cmacs-redact-surfaces~            | =(tool rpc prompt)=  | Which callers are model-facing                                                           |
+| ~cmacs-redact-text-field-rules~    | t                    | Field rules' =replace= entries and hashed match regexps also apply to free text          |
+| ~cmacs-redact-resolve-projects~    | t                    | Look a buffer's project up (once per buffer and directory, never remote) for =project= rules |
+| ~cmacs-redact-check-interval~      | 2.0                  | Seconds between looks at whether a filter file changed                                   |
+
+The rules themselves are the journal's options: ~cmacs-journal-default-filters~, ~cmacs-journal-filters~, ~cmacs-journal-filter-files~, ~cmacs-journal-filter-case-fold~.
+
+* For code that shows something to a model
+
+Put ~(declare-function cmacs-redact-... "cmacs-redact")~ at top level and ~(require 'cmacs-redact)~ in the body, then just call. Do not test who is asking.
+
+| Function                                         | Returns                                                                                             |
+|--------------------------------------------------+-----------------------------------------------------------------------------------------------------|
+| ~(cmacs-redact-window APP TITLE &optional PID)~  | nil when the window must not be shown; else =(APP . TITLE)=, either half possibly rewritten or nil    |
+| ~(cmacs-redact-buffer-p BUFFER-OR-NAME)~         | non-nil when the buffer must not be listed or read                                                  |
+| ~(cmacs-redact-buffer BUFFER-OR-NAME)~           | nil when excluded; else a plist (=:buffer= =:file= =:mode= =:project=, =:url= =:title=) to print from |
+| ~(cmacs-redact-file-p FILE)~                     | non-nil when the file must not be read                                                              |
+| ~(cmacs-redact-file FILE)~                       | for listing: nil when excluded, else the name, possibly rewritten. By name only, never touches the disk |
+| ~(cmacs-redact-buffer-name NAME)~                | nil when excluded, else the name, possibly rewritten                                                |
+| ~(cmacs-redact-generation)~                      | a value that changes when redacted output could: for the key of a cache of redacted things          |
+| ~(cmacs-redact-url URL)~                         | nil when excluded; else the URL, possibly rewritten                                                 |
+| ~(cmacs-redact-text STRING)~                     | the string with the free-text rules applied; never nil for a string                                 |
+| ~(cmacs-redact-event PLIST)~                     | the general form: the filtered plist, or nil                                                        |
+| ~(cmacs-redact-capture-refused-p WHAT &optional TARGET)~ | non-nil when an image must not be captured. WHAT: =desktop= =all= =window= =client= =frame= =buffer= =gsurf= =video= |
+| ~(cmacs-redact-capture-guard WHAT &optional TARGET)~ | the same, signalling                                                                            |
+| ~(cmacs-redact-resource-guard KIND &optional NAME)~ | signals unless the MCP resource may be read                                                      |
+| ~(cmacs-redact-as-model BODY...)~                | macro: BODY composes something a model will read                                                    |
+
+Rules for a new surface:
+
+- List only what ~cmacs-redact-window~ / ~cmacs-redact-buffer-p~ let through, and print the rewritten values, not the originals.
+- Never report that something was left out: no "3 windows hidden", no placeholder row. A count is a fact about the rule set.
+- Never put a rule, a regexp or a rule number in an error.
+- Text produced later (a sentinel, a timer) by an async brigade tool is covered by the =tool= surface. Text produced later by anything else is not: wrap its composition in ~cmacs-redact-as-model~.
+- A tool handler written in C asks through the dispatch, with the form beginning =(require 'cmacs-redact)= and names escaped by =cmacs_dispatch_lisp_escape=.
+
+* Internals
+
+- *One engine.* =cmacs-redact.el= calls ~cmacs-journal-filter-apply~ for events and ~cmacs-journal-filter-apply-text~ for free text; both live in =cmacs-journal-filter.el=. The only change to the engine is the =text= field and the free-text function.
+- *One event shape.* A buffer is described by ~cmacs-journal--buffer-event~, the function the journal records it with. Loading =cmacs-journal.el= for that turns nothing on.
+- *The advice.* ~cmacs-brigade-call-tool~ gets an around advice that binds a variable; ~cmacs-brigade-call-tool-async~ gets one that also wraps the callback, so the call counts as in flight until that function's exactly-once callback runs. A lost callback is forgotten after fifteen minutes.
+- *Loaded from inside a tool call.* Callers require the file in a function body, so the first load may happen inside a tool call the advice was too late to wrap. The file looks at the backtrace when it loads and, if it finds a brigade call on it, counts that call as in flight for a minute.
+- *The hash key is never changed here.* ~cmacs-journal-filter-hash-key~ is bound, not set, around each application, so a session key standing in for a missing journal key can never end up in a journal file.
+- *LQL.* =cmacs-lql.el= redacts in ~cmacs-lql--snapshot-1~ and keys ~cmacs-lql--snapshot-cache~ by =(NAME . REDACTED)=. =test/cmacs/cmacs-lql-redact-tests.el= covers the roles, the default, fail closed, that the two snapshots never share an entry or a generation, and that every shipped source declares every string column.
+- *Tests.* =test/cmacs/cmacs-redact-tests.el=: each contract function against rules; fail closed; who is asking, including the async window; the screen inventory; captures and resources; that no result or error contains the rule; and a source guard that every C image handler and resource handler still asks first.

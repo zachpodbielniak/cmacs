@@ -346,9 +346,13 @@ handle_video_snapshot (McpServer *s, const gchar *n,
     return shell_error ("cannot create a scratch file for the snapshot");
   {
     g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
+    /* CMACS redact: a frame of a video playing in a buffer the user's
+       privacy rules exclude is refused (the guard signals).  */
     expr = g_strdup_printf (
-      "(cmacs-video-snapshot-to-file %ld \"%s\")",
-      (long) handle, epath);
+      "(progn (require 'cmacs-redact)"
+      " (cmacs-redact-capture-guard 'video %" G_GINT64_FORMAT ")"
+      " (cmacs-video-snapshot-to-file %ld \"%s\"))",
+      handle, (long) handle, epath);
   }
 
   str = cmacs_dispatch_eval (expr, &error);

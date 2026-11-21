@@ -71,12 +71,19 @@
 
 (defconst cmacs-journal-filter-fields
   '(:kind :app :title :pid :tags :monitor :buffer :file :mode :project
-    :url :detail)
-  "Event fields a rule may match on.")
+    :url :detail :text)
+  "Event fields a rule may match on.
+
+`:text' is not a journal field: the journal records no text and never
+builds an event that has one, so a rule on it changes nothing the
+journal keeps.  It is the field of the free-text event
+`cmacs-journal-filter-apply-text' builds -- a clipboard entry, the text
+read off the screen, a buffer inlined into a prompt -- which is how the
+same rule set serves `cmacs-redact'.")
 
 (defconst cmacs-journal-filter-action-fields
   '(:app :title :pid :tags :monitor :buffer :file :mode :project :url
-    :detail)
+    :detail :text)
   "Event fields `drop', `replace' and `hash' may change.
 The kind and the times are not among them: a rule that wants those gone
 wants `exclude'.")
@@ -738,6 +745,90 @@ nothing.  This never signals: it runs on the compositor's hooks."
               (save-match-data
                 (dolist (rule (nreverse matched))
                   (setq out (cmacs-journal-filter--transform rule out))))
+              out))))
+    (error nil)))
+
+;;;; Free text
+;;
+;; The journal itself never calls this: it keeps no text.  It is here,
+;; beside the matcher, so that `cmacs-redact' -- which applies this rule
+;; set to everything a model is shown -- does not grow a second one.
+
+(defun cmacs-journal-filter--text-regexp-usable-p (regexp)
+  "Non-nil when REGEXP can be searched for inside free text.
+A regexp that matches the empty string (`.*', `[0-9]*') means \"the
+whole field\" where it was written, and has no meaning inside a larger
+text: there it matches between every two characters."
+  (not (string-match-p regexp "")))
+
+(defun cmacs-journal-filter--text-rule-p (rule)
+  "Non-nil when RULE is written for free text, or decides by a function.
+Such a rule already had its say through `cmacs-journal-filter-apply' on
+the text event, under its own match; it is not applied a second time."
+  (or (plist-get rule :predicate)
+      (assq :text (plist-get rule :match))))
+
+(defun cmacs-journal-filter-apply-text (string &optional field-rules)
+  "Return STRING as the rule set lets free text be shown.
+
+The result is a string; the symbol `excluded' when a rule excludes the
+text as a whole; or nil when there is no usable rule set or a rule
+signalled, in which case the caller must show nothing.  This never
+signals.
+
+Two things are applied, in this order:
+
+  1. STRING goes through `cmacs-journal-filter-apply' as the event
+     (:kind text :text STRING), so a rule matching on the `text' field
+     (or by a function) does to it exactly what any rule does to its
+     field: `exclude', `drop' (the result is the empty string),
+     `replace', `hash'.
+
+  2. With FIELD-RULES non-nil, what the other rules say is sensitive
+     inside a FIELD is also searched for in the text, whatever field it
+     was written for and whether or not the rule's own match holds --
+     free text has no fields to hold it against.  Every `replace' entry
+     of such a rule is applied; and for every field a rule both matches
+     on and hashes, each occurrence of that match regexp is replaced by
+     its keyed hash (blanked without a key).  A regexp that can match
+     the empty string is skipped (see
+     `cmacs-journal-filter--text-regexp-usable-p'), and one anchored
+     to the start or the end of its field only ever matches at the
+     start or the end of the whole text.
+     An `exclude' or `drop' written for another field has nothing in
+     free text to act on and is not applied."
+  (condition-case nil
+      (when (and (stringp string) (cmacs-journal-filter-ready-p))
+        (let ((event (cmacs-journal-filter-apply
+                      (list :kind 'text :text string))))
+          (if (null event)
+              'excluded
+            (let ((case-fold-search cmacs-journal-filter-case-fold)
+                  (out (plist-get event :text)))
+              (setq out (if (stringp out) out ""))
+              (when field-rules
+                (save-match-data
+                  (dolist (rule cmacs-journal-filter--rules)
+                    (unless (cmacs-journal-filter--text-rule-p rule)
+                      (pcase-dolist (`(,_field ,regexp ,with)
+                                     (plist-get rule :replace))
+                        (when (cmacs-journal-filter--text-regexp-usable-p
+                               regexp)
+                          (setq out (replace-regexp-in-string
+                                     regexp with out t))))
+                      (dolist (field (plist-get rule :hash))
+                        (let ((regexp (cdr (assq field
+                                                 (plist-get rule :match)))))
+                          (when (and regexp
+                                     (cmacs-journal-filter--text-regexp-usable-p
+                                      regexp))
+                            (setq out
+                                  (replace-regexp-in-string
+                                   regexp
+                                   (lambda (match)
+                                     (or (cmacs-journal-filter--hash match)
+                                         ""))
+                                   out t t)))))))))
               out))))
     (error nil)))
 

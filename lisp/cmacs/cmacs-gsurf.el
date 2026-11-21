@@ -1394,6 +1394,9 @@ Suitable as `browse-url-browser-function'."
 ;; (named, or the most-recently-opened gsurf buffer) and return plain
 ;; strings / JSON so the MCP layer can stay a trivial eval bridge.
 
+(declare-function cmacs-redact-capture-guard "cmacs-redact"
+                  (what &optional target))
+
 (defun cmacs-gsurf--mcp-target (&optional name)
   "Return the target gsurf buffer for an MCP call.
 NAME, when non-empty, selects a buffer by name; otherwise the most
@@ -1459,14 +1462,25 @@ recently opened gsurf buffer is used."
                   (buffer file &optional callback))
 
 (defun cmacs-gsurf-mcp-snapshot (file &optional full buffer)
-  "Snapshot the target gsurf buffer to FILE (async); return the path."
+  "Snapshot the target gsurf buffer to FILE (async); return the path.
+Refused, with an error that does not say why, for a page the user's
+privacy rules exclude (see `cmacs-redact-capture-guard'): a picture
+cannot be redacted, so there is none.  The check is here rather than in
+any one caller because the C MCP handler and the Lisp tool both end up
+in this function."
+  (require 'cmacs-redact)
+  (cmacs-redact-capture-guard 'gsurf buffer)
   (let ((buf (cmacs-gsurf--mcp-target buffer))
         (path (expand-file-name file)))
     (cmacs-gsurf-snapshot buf path nil full)
     path))
 
 (defun cmacs-gsurf-mcp-print-pdf (file &optional buffer)
-  "Print the target gsurf buffer to PDF at FILE (async); return the path."
+  "Print the target gsurf buffer to PDF at FILE (async); return the path.
+Refused for a page the user's privacy rules exclude, exactly as
+`cmacs-gsurf-mcp-snapshot' is."
+  (require 'cmacs-redact)
+  (cmacs-redact-capture-guard 'gsurf buffer)
   (let ((buf (cmacs-gsurf--mcp-target buffer))
         (path (expand-file-name file)))
     (cmacs-gsurf-print-to-pdf buf path nil)

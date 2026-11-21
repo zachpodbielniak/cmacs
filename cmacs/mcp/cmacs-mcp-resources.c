@@ -15,6 +15,35 @@
 
 #include <glib/gstdio.h>
 
+/* ── Redaction ────────────────────────────────────────────────────── */
+
+/* CMACS redact: whether the resource KIND://NAME may be read at all.
+
+   The user's privacy rules (lisp/cmacs/cmacs-redact.el, which applies
+   the journal's rule set to every model-facing surface) are asked
+   before anything is read: an excluded buffer, a file under a hidden
+   directory, the buffer of a process that is hidden.  The Lisp side
+   signals to refuse, so every way this can fail -- the rules did not
+   load, the file is missing from this build, the guard itself broke --
+   is a refusal.  A refused resource is reported exactly like one that
+   does not exist; nothing says why.
+
+   NAME goes into the form through cmacs_dispatch_lisp_escape, never
+   g_strescape (whose octal escapes the reader turns into raw bytes).  */
+static gboolean
+resource_allowed (const gchar *kind, const gchar *name)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *ename = cmacs_dispatch_lisp_escape (name ? name : "");
+  g_autofree gchar *expr = g_strdup_printf (
+    "(progn (require 'cmacs-redact)"
+    "  (cmacs-redact-resource-guard \"%s\" \"%s\") t)",
+    kind, ename);
+  g_autofree gchar *ok = cmacs_dispatch_eval (expr, &error);
+
+  return ok != NULL;
+}
+
 /* ── buffer://{name} ──────────────────────────────────────────────── */
 
 static GList *
@@ -37,6 +66,9 @@ handle_buffer_resource (McpServer   *server,
     name = uri + 9;
   else
     name = uri;
+
+  if (!resource_allowed ("buffer", name))
+    return NULL;
 
   ename = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
@@ -72,6 +104,9 @@ handle_file_resource (McpServer   *server,
   else
     path = uri;
 
+  if (!resource_allowed ("file", path))
+    return NULL;
+
   if (!g_file_get_contents (path, &content, NULL, &error))
     return NULL;
 
@@ -94,9 +129,15 @@ handle_messages_resource (McpServer   *server,
   (void) uri;
   (void) user_data;
 
+  if (!resource_allowed ("messages", NULL))
+    return NULL;
+
+  /* The message log is free text from everywhere, so beyond the
+     refusal above it goes through the free-text rules.  */
   content = cmacs_dispatch_eval (
-    "(with-current-buffer \"*Messages*\""
-    "  (buffer-substring-no-properties (point-min) (point-max)))",
+    "(cmacs-redact-text"
+    " (with-current-buffer \"*Messages*\""
+    "   (buffer-substring-no-properties (point-min) (point-max))))",
     &error);
 
   if (content == NULL)
@@ -131,9 +172,15 @@ handle_variable_resource (McpServer   *server,
   /* `intern' of a quoted string, not a bare symbol spliced into the
      source: a name is data, and "nil) (delete-directory ...) (car '(x"
      used to read as three forms. */
+  if (!resource_allowed ("variable", name))
+    return NULL;
+
+  /* A variable has no buffer or file for a rule to name, so its value
+     is redacted as free text instead.  */
   ename = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
-    "(prin1-to-string (symbol-value (intern \"%s\")))", ename);
+    "(cmacs-redact-text"
+    " (prin1-to-string (symbol-value (intern \"%s\"))))", ename);
 
   content = cmacs_dispatch_eval (expr, &error);
   if (content == NULL)
@@ -164,6 +211,9 @@ handle_process_resource (McpServer   *server,
     name = uri + 10;
   else
     name = uri;
+
+  if (!resource_allowed ("process", name))
+    return NULL;
 
   escaped = cmacs_dispatch_lisp_escape (name);
   expr = g_strdup_printf (
@@ -233,7 +283,11 @@ handle_screenshot_resource (McpServer   *server,
     return NULL;
   {
     g_autofree gchar *epath = cmacs_dispatch_lisp_escape (path);
-    expr = g_strdup_printf ("(gowl-screenshot 'desktop \"%s\" t)", epath);
+    /* CMACS redact: no picture of a screen an excluded window is on.  */
+    expr = g_strdup_printf (
+      "(progn (require 'cmacs-redact)"
+      "  (cmacs-redact-capture-guard 'desktop)"
+      "  (gowl-screenshot 'desktop \"%s\" t))", epath);
   }
 
   str = cmacs_dispatch_eval (expr, &error);

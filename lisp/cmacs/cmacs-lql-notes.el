@@ -586,7 +586,34 @@ The hour is part of it because `age_days' moves with the clock."
    #'cmacs-lql-notes--property-rows
    "Every property-drawer entry in your notes (file-level and per heading).")
   (dolist (name '("notes" "note_headings" "note_links" "note_properties"))
-    (cmacs-lql-set-source-generation name #'cmacs-lql-notes--generation-now)))
+    (cmacs-lql-set-source-generation name #'cmacs-lql-notes--generation-now))
+  ;; What a model is shown of them (see `cmacs-lql-set-source-redaction').
+  ;; A note the privacy rules exclude -- by its file name; nothing is
+  ;; opened -- is not a row in any of the four.  Everything read out of a
+  ;; note is free text.  The places computed from the path (PARA bucket,
+  ;; relative path, base name) are `derived': shown as long as the rules
+  ;; left the file name alone, blanked when they rewrote it.
+  (cmacs-lql-set-source-redaction
+   "notes"
+   '(("file" . file) ("path" . derived) ("root" . derived) ("name" . derived)
+     ("dir" . derived) ("para" . derived) ("scope" . derived)
+     ("area" . derived) ("title" . text) ("description" . text)
+     ("authors" . text) ("categories" . text) ("tags" . text)
+     ("version" . plain) ("id" . plain)))
+  (cmacs-lql-set-source-redaction
+   "note_headings"
+   '(("file" . file) ("path" . derived) ("para" . derived)
+     ("scope" . derived) ("area" . derived) ("heading" . text)
+     ("todo" . plain) ("priority" . plain) ("tags" . text) ("id" . plain)
+     ("olpath" . text)))
+  (cmacs-lql-set-source-redaction
+   "note_links"
+   '(("file" . file) ("path" . derived) ("para" . derived) ("type" . plain)
+     ("target" . text) ("description" . text) ("resolved" . file)))
+  (cmacs-lql-set-source-redaction
+   "note_properties"
+   '(("file" . file) ("path" . derived) ("para" . derived)
+     ("heading" . text) ("key" . plain) ("value" . text))))
 
 ;;;; Commands
 

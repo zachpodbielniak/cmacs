@@ -78,6 +78,17 @@
 (declare-function bookmark-get-filename "bookmark" (bookmark-name-or-record))
 (declare-function bookmark-get-position "bookmark" (bookmark-name-or-record))
 (defvar bookmark-alist)
+(defvar cmacs-redact-resolve-projects)
+(declare-function cmacs-redact-active-p "cmacs-redact" ())
+(declare-function cmacs-redact-ready-p "cmacs-redact" ())
+(declare-function cmacs-redact-generation "cmacs-redact" ())
+(declare-function cmacs-redact-text "cmacs-redact" (string))
+(declare-function cmacs-redact-url "cmacs-redact" (url))
+(declare-function cmacs-redact-file "cmacs-redact" (file))
+(declare-function cmacs-redact-buffer-name "cmacs-redact" (name))
+(declare-function cmacs-redact-window "cmacs-redact" (app title &optional pid))
+(declare-function gowl-client-info "cmacs-gowl.c" (client))
+(declare-function gowl-client-pid "cmacs-gowl.c" (client))
 (defvar recentf-list)
 (defvar eglot-server-programs)
 (defvar lql-register-with-eglot)
@@ -239,9 +250,13 @@ always talks to the server it was built with."
 ;;;; The source registry
 
 (defvar cmacs-lql--sources (make-hash-table :test #'equal)
-  "Source name -> plist (:columns :function :description) of Elisp sources.")
+  "Source name -> plist of Elisp sources.
+Keys: :columns :function :description, and optionally :generation
+\(`cmacs-lql-set-source-generation') and :redaction
+\(`cmacs-lql-set-source-redaction').")
 
-(defun cmacs-lql-define-source (name columns function &optional description)
+(defun cmacs-lql-define-source (name columns function
+                                     &optional description redaction)
   "Define the LQL source NAME, whose rows FUNCTION returns.
 
 COLUMNS is a list of (COLUMN TYPE) pairs, COLUMN a string and TYPE one
@@ -256,6 +271,12 @@ FUNCTION runs on the editor thread just before every query that names
 NAME, so keep it cheap or bounded.  DESCRIPTION is a one-line summary
 shown by completion and hover.  Redefining NAME replaces it.
 
+REDACTION says what the columns ARE, so that a query made for a model
+shows them the way the user's privacy rules allow; see
+`cmacs-lql-set-source-redaction', which is the same thing after the
+fact.  Left out, every string a model is shown from this source goes
+through the free-text rules.
+
   (cmacs-lql-define-source \"features\" \\='((\"name\" string))
     (lambda () (mapcar (lambda (f) (list :name f)) features))
     \"Loaded Lisp features.\")"
@@ -264,9 +285,12 @@ shown by completion and hover.  Redefining NAME replaces it.
     (error "cmacs-lql: %S is not a valid source name" name))
   (let ((cols (mapcar (lambda (c) (cons (car c) (cadr c))) columns)))
     (dolist (c cols) (cmacs-lql--type-name (cdr c)))
+    (cmacs-lql--check-redaction redaction)
     (puthash name (list :columns cols :function function
-                        :description description)
+                        :description description
+                        :redaction redaction)
              cmacs-lql--sources)
+    (cmacs-lql--forget-snapshots name)
     (when (cmacs-lql-available-p)
       (cmacs-lql--define-source
        name
@@ -290,7 +314,19 @@ shown by completion and hover.  Redefining NAME replaces it.
            collect name))
 
 (defvar cmacs-lql--snapshot-cache (make-hash-table :test #'equal)
-  "Source name -> (KEY . JSON) for sources with a generation function.")
+  "(SOURCE-NAME . REDACTED) -> (KEY . JSON), for sources with a generation.
+
+REDACTED is t for a snapshot made for a model and nil for one made for
+the user.  The two are different entries on purpose, not one entry with
+a longer key: a snapshot made for the user holds exactly the rows the
+rules exist to keep from a model, and the only way to be sure one is
+never handed out as the other is for them never to be in the same
+place.")
+
+(defun cmacs-lql--forget-snapshots (name)
+  "Drop every cached snapshot of source NAME, redacted or not."
+  (remhash (cons name nil) cmacs-lql--snapshot-cache)
+  (remhash (cons name t) cmacs-lql--snapshot-cache))
 
 (defun cmacs-lql-set-source-generation (name function)
   "Give Elisp source NAME a generation FUNCTION, to reuse its snapshot.
@@ -302,29 +338,240 @@ source with thousands of rows, like `notes'."
   (let ((spec (or (gethash name cmacs-lql--sources)
                   (error "cmacs-lql: no source %s" name))))
     (puthash name (plist-put spec :generation function) cmacs-lql--sources)
-    (remhash name cmacs-lql--snapshot-cache)))
+    (cmacs-lql--forget-snapshots name)))
+
+;;;; Redaction: what a model is shown of a source
+;;
+;; A query an agent submits reads these sources like any other, so the
+;; rows are put through the user's privacy rules (cmacs-redact.el) HERE,
+;; at the snapshot -- once, for every tool, watch and RPC surface that
+;; can run a query -- and not in each tool.  The snapshot is taken on the
+;; editor thread inside the dynamic extent of whoever asked, which is the
+;; one moment "is a model asking?" has an answer.
+
+(defconst cmacs-lql-redaction-roles
+  '(buffer file url app title pid text derived plain)
+  "What a column of a source may be declared to be.
+
+  `buffer'   a buffer name.  The row goes when the buffer is excluded;
+             else the name is shown as the rules rewrite it.
+  `file'     a file name.  The row goes when the file is excluded (by
+             name: nothing is opened or looked up); else it is shown as
+             the rules rewrite it.
+  `url'      a URL: likewise.
+  `app'      a window's app id, `title' its title, `pid' its process.
+             Together they are one window: the row goes when the window
+             is excluded, else app and title are shown rewritten.
+  `text'     free text, through the free-text rules.  A list of strings
+             is redacted element by element.
+  `derived'  something computed from this row's buffer, file, URL or
+             window -- a directory, a relative path, a base name.  Kept
+             when the rules left those alone, blanked when they rewrote
+             one: a hashed file name beside its untouched directory and
+             base name hides nothing.
+  `plain'    not sensitive: a mode, a state, an id.  Shown as it is.
+
+A column that is not declared is `text' when it holds a string and
+`plain' otherwise.")
+
+(defun cmacs-lql--check-redaction (redaction)
+  "Signal unless REDACTION is something `cmacs-lql-set-source-redaction' takes."
+  (cond
+   ((or (null redaction) (eq redaction 'none) (functionp redaction)))
+   ((and (listp redaction)
+         (cl-every (lambda (cell)
+                     (and (consp cell) (stringp (car cell))
+                          (memq (cdr cell) cmacs-lql-redaction-roles)))
+                   redaction)))
+   (t (error "cmacs-lql: a redaction is nil, `none', a function, or an alist of (COLUMN . ROLE) with ROLE one of %s"
+             cmacs-lql-redaction-roles))))
+
+(defun cmacs-lql-set-source-redaction (name redaction)
+  "Say how Elisp source NAME is shown to a model.
+
+When a query is made for a model -- by an agent's tool call, over MCP,
+D-Bus or emacsctl, by an agent's watch; see `cmacs-redact-active-p' --
+the source's rows pass through the user's privacy rules before the query
+sees them.  Your own queries never do.  REDACTION is one of:
+
+  an alist of (COLUMN . ROLE), COLUMN a string and ROLE one of
+      `cmacs-lql-redaction-roles', saying what the columns are;
+  a function of one argument, the rows as alists keyed by column name
+      (strings), returning the rows a model may see -- for a source
+      whose rule is not a matter of column roles.  It may call
+      `cmacs-lql-redact-rows' for the part that is;
+  the symbol `none': the rows are already what a model may see (the
+      journal's `activity', filtered when it was recorded);
+  nil, the default: nothing is known about the columns, so every string
+      in every row goes through the free-text rules.
+
+Whatever it is, when the rules are not usable, or redacting a source
+signals, a model's query sees that source with no rows."
+  (let ((spec (or (gethash name cmacs-lql--sources)
+                  (error "cmacs-lql: no source %s" name))))
+    (cmacs-lql--check-redaction redaction)
+    (puthash name (plist-put spec :redaction redaction) cmacs-lql--sources)
+    (cmacs-lql--forget-snapshots name)))
+
+(defun cmacs-lql--row-alist (row)
+  "ROW (a plist or an alist) as an alist keyed by column-name strings."
+  (if (and (consp row) (keywordp (car row)))
+      (cl-loop for (k v) on row by #'cddr
+               collect (cons (substring (symbol-name k) 1) v))
+    (mapcar (lambda (p) (cons (format "%s" (car p)) (cdr p))) row)))
+
+(defun cmacs-lql--redact-text-value (value memo)
+  "VALUE with every string in it through the free-text rules.
+MEMO caches strings already done: a column repeats itself down a table."
+  (cond
+   ((stringp value)
+    (let ((hit (gethash value memo 'miss)))
+      (if (eq hit 'miss)
+          (puthash value (cmacs-redact-text value) memo)
+        hit)))
+   ((and (consp value) (not (keywordp (car value))) (proper-list-p value))
+    (mapcar (lambda (v) (cmacs-lql--redact-text-value v memo)) value))
+   ((vectorp value)
+    (vconcat (mapcar (lambda (v) (cmacs-lql--redact-text-value v memo))
+                     value)))
+   (t value)))
+
+(defun cmacs-lql-redact-rows (rows roles)
+  "Return ROWS as a model may be shown them, with columns as ROLES says.
+
+ROWS are plists or alists; ROLES is an alist of (COLUMN . ROLE) as for
+`cmacs-lql-set-source-redaction'.  The result is a list of alists keyed
+by column-name strings, without the rows the rules exclude.
+
+This applies the rules whoever is asking -- a source's redaction
+function is only called for a model -- except that outside a
+model-facing context the functions of cmacs-redact.el are themselves the
+identity.  Nothing here touches the disk."
+  (require 'cmacs-redact)
+  (let ((names (make-hash-table :test #'equal))
+        (texts (make-hash-table :test #'equal))
+        ;; A project is looked up on disk the first time a buffer is
+        ;; seen.  Not from here: this is one pass over every buffer, on
+        ;; the editor thread.  What is already known is still used.
+        (cmacs-redact-resolve-projects nil)
+        out)
+    (cl-flet ((entity (kind value)
+                ;; (SHOWN) for a value that may be shown, nil to drop
+                ;; the row.  Memoised per kind and value.
+                (let* ((key (cons kind value))
+                       (hit (gethash key names 'miss)))
+                  (if (not (eq hit 'miss))
+                      hit
+                    (puthash key
+                             (let ((shown (pcase kind
+                                            ('buffer (cmacs-redact-buffer-name value))
+                                            ('file (cmacs-redact-file value))
+                                            ('url (cmacs-redact-url value)))))
+                               (and shown (list shown)))
+                             names)))))
+      (dolist (row rows)
+        (let* ((row (cmacs-lql--row-alist row))
+               (keep t) (rewritten nil)
+               (app (cl-find 'app roles :key #'cdr))
+               (title (cl-find 'title roles :key #'cdr))
+               (pid (cl-find 'pid roles :key #'cdr)))
+          ;; The things a row is about first: they decide whether there
+          ;; is a row at all.
+          (dolist (cell row)
+            (let ((role (cdr (assoc (car cell) roles))))
+              (when (and keep (memq role '(buffer file url))
+                         (stringp (cdr cell)))
+                (let ((shown (entity role (cdr cell))))
+                  (cond ((null shown) (setq keep nil))
+                        ((not (equal (car shown) (cdr cell)))
+                         (setq rewritten t)
+                         (setcdr cell (car shown))))))))
+          (when (and keep (or app title))
+            (let* ((app-cell (and app (assoc (car app) row)))
+                   (title-cell (and title (assoc (car title) row)))
+                   (pid-cell (and pid (assoc (car pid) row))))
+              (when (or (stringp (cdr app-cell)) (stringp (cdr title-cell)))
+                (let ((shown (cmacs-redact-window (cdr app-cell)
+                                                  (cdr title-cell)
+                                                  (cdr pid-cell))))
+                  (if (null shown)
+                      (setq keep nil)
+                    (unless (and (equal (car shown) (cdr app-cell))
+                                 (equal (cdr shown) (cdr title-cell)))
+                      (setq rewritten t))
+                    (when app-cell (setcdr app-cell (car shown)))
+                    (when title-cell (setcdr title-cell (cdr shown))))))))
+          (when keep
+            (dolist (cell row)
+              (let ((role (if (assoc (car cell) roles)
+                              (cdr (assoc (car cell) roles))
+                            'text)))
+                (pcase role
+                  ('text (setcdr cell (cmacs-lql--redact-text-value
+                                       (cdr cell) texts)))
+                  ('derived (when rewritten (setcdr cell nil))))))
+            (push row out)))))
+    (nreverse out)))
+
+(defun cmacs-lql--redacted-rows (name spec rows)
+  "ROWS of source NAME (its SPEC) as a model may be shown them.
+No rows when the rules are not usable or anything here signals: a source
+that cannot be redacted is, to a model, an empty one."
+  (condition-case nil
+      (let ((redaction (plist-get spec :redaction)))
+        (cond
+         ((not (cmacs-redact-ready-p)) nil)
+         ((eq redaction 'none) rows)
+         ((functionp redaction)
+          (funcall redaction (mapcar #'cmacs-lql--row-alist rows)))
+         (t (cmacs-lql-redact-rows rows redaction))))
+    (error
+     ;; Not the error itself: it could quote a row.
+     (message "cmacs-lql: source %s could not be redacted; a model sees no rows"
+              name)
+     nil)))
+
+(defun cmacs-lql--model-facing-p ()
+  "Non-nil when the query being submitted is for a model.
+Asked on the editor thread while the snapshots are taken, inside the
+dynamic extent of whoever submitted the query."
+  (require 'cmacs-redact)
+  (cmacs-redact-active-p))
 
 (defun cmacs-lql--snapshot (name)
-  "Rows of Elisp source NAME as a JSON array string."
+  "Rows of Elisp source NAME as a JSON array string.
+
+A snapshot made for a model is the redacted one.  It is cached apart
+from the one made for the user (see `cmacs-lql--snapshot-cache'), and
+its key also carries `cmacs-redact-generation', so a change of rules is
+a change of snapshot."
   (let* ((spec (gethash name cmacs-lql--sources))
+         (redacted (and (cmacs-lql--model-facing-p) t))
          (gen-fn (plist-get spec :generation))
-         (key (and gen-fn (funcall gen-fn)))
-         (hit (and gen-fn (gethash name cmacs-lql--snapshot-cache))))
+         (key (and gen-fn
+                   (list (funcall gen-fn)
+                         (and redacted (cmacs-redact-generation)))))
+         (slot (cons name redacted))
+         (hit (and gen-fn (gethash slot cmacs-lql--snapshot-cache))))
     (if (and hit (equal (car hit) key))
         (cdr hit)
-      (let ((json (cmacs-lql--snapshot-1 name spec)))
-        (when gen-fn (puthash name (cons key json) cmacs-lql--snapshot-cache))
+      (let ((json (cmacs-lql--snapshot-1 name spec redacted)))
+        (when gen-fn (puthash slot (cons key json) cmacs-lql--snapshot-cache))
         json))))
 
-(defun cmacs-lql--snapshot-1 (name spec)
-  "Serialise the rows of Elisp source NAME (its SPEC) to a JSON array."
+(defun cmacs-lql--snapshot-1 (name spec &optional redacted)
+  "Serialise the rows of Elisp source NAME (its SPEC) to a JSON array.
+REDACTED non-nil means the rows are for a model."
   (let* ((columns (plist-get spec :columns))
          (rows (condition-case err
                    (funcall (plist-get spec :function))
                  (error
                   (message "cmacs-lql: source %s failed: %s" name
                            (error-message-string err))
-                  nil))))
+                  nil)))
+         (rows (if redacted
+                   (cmacs-lql--redacted-rows name spec rows)
+                 rows)))
     (json-serialize
      (vconcat (mapcar (lambda (row) (cmacs-lql--row-object row columns))
                       rows))
@@ -743,13 +990,43 @@ on the libresearch server instead."
       (nreverse rows))))
 
 (defun cmacs-lql--gowl-client-rows ()
-  "Rows of the `gowl_clients' source (windows of the gowl compositor)."
+  "Rows of the `gowl_clients' source (windows of the gowl compositor).
+Each row names its window -- app id, title, process -- beside the client
+object: that is what a query filters on, and it is what the privacy
+rules need in order to say whether a model may see the row at all."
   (when (fboundp 'gowl-list-clients)
     (mapcar (lambda (c)
               (if (and (consp c) (keywordp (car c)))
                   c
-                (list :client (format "%S" c))))
+                (let ((info (and (fboundp 'gowl-client-info)
+                                 (ignore-errors (gowl-client-info c))))
+                      (pid (and (fboundp 'gowl-client-pid)
+                                (ignore-errors (gowl-client-pid c)))))
+                  (list :client (format "%S" c)
+                        :app_id (alist-get 'app-id info)
+                        :title (alist-get 'title info)
+                        :pid (and (integerp pid) (> pid 0) pid)
+                        :tags (alist-get 'tags info)
+                        :floating (and (alist-get 'floating info) t)))))
             (condition-case nil (gowl-list-clients) (error nil)))))
+
+(defun cmacs-lql--redact-window-rows (rows)
+  "The `windows' rows a model may see.
+A column-role source but for one thing: `frame' is the title of one of
+this Emacs's own frames, which is usually the name of a buffer on it.
+So it is judged as that window is (`cmacs-redact-window' with our own
+pid, which also looks at the buffers on the frame) and blanked, not
+shown, when the window may not be -- the row stays, for the buffer in it
+may be perfectly showable."
+  (cmacs-lql-redact-rows
+   (mapcar (lambda (row)
+             (let ((cell (assoc "frame" row)))
+               (when (stringp (cdr cell))
+                 (setcdr cell (cdr (cmacs-redact-window "emacs" (cdr cell)
+                                                        (emacs-pid))))))
+             row)
+           rows)
+   '(("buffer" . buffer) ("frame" . plain))))
 
 (defun cmacs-lql--define-shipped-sources ()
   "Define the editor-state sources cmacs ships."
@@ -758,41 +1035,57 @@ on the libresearch server instead."
    '(("name" string) ("file" string) ("directory" string) ("mode" string)
      ("size" int) ("modified" boolean) ("read_only" boolean)
      ("visible" boolean) ("process" string) ("hidden" boolean))
-   #'cmacs-lql--buffer-rows "Every live buffer.")
+   #'cmacs-lql--buffer-rows "Every live buffer."
+   '(("name" . buffer) ("file" . file) ("directory" . derived)
+     ("mode" . plain) ("process" . text)))
   (cmacs-lql-define-source
    "windows"
    '(("frame" string) ("buffer" string) ("width" int) ("height" int)
      ("selected" boolean) ("dedicated" boolean) ("point" int))
-   #'cmacs-lql--window-rows "Every window of every frame.")
+   #'cmacs-lql--window-rows "Every window of every frame."
+   #'cmacs-lql--redact-window-rows)
   (cmacs-lql-define-source
    "processes"
    '(("name" string) ("pid" int) ("status" string) ("type" string)
      ("command" string) ("buffer" string))
-   #'cmacs-lql--process-rows "Emacs subprocesses and network processes.")
+   #'cmacs-lql--process-rows "Emacs subprocesses and network processes."
+   ;; A process is named after its command or its buffer, so the name
+   ;; is text too.
+   '(("name" . text) ("status" . plain) ("type" . plain)
+     ("command" . text) ("buffer" . buffer)))
   (cmacs-lql-define-source
    "recentf"
    '(("rank" int) ("file" string) ("directory" string) ("extension" string)
      ("remote" boolean) ("exists" boolean))
-   #'cmacs-lql--recentf-rows "Recently visited files (recentf).")
+   #'cmacs-lql--recentf-rows "Recently visited files (recentf)."
+   '(("file" . file) ("directory" . derived) ("extension" . derived)))
   (cmacs-lql-define-source
    "kill_ring"
    '(("index" int) ("length" int) ("text" string))
-   #'cmacs-lql--kill-ring-rows "The kill ring, newest first.")
+   #'cmacs-lql--kill-ring-rows "The kill ring, newest first."
+   '(("text" . text)))
   (cmacs-lql-define-source
    "bookmarks"
    '(("name" string) ("file" string) ("position" int))
-   #'cmacs-lql--bookmark-rows "Emacs bookmarks.")
+   #'cmacs-lql--bookmark-rows "Emacs bookmarks."
+   '(("name" . text) ("file" . file)))
   (cmacs-lql-define-source
    "org_headings"
    '(("file" string) ("line" int) ("level" int) ("heading" string)
      ("todo" string) ("priority" string) ("tags" array) ("scheduled" string)
      ("deadline" string) ("id" string))
    #'cmacs-lql--org-heading-rows
-   "Headings of `org-agenda-files' (at most `cmacs-lql-org-max-files').")
+   "Headings of `org-agenda-files' (at most `cmacs-lql-org-max-files')."
+   '(("file" . file) ("heading" . text) ("todo" . plain)
+     ("priority" . plain) ("tags" . text) ("scheduled" . plain)
+     ("deadline" . plain) ("id" . plain)))
   (when (bound-and-true-p is-cmacs-gowl)
     (cmacs-lql-define-source
-     "gowl_clients" '(("client" any))
-     #'cmacs-lql--gowl-client-rows "Windows managed by the gowl compositor.")))
+     "gowl_clients"
+     '(("client" any) ("app_id" string) ("title" string) ("pid" int)
+       ("tags" int) ("floating" boolean))
+     #'cmacs-lql--gowl-client-rows "Windows managed by the gowl compositor."
+     '(("app_id" . app) ("title" . title) ("pid" . pid) ("client" . text)))))
 
 (when (cmacs-lql-available-p)
   (cmacs-lql--define-shipped-sources))

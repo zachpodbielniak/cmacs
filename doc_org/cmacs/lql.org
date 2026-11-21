@@ -226,7 +226,7 @@ Colon commands:
 | =kill_ring=    | index, length, text (first =cmacs-lql-kill-ring-max-chars=)                                   | =kill-ring=                             |
 | =bookmarks=    | name, file, position                                                                          | =bookmark-alist=                        |
 | =org_headings= | file, line, level, heading, todo, priority, tags, scheduled, deadline, id                     | =org-agenda-files= (at most =cmacs-lql-org-max-files=) |
-| =gowl_clients= | client                                                                                        | gowl's windows (only under =--gowl=)    |
+| =gowl_clients= | client, app_id, title, pid, tags, floating                                                    | gowl's windows (only under =--gowl=)    |
 
 A source's function runs on the editor thread only when a query names that source, just before the query runs.  =org_headings= reads every agenda file it is allowed, so =cmacs-lql-org-max-files= bounds it.
 

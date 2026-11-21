@@ -448,6 +448,11 @@ and the task it belongs to does not change."
 ;; than in a file of its own choosing because this one is loaded eagerly
 ;; with the brigade: the migrated families have to be in the registry
 ;; before the first MCP session lists its tools.
+;; The redaction table first: the families' tools call it, and loading it
+;; here keeps the first tool call from loading a file from inside a call.
+;; A build where it fails to load still fails closed, because each tool
+;; requires it again in its body and that signals.
+(require 'cmacs-redact nil 'noerror)
 (require 'cmacs-capability nil 'noerror)
 
 ;;; cmacs-brigade-tools.el ends here

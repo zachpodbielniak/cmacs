@@ -509,18 +509,30 @@ handle_gowl_screenshot (McpServer *s, const gchar *n,
   if (pattern != NULL)
     {
       g_autofree gchar *ep = cmacs_dispatch_lisp_escape (pattern);
+      /* CMACS redact: an image cannot be rewritten the way a title
+         can, so the user's privacy rules are asked first and the
+         capture refused whole (cmacs-redact-capture-guard signals).
+         A single window is its own picture, so only that window is
+         asked about; an excluded one is reported exactly like one that
+         matched nothing, so the pattern cannot be used to probe.  */
       expr = g_strdup_printf (
-        "(let ((c (gowl-find-client \"%s\" '%s)))"
-        "  (if c (let ((shot (gowl-screenshot-client c)))"
+        "(progn (require 'cmacs-redact)"
+        " (let ((c (gowl-find-client \"%s\" '%s)))"
+        "  (if (and c (not (cmacs-redact-capture-refused-p 'client c)))"
+        "      (let ((shot (gowl-screenshot-client c)))"
         "          (when shot"
         "            (apply #'gowl-screenshot-save-png"
         "                   (append shot (list \"%s\"))) t))"
-        "    (error \"no client matching pattern\")))",
+        "    (error \"no client matching pattern\"))))",
         ep, gowl_by_field (a), path);
     }
   else
+    /* MODE is one of three literals checked above: `window' is the
+       focused window alone, the other two everything on screen.  */
     expr = g_strdup_printf (
-      "(gowl-screenshot '%s \"%s\" t)", mode, path);
+      "(progn (require 'cmacs-redact)"
+      " (cmacs-redact-capture-guard '%s)"
+      " (gowl-screenshot '%s \"%s\" t))", mode, mode, path);
 
   str = cmacs_dispatch_eval (expr, &error);
   if (str == NULL)

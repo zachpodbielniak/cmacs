@@ -23,6 +23,11 @@
 (require 'cmacs)
 (require 'cl-lib)
 (require 'cmacs-ai-view)
+;; The view goes through the user's privacy rules.  These tests are
+;; about the view, so they run with the rules off -- a rule in the
+;; developer's own ~/.config must never decide a result here.  What the
+;; rules do to the view is tested in cmacs-redact-tests.el.
+(require 'cmacs-redact)
 ;; Required, not merely declared: tests `let'-bind defcustoms from
 ;; these, and without the definitions known to be special at compile
 ;; time the bindings are lexical and silently do nothing.
@@ -52,6 +57,7 @@ of these functions is actually used in."
   (declare (indent 1) (debug t))
   `(let ((cmacs-ai-view-tests--buffers nil)
          (cmacs-ai-view--last nil)
+         (cmacs-redact-mode nil)
          (height (frame-height)))
      (unwind-protect
          (save-window-excursion
