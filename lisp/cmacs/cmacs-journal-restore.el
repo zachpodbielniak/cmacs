@@ -834,6 +834,78 @@ Returns (EVENT . SNAPSHOT), or nil."
                                  candidates))))))
 
 ;;;###autoload
+(defun cmacs-journal-restore-plan-from-snapshot (snapshot &rest props)
+  "Work out what putting the arrangement SNAPSHOT back would do.
+
+SNAPSHOT is a plist in the checkpoint format
+\(`cmacs-journal-checkpoint-snapshot'): :frames :buffers :urls :clients
+:monitors.  It does not have to come from the journal, and the journal
+is neither read nor written here: this is the door for callers that keep
+arrangements of their own (cmacs-context.el).  Changes nothing.
+
+PROPS is a plist:
+  :running LIST   the windows to match against (default what gowl has)
+  :title STRING   the plan buffer's first line, and the name the
+                  confirmation and the final message use
+  :time SECONDS   the plan's :time (default now)
+  :notes LIST     strings shown under the title
+  :execute FN     called with the plan when it is confirmed in the plan
+                  buffer, instead of `cmacs-journal-restore-execute'
+  :refresh FN     called with no argument by the plan buffer's refresh
+                  key; returns the new plan
+
+Returns a plan like `cmacs-journal-restore-plan' does, with the same
+items for the same snapshot, which `cmacs-journal-restore-execute-plan'
+carries out."
+  (let* ((gowl (cmacs-journal-restore--gowl-p))
+         (running (or (plist-get props :running)
+                      (and gowl (cmacs-journal-restore--running))))
+         (leaves (mapcan (lambda (frame)
+                           (cmacs-journal-restore--leaves
+                            (plist-get frame :tree)))
+                         (copy-sequence (plist-get snapshot :frames))))
+         (items
+          (append
+           (cmacs-journal-restore--file-items
+            (append leaves (plist-get snapshot :buffers)))
+           (cmacs-journal-restore--url-items
+            (append leaves (plist-get snapshot :urls)))
+           (cmacs-journal-restore--app-items
+            (plist-get snapshot :clients) running (or gowl running))
+           (cmacs-journal-restore--layout-items snapshot (or gowl running))
+           (let ((focus (cmacs-journal-restore--focus-item snapshot nil)))
+             (and focus (list focus)))
+           (cmacs-journal-restore--gone-buffer-items leaves))))
+    ;; Every key an execution or a caller may later set is here, so
+    ;; `plist-put' changes this list in place wherever it is held.
+    (list :time (or (plist-get props :time) (float-time))
+          :checkpoint nil
+          :items items
+          :notes (append
+                  (plist-get props :notes)
+                  (list "Applications are started again; their own state (documents, tabs, unsaved work) is not restored."))
+          :log nil
+          :title (plist-get props :title)
+          :execute (plist-get props :execute)
+          :refresh (plist-get props :refresh)
+          :cancelled nil
+          :done nil)))
+
+(defun cmacs-journal-restore--gone-buffer-items (leaves)
+  "Skip items for the LEAVES whose non-file buffer no longer exists."
+  (let (items)
+    (dolist (leaf leaves)
+      (let ((name (plist-get leaf :buffer)))
+        (when (and (stringp name)
+                   (null (plist-get leaf :file))
+                   (null (plist-get leaf :url))
+                   (not (get-buffer name)))
+          (push (cmacs-journal-restore--skip
+                 name "that buffer is gone and visits no file")
+                items))))
+    (nreverse items)))
+
+;;;###autoload
 (defun cmacs-journal-restore-plan (time &optional running)
   "Work out what restoring the moment TIME would do.  Changes nothing.
 
@@ -900,16 +972,8 @@ remote caller gets an empty plan."
            (let ((focus (cmacs-journal-restore--focus-item snapshot span)))
              (and focus (list focus)))))
     ;; Non-file buffers that were in a window and are gone.
-    (dolist (leaf leaves)
-      (let ((name (plist-get leaf :buffer)))
-        (when (and (stringp name)
-                   (null (plist-get leaf :file))
-                   (null (plist-get leaf :url))
-                   (not (get-buffer name)))
-          (setq items
-                (append items
-                        (list (cmacs-journal-restore--skip
-                               name "that buffer is gone and visits no file")))))))
+    (setq items (append items
+                        (cmacs-journal-restore--gone-buffer-items leaves)))
     (cond
      ((null found)
       (push "No checkpoint at or before that time: turn on `cmacs-journal-checkpoint-mode' to record arrangements.  This plan is from focus spans only."
@@ -1001,18 +1065,24 @@ Nothing has been changed by showing this.  \\[cmacs-journal-restore-confirm] doe
          (column (current-column)))
     (erase-buffer)
     (insert (propertize
-             (format "Put me back where I was: %s\n"
-                     (format-time-string "%A %Y-%m-%d %H:%M"
-                                         (plist-get plan :time)))
+             (if (plist-get plan :title)
+                 (concat (plist-get plan :title) "\n")
+               (format "Put me back where I was: %s\n"
+                       (format-time-string "%A %Y-%m-%d %H:%M"
+                                           (plist-get plan :time))))
              'face 'cmacs-journal-restore-heading))
-    (insert (if (plist-get plan :checkpoint)
-                (format "Arrangement recorded %s (%s before).\n"
-                        (format-time-string "%Y-%m-%d %H:%M"
-                                            (plist-get plan :checkpoint))
-                        (cmacs-journal--format-duration
-                         (- (plist-get plan :time)
-                            (plist-get plan :checkpoint))))
-              "No arrangement was recorded for this moment.\n"))
+    ;; A plan with a title is not from the journal
+    ;; (`cmacs-journal-restore-plan-from-snapshot'): it has no moment
+    ;; and no checkpoint to describe.
+    (unless (plist-get plan :title)
+      (insert (if (plist-get plan :checkpoint)
+                  (format "Arrangement recorded %s (%s before).\n"
+                          (format-time-string "%Y-%m-%d %H:%M"
+                                              (plist-get plan :checkpoint))
+                          (cmacs-journal--format-duration
+                           (- (plist-get plan :time)
+                              (plist-get plan :checkpoint))))
+                "No arrangement was recorded for this moment.\n")))
     (dolist (note (plist-get plan :notes))
       (insert note "\n"))
     (insert (substitute-command-keys
@@ -1056,6 +1126,12 @@ Nothing has been changed by showing this.  \\[cmacs-journal-restore-confirm] doe
       (goto-char (point-min)))
     (pop-to-buffer buffer)
     buffer))
+
+(defun cmacs-journal-restore-show-plan (plan)
+  "Show PLAN in the plan buffer and return the buffer.  Changes nothing.
+For a plan from `cmacs-journal-restore-plan-from-snapshot'; confirming
+it there calls the plan's :execute function."
+  (cmacs-journal-restore--show plan))
 
 (defun cmacs-journal-restore--refresh-buffer (plan)
   "Redraw the plan buffer if it still shows PLAN."
@@ -1121,8 +1197,10 @@ Nothing has been changed by showing this.  \\[cmacs-journal-restore-confirm] doe
   "Build the plan again for the same moment."
   (interactive nil cmacs-journal-restore-mode)
   (setq cmacs-journal-restore--plan
-        (cmacs-journal-restore-plan
-         (plist-get cmacs-journal-restore--plan :time)))
+        (if (functionp (plist-get cmacs-journal-restore--plan :refresh))
+            (funcall (plist-get cmacs-journal-restore--plan :refresh))
+          (cmacs-journal-restore-plan
+           (plist-get cmacs-journal-restore--plan :time))))
   (cmacs-journal-restore--render))
 
 (defun cmacs-journal-restore--summary (plan)
@@ -1145,11 +1223,17 @@ Nothing has been changed by showing this.  \\[cmacs-journal-restore-confirm] doe
     (unless plan (user-error "No plan in this buffer"))
     (unless (cmacs-journal-restore--enabled plan)
       (user-error "Nothing is ticked"))
-    (when (y-or-n-p (format "Restore %s from %s? "
-                            (cmacs-journal-restore--summary plan)
-                            (format-time-string "%a %H:%M"
-                                                (plist-get plan :time))))
-      (cmacs-journal-restore-execute plan))))
+    (when (y-or-n-p (if (plist-get plan :title)
+                        (format "%s: %s? " (plist-get plan :title)
+                                (cmacs-journal-restore--summary plan))
+                      (format "Restore %s from %s? "
+                              (cmacs-journal-restore--summary plan)
+                              (format-time-string "%a %H:%M"
+                                                  (plist-get plan :time)))))
+      (funcall (if (functionp (plist-get plan :execute))
+                   (plist-get plan :execute)
+                 #'cmacs-journal-restore-execute)
+               plan))))
 
 ;;;; Doing it
 
@@ -1575,23 +1659,103 @@ Refuses to run for an agent or a remote caller: a restore launches
 programs, and that takes a person."
   (when (cmacs-journal-agent-context-p)
     (error "cmacs-journal-restore is for the person at the keyboard, not for agents or remote callers"))
-  (plist-put plan :log nil)
-  (cmacs-journal-restore--open-files plan)
-  (let ((urls (cmacs-journal-restore--open-urls-now plan)))
-    (cmacs-journal-restore--restore-windows plan urls)
-    (when (cmacs-journal-restore--gowl-p)
-      (cmacs-journal-restore--restore-apps plan)
-      (cmacs-journal-restore--restore-views plan))
-    (cmacs-journal-restore--restore-focus plan urls))
+  (cmacs-journal-restore-execute-plan plan))
+
+(defun cmacs-journal-restore--stages (plan)
+  "The steps that carry out PLAN, in order, as functions of no argument.
+The pages opened by one step are what the later ones show and select,
+so the steps share that list."
+  (let ((urls nil))
+    (list
+     (lambda () (cmacs-journal-restore--open-files plan))
+     (lambda () (setq urls (cmacs-journal-restore--open-urls-now plan)))
+     (lambda () (cmacs-journal-restore--restore-windows plan urls))
+     (lambda ()
+       (when (cmacs-journal-restore--gowl-p)
+         (cmacs-journal-restore--restore-apps plan)
+         (cmacs-journal-restore--restore-views plan)))
+     (lambda () (cmacs-journal-restore--restore-focus plan urls)))))
+
+(defun cmacs-journal-restore--finish (plan options)
+  "The steps of PLAN are done: report it as OPTIONS say."
+  (plist-put plan :done t)
   (cmacs-journal-restore--refresh-buffer plan)
-  (let ((failed (cl-count "failed" (plist-get plan :log)
-                          :key #'car :test #'equal)))
-    (message "cmacs-journal: restored %s%s%s (details in *cmacs-journal-restore*)"
-             (format-time-string "%a %H:%M" (plist-get plan :time))
-             (if (> failed 0) (format ", %d failed" failed) "")
-             (if cmacs-journal-restore--pending
-                 "; waiting for application windows" "")))
+  (unless (plist-get options :quiet)
+    (let ((failed (cl-count "failed" (plist-get plan :log)
+                            :key #'car :test #'equal)))
+      (message "cmacs-journal: restored %s%s%s (details in *cmacs-journal-restore*)"
+               (or (plist-get plan :title)
+                   (format-time-string "%a %H:%M" (plist-get plan :time)))
+               (if (> failed 0) (format ", %d failed" failed) "")
+               (if (cl-some (lambda (p) (eq (plist-get p :plan) plan))
+                            cmacs-journal-restore--pending)
+                   "; waiting for application windows" ""))))
+  (when (functionp (plist-get options :on-done))
+    (funcall (plist-get options :on-done) plan)))
+
+(defun cmacs-journal-restore--run-stages (plan stages options)
+  "Run the first of STAGES for PLAN and leave the rest to a timer.
+A cancelled plan runs nothing more.  A step that signals is logged and
+the rest go on, as the steps themselves do for their items."
+  (cond
+   ((plist-get plan :cancelled) nil)
+   ((null stages) (cmacs-journal-restore--finish plan options))
+   (t
+    (condition-case err
+        (funcall (car stages))
+      (error (cmacs-journal-restore--note
+              plan "failed" (error-message-string err))))
+    (run-at-time 0 nil #'cmacs-journal-restore--run-stages
+                 plan (cdr stages) options))))
+
+;;;###autoload
+(defun cmacs-journal-restore-execute-plan (plan &rest options)
+  "Carry out PLAN without asking who is calling.
+
+The executor under `cmacs-journal-restore-execute', for callers that
+have done their own asking (cmacs-context.el, whose tool is confirmed by
+the person before it runs).  The steps and their order are the ones
+described there.  OPTIONS is a plist:
+
+  :async B     non-nil returns at once and runs each step from a timer,
+               so the caller's command returns before a file is visited;
+               `cmacs-journal-restore-cancel' stops a plan between steps
+  :quiet B     non-nil shows no message when the steps are done
+  :on-done FN  called with PLAN after the last step.  Windows of started
+               applications may still be on their way then; they are
+               placed by the timer described above.
+
+Returns PLAN.  Its :log says what happened and its :done is non-nil once
+the last step has run."
+  (plist-put plan :log nil)
+  (plist-put plan :cancelled nil)
+  (plist-put plan :done nil)
+  (let ((stages (cmacs-journal-restore--stages plan)))
+    (if (plist-get options :async)
+        (run-at-time 0 nil #'cmacs-journal-restore--run-stages
+                     plan stages options)
+      (mapc #'funcall stages)
+      (cmacs-journal-restore--finish plan options)))
   plan)
+
+(defun cmacs-journal-restore-cancel (plan)
+  "Stop carrying out PLAN: no further step runs.
+What has been done stays done -- files visited stay open, programs
+started stay started (on the tags they were started for) -- but nothing
+more is opened, moved or focused, and the windows PLAN was still waiting
+for are no longer looked for.  Returns non-nil if PLAN was unfinished."
+  (let ((unfinished
+         (or (not (plist-get plan :done))
+             (cl-some (lambda (p) (eq (plist-get p :plan) plan))
+                      cmacs-journal-restore--pending))))
+    (plist-put plan :cancelled t)
+    (setq cmacs-journal-restore--pending
+          (cl-remove-if (lambda (p) (eq (plist-get p :plan) plan))
+                        cmacs-journal-restore--pending))
+    (when unfinished
+      (cmacs-journal-restore--note plan "stopped" "cancelled before it finished")
+      (cmacs-journal-restore--refresh-buffer plan))
+    unfinished))
 
 ;;;; Commands
 

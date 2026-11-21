@@ -1,0 +1,277 @@
+#+TITLE: cmacs-context — Named Arrangements You Switch Between
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+[[file:cmacs-journal-restore.org][cmacs-journal-restore]] answers "put me back where I was at /TIME/". =cmacs-context= answers "switch me to /WORK/". A context is a named arrangement — the Emacs window tree, the open files and pages, and under gowl the applications, their tags, and each monitor's view and layout — that you save, switch to, update and list.
+
+#+begin_src text
+M-x cmacs-context-save RET work RET        capture what is up now, and be in it
+M-x cmacs-context-switch RET research RET  go somewhere else
+M-x cmacs-context-list                     all of them, with keys
+#+end_src
+
+It is not a second implementation of anything. An arrangement is a checkpoint snapshot (=cmacs-journal-checkpoint-snapshot=, the format the journal's checkpoints use). A switch is a restore plan built from that snapshot (=cmacs-journal-restore-plan-from-snapshot=) and carried out by the restore's executor (=cmacs-journal-restore-execute-plan=). The plan buffer you are shown is the restore's plan buffer.
+
+Five things about it, stated plainly:
+
+- *The journal is not involved.* A context is saved and switched to with =cmacs-journal-mode= off, and saving writes nothing to the journal. The only thing a context ever writes there is one event per switch, and only while the journal is already recording (see /The journal/).
+- *A switch adds and arranges. It never closes.* No buffer is killed and no application's window is closed, ever. Windows that belong to neither context stay where they are.
+- *An application is started again, not resumed.* As with a restore: its documents, tabs and unsaved work are its own business.
+- *The journal's filters decide what a saved context holds*, because the snapshot is the checkpoint's. A buffer, page or window your rules exclude is not in the file, and when the rule set cannot be loaded nothing is saved at all.
+- *It works without the compositor.* In a pgtk or tty Emacs a context is its Emacs half: buffers, pages and the window tree. Every gowl call is behind a check that gowl is running.
+
+Pure Elisp, in every build. Files: =lisp/cmacs/cmacs-context.el=, =lisp/cmacs/cmacs-context-tools.el=; tests in =test/cmacs/cmacs-context-tests.el=.
+
+* Two kinds of context
+
+** Saved
+
+=cmacs-context-save NAME= captures the live arrangement into =cmacs-context-directory= (=$XDG_STATE_HOME/cmacs/contexts=, mode 0700), one =NAME.json= per context (mode 0600, written to a temporary file and renamed). The file is JSON because that is what the checkpoint encoder produces and Emacs has no YAML writer; it is pretty-printed, and its =snapshot= member is exactly a checkpoint document.
+
+With a prefix argument the save asks what to include. The categories are those of =cmacs-context-save-include=:
+
+| Category  | What it holds                                                        |
+|-----------+----------------------------------------------------------------------|
+| =buffers= | the Emacs window tree and the open file buffers                      |
+| =urls=    | the pages in gsurf buffers                                           |
+| =apps=    | gowl's windows: app id, title, tags, monitor, floating, command line |
+| =layout=  | each monitor's tags in view and layout                               |
+
+A save captures every application window on every tag, not only the tags in view: a context is an arrangement of the desktop, and one that spans tags 1 to 3 must not lose tag 3 because you were looking at tag 1 when you left.
+
+The first save of a context also records a directory for it — the project root of what is selected, else its directory — unless the context declares one. Later saves keep it.
+
+** Declared
+
+#+begin_src emacs-lisp
+(cmacs-context-define "work"
+  :directory "~/source/projects/cmacs"
+  :project "cmacs"
+  :files '("AGENTS.md" "src/emacs.c")
+  :urls '("https://example.org/dashboard")
+  :apps '("foot"                                   ; a command; app id "foot"
+          (:command "librewolf --new-window" :app "librewolf" :tag 2)
+          (:command "foot -T scratch" :app "foot" :tag 3 :floating t
+           :geometry (100 100 900 600)))
+  :tags '(1)
+  :layout "tile"
+  :env '(("CMACS_DEBUG" . "1"))
+  :setup (lambda () (message "at work"))
+  :teardown #'my/stop-work-timers)
+#+end_src
+
+| Key          | Meaning                                                                                                                                 |
+|--------------+-----------------------------------------------------------------------------------------------------------------------------------------|
+| =:files=     | files to open; a relative name is under =:directory=. The first is shown on arriving                                                    |
+| =:urls=      | pages to open                                                                                                                           |
+| =:apps=      | a command string, or a plist of =:command :app :tag :tags :floating :monitor :geometry=. =:app= is the window's app id, by which a running one is recognised; it defaults to the command's name. With no tag an application goes to the context's =:tags=, else tag 1 |
+| =:tags=      | the tags to view on switching                                                                                                           |
+| =:layout=    | the gowl layout to set, by name. With no =:tags= it applies to the tags in view                                                         |
+| =:directory= | where the context lives                                                                                                                 |
+| =:project=   | a label for the list and the journal                                                                                                    |
+| =:label=     | the name the journal records, if not the context's                                                                                      |
+| =:env=       | variables for the applications this context *starts*                                                                                    |
+| =:setup=     | a function of no argument, called after arriving                                                                                        |
+| =:teardown=  | a function of no argument, called before leaving                                                                                        |
+| =:auto-save= | overrides =cmacs-context-auto-save-on-leave= for this context                                                                           |
+
+An unknown key is an error, not something ignored.
+
+The same data can live in YAML, read through =cmacs-yaml-parse-file= when the build has it. List the files in =cmacs-context-files=; they are read the first time contexts are asked for, and again by =M-x cmacs-context-reload-files=.
+
+#+begin_src yaml
+contexts:
+  research:
+    directory: ~/Documents/notes
+    tags: [4]
+    urls:
+      - https://example.org/paper
+    apps:
+      - command: foot
+        tag: 4
+    env:
+      TOPIC: lasers
+#+end_src
+
+Functions cannot be named from YAML: =setup= and =teardown= there are errors, and so is any other key this does not know. A file that fails is reported in a warning and the rest are still read.
+
+** Precedence, when a context is both
+
+A declared context becomes "both" the moment it is saved — by =cmacs-context-update=, or by leaving it with auto-save on.
+
+- *Arrangement: the saved state wins, category by category.* A category the saved state holds *replaces* the declaration's; it is not merged with it. Close an application, leave, come back: it is not started again. A category the save did not include still comes from the declaration.
+- *Everything else comes from the declaration* whenever it is declared there: =:directory=, =:project=, =:label=, =:env=, =:setup=, =:teardown=. The saved directory is used only when the declaration names none.
+- *=cmacs-context-delete= removes the saved state and leaves the declaration*, which is how you get back to what your init says. The list shows which contexts are =declared=, =saved= or =both=.
+
+The consequence to know about: once a declared context has been saved, editing its =:files= or =:apps= in your init changes nothing you can see until you delete the saved state. If you want a declaration to stay authoritative, give it =:auto-save nil= and do not update it.
+
+* Commands
+
+| Command                           | What it does                                                                |
+|-----------------------------------+-----------------------------------------------------------------------------|
+| =cmacs-context-save NAME=         | capture now as NAME and be in it; =C-u= asks what to include                |
+| =cmacs-context-switch NAME=       | switch; =C-u= shows the plan first                                          |
+| =cmacs-context-update=            | save the arrangement into the context you are in                            |
+| =cmacs-context-diff NAME=         | the plan a switch to NAME would carry out; changes nothing                  |
+| =cmacs-context-delete NAME=       | delete the saved state (a declaration remains)                              |
+| =cmacs-context-rename NAME NEW=   | rename a saved context (a declared one is renamed in your init)             |
+| =cmacs-context-list=              | a table: =RET=/=s= switch, =S= save over, =d= diff, =D= delete, =r= rename, =+= new, =g= refresh |
+| =cmacs-context-menu=              | the switcher: gowl's menu card, else the minibuffer                         |
+| =cmacs-context-cancel=            | stop the switch in flight                                                   |
+| =cmacs-context-log=               | what the last switch did, step by step                                      |
+| =cmacs-context-project-find-file= | =project-find-file= in the context's directory                              |
+| =cmacs-context-compile=           | =compile= in the context's directory                                        |
+
+The switcher lists the most recently used context first and the current one last, so the first candidate is where you were before. Each candidate is annotated: applications, files, project, when it was last used.
+
+A context's name is one line of at most 64 characters with no slash, not starting with a dot. It becomes a file name (percent-encoded).
+
+* What a switch does
+
+In order:
+
+1. A switch that is in flight is cancelled.
+2. *Leaving.* If you were in a context and had fully arrived at it: its =:teardown= runs, and with =cmacs-context-auto-save-on-leave= (default on) the arrangement you are leaving is saved into it. That is what makes contexts drift with you the way workspaces do. A context whose own switch was cancelled part-way is neither torn down nor saved: it would be saved half-arrived.
+3. *Arriving.* The context becomes current; its directory becomes the default =default-directory= (=cmacs-context-set-default-directory=); the journal is told, if it is recording; the mode line and the bar show the name; integrations are entered; other windows are parked, if you asked for that.
+4. *The plan is carried out* by the restore's executor, one step per timer: files, pages, the Emacs window tree, applications (running ones moved to their tags, missing ones started and pre-tagged so they never flash on the tag in view), each monitor's view and layout, focus.
+5. =:setup= runs, then =cmacs-context-after-switch-functions= with the new and the previous name.
+
+Switching to the context you are already in puts its saved arrangement back *without* saving the current one first: it is how you undo a mess.
+
+** Fast, and when it asks
+
+A switch has to be as fast as changing tags or nobody uses it, so it is immediate. The plan is shown for confirming only:
+
+- before the *first* switch to a context (=cmacs-context-confirm-first-switch=);
+- when it would start more than =cmacs-context-confirm-launches= applications (default 3);
+- with a prefix argument.
+
+Confirming in the plan buffer (=c=) switches; every line there can be turned off first.
+
+** Asynchronous and cancellable
+
+=cmacs-context-switch= returns before a file is visited. Each step runs from a zero-delay timer, and the windows of started applications are placed when they appear, from the restore's poll timer. Nothing waits: under =emacs --gowl= Emacs is the compositor and a wait for a window would be waiting for itself.
+
+A second switch while one is in flight stops the first between steps. What the first had done stays done — files visited stay open, programs started stay started, on the tags they were started for — but nothing more is opened, moved or focused, its =:setup= does not run, and its pending windows are no longer looked for. =M-x cmacs-context-cancel= does the same without switching.
+
+** Windows that belong to neither context
+
+Left alone, on their tags. With =cmacs-context-park-others= set to a tag number, a running window that is not part of the context being switched to *and* sits on one of that context's tags is moved to the parking tag, so the context's tags show only the context. It is not moved back, and it is never closed.
+
+** Emacs buffers and perspectives
+
+No buffer is killed by a switch. If =persp-mode= is on (Doom's workspaces), a context maps to the perspective of the same name: it is switched to — and made, if new — before the context's buffers are opened, so they land in it. This is a registered, optional integration (=cmacs-context-use-perspectives=); nothing requires persp-mode. Your own goes in with:
+
+#+begin_src emacs-lisp
+(cmacs-context-register-integration 'my-tabs
+  :when  (lambda () tab-bar-mode)
+  :enter (lambda (name) (tab-bar-switch-to-tab name)))
+#+end_src
+
+=:when=, =:enter= and =:leave= all run under =condition-case=.
+
+* What a context carries besides a layout
+
+** A directory
+
+=:directory= (or the directory recorded at the first save) is:
+
+- the default value of =default-directory= while you are in the context, so buffers that visit no file start there (the original is put back in a context with no directory);
+- where the applications the context *starts* are started — a terminal opens in the project;
+- what =cmacs-context-project-find-file= and =cmacs-context-compile= use, whatever buffer is current, and what =(cmacs-context-directory-now)= returns for your own commands.
+
+A plain =project-find-file= or =compile= still goes by the current buffer's directory, as it always has; the two commands above are the ones that go by the context.
+
+** Environment variables
+
+=:env= is set for the applications a context starts, by starting them through =env(1)= (=gowl-spawn= runs a command line, not a shell). The values:
+
+- come from your Elisp or YAML and from nowhere else — nothing is captured from running programs;
+- are *never* written to a saved state file;
+- are visible in the plan buffer and in the process list, like any command line.
+
+They are not a place for secrets.
+
+** Hooks
+
+=:setup= and =:teardown= run on the main thread under =condition-case=. One that signals is reported in the echo area and the switch goes on.
+
+** The journal
+
+If — and only if — the journal is recording, a switch writes *one* ordinary event:
+
+| Field     | Value                                |
+|-----------+--------------------------------------|
+| =kind=    | =context=                            |
+| =title=   | the context's =:label=, else its name |
+| =project= | the context's project                |
+| =detail=  | =switch=                             |
+
+It goes through the journal's normal filtered write path, so a rule can rewrite the name or drop the event (=kind: context=) like any other; no kind needs registering. A report can group time by context from these events: a context lasts from its event to the next one. Saving a context writes nothing.
+
+* Doors
+
+** A gowl key
+
+=cmacs-context-setup= binds =cmacs-context-key= (default =Super+Ctrl+c=) to the switcher. cmacs calls it when the desktop starts. The switcher uses the compositor's menu card (=menu-choose=), so it comes up over whatever application has the keyboard; without the menu module it falls back to the minibuffer.
+
+** The mode line and the bar
+
+The current context is shown in the mode line (=cmacs-context-mode-line-format=, through =global-mode-string=). Under gowl it is also pushed to the bar: to the slot =cmacs-context-bar-slot= when the bar has named slots (=cmacs-gowl-bar-slot-set=), otherwise as the text of the widget =cmacs-context-bar-widget= (default the shipped =label=). That widget is one item; if an LQL watch already drives it, set the option to nil.
+
+** Voice
+
+| Say                                                    | Does                                    |
+|--------------------------------------------------------+-----------------------------------------|
+| "switch to work" / "go back to research"               | switch (only for names that are contexts) |
+| "switch to context work" / "switch to the work context" | switch                                  |
+| "save this as research"                                | save as that name, new or existing      |
+| "update this context"                                  | save into the current one               |
+
+The bare "switch to NAME" is only claimed for names that are contexts — "switch to firefox" is still a window — so that command's pattern is rebuilt whenever the set of contexts changes. A switch that needs confirming shows its plan and asks the voice way.
+
+** Tools
+
+=lisp/cmacs/cmacs-context-tools.el=, on every capability surface:
+
+| Tool              | Does                                                    |
+|-------------------+---------------------------------------------------------|
+| =context_list=    | the contexts, one per line                              |
+| =context_current= | the one you are in, or =none=                           |
+| =context_switch=  | switch; =:destructive=, and the person is asked first   |
+
+A context's name is your own text, so every name shown to a caller goes through =cmacs-redact-text=, and =context_switch= accepts a name in the form it was shown: a model can switch to a context without being told what it is really called. A name your rules withhold is not listed and cannot be switched to through a tool — with the answer a name that does not exist gets.
+
+An agent or a remote caller cannot call =cmacs-context-switch= or =cmacs-context-save= directly: a switch starts programs, and the tool's confirmation is what stands in for the person. A switch reached through the tool never shows the plan buffer, because nothing on that path may prompt.
+
+* Options
+
+| Option                                 | Default                           | Meaning                                              |
+|----------------------------------------+-----------------------------------+------------------------------------------------------|
+| =cmacs-context-directory=              | =$XDG_STATE_HOME/cmacs/contexts=  | where saved contexts are kept                        |
+| =cmacs-context-files=                  | nil                               | YAML files declaring contexts                        |
+| =cmacs-context-auto-save-on-leave=     | t                                 | save the context you leave into itself               |
+| =cmacs-context-park-others=            | nil                               | a tag for other windows on the context's tags        |
+| =cmacs-context-confirm-first-switch=   | t                                 | show the plan before a first switch                  |
+| =cmacs-context-confirm-launches=       | 3                                 | show the plan above this many applications to start  |
+| =cmacs-context-save-include=           | =(buffers urls apps layout)=      | what a save captures                                 |
+| =cmacs-context-set-default-directory=  | t                                 | make the context's directory the default one         |
+| =cmacs-context-use-perspectives=       | t                                 | map contexts to persp-mode perspectives              |
+| =cmacs-context-key=                    | =Super+Ctrl+c=                    | the gowl key for the switcher                        |
+| =cmacs-context-mode-line-format=       | =" [%s]"=                         | the mode line text, or nil                           |
+| =cmacs-context-bar-widget=             | ="label"=                         | the bar widget to push to, until slots exist         |
+| =cmacs-context-bar-slot=               | ="context"=                       | the bar slot, when slots exist                       |
+| =cmacs-context-after-switch-functions= | nil                               | called with the new and the previous name            |
+
+The restore's own options apply to a switch too: =cmacs-journal-restore-app-timeout=, =cmacs-journal-restore-app-commands= (how to start an application, overriding the recorded command) and =cmacs-journal-restore-layout-names=.
+
+* What was added to the journal's files
+
+Three public functions and one alias in =cmacs-journal-restore.el=, all additive; =cmacs-journal-checkpoint.el= is unchanged.
+
+- =cmacs-journal-restore-plan-from-snapshot SNAPSHOT &rest PROPS= — a plan from a snapshot that need not come from the journal. =:title=, =:notes=, =:execute= and =:refresh= let the plan buffer serve another caller.
+- =cmacs-journal-restore-execute-plan PLAN &rest OPTIONS= — the executor without the "is this an agent" refusal, for a caller that has done its own asking. =:async=, =:quiet=, =:on-done=. =cmacs-journal-restore-execute= is now that refusal followed by this.
+- =cmacs-journal-restore-cancel PLAN= — stop a plan between steps and stop looking for its windows.
+- =cmacs-journal-restore-show-plan PLAN= — the plan buffer.
