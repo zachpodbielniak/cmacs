@@ -29,6 +29,11 @@
 (require 'subr-x)
 (require 'cl-lib)
 
+;; `cmacs-brigade-deftool' is a macro used inside a runtime `when' below:
+;; without the registry at compile time each use compiles as a function
+;; call, and loading the result signals void-variable on the tool name.
+(eval-when-compile (require 'cmacs-brigade-registry nil t))
+
 (declare-function cmacs-office-open "src/cmacs-office-defuns.c" (path))
 (declare-function cmacs-office-close "src/cmacs-office-defuns.c" (handle))
 (declare-function cmacs-office-format "src/cmacs-office-defuns.c" (handle))
@@ -45,7 +50,6 @@
                   (handle slide index text))
 (declare-function cmacs-office-save "src/cmacs-office-defuns.c" (handle))
 (declare-function cmacs-office-text "cmacs-office" (handle))
-(declare-function cmacs-brigade-deftool "cmacs-brigade-registry")
 
 (defcustom cmacs-office-tools-max-chars 40000
   "Longest document text a tool will return in one call.

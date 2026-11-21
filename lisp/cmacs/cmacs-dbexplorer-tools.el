@@ -35,6 +35,16 @@
 (require 'json)
 (require 'subr-x)
 
+;; `cmacs-brigade-deftool' is a MACRO, and the forms that use it sit
+;; inside a runtime `when' further down.  Without the registry loaded at
+;; compile time the byte compiler cannot expand them, compiles each one
+;; as a call to a function named `cmacs-brigade-deftool', and loading the
+;; result evaluates the tool name as a variable ("void-variable
+;; db-connections").  Whether it was loaded used to depend on what the
+;; build happened to compile first, so an image could ship broken while
+;; the tree worked.
+(eval-when-compile (require 'cmacs-brigade-registry nil t))
+
 ;; cmacs-dbexplorer.el is required lazily, in
 ;; `cmacs-dbexplorer-tools--ensure', not at the top of this file: the
 ;; MCP, D-Bus and emacsctl surfaces load this file at startup, and an

@@ -1359,6 +1359,49 @@ script may call, so those tools list their surfaces."
           (should (memq 'cli (plist-get entry :surfaces)))
           (should (memq 'mcp (plist-get entry :surfaces))))))))
 
+;;;; Families compile their tools, whatever the build loaded first
+
+(ert-deftest cmacs-capability-test-deftool-macro-known-at-compile-time ()
+  "Every file using `cmacs-brigade-deftool' loads the registry to compile.
+The macro is an autoload, but a build can compile a file before that
+autoload is in effect.  A use the compiler cannot expand is compiled as
+a call to a FUNCTION named `cmacs-brigade-deftool', and loading the
+result evaluates the tool name as a variable: the whole family fails
+with \"void-variable db-connections\".  The tree's own build worked
+while the OS image shipped the broken `.elc', so the rule is checked
+in the source: a top-level `require' of the registry (or of
+cmacs-brigade-tools, which requires it), or one in `eval-when-compile'.
+A `declare-function' of the macro is refused too: it tells the
+compiler the macro is a function."
+  (let* ((root (cmacs-capability-tests--source-root))
+         (dir (and root (expand-file-name "lisp/cmacs" root)))
+         (bad nil))
+    (skip-unless (and dir (file-directory-p dir)))
+    (dolist (file (directory-files dir t "\\.el\\'"))
+      (unless (equal (file-name-nondirectory file)
+                     "cmacs-brigade-registry.el")
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (when (re-search-forward
+                 "^[ \t]*(declare-function cmacs-brigade-deftool\\_>" nil t)
+            (push (cons (file-name-nondirectory file) "declare-function")
+                  bad))
+          (goto-char (point-min))
+          (when (and (re-search-forward
+                      "^[ \t]*(cmacs-brigade-deftool[ \t\n]" nil t)
+                     (progn
+                       (goto-char (point-min))
+                       (not (re-search-forward
+                             (concat
+                              "^(\\(?:eval-when-compile[ \t\n]+\\)?"
+                              "(?require '"
+                              "cmacs-brigade-\\(?:registry\\|tools\\)\\_>")
+                             nil t))))
+            (push (cons (file-name-nondirectory file) "no compile-time require")
+                  bad)))))
+    (should-not bad)))
+
 (provide 'cmacs-capability-tests)
 
 ;;; cmacs-capability-tests.el ends here
