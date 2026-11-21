@@ -338,9 +338,28 @@ RA - GMST and moves ~15 deg/hour."
             cmacs-gnuseye-asteroids 'asteroid cb))
   :advance #'cmacs-gnuseye-celestial--horizons-advance)
 
-;; Kick the one-time texture fetch in the background (no-op once cached);
-;; bodies render flat-coloured until the maps arrive, then re-render.
-(run-with-idle-timer 2 nil #'cmacs-gnuseye-celestial-ensure-textures)
+(defvar cmacs-gnuseye-celestial--texture-timer nil
+  "The pending idle timer of the one-time body-map fetch, or nil.")
+
+(defun cmacs-gnuseye-celestial--textures-soon ()
+  "Fetch the missing body maps once Emacs is idle; a globe is open.
+A no-op once they are cached.  Bodies render flat-coloured until the maps
+arrive, then re-render."
+  (unless (timerp cmacs-gnuseye-celestial--texture-timer)
+    (setq cmacs-gnuseye-celestial--texture-timer
+          (run-with-idle-timer
+           2 nil
+           (lambda ()
+             (setq cmacs-gnuseye-celestial--texture-timer nil)
+             ;; The globe may have been closed in those two seconds.
+             (when (cmacs-gnuseye-globe-open-p)
+               (cmacs-gnuseye-celestial-ensure-textures)))))))
+
+;; NOT at load time.  This file is loaded to answer "which layers are
+;; there" (the `gnuseye_list_layers' tool, D-Bus `GnusEye.ListLayers'),
+;; and a timer started here sent that read-only question to
+;; solarsystemscope.com for ten body maps.  The fetch waits for a globe.
+(cmacs-gnuseye-when-open #'cmacs-gnuseye-celestial--textures-soon)
 
 (provide 'cmacs-gnuseye-celestial)
 ;;; cmacs-gnuseye-celestial.el ends here

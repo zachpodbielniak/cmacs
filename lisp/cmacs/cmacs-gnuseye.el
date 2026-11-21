@@ -115,6 +115,38 @@ Ensures the directory exists."
 (defvar cmacs-gnuseye-buffer nil
   "The active GNU's Eye globe buffer that layer timers push entities to.")
 
+;; Nothing is fetched until a globe is opened.  The layer and feature
+;; files are loaded by anything that needs the layer table -- a tool
+;; listing layers, a D-Bus `GnusEye.ListLayers' -- so a file that started
+;; a download when it was loaded made a read-only question reach the
+;; network (ten body maps from solarsystemscope.com, the Natural Earth
+;; countries file).  A file with something to fetch for the globe puts a
+;; function on this hook instead of running it at top level.
+(defvar cmacs-gnuseye-open-hook nil
+  "Normal hook run when `cmacs-gnuseye' has opened the globe.
+Run at the end of that command, after the layer and feature files are
+loaded and the globe is attached, with the globe buffer current.  This is
+where one-time assets for the globe are fetched (asynchronously); loading
+a gnuseye file must never touch the network.  Use
+`cmacs-gnuseye-when-open' to add a function from a layer file.")
+
+(defun cmacs-gnuseye-globe-open-p ()
+  "Non-nil when a globe is open: its buffer is live and attached."
+  (and cmacs-gnuseye-buffer
+       (buffer-live-p cmacs-gnuseye-buffer)
+       (fboundp 'cmacs-gnuseye-attached-p)
+       (ignore-errors (cmacs-gnuseye-attached-p cmacs-gnuseye-buffer))
+       t))
+
+(defun cmacs-gnuseye-when-open (function)
+  "Call FUNCTION, with no arguments, whenever a globe is opened.
+If one is open already -- the calling file was loaded late -- FUNCTION is
+also called now.  With no globe nothing runs, which is the point: a
+layer file calls this at top level in place of fetching there."
+  (add-hook 'cmacs-gnuseye-open-hook function)
+  (when (cmacs-gnuseye-globe-open-p)
+    (funcall function)))
+
 ;;;; Entity index, filter, and selection state -------------------------------
 
 (defvar cmacs-gnuseye--layer-entities (make-hash-table :test 'eq)
@@ -2333,6 +2365,16 @@ just the globe viewport."
     (cmacs-gnuseye--smooth-start)
     ;; Track the real day/night terminator.
     (cmacs-gnuseye--sun-start)
+    ;; Only now may anything be fetched for the globe (body maps, the
+    ;; country index): see `cmacs-gnuseye-open-hook'.  One function
+    ;; failing must not cost the rest, or the globe.
+    (with-current-buffer buf
+      (run-hook-wrapped
+       'cmacs-gnuseye-open-hook
+       (lambda (function)
+         (with-demoted-errors "GNU's Eye open hook: %S"
+           (funcall function))
+         nil)))
     buf))
 
 ;;;; Evil (Doom) + vanilla navigation -----------------------------------------

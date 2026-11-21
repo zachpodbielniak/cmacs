@@ -199,9 +199,12 @@ click); marker clicks and ocean clicks pass through."
         t))))
 
 (add-hook 'cmacs-gnuseye--click-functions #'cmacs-gnuseye-country--click)
-;; Build the polygon index up front (the GeoJSON is already disk-cached by
-;; the map loader, so this is instant after the first session).
-(cmacs-gnuseye-country--load)
+;; Build the polygon index when a globe opens (the GeoJSON is already
+;; disk-cached by the map loader, so this is instant after the first
+;; session).  Not at load time: without the cache this is a download, and
+;; this file is loaded by callers that only want the layer table.  The
+;; index has one reader, the click hook above, which needs a globe.
+(cmacs-gnuseye-when-open #'cmacs-gnuseye-country--load)
 
 (provide 'cmacs-gnuseye-country)
 ;;; cmacs-gnuseye-country.el ends here

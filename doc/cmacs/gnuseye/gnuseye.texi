@@ -319,6 +319,23 @@ Earth daymap doubles as the globe's default base texture.  Flat-coloured
 spheres remain the keyless fallback
 (@code{cmacs-gnuseye-celestial-textures}).
 
+@vindex cmacs-gnuseye-open-hook
+@findex cmacs-gnuseye-when-open
+@emph{Nothing is fetched until a globe is open.}  The maps, and the
+Natural Earth countries file behind click-a-country, are fetched
+(asynchronously) when @kbd{M-x cmacs-gnuseye} opens the globe, never
+when a GNU's Eye file is loaded.  Loading is what a read-only caller
+does -- the @code{gnuseye_list_layers} tool, D-Bus
+@code{GnusEye.ListLayers} -- and it used to start ten downloads from
+solarsystemscope.com.  A layer file with a one-time asset to fetch calls
+@code{(cmacs-gnuseye-when-open @var{function})} at top level in place of
+fetching there; the functions run from @code{cmacs-gnuseye-open-hook} at
+the end of @code{cmacs-gnuseye}.
+@file{test/cmacs/cmacs-load-quiet-tests.el} loads every GNU's Eye file,
+and every subsystem a tool family requires, in a child Emacs with the
+network and process primitives replaced by recorders, and fails on any
+call.
+
 Sizes follow one sqrt-law for every body, the Sun included (radius =
 @code{6.371*sqrt(R/R_earth)}): the Sun renders 3.2x Jupiter, Jupiter 3.3x
 Earth, Venus ~ Earth.  The inspector reports each body's true ratio, real

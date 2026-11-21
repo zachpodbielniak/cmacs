@@ -269,6 +269,8 @@ when no ~cmacs-gnuseye-base-texture~ is configured.  Without the cache the
 bodies fall back to flat-coloured spheres (~cmacs-gnuseye-celestial-textures~
 toggles the whole feature).
 
+*Nothing is fetched until a globe is open.* The maps, and the Natural Earth countries file behind click-a-country, are fetched (asynchronously) when ~M-x cmacs-gnuseye~ opens the globe, never when a GNU's Eye file is loaded. Loading is what a read-only caller does -- the =gnuseye_list_layers= tool, D-Bus =GnusEye.ListLayers= -- and it used to start ten downloads from solarsystemscope.com. A layer file with a one-time asset to fetch calls ~(cmacs-gnuseye-when-open FUNCTION)~ at top level in place of fetching there; the functions run from ~cmacs-gnuseye-open-hook~ at the end of ~cmacs-gnuseye~. =test/cmacs/cmacs-load-quiet-tests.el= loads every GNU's Eye file, and every subsystem a tool family requires, in a child Emacs with the network and process primitives replaced by recorders, and fails on any call.
+
 Click a body to fly out and frame it (the camera moves just outside its
 shell, with Earth behind it); ~.~ tracks it as it moves.  *~0~ (or Home) is
 the "go back to Earth" button*: it clears the selection and returns to the
