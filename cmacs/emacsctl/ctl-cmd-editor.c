@@ -7,8 +7,14 @@
  *
  * Every verb here is ONE CtlMethodSpec table row bound to a typed
  * org.cmacs.Editor1.* D-Bus method.  Adding a server method to the
- * CLI means adding a row. */
+ * CLI means adding a row.
+ *
+ * A CTL_ALIAS_ROW ("verb") is a verb whose capability is a registry
+ * tool: it holds the verb's place in the table and its row -- tool,
+ * argument mapping, and the D-Bus method it falls back to -- is in
+ * ctl-cmd-alias.c. */
 
+#include "ctl-cmd-alias.h"
 #include "ctl-command-registry.h"
 #include "ctl-ifaces.h"
 
@@ -459,8 +465,7 @@ static const CtlMethodSpec editor_specs[] = {
     CTL_IFACE_PACKAGE, "List", NULL, CTL_REPLY_STRING },
   { "get watches", "List live expression watchers",
     CTL_IFACE_WATCH, "List", NULL, CTL_REPLY_STRING },
-  { "get content", "Print a buffer's contents",
-    CTL_IFACE_EDIT, "GetContent", "s:buffer", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("get content"),
   /* "get content-org" is a CtlSimpleCommand in ctl-cmd-core.c: it
      takes filter flags and reshapes the reply per output format. */
 
@@ -483,8 +488,7 @@ static const CtlMethodSpec editor_specs[] = {
     CTL_IFACE_BUFMGR, "Save", "s:name", CTL_REPLY_BOOL },
   { "buffer kill", "Kill a buffer",
     CTL_IFACE_BUFMGR, "Kill", "s:name", CTL_REPLY_BOOL },
-  { "buffer show", "Print a buffer's contents",
-    CTL_IFACE_EDIT, "GetContent", "s:buffer", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("buffer show"),
   { "buffer set", "Replace a buffer's contents",
     CTL_IFACE_EDIT, "SetContent", "s:buffer s:content",
     CTL_REPLY_STRING },
@@ -497,10 +501,8 @@ static const CtlMethodSpec editor_specs[] = {
   { "edit replace", "Regexp replacement in a buffer",
     CTL_IFACE_EDIT, "Replace", "s:buffer s:regexp s:replacement",
     CTL_REPLY_STRING },
-  { "edit search", "Regexp search in a buffer",
-    CTL_IFACE_EDIT, "Search", "s:buffer s:regexp", CTL_REPLY_STRING },
-  { "edit goto-line", "Move point to a line",
-    CTL_IFACE_EDIT, "GotoLine", "s:buffer i:line", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("edit search"),
+  CTL_ALIAS_ROW ("edit goto-line"),
 
   /* file */
   { "file open", "Open a file (find-file)",
@@ -628,30 +630,17 @@ static const CtlMethodSpec editor_specs[] = {
     CTL_IFACE_PROCMGR, "SendTo", "s:name s:input", CTL_REPLY_BOOL },
 
   /* debug */
-  { "debug backtrace", "Lisp backtrace",
-    CTL_IFACE_DEBUG, "Backtrace", NULL, CTL_REPLY_STRING },
-  { "debug memory", "GC and memory statistics",
-    CTL_IFACE_DEBUG, "MemoryInfo", NULL, CTL_REPLY_STRING },
-  { "debug hooks", "Non-empty hooks",
-    CTL_IFACE_DEBUG, "ListHooks", NULL, CTL_REPLY_STRING },
-  { "debug mode", "Current major/minor modes",
-    CTL_IFACE_DEBUG, "DescribeMode", NULL, CTL_REPLY_STRING },
-  { "debug function", "Describe a function",
-    CTL_IFACE_DEBUG, "DescribeFunction", "s:symbol",
-    CTL_REPLY_STRING },
-  { "debug variable", "Describe a variable",
-    CTL_IFACE_DEBUG, "DescribeVariable", "s:symbol",
-    CTL_REPLY_STRING },
-  { "debug apropos", "Apropos symbol search",
-    CTL_IFACE_DEBUG, "Apropos", "s:pattern", CTL_REPLY_STRING },
-  { "debug completions", "Symbol completions",
-    CTL_IFACE_DEBUG, "Completions", "s:prefix", CTL_REPLY_STRLIST },
-  { "debug profiler-start", "Start the CPU profiler",
-    CTL_IFACE_DEBUG, "ProfilerStart", NULL, CTL_REPLY_STRING },
-  { "debug profiler-stop", "Stop the CPU profiler",
-    CTL_IFACE_DEBUG, "ProfilerStop", NULL, CTL_REPLY_STRING },
-  { "debug profiler-report", "CPU profiler report",
-    CTL_IFACE_DEBUG, "ProfilerReport", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("debug backtrace"),
+  CTL_ALIAS_ROW ("debug memory"),
+  CTL_ALIAS_ROW ("debug hooks"),
+  CTL_ALIAS_ROW ("debug mode"),
+  CTL_ALIAS_ROW ("debug function"),
+  CTL_ALIAS_ROW ("debug variable"),
+  CTL_ALIAS_ROW ("debug apropos"),
+  CTL_ALIAS_ROW ("debug completions"),
+  CTL_ALIAS_ROW ("debug profiler-start"),
+  CTL_ALIAS_ROW ("debug profiler-stop"),
+  CTL_ALIAS_ROW ("debug profiler-report"),
 
   /* c (cintrospect + cpatch) */
   { "c list", "List C symbols (kind: functions|variables|types)",
@@ -702,8 +691,8 @@ ctl_cmd_editor_register (CtlCommandRegistry *registry)
 {
   gint k;
   for (k = 0; editor_specs[k].name != NULL; k++)
-    ctl_command_registry_add (registry,
-                              ctl_method_command_new (&editor_specs[k]));
+    ctl_command_registry_add (
+      registry, ctl_cmd_alias_command_for_row (&editor_specs[k]));
 
   ctl_command_registry_add (registry,
     ctl_simple_command_new_with_options (

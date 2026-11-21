@@ -6,6 +6,7 @@
 /* ctl-application.c --- see ctl-application.h. */
 
 #include "ctl-application.h"
+#include "ctl-cmd-alias.h"
 #include "ctl-cmd-tool.h"
 #include "ctl-config.h"
 #include "ctl-invocation.h"
@@ -688,7 +689,14 @@ ctl_application_run (CtlApplication *self, gint argc, gchar **argv)
            * -1 means "not mine, or no editor to ask": fall through to
            * the static help. */
           code = (cmd_argc > 0 && g_strcmp0 (cmd_argv[0], "tool") == 0)
-            ? ctl_cmd_tool_help (inv, prog, cmd_argv, cmd_argc) : -1;
+            ? ctl_cmd_tool_help (inv, prog, cmd_argv, cmd_argc)
+            /* A verb that is an alias of a tool is described by the
+             * tool: its help page comes from the same table, and a
+             * group listing takes its one-line summaries from it
+             * (which is the -1 case: the static renderer below prints
+             * them). */
+            : ctl_cmd_alias_help (inv, self->registry, prog, cmd_argv,
+                                  cmd_argc);
           if (code < 0)
             code = print_help_for (self, prog, cmd_argv, cmd_argc);
           g_strfreev (cmd_argv);

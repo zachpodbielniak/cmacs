@@ -25,6 +25,25 @@ code), =NONE=.
 Usage text, =help= listing, table/json/yaml/raw output and group
 completion all derive automatically.
 
+* Make a verb an alias of a registry tool
+
+When the capability is a tool in the registry (a =cmacs-brigade-deftool=, see [[file:../cmacs-capability.org][cmacs-capability.org]]), the verb should not name a D-Bus method of its own: =emacsctl tool GROUP VERB= already reaches it.  Give it a short positional spelling with one row in =alias_specs= in =ctl-cmd-alias.c=, and put =CTL_ALIAS_ROW ("the verb")= where the verb belongs in its group's table:
+
+#+begin_src c
+  /* ctl-cmd-alias.c */
+  { "gsurf_set_zoom", "level buffer", NULL, CTL_ALIAS_TEXT, 0,
+    { "gsurf zoom", "Set the zoom level",
+      CTL_IFACE_GSURF, "SetZoom", "d:level s?:buffer",
+      CTL_REPLY_STRING } },
+
+  /* ctl-cmd-subsys.c, among the gsurf rows */
+  CTL_ALIAS_ROW ("gsurf zoom"),
+#+end_src
+
+The first line is the tool, the tool parameter each positional becomes, defaults for positionals left out (=NULL= or ="name=value ..."=), how to print the result (=CTL_ALIAS_TEXT=, =_JSON=, =_PRINTED=, =_PRINTED_LINES=) and the tool's =:timeout= in seconds when it is =:async= (else 0).  The inner row is an ordinary method row: its argspec types the positionals, and its D-Bus method is what the verb calls against a cmacs that cannot serve the tool.  A tool with no hand-written D-Bus method does not need an alias -- it is already =emacsctl tool ...=.
+
+Only tools on the =cli= surface can be aliased (a destructive tool is not on it unless its =:surfaces= says so).  =make -C cmacs/emacsctl check= refuses a malformed row, and =test/cmacs/cmacs-emacsctl-alias-tests.el= refuses one whose tool, parameters or types do not match the generated capability reference.  A verb that stays hand-written needs a line in =kept_verbs= in the same file saying why; the unit tests refuse a verb with neither.
+
 * Add a local or composite command
 
 Subclass-by-callback with =ctl_simple_command_new()= in
@@ -82,8 +101,6 @@ commands, REPLs, watchers, formatters — is transport-blind.
 
 * Keep the server in sync
 
-The sync discipline is bidirectional: a new MCP tool in
-=cmacs/mcp/cmacs-mcp-tools-*.c= gets a matching typed method in the
-paired =cmacs/dbus/cmacs-dbus-iface-*.c= (and vice versa), and a new
-D-Bus method gets its emacsctl table row.  Each file's header
-comment names its partner.
+A new capability is written once, as a tool in the registry; it is then an MCP tool, a =Tools.Call= target and an =emacsctl tool= verb with no further work, and nothing has to be kept in sync.
+
+For what is still hand-written the old discipline holds: a new MCP tool in =cmacs/mcp/cmacs-mcp-tools-*.c= gets a matching typed method in the paired =cmacs/dbus/cmacs-dbus-iface-*.c= (and vice versa), and a new D-Bus method gets its emacsctl table row.  Each file's header comment names its partner.  =admin/cmacs-capability-audit.sh --list cli= lists every verb with where it comes from.

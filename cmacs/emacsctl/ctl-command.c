@@ -130,6 +130,17 @@ ctl_command_get_usage (CtlCommand *self)
   return GET_PRIV (self)->usage;
 }
 
+void
+ctl_command_set_summary (CtlCommand *self, const gchar *summary)
+{
+  CtlCommandPrivate *priv;
+
+  g_return_if_fail (CTL_IS_COMMAND (self));
+  priv = GET_PRIV (self);
+  g_free (priv->summary);
+  priv->summary = g_strdup (summary);
+}
+
 gint
 ctl_command_run (CtlCommand *self, CtlInvocation *inv, GError **error)
 {
@@ -433,11 +444,10 @@ result_for_reply (GVariant *reply, CtlReplyKind kind)
     }
 }
 
-static gint
-method_run (CtlCommand *self, CtlInvocation *inv, GError **error)
+gint
+ctl_method_spec_run (const CtlMethodSpec *spec, CtlInvocation *inv,
+                     GError **error)
 {
-  CtlMethodCommand *cmd = CTL_METHOD_COMMAND (self);
-  const CtlMethodSpec *spec = cmd->spec;
   CtlTransport *transport;
   GVariant *params, *reply;
   GError *local = NULL;
@@ -487,6 +497,12 @@ method_run (CtlCommand *self, CtlInvocation *inv, GError **error)
   }
 }
 
+static gint
+method_run (CtlCommand *self, CtlInvocation *inv, GError **error)
+{
+  return ctl_method_spec_run (CTL_METHOD_COMMAND (self)->spec, inv, error);
+}
+
 static void
 ctl_method_command_class_init (CtlMethodCommandClass *klass)
 {
@@ -500,8 +516,8 @@ ctl_method_command_init (CtlMethodCommand *self)
 }
 
 /* Derive a usage string from an argspec: "<code>" / "[buffer]"... */
-static gchar *
-usage_for_argspec (const gchar *argspec)
+gchar *
+ctl_method_spec_usage (const gchar *argspec)
 {
   GString *out;
   gchar **specs;
@@ -532,7 +548,7 @@ usage_for_argspec (const gchar *argspec)
 CtlCommand *
 ctl_method_command_new (const CtlMethodSpec *spec)
 {
-  gchar *usage = usage_for_argspec (spec->argspec);
+  gchar *usage = ctl_method_spec_usage (spec->argspec);
   CtlMethodCommand *self = g_object_new (CTL_TYPE_METHOD_COMMAND,
                                          "name", spec->name,
                                          "summary", spec->summary,

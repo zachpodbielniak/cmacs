@@ -25,6 +25,45 @@ Argspec tokens: @code{s} string, @code{o} object path,
 @code{NONE}.  Usage text, @code{help} listing, all four output
 formats and group completion derive automatically.
 
+@subsection An alias of a registry tool
+
+When the capability is a tool in the registry (a
+@code{cmacs-brigade-deftool}, @pxref{Capability Table}), the verb should
+not name a D-Bus method of its own: @samp{emacsctl tool GROUP VERB}
+already reaches it.  Give it a short positional spelling with one row in
+@code{alias_specs} in @file{ctl-cmd-alias.c}, and put
+@code{CTL_ALIAS_ROW ("the verb")} where the verb belongs in its group's
+table:
+
+@example
+/* ctl-cmd-alias.c */
+@{ "gsurf_set_zoom", "level buffer", NULL, CTL_ALIAS_TEXT, 0,
+  @{ "gsurf zoom", "Set the zoom level",
+    CTL_IFACE_GSURF, "SetZoom", "d:level s?:buffer",
+    CTL_REPLY_STRING @} @},
+
+/* ctl-cmd-subsys.c, among the gsurf rows */
+CTL_ALIAS_ROW ("gsurf zoom"),
+@end example
+
+The first line is the tool, the tool parameter each positional becomes,
+defaults for positionals left out (@code{NULL} or @code{"name=value
+..."}), how to print the result (@code{CTL_ALIAS_TEXT}, @code{_JSON},
+@code{_PRINTED}, @code{_PRINTED_LINES}) and the tool's @code{:timeout}
+in seconds when it is @code{:async} (else 0).  The inner row is an
+ordinary method row: its argspec types the positionals, and its D-Bus
+method is what the verb calls against a cmacs that cannot serve the
+tool.  A tool with no hand-written D-Bus method does not need an alias
+--- it is already @samp{emacsctl tool ...}.
+
+Only tools on the @code{cli} surface can be aliased (a destructive tool
+is not on it unless its @code{:surfaces} says so).  @samp{make -C
+cmacs/emacsctl check} refuses a malformed row, and
+@file{test/cmacs/cmacs-emacsctl-alias-tests.el} refuses one whose tool,
+parameters or types do not match the generated capability reference.  A
+verb that stays hand-written needs a line in @code{kept_verbs} in the
+same file saying why; the unit tests refuse a verb with neither.
+
 @subsection A local or composite command
 
 @code{ctl_simple_command_new (name, summary, usage, callback)} plus
@@ -55,8 +94,13 @@ interface is transport-blind.
 
 @subsection Keeping the server in sync
 
-The sync discipline is bidirectional: a new MCP tool in
-@file{cmacs/mcp/cmacs-mcp-tools-*.c} gets a matching typed method in
-the paired @file{cmacs/dbus/cmacs-dbus-iface-*.c} (and vice versa),
-and a new D-Bus method gets its emacsctl table row.  Each file's
-header comment names its partner.
+A new capability is written once, as a tool in the registry; it is then
+an MCP tool, a @code{Tools.Call} target and an @samp{emacsctl tool} verb
+with no further work, and nothing has to be kept in sync.
+
+For what is still hand-written the old discipline holds: a new MCP tool
+in @file{cmacs/mcp/cmacs-mcp-tools-*.c} gets a matching typed method in
+the paired @file{cmacs/dbus/cmacs-dbus-iface-*.c} (and vice versa), and
+a new D-Bus method gets its emacsctl table row.  Each file's header
+comment names its partner.  @samp{admin/cmacs-capability-audit.sh
+--list cli} lists every verb with where it comes from.

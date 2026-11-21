@@ -24,9 +24,10 @@ Precedence: command-line flags > the selected context > config
 
 * Getting help
 
-Help is contextual and available everywhere (all generated through
+Help is contextual and available everywhere (generated through
 GLib's option parser, so flag listings can never drift from the
-parser):
+parser; for a verb that is an alias of a tool, from the tool's own
+description -- see [[*Verbs that are aliases of tools][Verbs that are aliases of tools]]):
 
 #+begin_src sh
   emacsctl --help                   # global: commands, groups, options
@@ -38,6 +39,58 @@ parser):
 A bare group (=emacsctl get=) prints the same subcommand listing and
 exits 2; an unknown flag exits 2 with a =--help= hint; a typo'd verb
 gets a did-you-mean suggestion.
+
+* Verbs that are aliases of tools
+
+Most of what cmacs can do is a /tool/ in its capability table ([[file:../cmacs-capability.org][cmacs-capability.org]]), and =emacsctl tool GROUP VERB --flag value= reaches every one of them through a single D-Bus method, =org.cmacs.Editor1.Tools.Call=.  The verbs that existed before the table -- =emacsctl calc eval=, =emacsctl gsurf open=, =emacsctl db tables= and about a hundred more -- are now *aliases* of those tools: the spelling, the positional arguments and the output are what they were, and the call goes down the same path as =emacsctl tool=.
+
+#+begin_src sh
+  emacsctl calc units '60 mph' m/s
+  # is
+  emacsctl tool calc convert-units --expression '60 mph' --units m/s
+#+end_src
+
+An alias costs one D-Bus round trip, as the verb always did: which tool to call, which parameter each positional is and how to print the answer are compiled into the client, so the tool list is not fetched to run one.
+
+| Group        | Aliased verbs                                                                                                                                                                    |
+|--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =get=        | =content=                                                                                                                                                                        |
+| =buffer=     | =show=                                                                                                                                                                           |
+| =edit=       | =search=, =goto-line=                                                                                                                                                            |
+| =debug=      | all eleven                                                                                                                                                                       |
+| =ai=         | =providers=                                                                                                                                                                      |
+| =brigade=    | =status=, =result=, =list=, =providers=, =models=, =inbox=, =log=                                                                                                                |
+| =gsurf=      | =open=, =navigate=, =back=, =forward=, =reload=, =stop=, =url=, =title=, =current=, =list=, =modules=, =zoom=, =lite=, =text=, =downloads=, =download-cancel=, =click=, =click-element=, =module=, =action=, =actions=, =containers= |
+| =gnuseye=    | all nine                                                                                                                                                                         |
+| =pod=        | =pods=, =modules=, =stats=                                                                                                                                                       |
+| =video=      | =list=                                                                                                                                                                           |
+| =audio=      | =record=                                                                                                                                                                         |
+| =speech=     | =transcribe=, =components=, =set=, =whisper-models=, =voices=                                                                                                                    |
+| =lrg=        | all ten                                                                                                                                                                          |
+| =calc=       | all five                                                                                                                                                                         |
+| =db=         | =connections=, =connect=, =disconnect=, =query=, =tables=, =columns=                                                                                                             |
+| =logs=       | =show=                                                                                                                                                                           |
+| =compositor= | =clients=, =focused=, =find=, =workspaces=, =keybinds=, =screensaver= and the seven =screensaver-*= verbs                                                                        |
+| =monitor=    | =list=                                                                                                                                                                           |
+| =sb=         | =open=, =layout=, =expand=, =node=, =stats=, =sources=, =refresh=, =jobs=, =status=, =cancel=                                                                                    |
+
+** Help
+
+=emacsctl calc eval --help= shows the tool's own description and the tool's own text for each argument, fetched from the running editor, and ends with the generic command the verb is the same as.  =emacsctl calc --help= lists the group as before; an aliased verb's summary is the first sentence of the tool's description and ends in =[= tool calc eval]=.  Neither can drift from what the editor does, because neither is compiled into the client.  When no cmacs answers, the built-in one-line summary is shown and the page says so.
+
+** Against an older cmacs
+
+An alias never fails because the tool registry is missing.  When =Tools.Call= is refused before the tool starts -- no =org.cmacs.Editor1.Tools= interface at all (an older cmacs, or a build without the registry), =NoSuchTool=, =NotOnSurface=, or =BadArguments= -- the verb calls the D-Bus method it used to be, exactly as it used to.  A failure of the tool itself (=ToolFailed=, =Timeout=) is reported and never retried: the tool may have run.
+
+** What is different from the old verbs
+
+- *A failure is a failure.*  A handful of the old methods (=calc=, =db=, =brigade=) caught an error and printed it as =error: ...= with exit status 0.  The tool signals, so the alias prints the message on stderr and exits 1.  A script that grepped for =error:= should test the exit status instead.
+- *Redaction applies.*  A tool's result passes through the redaction table ([[file:../cmacs-redact.org][cmacs-redact.org]]), as everything =emacsctl tool= prints does.  With no matching rules the output is unchanged; with rules, an excluded buffer, window or URL is withheld from =get content=, =gsurf list= and their kin.
+- *Optional numbers left out take the tool's default.*  =emacsctl gnuseye query aircraft= used to send zero for each bound it was not given, which matched nothing; it now asks for the whole globe.  An optional argument given as =0=, =false= or =""= still means "not given", as it did on the old wire.
+
+** Verbs that are not aliases
+
+A verb stays a hand-written D-Bus call when no tool does the same thing, when its tool is destructive and therefore not on the =cli= surface (=buffer kill=, =gsurf js=, =compositor spawn=; =Tools.Call= would refuse them), when the tool's answer cannot be turned back into what the verb printed (=get buffers=, =lql query=, =speech models=), or when the verb composes its request in the client (=ai prompt=, =sb ingest=, =text insert=).  =instances=, the contexts, =eval= / =repl=, =logs= / =events= / =watch=, the ssh proxy, the =c= group and =completion= are not tools at all.  The reason for each is recorded next to the alias table, in =kept_verbs= in =cmacs/emacsctl/ctl-cmd-alias.c=, and a verb that is neither an alias nor listed there fails the unit tests.
 
 * Core
 

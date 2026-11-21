@@ -9,8 +9,13 @@
  *
  * If the target cmacs was built without a subsystem its interface is
  * absent and the call maps to exit code 3 with a clear message ---
- * the CLI does not need to know the server's configure flags. */
+ * the CLI does not need to know the server's configure flags.
+ *
+ * A CTL_ALIAS_ROW ("verb") is a verb whose capability is a registry
+ * tool; its row is in ctl-cmd-alias.c, and it runs through the same
+ * Tools.Call as `emacsctl tool'. */
 
+#include "ctl-cmd-alias.h"
 #include "ctl-command-registry.h"
 #include "ctl-ifaces.h"
 
@@ -40,8 +45,7 @@ static const CtlMethodSpec subsys_specs[] = {
 
   /* ai --- prompt/models/chat are flag-driven CtlSimpleCommands
    * below; only the no-argument verb stays a table row. */
-  { "ai providers", "List configured AI providers",
-    CTL_IFACE_AI, "ListProviders", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("ai providers"),
 
   /* brigade --- subagent control.  Same verbs as the agent_* tools an
    * agent gets over MCP, so a shell script and a model drive the queue
@@ -49,72 +53,47 @@ static const CtlMethodSpec subsys_specs[] = {
   { "brigade spawn", "Hand a task to an agent; prints the task id",
     CTL_IFACE_BRIGADE, "Spawn", "s:task s?:agent s?:title s?:model",
     CTL_REPLY_STRING },
-  { "brigade status", "State, turns, tokens and cost of a task",
-    CTL_IFACE_BRIGADE, "Status", "s:id", CTL_REPLY_STRING },
-  { "brigade result", "What a task produced",
-    CTL_IFACE_BRIGADE, "Result", "s:id", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("brigade status"),
+  CTL_ALIAS_ROW ("brigade result"),
   { "brigade cancel", "Stop a running task",
     CTL_IFACE_BRIGADE, "Cancel", "s:id", CTL_REPLY_STRING },
-  { "brigade list", "Every known task with its state",
-    CTL_IFACE_BRIGADE, "List", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("brigade list"),
   { "brigade agents", "Agent definitions available to spawn",
     CTL_IFACE_BRIGADE, "Agents", NULL, CTL_REPLY_STRING },
-  { "brigade providers", "AI providers this cmacs can reach",
-    CTL_IFACE_BRIGADE, "Providers", NULL, CTL_REPLY_STRING },
-  { "brigade models", "Models a provider offers, as provider/model",
-    CTL_IFACE_BRIGADE, "Models", "s:provider", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("brigade providers"),
+  CTL_ALIAS_ROW ("brigade models"),
   /* The mailbox: a task you can go on talking to.  `send' works whether
    * the task is running (delivered when its turn ends) or already
    * finished (it starts again on the same session). */
   { "brigade send", "Queue a message for a task; wakes a parked agent",
     CTL_IFACE_BRIGADE, "Send", "s:id s:message", CTL_REPLY_STRING },
-  { "brigade inbox", "Messages queued for a task but not yet delivered",
-    CTL_IFACE_BRIGADE, "Inbox", "s:id", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("brigade inbox"),
   { "brigade drop", "Remove a queued message; omit INDEX to clear the queue",
     CTL_IFACE_BRIGADE, "Drop", "s:id s?:index", CTL_REPLY_STRING },
-  { "brigade log", "A task's transaction log: messages, replies, tool calls",
-    CTL_IFACE_BRIGADE, "Log", "s:id s?:from_turn s?:kinds",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("brigade log"),
   { "brigade close", "End a conversation and release its session",
     CTL_IFACE_BRIGADE, "Close", "s:id", CTL_REPLY_STRING },
 
   /* gsurf */
-  { "gsurf open", "Open a URL in a new gsurf buffer",
-    CTL_IFACE_GSURF, "Open", "s:url", CTL_REPLY_STRING },
-  { "gsurf navigate", "Navigate a gsurf buffer",
-    CTL_IFACE_GSURF, "Navigate", "s:url s?:buffer", CTL_REPLY_STRING },
-  { "gsurf back", "History back",
-    CTL_IFACE_GSURF, "Back", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf forward", "History forward",
-    CTL_IFACE_GSURF, "Forward", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf reload", "Reload the page",
-    CTL_IFACE_GSURF, "Reload", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf stop", "Stop loading",
-    CTL_IFACE_GSURF, "Stop", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf url", "Current page URL",
-    CTL_IFACE_GSURF, "GetUri", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf title", "Current page title",
-    CTL_IFACE_GSURF, "GetTitle", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf current", "Most recent gsurf buffer info",
-    CTL_IFACE_GSURF, "Current", NULL, CTL_REPLY_STRING },
-  { "gsurf list", "List gsurf buffers",
-    CTL_IFACE_GSURF, "List", NULL, CTL_REPLY_STRING },
-  { "gsurf modules", "List loaded gsurf modules",
-    CTL_IFACE_GSURF, "ModulesList", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("gsurf open"),
+  CTL_ALIAS_ROW ("gsurf navigate"),
+  CTL_ALIAS_ROW ("gsurf back"),
+  CTL_ALIAS_ROW ("gsurf forward"),
+  CTL_ALIAS_ROW ("gsurf reload"),
+  CTL_ALIAS_ROW ("gsurf stop"),
+  CTL_ALIAS_ROW ("gsurf url"),
+  CTL_ALIAS_ROW ("gsurf title"),
+  CTL_ALIAS_ROW ("gsurf current"),
+  CTL_ALIAS_ROW ("gsurf list"),
+  CTL_ALIAS_ROW ("gsurf modules"),
   { "gsurf js", "Evaluate JavaScript in the page",
     CTL_IFACE_GSURF, "EvalJs", "s:script s?:buffer",
     CTL_REPLY_STRING },
-  { "gsurf zoom", "Set the zoom level",
-    CTL_IFACE_GSURF, "SetZoom", "d:level s?:buffer",
-    CTL_REPLY_STRING },
-  { "gsurf lite", "Render a page into a text buffer (gsurf-lite)",
-    CTL_IFACE_GSURF, "LiteOpen", "s:url", CTL_REPLY_STRING },
-  { "gsurf text", "Extract the page's text content",
-    CTL_IFACE_GSURF, "ExtractText", "s?:buffer", CTL_REPLY_STRING },
-  { "gsurf downloads", "List downloads",
-    CTL_IFACE_GSURF, "DownloadList", NULL, CTL_REPLY_STRING },
-  { "gsurf download-cancel", "Cancel a download by id",
-    CTL_IFACE_GSURF, "DownloadCancel", "x:id", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("gsurf zoom"),
+  CTL_ALIAS_ROW ("gsurf lite"),
+  CTL_ALIAS_ROW ("gsurf text"),
+  CTL_ALIAS_ROW ("gsurf downloads"),
+  CTL_ALIAS_ROW ("gsurf download-cancel"),
   { "gsurf snapshot", "Screenshot the page to a PNG file",
     CTL_IFACE_GSURF, "Snapshot", "s:file b?:full_page s?:buffer",
     CTL_REPLY_STRING },
@@ -127,69 +106,41 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_REPLY_STRING },
   /* gsurf 0.5 control surface: trusted page input, cookies, modules,
    actions and containers. */
-  { "gsurf click", "Click at X Y (CSS px) in the page "
-    "(button 1|2|3, default 1)",
-    CTL_IFACE_GSURF, "Click", "d:x d:y i?:button s?:buffer",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("gsurf click"),
   { "gsurf type", "Type text into the focused page element",
     CTL_IFACE_GSURF, "TypeText", "s:text s?:buffer", CTL_REPLY_STRING },
   { "gsurf key", "Press a key in the page "
     "(e.g. Enter, Tab, ArrowDown; modifiers like ctrl+shift)",
     CTL_IFACE_GSURF, "PressKey", "s:key s?:modifiers s?:buffer",
     CTL_REPLY_STRING },
-  { "gsurf click-element", "Click the first element matching a CSS "
-    "selector (async)",
-    CTL_IFACE_GSURF, "ClickElement", "s:selector s?:buffer",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("gsurf click-element"),
   { "gsurf cookie", "Add a cookie to the view's session",
     CTL_IFACE_GSURF, "SetCookie",
     "s:name s:value s:domain s?:path b?:secure b?:http_only x?:expires "
     "s?:buffer",
     CTL_REPLY_STRING },
-  { "gsurf module", "Enable or disable a gsurf module (NAME true|false)",
-    CTL_IFACE_GSURF, "ToggleModule", "s:name b:enabled", CTL_REPLY_STRING },
-  { "gsurf action", "Run a gsurf action by name "
-    "(dark-mode-toggle, form-autofill, reload, ...)",
-    CTL_IFACE_GSURF, "RunAction", "s:action s?:buffer", CTL_REPLY_STRING },
-  { "gsurf actions", "List gsurf actions (JSON)",
-    CTL_IFACE_GSURF, "ListActions", NULL, CTL_REPLY_STRING },
-  { "gsurf containers", "List browsing containers (JSON)",
-    CTL_IFACE_GSURF, "ListContainers", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("gsurf module"),
+  CTL_ALIAS_ROW ("gsurf action"),
+  CTL_ALIAS_ROW ("gsurf actions"),
+  CTL_ALIAS_ROW ("gsurf containers"),
 
   /* gnuseye */
-  { "gnuseye open", "Open the GNU's Eye globe",
-    CTL_IFACE_GNUSEYE, "Open", NULL, CTL_REPLY_STRING },
-  { "gnuseye brief", "Entity index summary",
-    CTL_IFACE_GNUSEYE, "Brief", NULL, CTL_REPLY_STRING },
-  { "gnuseye layers", "List data layers",
-    CTL_IFACE_GNUSEYE, "ListLayers", NULL, CTL_REPLY_STRING },
-  { "gnuseye toggle", "Toggle a data layer",
-    CTL_IFACE_GNUSEYE, "ToggleLayer", "s:name", CTL_REPLY_STRING },
-  { "gnuseye fly-to", "Fly the camera to lat/lon",
-    CTL_IFACE_GNUSEYE, "FlyTo", "d:lat d:lon d?:range",
-    CTL_REPLY_STRING },
-  { "gnuseye refresh", "Refresh all layers",
-    CTL_IFACE_GNUSEYE, "Refresh", NULL, CTL_REPLY_STRING },
-  { "gnuseye query", "Query indexed entities "
-    "(kind west east south north limit)",
-    CTL_IFACE_GNUSEYE, "QueryEntities",
-    "s?:kind d?:west d?:east d?:south d?:north i?:limit",
-    CTL_REPLY_JSON },
-  { "gnuseye geofence", "Add a circular geofence",
-    CTL_IFACE_GNUSEYE, "AddGeofence", "s:name d:lat d:lon d:radius_km",
-    CTL_REPLY_STRING },
-  { "gnuseye cii", "Country instability index (top 15)",
-    CTL_IFACE_GNUSEYE, "Cii", NULL, CTL_REPLY_JSON },
+  CTL_ALIAS_ROW ("gnuseye open"),
+  CTL_ALIAS_ROW ("gnuseye brief"),
+  CTL_ALIAS_ROW ("gnuseye layers"),
+  CTL_ALIAS_ROW ("gnuseye toggle"),
+  CTL_ALIAS_ROW ("gnuseye fly-to"),
+  CTL_ALIAS_ROW ("gnuseye refresh"),
+  CTL_ALIAS_ROW ("gnuseye query"),
+  CTL_ALIAS_ROW ("gnuseye geofence"),
+  CTL_ALIAS_ROW ("gnuseye cii"),
 
   /* podomation */
   { "pod status", "Engine status (start|stop|status)",
     CTL_IFACE_PODOMATION, "Control", "s:action", CTL_REPLY_STRING },
-  { "pod pods", "List active pods",
-    CTL_IFACE_PODOMATION, "ListPods", NULL, CTL_REPLY_STRING },
-  { "pod modules", "List loaded modules",
-    CTL_IFACE_PODOMATION, "ListModules", NULL, CTL_REPLY_STRING },
-  { "pod stats", "Engine statistics",
-    CTL_IFACE_PODOMATION, "Stats", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("pod pods"),
+  CTL_ALIAS_ROW ("pod modules"),
+  CTL_ALIAS_ROW ("pod stats"),
   { "pod emit", "Emit an event (with KEY=VALUE payload)",
     CTL_IFACE_PODOMATION, "EmitEvent", "s:event D:data",
     CTL_REPLY_STRING },
@@ -206,100 +157,62 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_REPLY_STRING },
 
   /* video */
-  { "video list", "List live video stream handles",
-    CTL_IFACE_VIDEO, "List", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("video list"),
   { "video snapshot", "Save a video frame to a PNG file",
     CTL_IFACE_VIDEO, "Snapshot", "x:handle s:file",
     CTL_REPLY_STRING },
 
   /* audio */
-  { "audio record", "Record microphone audio to a WAV file",
-    CTL_IFACE_AUDIO, "Record", "d:seconds s?:file",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("audio record"),
 
   /* speech: through cmacs-speech (whisper.cpp / sherpa-onnx / piper) */
-  { "speech transcribe", "Transcribe an audio/video file (engine from M-x cmacs-speech)",
-    CTL_IFACE_SPEECH, "Transcribe", "s:audio_path s?:language",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("speech transcribe"),
   { "speech who", "Who spoke when: a speaker-labelled transcript",
     CTL_IFACE_SPEECH, "WhoSpoke", "s:audio_path", CTL_REPLY_STRING },
   { "speech say", "Speak text; FILE writes a WAV instead",
     CTL_IFACE_SPEECH, "Synthesize", "s:text s?:file",
     CTL_REPLY_STRING },
-  { "speech components", "Engine and model per component, and why",
-    CTL_IFACE_SPEECH, "Components", NULL, CTL_REPLY_STRING },
-  { "speech set", "Choose a component's engine for this session",
-    CTL_IFACE_SPEECH, "SetComponent", "s:component s:backend s?:model",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("speech components"),
+  CTL_ALIAS_ROW ("speech set"),
   { "speech models", "Installed and downloadable speech models",
     CTL_IFACE_SPEECH, "Models", "s?:component", CTL_REPLY_STRING },
-  { "speech whisper-models", "List whisper.cpp model files",
-    CTL_IFACE_SPEECH, "ListWhisperModels", NULL, CTL_REPLY_STRING },
-  { "speech voices", "List piper voices",
-    CTL_IFACE_SPEECH, "ListVoices", NULL, CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("speech whisper-models"),
+  CTL_ALIAS_ROW ("speech voices"),
 
   /* lrg (libregnum editor) */
-  { "lrg open", "Open the libregnum level editor",
-    CTL_IFACE_LRG, "Open", "s?:path", CTL_REPLY_STRING },
-  { "lrg play", "Enter play mode",
-    CTL_IFACE_LRG, "Play", NULL, CTL_REPLY_STRING },
-  { "lrg stop", "Stop play mode",
-    CTL_IFACE_LRG, "Stop", NULL, CTL_REPLY_STRING },
-  { "lrg save", "Save the level",
-    CTL_IFACE_LRG, "Save", "s?:path", CTL_REPLY_STRING },
-  { "lrg tree", "Object tree",
-    CTL_IFACE_LRG, "ObjectTree", NULL, CTL_REPLY_STRING },
-  { "lrg select", "Select a node by id",
-    CTL_IFACE_LRG, "Select", "x:id", CTL_REPLY_STRING },
-  { "lrg move", "Move a node",
-    CTL_IFACE_LRG, "Move", "x:id d:x d:y d:z", CTL_REPLY_STRING },
-  { "lrg delete", "Delete a node",
-    CTL_IFACE_LRG, "Delete", "x:id", CTL_REPLY_STRING },
-  { "lrg add-primitive", "Add a primitive node",
-    CTL_IFACE_LRG, "AddPrimitive", "x:primitive s?:name",
-    CTL_REPLY_STRING },
-  { "lrg add-visual", "Add a visual node",
-    CTL_IFACE_LRG, "AddVisual", "x:kind s?:asset s?:name",
-    CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("lrg open"),
+  CTL_ALIAS_ROW ("lrg play"),
+  CTL_ALIAS_ROW ("lrg stop"),
+  CTL_ALIAS_ROW ("lrg save"),
+  CTL_ALIAS_ROW ("lrg tree"),
+  CTL_ALIAS_ROW ("lrg select"),
+  CTL_ALIAS_ROW ("lrg move"),
+  CTL_ALIAS_ROW ("lrg delete"),
+  CTL_ALIAS_ROW ("lrg add-primitive"),
+  CTL_ALIAS_ROW ("lrg add-visual"),
 
   /* calc --- `emacsctl eval -l calc EXPR' and `emacsctl repl -l calc'
    * cover plain evaluation too (both ride the same Calc.Eval method). */
-  { "calc eval", "Evaluate an expression numerically",
-    CTL_IFACE_CALC, "Eval", "s:expression", CTL_REPLY_STRING },
-  { "calc symbolic", "Evaluate symbolically (deriv/integ/solve/taylor)",
-    CTL_IFACE_CALC, "EvalSymbolic", "s:expression", CTL_REPLY_STRING },
-  { "calc units", "Convert to UNITS, or reduce to base SI when omitted",
-    CTL_IFACE_CALC, "ConvertUnits", "s:expression s?:units",
-    CTL_REPLY_STRING },
-  { "calc list", "List registered calculators (optionally by category)",
-    CTL_IFACE_CALC, "ListCalculators", "s?:category", CTL_REPLY_STRING },
-  { "calc describe", "Describe one calculator by name",
-    CTL_IFACE_CALC, "Describe", "s:name", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("calc eval"),
+  CTL_ALIAS_ROW ("calc symbolic"),
+  CTL_ALIAS_ROW ("calc units"),
+  CTL_ALIAS_ROW ("calc list"),
+  CTL_ALIAS_ROW ("calc describe"),
 
   /* db (database explorer) --- CONNECTION is always the name of a
    * connection someone saved, never a URL, so a shell one-liner cannot
    * reach a database the target cmacs was not already given.  The
    * structured verbs reply with JSON, which -o table renders as rows
    * and -o json/yaml passes through. */
-  { "db connections", "List saved and live database connections",
-    CTL_IFACE_DBEXPLORER, "Connections", NULL, CTL_REPLY_JSON },
-  { "db connect", "Connect to a saved database",
-    CTL_IFACE_DBEXPLORER, "Connect", "s:connection", CTL_REPLY_STRING },
-  { "db disconnect", "Close a connection, keeping its saved definition",
-    CTL_IFACE_DBEXPLORER, "Disconnect", "s:connection",
-    CTL_REPLY_STRING },
-  { "db query", "Run a read-only query (MAX_ROWS caps the rows fetched)",
-    CTL_IFACE_DBEXPLORER, "QueryLimited",
-    "s:connection s:sql i?:max_rows", CTL_REPLY_JSON },
+  CTL_ALIAS_ROW ("db connections"),
+  CTL_ALIAS_ROW ("db connect"),
+  CTL_ALIAS_ROW ("db disconnect"),
+  CTL_ALIAS_ROW ("db query"),
   { "db execute", "Run a writing statement; prints the rows affected",
     CTL_IFACE_DBEXPLORER, "Execute", "s:connection s:sql",
     CTL_REPLY_JSON },
-  { "db tables", "List tables and views, optionally in one schema",
-    CTL_IFACE_DBEXPLORER, "Tables", "s:connection s?:schema",
-    CTL_REPLY_JSON },
-  { "db columns", "Describe one table's columns",
-    CTL_IFACE_DBEXPLORER, "Columns", "s:connection s:table s?:schema",
-    CTL_REPLY_JSON },
+  CTL_ALIAS_ROW ("db tables"),
+  CTL_ALIAS_ROW ("db columns"),
   { "db export", "Write a query's whole result to a file",
     CTL_IFACE_DBEXPLORER, "Export",
     "s:connection s:sql s:format s:path", CTL_REPLY_STRING },
@@ -316,8 +229,7 @@ static const CtlMethodSpec subsys_specs[] = {
     CTL_IFACE_LQL, "Sources", NULL, CTL_REPLY_STRING },
 
   /* instance/log surface */
-  { "logs show", "Recent *Messages* lines",
-    CTL_IFACE_LOG, "RecentMessages", "i?:lines", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("logs show"),
 
   { NULL, NULL, NULL, NULL, NULL, 0 }
 };
@@ -783,8 +695,8 @@ ctl_cmd_subsys_register (CtlCommandRegistry *registry)
 {
   gint k;
   for (k = 0; subsys_specs[k].name != NULL; k++)
-    ctl_command_registry_add (registry,
-                              ctl_method_command_new (&subsys_specs[k]));
+    ctl_command_registry_add (
+      registry, ctl_cmd_alias_command_for_row (&subsys_specs[k]));
 
   ctl_command_registry_add (registry,
     ctl_simple_command_new_with_options (

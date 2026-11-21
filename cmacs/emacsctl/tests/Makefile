@@ -22,15 +22,12 @@ PKG_CFLAGS += $(shell pkg-config --cflags readline) \
 PKG_LIBS   += $(shell pkg-config --libs readline)
 endif
 
-# The units under test (no main.o, no application/dbus layers needed
-# beyond what the tested units pull in).
-UNITS := ../ctl-error.c ../ctl-result.c ../ctl-json-yaml.c ../ctl-frame.c \
-         ../ctl-config.c ../ctl-repl.c \
-         ../ctl-transport.c ../ctl-invocation.c \
-         ../ctl-transport-dbus.c ../ctl-transport-ssh.c \
-         ../ctl-formatter.c ../ctl-formatter-table.c \
-         ../ctl-formatter-json.c ../ctl-formatter-yaml.c \
-         ../ctl-formatter-raw.c ../ctl-tool-args.c
+# The units under test: every source of the client except its main().
+# The alias tests build the real command registry (every ctl-cmd-*.c
+# registration) to check that each verb is either an alias or has a
+# recorded reason not to be, so the command layers are linked too.
+# Nothing here connects to a bus: registering a command does not.
+UNITS := $(filter-out ../ctl-main.c,$(sort $(wildcard ../ctl-*.c)))
 
 CFLAGS += -std=gnu89 -Wall -Wextra -Wno-unused-parameter \
           -I.. -I$(YAMLGLIB_DIR)/src $(PKG_CFLAGS)

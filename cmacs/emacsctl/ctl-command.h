@@ -52,6 +52,13 @@ const gchar *ctl_command_get_name    (CtlCommand *self);
 const gchar *ctl_command_get_summary (CtlCommand *self);
 const gchar *ctl_command_get_usage   (CtlCommand *self);
 
+/* Replace the one-line summary.  The properties are construct-only
+ * for everything else; this exists for the alias commands, whose
+ * summary in a group's help is the running editor's description of the
+ * tool rather than text compiled into the client (ctl-cmd-alias.c). */
+void         ctl_command_set_summary (CtlCommand *self,
+                                      const gchar *summary);
+
 gint    ctl_command_run      (CtlCommand *self, CtlInvocation *inv,
                               GError **error);
 gchar **ctl_command_complete (CtlCommand *self, CtlInvocation *inv,
@@ -125,6 +132,17 @@ G_DECLARE_FINAL_TYPE (CtlMethodCommand, ctl_method_command,
 
 /* SPEC must be static storage (the table rows are). */
 CtlCommand *ctl_method_command_new (const CtlMethodSpec *spec);
+
+/* What a CtlMethodCommand does when run, without the command object:
+ * build SPEC's parameters from INV's positionals, call the method and
+ * print the reply.  An alias (ctl-cmd-alias.c) falls back to this when
+ * the target cmacs has no tool registry to ask. */
+gint ctl_method_spec_run (const CtlMethodSpec *spec, CtlInvocation *inv,
+                          GError **error);
+
+/* The usage synopsis derived from an argspec: "<code> [buffer]".
+ * Caller g_frees. */
+gchar *ctl_method_spec_usage (const gchar *argspec);
 
 G_END_DECLS
 

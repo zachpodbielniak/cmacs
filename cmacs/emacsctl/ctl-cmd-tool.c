@@ -12,7 +12,8 @@
  *   emacsctl tool GROUP VERB [--ARG VALUE ...]  the same, by CLI words
  *
  * The other ctl-cmd-*.c files are tables: one row per verb, naming a
- * D-Bus method somebody wrote for it.  This one asks the running
+ * D-Bus method somebody wrote for it (or, in ctl-cmd-alias.c, naming
+ * the tool the verb is an old spelling of).  This one asks the running
  * editor what it can do -- org.cmacs.Editor1.Tools.List, which is the
  * brigade tool registry rendered by lisp/cmacs/cmacs-capability.el --
  * and builds the verbs, the typed flags and the --help text from the
@@ -145,6 +146,12 @@ tool_emit (CtlInvocation *inv, const gchar *text, gboolean as_json,
   ok = ctl_invocation_emit (inv, result, error);
   ctl_result_unref (result);
   return ok ? CTL_EXIT_OK : CTL_EXIT_ERROR;
+}
+
+JsonArray *
+ctl_cmd_tool_table (CtlInvocation *inv, JsonParser **parser, GError **error)
+{
+  return tool_table (inv, parser, error);
 }
 
 /* ── Running a tool ──────────────────────────────────────────────── */

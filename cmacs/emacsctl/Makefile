@@ -16,14 +16,16 @@ SRCS := ctl-main.c ctl-application.c ctl-error.c \
         ctl-frame.c ctl-proxy.c \
         ctl-config.c ctl-repl.c ctl-watcher.c ctl-completion.c \
         ctl-cmd-core.c ctl-cmd-editor.c ctl-cmd-subsys.c ctl-cmd-sb.c \
-        ctl-cmd-gowl.c ctl-cmd-tool.c ctl-tool-args.c
+        ctl-cmd-gowl.c ctl-cmd-tool.c ctl-tool-args.c \
+        ctl-cmd-alias.c ctl-alias.c
 
 HDRS := ctl.h ctl-ifaces.h ctl-application.h ctl-command.h \
         ctl-command-registry.h ctl-invocation.h ctl-result.h \
         ctl-formatter.h ctl-json-yaml.h ctl-transport.h \
         ctl-transport-dbus.h ctl-transport-ssh.h ctl-frame.h \
         ctl-proxy.h ctl-config.h ctl-repl.h ctl-watcher.h \
-        ctl-completion.h ctl-cmd-tool.h ctl-tool-args.h
+        ctl-completion.h ctl-cmd-tool.h ctl-tool-args.h \
+        ctl-cmd-alias.h ctl-alias.h
 
 CC       ?= gcc
 PKGS     := glib-2.0 gobject-2.0 gio-2.0 gio-unix-2.0 \

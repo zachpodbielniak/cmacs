@@ -20,6 +20,7 @@
  * the client rather than blocking in the editor is deliberate -- a
  * `--gowl' editor's main thread is the desktop.  */
 
+#include "ctl-cmd-alias.h"
 #include "ctl-command-registry.h"
 #include "ctl-ifaces.h"
 #include "ctl-invocation.h"
@@ -36,29 +37,22 @@ void ctl_cmd_sb_register (CtlCommandRegistry *registry);
 
 /* ── Table-driven verbs (one D-Bus call, one reply) ──────────────── */
 
+/* CTL_ALIAS_ROW: the verb is an alias of a secondbrain_* tool; its row
+ * is in ctl-cmd-alias.c. */
+
 static const CtlMethodSpec sb_specs[] = {
-  { "sb open", "Open the second-brain visualiser (--3d via 'sb open true')",
-    CTL_IFACE_SECONDBRAIN, "Open", "b?:three_d", CTL_REPLY_STRING },
-  { "sb layout", "Switch the visualiser layout: rings, circle, hex, force",
-    CTL_IFACE_SECONDBRAIN, "SetLayout", "s:kind", CTL_REPLY_STRING },
+  CTL_ALIAS_ROW ("sb open"),
+  CTL_ALIAS_ROW ("sb layout"),
   { "sb search", "Highlight nodes matching QUERY (SEMANTIC true = embeddings)",
     CTL_IFACE_SECONDBRAIN, "Search", "s:query b?:semantic", CTL_REPLY_STRING },
-  { "sb expand", "Expand (or COLLAPSE true) a department by id; empty id = all",
-    CTL_IFACE_SECONDBRAIN, "Expand", "s?:id b?:collapse", CTL_REPLY_STRING },
-  { "sb node", "The full record for a node id",
-    CTL_IFACE_SECONDBRAIN, "NodeInfo", "s:id", CTL_REPLY_STRING },
-  { "sb stats", "Node, visible and edge counts of the open view",
-    CTL_IFACE_SECONDBRAIN, "Stats", NULL, CTL_REPLY_STRING },
-  { "sb sources", "The registered ARMS data sources",
-    CTL_IFACE_SECONDBRAIN, "Sources", NULL, CTL_REPLY_STRING },
-  { "sb refresh", "Re-read every source and rebuild the view",
-    CTL_IFACE_SECONDBRAIN, "Refresh", NULL, CTL_REPLY_STRING },
-  { "sb jobs", "Every ingest job this session, with its state",
-    CTL_IFACE_SECONDBRAIN, "IngestList", NULL, CTL_REPLY_JSON },
-  { "sb status", "Status of one ingest job",
-    CTL_IFACE_SECONDBRAIN, "IngestStatus", "s:id", CTL_REPLY_JSON },
-  { "sb cancel", "Cancel an ingest job",
-    CTL_IFACE_SECONDBRAIN, "IngestCancel", "s:id", CTL_REPLY_JSON },
+  CTL_ALIAS_ROW ("sb expand"),
+  CTL_ALIAS_ROW ("sb node"),
+  CTL_ALIAS_ROW ("sb stats"),
+  CTL_ALIAS_ROW ("sb sources"),
+  CTL_ALIAS_ROW ("sb refresh"),
+  CTL_ALIAS_ROW ("sb jobs"),
+  CTL_ALIAS_ROW ("sb status"),
+  CTL_ALIAS_ROW ("sb cancel"),
   { "sb doctor", "Which programs and features the ingester can use here",
     CTL_IFACE_SECONDBRAIN, "Doctor", NULL, CTL_REPLY_JSON },
   { "sb watch", "Watch the drop folder in the editor (true) or stop (false)",
@@ -736,8 +730,8 @@ ctl_cmd_sb_register (CtlCommandRegistry *registry)
   gint k;
 
   for (k = 0; sb_specs[k].name != NULL; k++)
-    ctl_command_registry_add (registry,
-                              ctl_method_command_new (&sb_specs[k]));
+    ctl_command_registry_add (
+      registry, ctl_cmd_alias_command_for_row (&sb_specs[k]));
 
   ctl_command_registry_add (registry,
     ctl_simple_command_new_with_options (

@@ -39,13 +39,133 @@ Precedence: command-line flags > the selected context > config
 
 Help is contextual and available everywhere (generated through
 GLib's option parser, so flag listings can never drift from the
-parser): @code{emacsctl --help} for the global overview,
+parser; for a verb that is an alias of a tool, from the tool's own
+description, as described below): @code{emacsctl --help} for the global overview,
 @code{emacsctl GROUP --help} for a group's subcommands,
 @code{emacsctl CMD --help} for one command's flags plus the global
 options, and @code{emacsctl help WORDS@dots{}} as an equivalent
 spelling.  A bare group prints its subcommand listing and exits 2;
 an unknown flag exits 2 with a @option{--help} hint; a typo'd verb
 gets a did-you-mean suggestion.
+
+@subsection Verbs that are aliases of tools
+
+@cindex emacsctl, verb aliases
+Most of what cmacs can do is a @dfn{tool} in its capability table
+(@pxref{Capability Table}), and @samp{emacsctl tool GROUP VERB --flag
+value} reaches every one of them through a single D-Bus method,
+@code{org.cmacs.Editor1.Tools.Call}.  The verbs that existed before the
+table --- @samp{emacsctl calc eval}, @samp{emacsctl gsurf open},
+@samp{emacsctl db tables} and about a hundred more --- are now
+@emph{aliases} of those tools: the spelling, the positional arguments
+and the output are what they were, and the call goes down the same path
+as @samp{emacsctl tool}.
+
+@example
+emacsctl calc units '60 mph' m/s
+# is
+emacsctl tool calc convert-units --expression '60 mph' --units m/s
+@end example
+
+An alias costs one D-Bus round trip, as the verb always did: which tool
+to call, which parameter each positional is and how to print the answer
+are compiled into the client, so the tool list is not fetched to run
+one.
+
+@multitable @columnfractions .18 .82
+@headitem Group @tab Aliased verbs
+@item @code{get} @tab @code{content}
+@item @code{buffer} @tab @code{show}
+@item @code{edit} @tab @code{search}, @code{goto-line}
+@item @code{debug} @tab all eleven
+@item @code{ai} @tab @code{providers}
+@item @code{brigade} @tab @code{status}, @code{result}, @code{list},
+@code{providers}, @code{models}, @code{inbox}, @code{log}
+@item @code{gsurf} @tab @code{open}, @code{navigate}, @code{back},
+@code{forward}, @code{reload}, @code{stop}, @code{url}, @code{title},
+@code{current}, @code{list}, @code{modules}, @code{zoom}, @code{lite},
+@code{text}, @code{downloads}, @code{download-cancel}, @code{click},
+@code{click-element}, @code{module}, @code{action}, @code{actions},
+@code{containers}
+@item @code{gnuseye} @tab all nine
+@item @code{pod} @tab @code{pods}, @code{modules}, @code{stats}
+@item @code{video} @tab @code{list}
+@item @code{audio} @tab @code{record}
+@item @code{speech} @tab @code{transcribe}, @code{components},
+@code{set}, @code{whisper-models}, @code{voices}
+@item @code{lrg} @tab all ten
+@item @code{calc} @tab all five
+@item @code{db} @tab @code{connections}, @code{connect},
+@code{disconnect}, @code{query}, @code{tables}, @code{columns}
+@item @code{logs} @tab @code{show}
+@item @code{compositor} @tab @code{clients}, @code{focused},
+@code{find}, @code{workspaces}, @code{keybinds}, @code{screensaver} and
+the seven @code{screensaver-*} verbs
+@item @code{monitor} @tab @code{list}
+@item @code{sb} @tab @code{open}, @code{layout}, @code{expand},
+@code{node}, @code{stats}, @code{sources}, @code{refresh}, @code{jobs},
+@code{status}, @code{cancel}
+@end multitable
+
+@subsubheading Help
+
+@samp{emacsctl calc eval --help} shows the tool's own description and
+the tool's own text for each argument, fetched from the running editor,
+and ends with the generic command the verb is the same as.
+@samp{emacsctl calc --help} lists the group as before; an aliased
+verb's summary is the first sentence of the tool's description and ends
+in @samp{[= tool calc eval]}.  Neither can drift from what the editor
+does, because neither is compiled into the client.  When no cmacs
+answers, the built-in one-line summary is shown and the page says so.
+
+@subsubheading Against an older cmacs
+
+An alias never fails because the tool registry is missing.  When
+@code{Tools.Call} is refused before the tool starts --- no
+@code{org.cmacs.Editor1.Tools} interface at all (an older cmacs, or a
+build without the registry), @code{NoSuchTool}, @code{NotOnSurface}, or
+@code{BadArguments} --- the verb calls the D-Bus method it used to be,
+exactly as it used to.  A failure of the tool itself (@code{ToolFailed},
+@code{Timeout}) is reported and never retried: the tool may have run.
+
+@subsubheading What is different from the old verbs
+
+@itemize
+@item
+@emph{A failure is a failure.}  A handful of the old methods
+(@code{calc}, @code{db}, @code{brigade}) caught an error and printed it
+as @samp{error: ...} with exit status 0.  The tool signals, so the alias
+prints the message on stderr and exits 1.  A script that grepped for
+@samp{error:} should test the exit status instead.
+@item
+@emph{Redaction applies.}  A tool's result passes through the redaction
+table (@pxref{CMacs Redact}), as everything @samp{emacsctl tool} prints
+does.  With no matching rules the output is unchanged; with rules, an
+excluded buffer, window or URL is withheld from @code{get content},
+@code{gsurf list} and their kin.
+@item
+@emph{Optional numbers left out take the tool's default.}
+@samp{emacsctl gnuseye query aircraft} used to send zero for each bound
+it was not given, which matched nothing; it now asks for the whole
+globe.  An optional argument given as @code{0}, @code{false} or
+@code{""} still means ``not given'', as it did on the old wire.
+@end itemize
+
+@subsubheading Verbs that are not aliases
+
+A verb stays a hand-written D-Bus call when no tool does the same
+thing, when its tool is destructive and therefore not on the @code{cli}
+surface (@code{buffer kill}, @code{gsurf js}, @code{compositor spawn};
+@code{Tools.Call} would refuse them), when the tool's answer cannot be
+turned back into what the verb printed (@code{get buffers}, @code{lql
+query}, @code{speech models}), or when the verb composes its request in
+the client (@code{ai prompt}, @code{sb ingest}, @code{text insert}).
+@code{instances}, the contexts, @code{eval} / @code{repl}, @code{logs}
+/ @code{events} / @code{watch}, the ssh proxy, the @code{c} group and
+@code{completion} are not tools at all.  The reason for each is recorded
+next to the alias table, in @code{kept_verbs} in
+@file{cmacs/emacsctl/ctl-cmd-alias.c}, and a verb that is neither an
+alias nor listed there fails the unit tests.
 
 @subsection Core commands
 

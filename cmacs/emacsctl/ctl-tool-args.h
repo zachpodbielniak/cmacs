@@ -38,12 +38,22 @@ gboolean ctl_tool_on_surface (JsonObject *tool, const gchar *surface);
  *   --NAME VALUE | --NAME=VALUE   string, integer, number
  *   --NAME [true|false]           boolean (bare flag = true)
  *   --no-NAME                     boolean false
+ *   --NAME '{...}'                object: a JSON object
+ *   --NAME V [--NAME V ...]       array: one element per use of the
+ *                                 flag (typed by the array's item type
+ *                                 when that is a scalar, JSON
+ *                                 otherwise), or the whole array at
+ *                                 once as --NAME '[...]'
  *   --json '{...}'                the whole object; flags override it
  *
  * `-' in a flag stands for `_' in the parameter name.  Returns NULL
  * with a CTL_ERROR_USAGE error for an unknown flag, a value of the
  * wrong type, a missing value, a stray positional, or a required
- * parameter that was not given.  Caller g_frees. */
+ * parameter that was not given.  Caller g_frees.
+ *
+ * An array of strings has one ambiguity: an element that is itself the
+ * text of a JSON array (--tags '["a"]') is read as the whole array.
+ * Such an element has to be passed inside --json. */
 gchar *ctl_tool_build_args (JsonObject *tool, gchar **argv, gint argc,
                             GError **error);
 

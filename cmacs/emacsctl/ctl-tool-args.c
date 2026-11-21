@@ -18,6 +18,11 @@
  *     "destructive": false, "confirm": null, "async": false,
  *     "timeout": 120, "surfaces": ["mcp", "dbus", ...],
  *     "example": null, "aliases": [] }
+ *
+ * A parameter whose type is "array" or "object" carries one more
+ * member, "schema": its JSON Schema ("items", "properties",
+ * "required").  The only part read here is schema.items.type, which
+ * decides whether an array can be given one element per flag.
  */
 
 #include "ctl-tool-args.h"
@@ -283,6 +288,176 @@ set_typed (JsonObject *obj, const gchar *name, const gchar *type,
   return TRUE;
 }
 
+/* ── Structured flags ────────────────────────────────────────────── */
+
+/* The member KEY of OBJ as an object, or NULL. */
+static JsonObject *
+member_object (JsonObject *obj, const gchar *key)
+{
+  JsonNode *node;
+
+  if (obj == NULL || !json_object_has_member (obj, key))
+    return NULL;
+  node = json_object_get_member (obj, key);
+  return JSON_NODE_HOLDS_OBJECT (node) ? json_node_get_object (node) : NULL;
+}
+
+/* The declared type of one element of the array parameter PARAM
+ * (schema.items.type), or NULL when the tool does not say. */
+static const gchar *
+array_item_type (JsonObject *param)
+{
+  return member_string (member_object (member_object (param, "schema"),
+                                       "items"),
+                        "type", NULL);
+}
+
+static gboolean
+is_scalar_type (const gchar *type)
+{
+  return g_strcmp0 (type, "string") == 0
+    || g_strcmp0 (type, "integer") == 0
+    || g_strcmp0 (type, "number") == 0
+    || g_strcmp0 (type, "boolean") == 0;
+}
+
+/* TEXT parsed as JSON: a new node, or NULL when it is not JSON.  No
+ * error is reported, because for an array of strings "not JSON" is the
+ * normal case -- the word is simply one element. */
+static JsonNode *
+parse_json_quiet (const gchar *text)
+{
+  JsonParser *parser = json_parser_new ();
+  JsonNode *out = NULL;
+
+  if (json_parser_load_from_data (parser, text, -1, NULL)
+      && json_parser_get_root (parser) != NULL)
+    out = json_node_copy (json_parser_get_root (parser));
+  g_object_unref (parser);
+  return out;
+}
+
+/* One element for an array whose elements are the scalar TYPE, from the
+ * command-line word VALUE.  NULL with ERROR set when VALUE is not one. */
+static JsonNode *
+scalar_element (const gchar *name, const gchar *type, const gchar *value,
+                GError **error)
+{
+  JsonNode *node = json_node_new (JSON_NODE_VALUE);
+  gchar *end = NULL;
+
+  if (g_strcmp0 (type, "integer") == 0)
+    {
+      gint64 v = g_ascii_strtoll (value, &end, 10);
+      if (*value == '\0' || end == NULL || *end != '\0')
+        goto bad;
+      json_node_set_int (node, v);
+    }
+  else if (g_strcmp0 (type, "number") == 0)
+    {
+      gdouble v = g_ascii_strtod (value, &end);
+      if (*value == '\0' || end == NULL || *end != '\0')
+        goto bad;
+      json_node_set_double (node, v);
+    }
+  else if (g_strcmp0 (type, "boolean") == 0)
+    {
+      gboolean v;
+      if (!parse_bool_word (value, &v))
+        goto bad;
+      json_node_set_boolean (node, v);
+    }
+  else
+    json_node_set_string (node, value);
+  return node;
+
+bad:
+  json_node_unref (node);
+  g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+               "--%s takes %s elements, not '%s'", name, type, value);
+  return NULL;
+}
+
+/* Apply `--NAME VALUE' for the array or object parameter PARAM.
+ *
+ *   object                 VALUE is a JSON object.
+ *   array                  VALUE that is a JSON array is the array's
+ *                          elements; anything else is ONE element, and
+ *                          the flag is repeated for the next.  For an
+ *                          array of scalars the element is the word
+ *                          itself, typed like a scalar flag; for any
+ *                          other array it must be JSON.
+ *
+ * The first use of an array flag replaces whatever --json supplied for
+ * it (flags override --json); later uses append.  STARTED remembers
+ * which arrays this command line has already begun. */
+static gboolean
+set_structured (JsonObject *obj, JsonObject *param, const gchar *name,
+                const gchar *type, const gchar *value, GHashTable *started,
+                GError **error)
+{
+  JsonNode *parsed = parse_json_quiet (value);
+  JsonArray *arr;
+
+  if (g_strcmp0 (type, "object") == 0)
+    {
+      if (parsed == NULL || !JSON_NODE_HOLDS_OBJECT (parsed))
+        {
+          g_clear_pointer (&parsed, json_node_unref);
+          g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                       "--%s takes a JSON object, e.g. --%s '{\"key\": 1}'",
+                       name, name);
+          return FALSE;
+        }
+      json_object_set_member (obj, name, parsed);
+      return TRUE;
+    }
+
+  if (!g_hash_table_contains (started, name)
+      || !json_object_has_member (obj, name)
+      || !JSON_NODE_HOLDS_ARRAY (json_object_get_member (obj, name)))
+    {
+      json_object_set_array_member (obj, name, json_array_new ());
+      g_hash_table_add (started, g_strdup (name));
+    }
+  arr = json_object_get_array_member (obj, name);
+
+  if (parsed != NULL && JSON_NODE_HOLDS_ARRAY (parsed))
+    {
+      JsonArray *src = json_node_get_array (parsed);
+      guint n = json_array_get_length (src);
+      guint k;
+
+      for (k = 0; k < n; k++)
+        json_array_add_element (arr,
+                                json_node_copy (json_array_get_element (src, k)));
+      json_node_unref (parsed);
+      return TRUE;
+    }
+
+  if (is_scalar_type (array_item_type (param)))
+    {
+      JsonNode *element;
+
+      g_clear_pointer (&parsed, json_node_unref);
+      element = scalar_element (name, array_item_type (param), value, error);
+      if (element == NULL)
+        return FALSE;
+      json_array_add_element (arr, element);
+      return TRUE;
+    }
+
+  if (parsed == NULL)
+    {
+      g_set_error (error, CTL_ERROR, CTL_ERROR_USAGE,
+                   "--%s takes JSON: one element per flag, or the whole "
+                   "array as --%s '[...]'", name, name);
+      return FALSE;
+    }
+  json_array_add_element (arr, parsed);
+  return TRUE;
+}
+
 /* Merge the members of the JSON object text TEXT into OBJ. */
 static gboolean
 merge_json (JsonObject *obj, const gchar *text, GError **error)
@@ -327,6 +502,9 @@ ctl_tool_build_args (JsonObject *tool, gchar **argv, gint argc,
   JsonObject *obj = json_object_new ();
   JsonArray *params = member_array (tool, "params");
   const gchar *tool_name = member_string (tool, "name", "tool");
+  /* Array parameters this command line has started; see set_structured. */
+  GHashTable *started = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                               g_free, NULL);
   JsonNode *root;
   gchar *out;
   guint n_params, p;
@@ -454,7 +632,17 @@ ctl_tool_build_args (JsonObject *tool, gchar **argv, gint argc,
                 }
               value = argv[++k];
             }
-          if (!set_typed (obj, pname, ptype, value, error))
+          if (g_strcmp0 (ptype, "array") == 0
+              || g_strcmp0 (ptype, "object") == 0)
+            {
+              if (!set_structured (obj, param, pname, ptype, value,
+                                   started, error))
+                {
+                  g_free (flag);
+                  goto fail;
+                }
+            }
+          else if (!set_typed (obj, pname, ptype, value, error))
             {
               g_free (flag);
               goto fail;
@@ -490,9 +678,11 @@ ctl_tool_build_args (JsonObject *tool, gchar **argv, gint argc,
   json_node_take_object (root, obj);
   out = json_to_string (root, FALSE);
   json_node_unref (root);
+  g_hash_table_unref (started);
   return out;
 
 fail:
+  g_hash_table_unref (started);
   json_object_unref (obj);
   return NULL;
 }
@@ -506,7 +696,25 @@ type_placeholder (const gchar *type)
   if (g_strcmp0 (type, "integer") == 0) return "INT";
   if (g_strcmp0 (type, "number") == 0)  return "NUM";
   if (g_strcmp0 (type, "boolean") == 0) return "[true|false]";
+  if (g_strcmp0 (type, "object") == 0)  return "JSON";
   return "STRING";
+}
+
+/* The placeholder for the parameter PARAM: its type's, except that an
+ * array is shown by what ONE use of the flag takes -- an element of its
+ * item type when that is a scalar, JSON otherwise. */
+static const gchar *
+param_placeholder (JsonObject *param)
+{
+  const gchar *type = member_string (param, "type", "string");
+
+  if (g_strcmp0 (type, "array") != 0)
+    return type_placeholder (type);
+  if (g_strcmp0 (array_item_type (param), "boolean") == 0)
+    return "true|false";
+  if (is_scalar_type (array_item_type (param)))
+    return type_placeholder (array_item_type (param));
+  return "JSON";
 }
 
 /* Comma-joined string elements of ARR.  Caller g_frees. */
@@ -562,10 +770,14 @@ ctl_tool_help_string (JsonObject *tool, const gchar *prog)
       if (g_strcmp0 (ptype, "boolean") == 0)
         g_string_append_printf (out, required ? " --%s" : " [--%s]",
                                 member_string (p, "name", "?"));
+      else if (g_strcmp0 (ptype, "array") == 0)
+        g_string_append_printf (out, required ? " --%s %s…" : " [--%s %s…]",
+                                member_string (p, "name", "?"),
+                                param_placeholder (p));
       else
         g_string_append_printf (out, required ? " --%s %s" : " [--%s %s]",
                                 member_string (p, "name", "?"),
-                                type_placeholder (ptype));
+                                param_placeholder (p));
     }
   g_string_append_printf (out, "\n  %s [OPTION…] tool call %s --json '{…}'\n\n",
                           prog, name);
@@ -587,11 +799,35 @@ ctl_tool_help_string (JsonObject *tool, const gchar *prog)
         continue;
       ptype = member_string (p, "type", "string");
       label = g_strdup_printf ("--%s %s", member_string (p, "name", "?"),
-                               type_placeholder (ptype));
+                               param_placeholder (p));
       g_string_append_printf (out, "  %-28s %s%s\n", label,
                               member_bool (p, "required") ? "(required) " : "",
                               member_string (p, "description", ""));
       g_free (label);
+      if (g_strcmp0 (ptype, "array") == 0)
+        g_string_append_printf (
+          out, "  %-28s A list: repeat the flag for each element, or give "
+          "the whole list once as a JSON array\n", "");
+      else if (g_strcmp0 (ptype, "object") == 0)
+        {
+          JsonObject *members
+            = member_object (member_object (p, "schema"), "properties");
+          GList *names = members != NULL
+            ? json_object_get_members (members) : NULL;
+          GString *list = g_string_new (NULL);
+          GList *l;
+
+          for (l = names; l != NULL; l = l->next)
+            g_string_append_printf (list, "%s%s", list->len > 0 ? ", " : "",
+                                    (const gchar *) l->data);
+          if (list->len > 0)
+            g_string_append_printf (out, "  %-28s A JSON object with: %s\n",
+                                    "", list->str);
+          else
+            g_string_append_printf (out, "  %-28s A JSON object\n", "");
+          g_string_free (list, TRUE);
+          g_list_free (names);
+        }
       pen = member_array (p, "enum");
       if (pen != NULL && json_array_get_length (pen) > 0)
         {
