@@ -78,13 +78,18 @@ interaction.
 * CMacs Transcribe::            Batch speech-to-text (whisper STT + AI summaries).
 * CMacs Journal::               Local activity journal with privacy filters.
 * CMacs Journal Restore::       Put me back where I was: checkpoints and restore.
+* CMacs Journal Daily::         The day's note, written from the journal.
+* CMacs Context::               Named arrangements you switch between.
 * CMacs Redact::                One privacy rule set for every model-facing surface.
 * CMacs Deixis::                Deictic voice: "move that there" bound to what was pointed at.
+* CMacs Deixis Ask::            Questions about what you point at.
 * Gowl Edit Field::             Edit any application's text field in a floating Emacs frame.
 * Gowl AI Field::               AI commands on any application's text field.
+* Gowl Bar Slots::              Bar items Elisp creates and fills.
 * LQL Watches::                 Standing LQL queries that fire when their result changes.
 * Agent Desktops::              A private headless desktop per brigade agent.
 * Capability Table::            One tool table behind MCP, D-Bus, emacsctl and menus.
+* CMacs Rig::                   A private cmacs --gowl session to test against.
 * CMacs AI and ai-glib 0.13::   ACP agents, steering, limit notices, Codex transport.
 * CMacs Calculator::            Desktop/financial/physics/tax calculator + CAS over GNU Calc.
 * CMacs LSP::                   In-binary LSP language servers (emacs --cmacs-lsp).
@@ -13858,16 +13863,28 @@ viewport; a low-resolution proxy keeps playback near real-time.
 @include journal-restore.texi
 
 @c ===================================================================
+@include journal-daily.texi
+
+@c ===================================================================
+@include context.texi
+
+@c ===================================================================
 @include redact.texi
 
 @c ===================================================================
 @include deixis.texi
 
 @c ===================================================================
+@include deixis-ask.texi
+
+@c ===================================================================
 @include gowl-edit-field.texi
 
 @c ===================================================================
 @include gowl-ai-field.texi
+
+@c ===================================================================
+@include gowl-bar-slots.texi
 
 @c ===================================================================
 @include lql-watch.texi
@@ -13877,6 +13894,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include capability.texi
+
+@c ===================================================================
+@include rig.texi
 
 @c ===================================================================
 @include ai-0.13.texi

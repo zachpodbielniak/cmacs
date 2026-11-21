@@ -28,17 +28,19 @@
 ;; return at once and put anything slower on a timer; neither prompts,
 ;; and neither signals for an ordinary failure.
 ;;
-;; Model lists, and why only some providers get one.  cmacs-ai can list
-;; models only SYNCHRONOUSLY (`cmacs-ai-list-models' iterates a private
-;; main context until the provider answers, up to thirty seconds).  For
-;; the CLI providers that answer is a static table and returns at once;
-;; for an HTTP provider it is a network round trip, and an idle timer
-;; does not make a blocking call non-blocking -- it only picks when the
-;; desktop freezes.  So `cmacs-gowl-bar-assistant-model-list-providers'
-;; defaults to the CLI providers.  ollama is deliberately absent: the
-;; widget asks ollama for its installed models itself, off the
-;; compositor thread.  Every other provider's model chooser falls back
-;; to free text, which always works.
+;; Model lists.  cmacs-ai can list models only SYNCHRONOUSLY
+;; (`cmacs-ai-list-models' iterates a private main context until the
+;; provider answers, up to thirty seconds), and an idle timer does not
+;; make a blocking call non-blocking -- it only picks when the desktop
+;; freezes.  The CLI providers were listed in line on the belief that
+;; their answer is a static table; opencode's is not, and it held the
+;; thread for twenty seconds after every start where its program was
+;; slow or missing.  So the stock lister runs in a child process per
+;; provider and the list is pushed when the child answers
+;; (`cmacs-gowl-bar-assistant--push-model-lists').  ollama is absent
+;; from the default list for another reason: the widget asks ollama for
+;; its installed models itself.  A provider with no list falls back to
+;; free text, which always works.
 
 ;;; Code:
 
@@ -125,30 +127,80 @@ Tests rebind it; everything else leaves it alone.")
                      (not (string-match-p "[,\n]" s)))
            collect s))
 
+(declare-function cmacs-ai-models-tools--list "cmacs-ai-models-tools"
+                  (done provider))
+
+(defun cmacs-gowl-bar-assistant--push-models (alist)
+  "Push ALIST, a list of (\"models.PROVIDER\" . \"a,b,c\"), to the widgets."
+  (when alist
+    (dolist (widget (delete-dups (cons cmacs-gowl-bar-assistant-widget
+                                       (copy-sequence
+                                        cmacs-gowl-bar-model-list-widgets))))
+      (cmacs-gowl-bar-push widget alist))))
+
+(defun cmacs-gowl-bar-assistant--list-async (name)
+  "List provider NAME's models in a child process and push them when it answers.
+Returns at once.  Nothing here signals; a provider that cannot be listed
+simply gets no list, and its chooser stays free text."
+  (condition-case nil
+      (cmacs-ai-models-tools--list
+       (lambda (text)
+         ;; TEXT is {\"NAME\": [MODEL...]} or an \"Error: ...\" string; a
+         ;; provider the child could not list comes back as one entry
+         ;; beginning \"(unavailable\".
+         (ignore-errors
+           (let* ((table (and (stringp text)
+                              (string-prefix-p "{" text)
+                              (json-parse-string text :array-type 'list)))
+                  (models (and table
+                               (cl-remove-if
+                                (lambda (m) (string-prefix-p "(unavailable" m))
+                                (cmacs-gowl-bar-assistant--clean-models
+                                 (gethash name table))))))
+             (when models
+               (cmacs-gowl-bar-assistant--push-models
+                (list (cons (concat "models." name)
+                            (mapconcat #'identity models ","))))))))
+       name)
+    (error nil)))
+
 (defun cmacs-gowl-bar-assistant--push-model-lists ()
-  "Push `models.<provider>' for every provider that can be listed cheaply.
-A provider that fails to list is skipped; nothing here signals."
+  "Push `models.<provider>' for every provider in the configured list.
+A provider that fails to list is skipped; nothing here signals.
+
+With the stock lister this does not list anything itself.  Listing is
+synchronous in cmacs-ai, and the comment that used to be here -- that
+the CLI providers answer from a static table at once -- was not true of
+all of them: opencode asks its program, and where that program is slow
+or absent the call held Emacs's thread for twenty seconds on the idle
+timer after every start.  Under `--gowl' that thread is the desktop.
+So each provider is listed in a child process
+\(`cmacs-ai-models-tools--list') and pushed when its child answers.
+A lister you set yourself in
+`cmacs-gowl-bar-assistant-list-models-function' is still called here,
+in line: it is yours to keep fast."
   (setq cmacs-gowl-bar-assistant--model-timer nil)
   (let ((offered (ignore-errors (cmacs-gowl-bar-ai-provider-names)))
+        (async (and (eq cmacs-gowl-bar-assistant-list-models-function
+                        #'cmacs-ai-list-models)
+                    (require 'cmacs-ai-models-tools nil t)
+                    (fboundp 'cmacs-ai-models-tools--list)))
         out)
     (dolist (p cmacs-gowl-bar-assistant-model-list-providers)
       (let ((name (if (symbolp p) (symbol-name p) (format "%s" p))))
         (when (member name offered)
-          (let ((models (condition-case nil
-                            (cmacs-gowl-bar-assistant--clean-models
-                             (funcall cmacs-gowl-bar-assistant-list-models-function
-                                      (intern name)))
-                          (error nil))))
-            (when models
-              (push (cons (concat "models." name)
-                          (mapconcat #'identity models ","))
-                    out))))))
-    (when out
-      (setq out (nreverse out))
-      (dolist (widget (delete-dups (cons cmacs-gowl-bar-assistant-widget
-                                         (copy-sequence
-                                          cmacs-gowl-bar-model-list-widgets))))
-        (cmacs-gowl-bar-push widget out)))
+          (if async
+              (cmacs-gowl-bar-assistant--list-async name)
+            (let ((models (condition-case nil
+                              (cmacs-gowl-bar-assistant--clean-models
+                               (funcall cmacs-gowl-bar-assistant-list-models-function
+                                        (intern name)))
+                            (error nil))))
+              (when models
+                (push (cons (concat "models." name)
+                            (mapconcat #'identity models ","))
+                      out)))))))
+    (cmacs-gowl-bar-assistant--push-models (nreverse out))
     nil))
 
 ;;;###autoload

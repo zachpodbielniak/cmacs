@@ -757,7 +757,8 @@ AC_SUBST([CMACS_LIBREGNUM_MAKEFLAGS])
 if test "$with_cmacs_glib" != "no"; then
   PKG_CHECK_MODULES([CMACS_GLIB], [glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0])
   AC_DEFINE([HAVE_CMACS_GLIB], 1, [CMacs GLib integration])
-  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o cmacs-dbus-emit.o cmacs-dbus-properties.o cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o cmacs-dbus-iface-bufmgr.o cmacs-dbus-iface-resmgr.o cmacs-dbus-iface-search.o cmacs-dbus-iface-vc.o cmacs-dbus-iface-project.o cmacs-dbus-iface-cintrospect.o cmacs-dbus-iface-cpatch.o cmacs-dbus-iface-bookmark.o cmacs-dbus-iface-clipboard.o cmacs-dbus-iface-package.o cmacs-dbus-iface-file.o cmacs-dbus-iface-text.o cmacs-dbus-iface-nav.o cmacs-dbus-iface-config.o cmacs-dbus-application.o cmacs-dbus-actions.o cmacs-dbus-search-provider.o cmacs-dbus-watch.o cmacs-dbus-mpris.o cmacs-dbus-iface-compositor.o cmacs-dbus-iface-monitor.o cmacs-dbus-iface-lang.o cmacs-dbus-iface-edit.o cmacs-dbus-iface-input.o cmacs-dbus-iface-debug.o cmacs-dbus-iface-ai.o cmacs-dbus-iface-gsurf.o cmacs-dbus-iface-gnuseye.o cmacs-dbus-iface-podomation.o cmacs-dbus-iface-media.o cmacs-dbus-iface-lrg.o cmacs-dbus-iface-instance.o cmacs-dbus-iface-log.o cmacs-dbus-iface-events.o cmacs-dbus-iface-secondbrain.o"
+  CMACS_GLIB_OBJ="cmacs-glib-loop.o cmacs-gobject.o cmacs-gclosure.o cmacs-eval-dispatch.o cmacs-glib-screenshot.o cmacs-ink-overlay.o cmacs-dbus.o cmacs-dbus-helpers.o cmacs-dbus-emit.o cmacs-dbus-properties.o cmacs-dbus-object-manager.o cmacs-dbus-iface-eval.o cmacs-dbus-iface-bufmgr.o cmacs-dbus-iface-resmgr.o cmacs-dbus-iface-search.o cmacs-dbus-iface-vc.o cmacs-dbus-iface-project.o cmacs-dbus-iface-cintrospect.o cmacs-dbus-iface-cpatch.o cmacs-dbus-iface-bookmark.o cmacs-dbus-iface-clipboard.o cmacs-dbus-iface-package.o cmacs-dbus-iface-file.o cmacs-dbus-iface-text.o cmacs-dbus-iface-nav.o cmacs-dbus-iface-config.o cmacs-dbus-application.o cmacs-dbus-actions.o cmacs-dbus-search-provider.o cmacs-dbus-watch.o cmacs-dbus-mpris.o cmacs-dbus-iface-compositor.o cmacs-dbus-iface-monitor.o cmacs-dbus-iface-lang.o cmacs-dbus-iface-edit.o cmacs-dbus-iface-input.o cmacs-dbus-iface-debug.o cmacs-dbus-iface-ai.o cmacs-dbus-iface-gsurf.o cmacs-dbus-iface-gnuseye.o cmacs-dbus-iface-podomation.o cmacs-dbus-iface-media.o cmacs-dbus-iface-lrg.o cmacs-dbus-iface-instance.o cmacs-dbus-iface-log.o cmacs-dbus-iface-events.o cmacs-dbus-iface-secondbrain.o cmacs-dbus-forward.o cmacs-dbus-iface-tools.o"
+  AC_DEFINE([HAVE_CMACS_DBUS_TOOLS], 1, [org.cmacs.Editor1.Tools capability interface])
 fi
 if test "$with_cmacs_gi" != "no"; then
   PKG_CHECK_MODULES([CMACS_GI], [gobject-introspection-1.0])
@@ -905,7 +906,7 @@ if test "$with_cmacs_gowl" != "no"; then
       [AC_MSG_WARN([libdecor not found - nested window decorations disabled])])
   fi
   AC_DEFINE([HAVE_CMACS_GOWL], 1, [CMacs Gowl compositor])
-  CMACS_GOWL_OBJ="cmacs-gowl.o cmacs-gowl-loop.o cmacs-gowl-pointer.o cmacs-gowl-pointer-history.o cmacs-gowl-textfield.o keyboard-shortcuts-inhibit-v1-protocol.o"
+  CMACS_GOWL_OBJ="cmacs-gowl.o cmacs-gowl-loop.o cmacs-gowl-pointer.o cmacs-gowl-pointer-history.o cmacs-gowl-textfield.o cmacs-gowl-bar-slots.o keyboard-shortcuts-inhibit-v1-protocol.o"
 fi
 if test "$with_cmacs_podomation" != "no"; then
   if test "$with_cmacs_podomation" = "system"; then
@@ -1122,9 +1123,16 @@ if test "$with_cmacs_ai_brigade" != "no"; then
   CMACS_AI_BRIGADE_LIBS="$CMACS_AI_BRIGADE_DEPS_LIBS"
   AC_DEFINE([HAVE_CMACS_AI_BRIGADE], 1, [CMacs AI brigade fabric])
   CMACS_AI_BRIGADE_OBJ="cmacs-brigade-init.o cmacs-brigade-defuns.o \
- cmacs-brigade-registry.o cmacs-brigade-allowlist.o cmacs-brigade-relay.o \
+ cmacs-brigade-allowlist.o cmacs-brigade-relay.o \
  cmacs-brigade-chunk.o cmacs-brigade-index.o cmacs-brigade-memory-defuns.o \
  cmacs-brigade-state.o"
+  dnl The tool registry's C mirror (cmacs/core/cmacs-tool-registry.c) is
+  dnl needed by the allowlist gate here AND by the MCP publisher, which no
+  dnl longer needs the brigade.  The MCP block lists it whenever MCP is
+  dnl on; list it here only when it is not, so it is linked exactly once.
+  if test "$with_cmacs_mcp" = "no"; then
+    CMACS_AI_BRIGADE_OBJ="$CMACS_AI_BRIGADE_OBJ cmacs-tool-registry.o"
+  fi
   dnl NOTE: do not add AC_CHECK_HEADERS / AC_COMPILE_IFELSE here.  The
   dnl cmacs feature blocks run before AC_USE_SYSTEM_EXTENSIONS, so any
   dnl compile test expands AC_CHECK_INCLUDES_DEFAULT early and _GNU_SOURCE
@@ -1150,8 +1158,7 @@ if test "$with_cmacs_ai_brigade" != "no"; then
   dnl builds when BOTH the brigade and cmacs-glib are enabled --- matching
   dnl the file's HAVE_CMACS_GLIB && HAVE_CMACS_AI_BRIGADE guard.
   if test "$with_cmacs_glib" != "no"; then
-    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-brigade.o cmacs-dbus-iface-tools.o"
-    AC_DEFINE([HAVE_CMACS_DBUS_TOOLS], 1, [org.cmacs.Editor1.Tools capability interface])
+    CMACS_GLIB_OBJ="$CMACS_GLIB_OBJ cmacs-dbus-iface-brigade.o"
   fi
 fi
 if test "$with_cmacs_libregnum" != "no"; then
@@ -1895,52 +1902,24 @@ if test "$with_cmacs_mcp" != "no"; then
     CMACS_MCP_BUNDLED=yes
   fi
   AC_DEFINE([HAVE_CMACS_MCP], 1, [CMacs MCP server])
-  CMACS_MCP_OBJ="cmacs-mcp.o cmacs-mcp-tools.o cmacs-mcp-tools-eval.o \
-    cmacs-mcp-tools-buffer.o cmacs-mcp-tools-window.o cmacs-mcp-tools-input.o \
-    cmacs-mcp-tools-process.o cmacs-mcp-tools-debug.o cmacs-mcp-tools-gi.o \
-    cmacs-mcp-tools-gowl.o cmacs-mcp-tools-edit.o cmacs-mcp-tools-shell.o \
-    cmacs-mcp-tools-project.o cmacs-mcp-resources.o cmacs-mcp-prompts.o"
+  dnl cmacs-tool-registry.o + cmacs-mcp-tools-brigade.o: the capability
+  dnl table (cmacs-brigade-deftool) is published by EVERY build with an MCP
+  dnl server, AI subsystems or not; only the scoped sockets inside
+  dnl cmacs-mcp-tools-brigade.c are HAVE_CMACS_AI_BRIGADE.
+  CMACS_MCP_OBJ="cmacs-tool-registry.o cmacs-mcp-tools-brigade.o \
+    cmacs-mcp.o cmacs-mcp-tools.o cmacs-mcp-tools-eval.o \
+    cmacs-mcp-tools-input.o \
+    cmacs-mcp-tools-process.o cmacs-mcp-tools-gi.o \
+    cmacs-mcp-tools-gowl.o cmacs-mcp-tools-shell.o \
+    cmacs-mcp-resources.o cmacs-mcp-prompts.o"
   if test "$with_cmacs_cintrospect" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cintrospect.o"
-  fi
-  if test "$with_cmacs_audio" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-audio.o"
-  fi
-  if test "$with_cmacs_ai" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-ai.o"
-  fi
-  if test "$with_cmacs_gsurf" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gsurf.o"
-  fi
-  if test "$with_cmacs_libregnum" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-libregnum.o"
-  fi
-  if test "$with_cmacs_gnuseye" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-gnuseye.o"
-  fi
-  if test "$with_cmacs_secondbrain" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-secondbrain.o"
   fi
   if test "$with_cmacs_cad" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-cad.o"
   fi
   if test "$with_cmacs_lrgterm" != "no"; then
     CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-lrgterm.o"
-  fi
-  if test "$with_cmacs_imgedit" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-imgedit.o"
-  fi
-  if test "$with_cmacs_vidstudio" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-vidstudio.o"
-  fi
-  if test "$with_cmacs_calculator" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-calculator.o"
-  fi
-  if test "$with_cmacs_dbexplorer" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-dbexplorer.o"
-  fi
-  if test "$with_cmacs_ai_brigade" != "no"; then
-    CMACS_MCP_OBJ="$CMACS_MCP_OBJ cmacs-mcp-tools-brigade.o"
   fi
 fi
 # CMACS Print: pure-Elisp + shell-script subsystem (no C build artefacts).

@@ -62,6 +62,8 @@
 (declare-function cmacs-gowl-power--on-stop "cmacs-gowl-power" ())
 (declare-function cmacs-gowl-power-apply "cmacs-gowl-power" (backdrop crt))
 (declare-function cmacs-gowl-gabbrev--on-start "cmacs-gowl-gabbrev" ())
+(declare-function cmacs-gowl-bar-slots--on-start "cmacs-gowl-bar-slots" ())
+(declare-function cmacs-context-setup "cmacs-context" ())
 (defvar cmacs-gowl-broadcast-enable)
 (defvar cmacs-gowl-broadcast-teams)
 (defvar cmacs-gowl-broadcast-rules)
@@ -2100,12 +2102,20 @@ thread is running and applies configuration."
   ;; Binds `cmacs-gowl-ai-field-key'; a nil key binds nothing.
   (when (require 'cmacs-gowl-ai-field nil t)
     (cmacs-gowl-ai-field-setup))
+  ;; Named contexts (cmacs-context.el).  Binds `cmacs-context-key'
+  ;; to the switcher; a nil key binds nothing.
+  (when (require 'cmacs-context nil t)
+    (cmacs-context-setup))
   ;; Text expansion (cmacs-gowl-gabbrev.el).  Its module is in the
   ;; default set too: this gives it the `cmacs-gowl-gabbrev-*'
   ;; configuration -- files, espanso, Elisp matches, the abbrev tables
   ;; -- and registers the Lisp-backed variable types.
   (when (require 'cmacs-gowl-gabbrev nil t)
     (cmacs-gowl-gabbrev--on-start))
+  ;; Bar slots Elisp created (cmacs-gowl-bar-slots.el): a new
+  ;; compositor has none of them, so they are pushed again.
+  (when (require 'cmacs-gowl-bar-slots nil t)
+    (cmacs-gowl-bar-slots--on-start))
   ;; How the screen locks, and whether a suspend does it.
   (cmacs-gowl--apply-lock)
   ;; Whether power saver is holding the effects off.  Before the
@@ -2141,14 +2151,12 @@ thread is running and applies configuration."
        (message "cmacs-gowl: session restore failed: %s" err))))
   ;; Install the save-on-exit hook idempotently.
   (add-hook 'kill-emacs-hook #'cmacs-gowl--save-session-if-configured)
-  ;; Ensure Emacs has keyboard focus.  The client may have mapped
-  ;; before focus was properly assigned, so explicitly focus it.
-  (run-with-timer 0.5 nil
-    (lambda ()
-      (when (gowl-running-p)
-        (let ((clients (gowl-list-clients)))
-          (when clients
-            (gowl-focus-client (car clients)))))))
+  ;; Ensure SOMETHING has keyboard focus.  Emacs's frame may have mapped
+  ;; before focus was properly assigned, so give it the keyboard half a
+  ;; second in -- but only when nothing holds it.  A window mapped in
+  ;; that half second (an autostart program, a test client) was given
+  ;; focus by the compositor's own rule and keeps it.
+  (run-with-timer 0.5 nil #'cmacs-gowl--focus-emacs-if-unfocused)
   ;; Launch autostart programs (only once per session).
   (unless cmacs-gowl--autostart-launched
     (dolist (cmd cmacs-gowl-autostart)
@@ -2477,18 +2485,60 @@ it the selected monitor, stranding focus / the bar on the dark screen."
   (interactive)
   (unless (gowl-running-p)
     (user-error "Gowl compositor is not running"))
-  (let ((i 0))
+  (let ((i 0)
+        ;; Who has the keyboard now.  Asked before the tags move.
+        (before (cmacs-gowl--focused-client-id)))
     (dolist (mon (gowl-list-monitors))
       (when (and (ignore-errors (gowl-monitor-enabled-p mon)) (< i 9))
         (gowl-view-tags (ash 1 i) mon)
-        (setq i (1+ i)))))
-  ;; `gowl-view-tags' focus-follows per monitor, which would leave
-  ;; keyboard focus on the last monitor's top client (or nowhere if
-  ;; it is empty).  Return focus to Emacs.
-  (when (fboundp 'gowl-emacs-client)
-    (let ((ec (ignore-errors (gowl-emacs-client))))
-      (when ec (ignore-errors (gowl-focus-client ec)))))
+        (setq i (1+ i))))
+    ;; `gowl-view-tags' focus-follows per monitor, which would leave
+    ;; keyboard focus on the last monitor's top client (or nowhere if
+    ;; it is empty).  Put it back where it was.  This used to hand it
+    ;; to Emacs unconditionally, and this function runs a second time
+    ;; 0.6 s into a session: a window mapped in that time lost the
+    ;; keyboard to the Emacs frame.  Emacs gets it only when nothing
+    ;; had it, or what had it is gone.
+    (cmacs-gowl--restore-focus before))
   (cmacs-gowl--bar-redraw))
+
+(defun cmacs-gowl--focused-client-id ()
+  "The id of the window holding the keyboard, or nil when none does.
+An id and not the client object: every call into the compositor wraps a
+client afresh, so two objects for one window are not `eq', and an
+object kept across a call may name a window that has since closed."
+  (let ((client (ignore-errors (gowl-focused-client))))
+    (and client
+         (ignore-errors (cdr (assq 'id (gowl-client-info client)))))))
+
+(defun cmacs-gowl--restore-focus (id)
+  "Give the keyboard back to the window with ID, or to Emacs.
+ID is what `cmacs-gowl--focused-client-id' returned earlier, or nil.
+The window is looked up again, so one that closed meanwhile is never
+touched; Emacs's own frame gets the keyboard when ID is nil or gone."
+  (let ((target
+         (or (and id
+                  (seq-find
+                   (lambda (client)
+                     (eql id (ignore-errors
+                               (cdr (assq 'id (gowl-client-info client))))))
+                   (ignore-errors (gowl-list-clients))))
+             (and (fboundp 'gowl-emacs-client)
+                  (ignore-errors (gowl-emacs-client))))))
+    (when target
+      (ignore-errors (gowl-focus-client target)))))
+
+(defun cmacs-gowl--focus-emacs-if-unfocused ()
+  "Focus Emacs's own frame when no window has the keyboard.
+The startup safety net: the frame can map before the compositor has
+assigned focus.  Does nothing when any window is focused, so it never
+takes the keyboard from one."
+  (when (and (gowl-running-p)
+             (null (ignore-errors (gowl-focused-client))))
+    (let ((ec (and (fboundp 'gowl-emacs-client)
+                   (ignore-errors (gowl-emacs-client)))))
+      (when ec
+        (ignore-errors (gowl-focus-client ec))))))
 
 (defun cmacs-gowl--monitor-index-showing-tag (mask)
   "Return the 0-based index of the monitor currently viewing MASK, or nil.

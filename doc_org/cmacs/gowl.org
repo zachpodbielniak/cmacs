@@ -2525,6 +2525,10 @@ From Lisp: =gowl-tray-items=, =gowl-tray-activate=,
 =gowl-tray-menu=, =gowl-tray-menu-refresh=, =gowl-tray-menu-click=,
 =gowl-tray-serving-p= and =gowl-set-tray=.
 
+*** A session with no keyboard
+
+The seat advertises =wl_keyboard= while a keyboard exists, and a client's virtual keyboard (an on-screen keyboard, =wtype=) now counts as one; before, a tablet, a headset or a headless session offered no =wl_keyboard= at all, so injected keys reached no window and toolkit text fields never enabled. ~(gowl-set-force-seat-keyboard t)~ advertises it always, which is what a keyboardless session hosting ordinary applications wants (a program that creates a virtual keyboard, types and exits is gone before a client could bind otherwise); ~nil~ is automatic again. ~(gowl-seat-has-keyboard-p)~ answers what the seat offers now, ~(gowl-config-get "force-seat-keyboard")~ the setting. =GOWL_SEAT_KEYBOARD=always= / =auto= in the environment overrides the setting. The rule and the YAML key are in =deps/gowl/docs/configuration.org=, /Machines without a keyboard/.
+
 *** The whole screen on a cathode ray tube
 :PROPERTIES:
 :CUSTOM_ID: crt

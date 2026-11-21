@@ -22,6 +22,7 @@
 #include "cmacs-gowl-pointer.h"
 #include "cmacs-gowl-pointer-history.h"
 #include "cmacs-gowl-textfield.h"
+#include "cmacs-gowl-bar-slots.h"
 #include "cmacs-gobject.h"
 #include "cmacs-glib-loop.h"
 #include "cmacs-eval-dispatch.h"
@@ -7274,6 +7275,50 @@ registered with the one nobody is displaying.  */)
   return unbind_to (lock_count, gowl_tray_is_serving (gowl_tray_get_default ()) ? Qt : Qnil);
 }
 
+DEFUN ("gowl-set-force-seat-keyboard", Fgowl_set_force_seat_keyboard,
+       Sgowl_set_force_seat_keyboard, 1, 1, 0,
+       doc: /* Advertise a keyboard on the seat always, or only when one exists.
+
+ON non-nil makes the seat offer `wl_keyboard' whether or not any
+keyboard is attached; nil goes back to automatic, where it is offered
+while a physical keyboard, a device claimed by an input remapper, or a
+client's virtual keyboard (an on-screen keyboard, wtype) exists.
+
+Forcing it is for a session with no keyboard that hosts ordinary
+applications -- a tablet, a headset, a headless session: a toolkit binds
+`wl_keyboard' only while the capability is there, and learns that its
+window has focus, and so enables its text field, from the keyboard's
+enter event.  It invents no device.
+
+The environment variable GOWL_SEAT_KEYBOARD (`always' or `auto')
+overrides the setting.  Returns non-nil when the seat advertises a
+keyboard afterwards.  */)
+  (Lisp_Object on)
+{
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
+  GOWL_CHECK_RUNNING ();
+  gowl_compositor_set_force_seat_keyboard (cmacs_gowl_compositor,
+                                           !NILP (on));
+  return unbind_to (lock_count,
+                    gowl_compositor_seat_has_keyboard (cmacs_gowl_compositor)
+                    ? Qt : Qnil);
+}
+
+DEFUN ("gowl-seat-has-keyboard-p", Fgowl_seat_has_keyboard_p,
+       Sgowl_seat_has_keyboard_p, 0, 0, 0,
+       doc: /* Return non-nil while the seat advertises a keyboard.
+That is: a physical keyboard is attached, an input remapper holds one,
+a client has created a virtual keyboard, or the capability is forced
+on (`gowl-set-force-seat-keyboard').  */)
+  (void)
+{
+  specpdl_ref lock_count = cmacs_gowl_lock_scoped ();
+  GOWL_CHECK_RUNNING ();
+  return unbind_to (lock_count,
+                    gowl_compositor_seat_has_keyboard (cmacs_gowl_compositor)
+                    ? Qt : Qnil);
+}
+
 DEFUN ("gowl-tray-serving-p", Fgowl_tray_serving_p, Sgowl_tray_serving_p,
        0, 0, 0,
        doc: /* Return non-nil while gowl owns the tray register.
@@ -8317,6 +8362,45 @@ taken before it still names the old one; take it again after.  */)
   return unbind_to (count, Qt);
 }
 
+DEFUN ("gowl-reload-config-from-search-path",
+       Fgowl_reload_config_from_search_path,
+       Sgowl_reload_config_from_search_path, 0, 0, 0,
+       doc: /* Reload gowl's config from its search path, in place.
+Reads the first gowl.yaml the search path gives (the user's config
+directory, then the system ones), loads it into the running config
+object and applies the monitor section to the outputs.  Return t.
+
+Unlike `gowl-reload-config', this does search the user's config
+directory: it is what a standalone gowl's reload does, offered for the
+`gowl_reload_config' tool and for a session configured from gowl.yaml
+rather than from Lisp.  The config object is loaded into, not replaced,
+so a `gowl-config-object' taken earlier stays valid.  */)
+  (void)
+{
+  GowlConfig *config;
+  specpdl_ref count;
+  g_autoptr (GError) err = NULL;
+
+  GOWL_CHECK_RUNNING ();
+
+  count = cmacs_gowl_lock_scoped ();
+  config = gowl_compositor_get_config (cmacs_gowl_compositor);
+  if (config == NULL)
+    error ("No gowl config");
+  if (!gowl_config_load_yaml_from_search_path (config, &err))
+    {
+      /* Copied out before the signal: a longjmp runs no g_autoptr
+         cleanup, so signalling with the GError live would leak it.  */
+      Lisp_Object msg = build_string (err != NULL ? err->message
+                                      : "no gowl.yaml on the search path");
+      g_clear_error (&err);
+      xsignal1 (Qgowl_error, msg);
+    }
+  gowl_compositor_apply_monitor_configs (cmacs_gowl_compositor);
+
+  return unbind_to (count, Qt);
+}
+
 
 /* ── Input recording ─────────────────────────────────────────────────
  *
@@ -8545,6 +8629,10 @@ one; anything reporting what is true right now wants the other.  */)
                       gowl_config_get_sloppyfocus (config) ? Qt : Qnil);
   if (g_strcmp0 (prop, "tray") == 0)
     return unbind_to (count, gowl_config_get_tray (config) ? Qt : Qnil);
+  if (g_strcmp0 (prop, "force-seat-keyboard") == 0)
+    return unbind_to (count,
+                      gowl_config_get_force_seat_keyboard (config)
+                      ? Qt : Qnil);
   if (g_strcmp0 (prop, "log-level") == 0)
     return unbind_to (count,
                       build_string (gowl_config_get_log_level (config) ? : ""));
@@ -13164,6 +13252,7 @@ syms_of_cmacs_gowl (void)
   syms_of_cmacs_gowl_pointer ();   /* cmacs-gowl-pointer.c */
   syms_of_cmacs_gowl_pointer_history ();
   syms_of_cmacs_gowl_textfield ();
+  syms_of_cmacs_gowl_bar_slots ();
   DEFSYM (Qgowl_error, "gowl-error");
   DEFSYM (Qnormal, "normal");
   DEFSYM (Q90, "90");
@@ -13408,6 +13497,7 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_lock_on_suspend_p);
   defsubr (&Sgowl_set_lock_on_suspend);
   defsubr (&Sgowl_reload_config);
+  defsubr (&Sgowl_reload_config_from_search_path);
   defsubr (&Sgowl_get_palette);
   defsubr (&Sgowl_set_palette);
   defsubr (&Sgowl_list_palettes);
@@ -13421,6 +13511,8 @@ The elisp layer uses this to auto-enable `cmacs-gowl-mode'. */);
   defsubr (&Sgowl_config_get);
   defsubr (&Sgowl_config_generate_yaml);
   defsubr (&Sgowl_set_tray);
+  defsubr (&Sgowl_set_force_seat_keyboard);
+  defsubr (&Sgowl_seat_has_keyboard_p);
   defsubr (&Sgowl_tray_serving_p);
   defsubr (&Sgowl_tray_items);
   defsubr (&Sgowl_tray_activate);

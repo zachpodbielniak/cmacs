@@ -659,6 +659,23 @@ test-gowl:
     admin/cmacs-verify-fresh.sh --gate --only 'gowl-release,gowl-modules-release'
     make -C {{ gowl_dir }} test {{ gowl_deps }}
 
+# Run the end-to-end rig: a private headless cmacs --gowl, never the live session.
+# SHOTS names a directory to save a screenshot of each scenario into.
+[group('test')]
+test-rig SELECTOR='' SHOTS='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sel='{{ SELECTOR }}'
+    shots='{{ SHOTS }}'
+    if [[ -n "${shots}" ]]
+    then
+        mkdir -p "${shots}"
+        export CMACS_RIG_SHOTS="$(cd -- "${shots}" > /dev/null && pwd)"
+    fi
+    CMACS_RIG=1 {{ emacs }} --batch -Q -L lisp/cmacs -L test/cmacs \
+        --eval '(setq load-prefer-newer t)' -l ert -l test/cmacs/cmacs-rig-tests.el \
+        --eval "(ert-run-tests-batch-and-exit (if (string-empty-p \"$sel\") t \"$sel\"))"
+
 # Pure C over glib -- no Emacs, no GL, no display -- so it runs headless
 # and needs no built emacs.
 # Run graphcore's GTest suite (shared graph model + layout solver).
