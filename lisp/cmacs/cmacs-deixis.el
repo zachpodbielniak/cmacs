@@ -59,6 +59,8 @@
 (declare-function gowl-pointer-history-enable "cmacs-gowl-pointer-history.c")
 (declare-function gowl-pointer-history-at "cmacs-gowl-pointer-history.c")
 (declare-function gowl-pointer-history-dwell "cmacs-gowl-pointer-history.c")
+(declare-function gowl-pointer-history-enabled-p
+                  "cmacs-gowl-pointer-history.c")
 (declare-function gowl-client-info "cmacs-gowl.c")
 (declare-function gowl-client-pid "cmacs-gowl.c")
 (declare-function gowl-list-monitors "cmacs-gowl.c")
@@ -238,6 +240,16 @@ utterance untouched; the bindings are still in
 
 (defvar cmacs-deixis-last-bindings nil
   "The bindings of the last utterance resolved, for commands to consult.")
+
+(defvar cmacs-deixis-unclaimed-functions nil
+  "Abnormal hook for an utterance with demonstratives that no command took.
+Each function is called with (TEXT BINDINGS) -- the utterance and its
+bindings, as `cmacs-deixis-resolve' returns them -- until one returns
+non-nil, which means it has dealt with the utterance: nothing is sent on
+to the voice loop's route.  When all return nil the utterance goes on,
+annotated, as before.  Deictic questions (`cmacs-deixis-ask-utterance',
+\"what is that?\") are recognised here, after the commands, so a
+question can never take an utterance a command matches.")
 
 (defvar cmacs-deixis-clock-function nil
   "When non-nil, a function returning the current time in milliseconds.
@@ -537,7 +549,11 @@ now, so the result is flagged :approximate."
                     (window-point win))))
       (list :kind 'buffer-position :window win :buffer buf :position pos
             :frame frame :approximate t :confidence confidence
-            :label (cmacs-deixis--buffer-label buf pos)))))
+            :label (cmacs-deixis--buffer-label buf pos)
+            ;; The pixel inside FRAME, for a buffer whose content is not
+            ;; text at a position (a web view): `cmacs-deixis-ask' turns
+            ;; it into a place on the page.
+            :frame-x (round x) :frame-y (round y)))))
 
 (defun cmacs-deixis--region-referent ()
   "The active region of the selected window's buffer as a referent, or nil."
@@ -938,6 +954,54 @@ elsewhere (`cmacs-deixis-elsewhere-confidence')."
           (pointer)
           ((and cmacs-deixis-fallback-to-point (not (eq role 'pronoun)))
            (cmacs-deixis--point-referent)))))
+
+(defun cmacs-deixis--pointer-now ()
+  "What the pointer is on at this moment, as a referent, or nil.
+Unlike a word's referent this needs no history: it is asked outside any
+utterance, by a command.  The compositor's ring is the one place that
+knows which window is under the pointer, so when it is not sampling it
+is switched on for the one lookup -- which takes a sample at once -- and
+off again, which empties it.  Nothing is kept."
+  (let ((cmacs-deixis-lookup-window nil))
+    (cond
+     ((and (fboundp 'cmacs-lrg-vr-active-p) (cmacs-lrg-vr-active-p)
+           (window-live-p (cmacs-lrg-vr-pointed-window)))
+      (let* ((win (cmacs-lrg-vr-pointed-window))
+             (buf (window-buffer win)) (pos (window-point win)))
+        (list :kind 'buffer-position :window win :buffer buf :position pos
+              :device 'vr :approximate t :confidence 1.0
+              :label (cmacs-deixis--buffer-label buf pos))))
+     ((cmacs-deixis--gowl-live-p)
+      (let* ((was-on (and (fboundp 'gowl-pointer-history-enabled-p)
+                          (gowl-pointer-history-enabled-p)))
+             (sample (unwind-protect
+                         (progn
+                           (unless was-on (gowl-pointer-history-enable t))
+                           (gowl-pointer-history-at (cmacs-deixis-now-ms)))
+                       (unless was-on (gowl-pointer-history-enable nil))))
+             (r (and sample (cmacs-deixis--gowl-referent sample))))
+        ;; Leading keys shadow R's own: the pointer is there NOW, which
+        ;; is as sure as a pointer gets.
+        (and r (append (list :device 'gowl :confidence 1.0) r))))
+     (t
+      (when-let* ((mp (ignore-errors (mouse-pixel-position)))
+                  ((framep (car mp)))
+                  ((numberp (cadr mp)))
+                  (r (cmacs-deixis--frame-referent (car mp) (cadr mp)
+                                                   (cddr mp) 1.0)))
+        (append (list :device 'emacs) r))))))
+
+(defun cmacs-deixis-referent-now ()
+  "What \"this\" means at this moment, with nothing spoken: a referent or nil.
+The rule is `cmacs-deixis-referent-at's: an active region, unless the
+pointer is on another window; else what the pointer is on; else, with
+`cmacs-deixis-fallback-to-point', point in the selected window.  For
+commands that act on the pointed thing from a key or a menu."
+  (let ((pointer (ignore-errors (cmacs-deixis--pointer-now)))
+        (region (cmacs-deixis--region-referent)))
+    (cond ((and region (not (cmacs-deixis--elsewhere-p pointer region))) region)
+          (pointer)
+          (cmacs-deixis-fallback-to-point (cmacs-deixis--point-referent)))))
 
 (defun cmacs-deixis--referent-key (r)
   "What makes referent R the same thing as another."
@@ -1407,6 +1471,9 @@ annotated when it has demonstratives, TEXT itself when it has none."
     (cond
      ((null bindings) text)
      ((cmacs-deixis-run-command text bindings) nil)
+     ((run-hook-with-args-until-success 'cmacs-deixis-unclaimed-functions
+                                        text bindings)
+      nil)
      ((and (eq (bound-and-true-p cmacs-voice-loop--last-target) 'commands)
            (not cmacs-deixis-annotate-for-commands))
       text)

@@ -1,0 +1,493 @@
+@c -*- mode: texinfo; coding: utf-8 -*-
+@c This file is part of the CMacs manual.
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Deixis Ask
+@chapter CMacs Deixis Ask: ``explain THAT''
+
+Deictic questions.  CMacs Deixis (@pxref{CMacs Deixis}) binds a spoken
+``this'' or ``that'' to what the pointer rested on while the word was
+said, and runs deictic @emph{commands} with it.
+@file{lisp/cmacs/cmacs-deixis-ask.el} adds @emph{questions}: point at
+something and ask about it --- ``what is that?'', ``explain this'',
+``summarise that'', ``what does this error mean'', ``translate that into
+German'', ``why is this failing'', ``compare this and that'', ``and that
+one?'' --- and what was pointed at becomes the model's context.
+
+There are three stages.  @emph{Extractors}, most specific first, turn
+the referent into text (a public registry,
+@code{cmacs-deixis-ask-register-extractor}).  A privacy gate runs before
+anything is read, and what was read from outside Emacs's buffers is
+redacted.  Then @code{cmacs-ai-textops-stream} streams the answer into
+the @code{cmacs-ai-output} window, which keeps its session for
+follow-ups (@kbd{C-c C-c}) and promote-to-chat (@kbd{C-c C-p}).
+
+There is no configure flag and no mode of its own.  By voice it rides
+@code{cmacs-deixis-mode}; by hand it is @kbd{M-x
+cmacs-deixis-ask-at-pointer} and an entry in the AI right-click menu.
+The provider and model are the text operations' unless
+@code{cmacs-deixis-ask-provider} and @code{cmacs-deixis-ask-model} say
+otherwise.
+
+@menu
+* Deixis Ask Doors::          By voice, and by hand.
+* Deixis Ask Extractors::     From referent to content.
+* Deixis Ask Questions::      What is, and is not, taken as a question.
+* Deixis Ask Privacy::        What is refused and what is redacted.
+* Deixis Ask Customization::  The variables.
+* Deixis Ask Internals::      Additions to Deixis, reaches into other files, tests.
+@end menu
+
+@node Deixis Ask Doors
+@section Two doors
+
+@subheading By voice
+
+@code{cmacs-deixis-filter} resolves an utterance's demonstratives, tries
+the deictic commands, and then runs
+@code{cmacs-deixis-unclaimed-functions} with @code{(TEXT BINDINGS)}
+until one returns non-@code{nil}.  @code{cmacs-deixis-ask-utterance} is
+on that hook (an autoload cookie puts it there).  Because the hook is
+asked only @emph{after} the commands, a question can never take an
+utterance a command matches.
+
+When the utterance is a question, each distinct thing pointed at is
+checked for privacy (one refusal refuses the whole question, aloud); the
+loop is put in @code{thinking} with its reply marked open, which is what
+makes talking over the answer a barge-in; the things are read one after
+the other by callbacks; and the answer streams into the result window
+@emph{and} into the loop's own sentence queue
+(@code{cmacs-voice-loop--feed-reply}, @code{cmacs-voice-loop-speak}) ---
+the path a chat reply takes, so @code{cmacs-voice-loop-speak} @code{nil}
+silences it, and the loop returns to listening, with the follow-up
+window open, when the speech is done.  The result window is not selected
+for a spoken question.
+
+@emph{Barge-in.}  The loop enters @code{hearing} from @code{thinking} or
+@code{speaking} only when you talk over a reply.  It stops the speech
+itself; this file's state hook then drops an extraction still in flight
+and cancels the model's stream, when
+@code{cmacs-voice-loop-barge-in-cancels-stream} is on.  Text that still
+arrives is shown but not spoken.
+
+@emph{Follow-ups.}  ``And that one?'', ``what about this?'' continue the
+conversation with a new referent: the new thing is read and sent as a
+follow-up turn on the @emph{same session}, through the window's own
+compose region --- rendered, sealed, recorded for promote-to-chat and
+streamed exactly as a typed @kbd{C-c C-c} follow-up, with what was sent
+there to read.  A draft you had typed in the compose region is put back.
+A follow-up needs a settled answer no older than
+@code{cmacs-deixis-ask-followup-seconds} (300); otherwise --- the window
+closed, the answer cancelled by a barge-in, too long ago --- the earlier
+question is asked afresh about the new thing.  A follow-up form with no
+earlier question at all is not a question.
+
+@code{cmacs-deixis-ask-voice} @code{nil} turns the voice door off.
+
+@subheading By hand
+
+@kbd{M-x cmacs-deixis-ask-at-pointer} asks about what the pointer is on
+@emph{now}.  What ``that'' is comes from
+@code{cmacs-deixis-referent-now}: the active region, unless the pointer
+is on another window; else what the pointer is on; else point.  The
+compositor's pointer ring is the one place that knows which window is
+under the pointer, so when it is not sampling it is switched on for the
+one lookup and off again, which empties it.
+
+The question is read after the privacy gate has passed.  Over another
+program's window, or while another program has the keyboard, it comes
+from a gowl menu card with the rows of @code{cmacs-deixis-ask-menu} and
+a last row for typing something else in a floating minibuffer (the AI
+field commands' chooser, reused).  With the keyboard in Emacs it is one
+minibuffer read with those questions as completions.  A question that
+names the whole thing (``what is this window'') reads the whole thing.
+
+Bind it in the compositor so that it works over any window:
+
+@example
+(gowl-add-keybind "Super+Ctrl+q" 'custom "(cmacs-deixis-ask-at-pointer)"
+                  "Ask about what the pointer is on")
+@end example
+
+@code{cmacs-deixis-ask-register-menu} adds ``Ask about this...'' to the
+AI menu's Ask group through @code{cmacs-ai-register-action}, so it is in
+the right-click menu, the @kbd{C-c a} transient and
+@code{cmacs-ai-run-action}.  It asks about the click's target, not the
+pointer: by the time a menu row is chosen the pointer is on the menu.
+
+@node Deixis Ask Extractors
+@section From referent to content
+
+@code{cmacs-deixis-ask-extract} asks the gate, then tries the extractors
+that apply to the referent, in order, until one answers.  It never
+blocks and gives up after @code{cmacs-deixis-ask-extract-timeout}
+seconds.
+
+@table @code
+@item gsurf @r{(order 10)}
+A buffer showing a gsurf web view: URL, title, and the selection or the
+text nearest the pointed place.
+@item field @r{(order 20)}
+Another program's window that has the keyboard: the text
+@emph{selected} in its focused field.
+@item buffer @r{(order 50)}
+A position, region or point in an Emacs buffer: the thing there, its
+diagnostics, its file and major mode.
+@item ocr @r{(order 60)}
+Any other window, with a compositor: tesseract over a box around the
+pointed place, or over the whole window.
+@end table
+
+@subheading An Emacs buffer
+
+@code{cmacs-deixis-ask-buffer-thing} chooses what is ``at'' the
+position, the most specific of, in the buffer's own terms:
+
+@table @code
+@item region
+A region referent, or the active region when the position is inside it.
+@item shown
+The question was about the whole file or buffer: what the window shows
+of it.
+@item compilation-error
+A compilation message is there: its line and the lines under it that
+carry no message of their own (gcc's excerpt and caret), up to
+@code{cmacs-deixis-ask-error-lines}; the file and line it is about come
+from the data @code{compilation-next-error} works from.
+@item subtree
+Org: the subtree.
+@item defun
+Code: the function, by tree-sitter when the buffer has a parser, else
+the major mode's.
+@item paragraph
+The paragraph.
+@item lines
+The line is blank or nearly so: it and
+@code{cmacs-deixis-ask-context-lines} either side.
+@item line
+The line.
+@end table
+
+Anything longer than @code{cmacs-deixis-ask-max-chars} (6000) is cut to
+that much around the pointed position, on whole lines, and the prompt
+says so.  Narrowing is respected.  The flymake diagnostics over the
+thing's span are added --- eglot reports through flymake --- which is
+what lets ``why is this failing'' on a function see what the checker
+says about it.  The description names the major mode and the file.
+
+@subheading A web view
+
+A gsurf buffer has no text in it, so it has its own extractor, ahead of
+@code{buffer}.  One asynchronous script
+(@code{cmacs-gsurf-run-javascript-async}) returns JSON: the title, the
+selection, the text nearest the pointed place, and the start of the
+page's text.  ``Nearest'' is the element under the pointed place,
+widened to an ancestor until it holds
+@code{cmacs-deixis-ask-web-min-chars} (200) characters.  The place is
+the frame pixel the referent carries (@code{:frame-x}, @code{:frame-y})
+as a fraction of the window's body; the middle of the view when there is
+none.  Only numbers are formatted into the script.  A selection beats
+the pointed place; ``this page'' takes the page.
+
+@subheading Another program's window
+
+@emph{(a) The field.}  Only when the pointed window holds the keyboard
+--- text-input reaches the focused window and no other --- and only for
+a @emph{selection}: a headless edit-field session
+(@code{cmacs-gowl-edit-field-read-async}) reads the field, the selection
+is taken, and the session is released at once.  The deny list and the
+password refusal are that file's own.  The clipboard fallback is never
+used: it types Ctrl+A and Ctrl+C at the application.  A field with a
+caret and no selection is not this extractor's.
+
+@emph{(b) The screen.}  @code{cmacs-deixis-ask-ocr-region} is a box of
+@code{cmacs-deixis-ask-ocr-box} (900x420 layout pixels) centred on the
+pointed position and moved to lie inside the window, so it never reaches
+into a neighbour; a smaller window, and ``what is this window'', read
+the whole window.  The capture and the asynchronous tesseract run are
+the gowl tools' @code{cmacs-gowl-tools--screen-text} --- what the
+@code{gowl_screen_text} tool calls --- entered as a model would enter
+it, so its guard refuses a region that shows a window the rules
+withhold.
+
+@emph{(c) The picture.}  Not implemented, because the interface does
+not exist: @code{cmacs-ai-chat-stream} and
+@code{cmacs-ai-session-append-message} take text only, so a cropped
+image cannot be handed to a multimodal model.  Where OCR finds no text
+the question is reported as unanswerable.
+
+@subheading Adding an extractor
+
+@example
+(cmacs-deixis-ask-register-extractor
+ 'pdf
+ :order 30
+ :applies (lambda (referent _scope)
+            (with-current-buffer (plist-get referent :buffer)
+              (derived-mode-p 'pdf-view-mode)))
+ :extract (lambda (referent _scope done)
+            ;; Call DONE exactly once, now or later.
+            (funcall done (list :source 'pdf
+                                :description "a page of a PDF"
+                                :text (my-pdf-page-text referent)))))
+@end example
+
+@code{:extract} calls @var{done} with a context plist (@code{:source},
+@code{:description}, @code{:text}, optional @code{:extra},
+@code{:foreign}, @code{:clipped}), with @code{nil} (``not mine after
+all: try the next''), with @code{(:failed WHY)} or with
+@code{(:refused WHY)}.  It must not block.  Signalling counts as
+@code{nil}, with the error kept for the final report.  Mark text that
+did not come from an Emacs buffer @code{:foreign} so that it is
+redacted.
+
+@subheading Two referents
+
+``Compare this and that'' binds two demonstratives; each distinct thing
+is read by its own extractor and the prompt carries two numbered
+contexts, with the words marked:
+
+@example
+The user pointed at something on screen and said:
+
+  compare this [this=①] and that [that=②]
+
+Compare the two: what they share, then how they differ.
+
+① text from an Emacs buffer (c-mode; file ~/src/a.c; lines 10-42; ...)
+<<<
+...
+>>>
+
+② text read by OCR off the part of a window around the pointed
+position of another program; expect recognition errors ...
+<<<
+...
+>>>
+@end example
+
+Unlike @code{cmacs-deixis-annotate} there is no legend: the legend names
+windows by title, and the blocks say what each thing is.  One thing said
+twice is one context.
+
+@node Deixis Ask Questions
+@section What is taken as a question
+
+@code{cmacs-deixis-ask-match} decides.  An utterance is a question only
+when @emph{every demonstrative resolved to something that still exists},
+and then when either holds:
+
+@enumerate
+@item
+Its canonical form (@code{cmacs-deixis-canonical}, with
+@code{cmacs-deixis-ask-lead-ins} such as ``so'' and ``okay'' taken off
+the front) matches one of @code{cmacs-deixis-ask-questions}.
+@item
+The catch-all (@code{cmacs-deixis-ask-catch-all}, on by default): its
+first word is one of @code{cmacs-deixis-ask-question-words} @emph{and}
+the voice route it was on is one of
+@code{cmacs-deixis-ask-catch-all-routes} (@code{chat} and agent routes:
+the ones whose utterances were going to a model anyway).
+@end enumerate
+
+The shipped questions:
+
+@table @code
+@item what-is
+``what is that'', ``what's this'', ``what is this window''.
+@item explain
+``explain this'', ``could you describe that to me''.
+@item summarise
+``summarise that'', ``sum that up'', ``summarize this page''.
+@item translate
+``translate that'', ``translate this into German''.
+@item meaning
+``what does this error mean'', ``what does that say''.
+@item why
+``why is this failing'', ``why doesn't that compile''.
+@item compare
+``compare this and that'', ``what is the difference between this and
+that'', ``how does this differ from that''.
+@item and-that
+``and that one?'', ``what about this?'' --- a follow-up.
+@end table
+
+What is deliberately @emph{not} taken: anything a deictic command
+matches (commands are tried first); anything with no demonstrative, or
+one that points at nothing; requests to @emph{do} something (``can you
+close that'', ``make this bigger'' --- ``can'', ``could'', ``would'' and
+``will'' are not in the question words on purpose: a model with tools on
+the chat route can carry the request out, and an answer in a window
+cannot); on the @code{commands} route or a function route, anything but
+the shipped questions; and a follow-up form when there is no question to
+follow up.  Everything not taken goes on to its route exactly as before.
+
+@code{cmacs-deixis-define-question} is the sibling of
+@code{cmacs-deixis-define-command}.  The shapes differ --- a question's
+``body'' is always the same, so there is no argument list and no body:
+
+@example
+(cmacs-deixis-define-question who-wrote
+    "\\`who wrote <object>\\'"
+  "Who wrote the pointed thing."
+  :instruction "Name the author if the text says; do not guess.")
+@end example
+
+@code{:instruction} is added to the prompt under what was said.
+@code{:followup t} makes the utterance continue the last answer.
+
+@node Deixis Ask Privacy
+@section Privacy
+
+Decided before any text is read, and again on what was read.  All of it
+runs under @code{cmacs-redact-as-model}: a question the user asked is
+still text composed for a model.
+
+@itemize
+@item
+The window pointed at is put to @code{cmacs-redact-window} (app id,
+title, pid); the buffer to @code{cmacs-redact-buffer-p}; a web view to
+the buffer check and @code{cmacs-redact-url}.  Excluded means refused,
+and nothing is read --- a page's script never runs.
+@item
+A window on @code{cmacs-gowl-edit-field-deny} is refused whole: the
+field read by the edit-field code, the OCR read by
+@code{cmacs-deixis-ask-deny-applies-to-ocr} (default on).  A password or
+PIN field is refused by the edit-field code whatever the lists say.
+@item
+Text from a field, OCR or a web page goes through
+@code{cmacs-redact-text}; if that fails the text is dropped, not sent.
+The text of an Emacs buffer is sent as it is.
+@item
+A window's title and app id are not sent unless
+@code{cmacs-deixis-ask-send-window-identity}, and then as the rules
+rewrite them.  A web page's URL and title are sent, the URL as
+@code{cmacs-redact-url} rewrites it, the title through
+@code{cmacs-redact-text}.
+@item
+When the rules cannot be asked, the answer is a refusal (fail closed),
+in the gate and in the text.
+@end itemize
+
+A refusal is @emph{visible} (the echo area, and a toast on the gowl bar;
+@code{cmacs-deixis-ask-toast}) and @emph{spoken} when the question was.
+Every privacy refusal reads @code{cmacs-deixis-ask-refusal-text}, the
+same words whatever was matched.  A refused spoken question is still
+@emph{taken}: it does not go on to another model by the chat route.
+
+@emph{Why OCR and field text are redacted when the AI field's is not.}
+The AI field commands send a field verbatim, because the user asked for
+that exact text to be rewritten.  Here the text is whatever happened to
+be in a box around a pointer, and a box catches things nobody pointed
+at.  So it is redacted.  The text of an Emacs buffer is not: the buffer
+check has passed, the thing is exactly what was pointed at, and the
+other @code{cmacs-ai} actions send buffer text the same way.
+
+@emph{Why the deny list stops OCR too.}  The list names windows whose
+text fields are never read.  Reading the same window's pixels is the
+same breach by another road.
+
+@emph{Nothing blocks.}  Under @command{emacs --gowl} all of this runs on
+the compositor's thread.  The field read, the page's script, tesseract
+and the model are callbacks; every extraction has a timeout; a newer
+question or a barge-in bumps a generation counter and late results are
+dropped.  The screen capture and the PNG write before tesseract starts
+are synchronous, exactly as in the @code{gowl_screen_text} tool.  The
+one wait is typing a question in the minibuffer, in the door by hand.
+
+@node Deixis Ask Customization
+@section Customization
+
+@table @code
+@item cmacs-deixis-ask-voice
+Answer spoken questions here (@code{t}).
+@item cmacs-deixis-ask-catch-all
+Take unlisted questions (@code{t}).
+@item cmacs-deixis-ask-question-words
+First words that make a catch-all question.
+@item cmacs-deixis-ask-lead-ins
+Words skipped at the start.
+@item cmacs-deixis-ask-catch-all-routes
+Routes the catch-all may take from (@code{(chat agent)}).
+@item cmacs-deixis-ask-whole-words
+After a demonstrative: ask about the whole thing.
+@item cmacs-deixis-ask-max-chars
+Most characters of one thing sent (6000).
+@item cmacs-deixis-ask-context-lines
+Lines either side of a lone line (5).
+@item cmacs-deixis-ask-error-lines
+Most lines of one compilation error (15).
+@item cmacs-deixis-ask-ocr-box
+The OCR box in layout pixels (@code{(900 . 420)}).
+@item cmacs-deixis-ask-ocr-language
+Tesseract languages; @code{nil} is the screenshot module's.
+@item cmacs-deixis-ask-web-min-chars
+How much text the element under the pointer should have (200).
+@item cmacs-deixis-ask-deny-applies-to-ocr
+The edit-field deny list also stops OCR (@code{t}).
+@item cmacs-deixis-ask-send-window-identity
+Send a window's app id and title (@code{nil}).
+@item cmacs-deixis-ask-extract-timeout
+Seconds to read one thing (45).
+@item cmacs-deixis-ask-followup-seconds
+How long ``and that one?'' continues an answer (300).
+@item cmacs-deixis-ask-provider
+@itemx cmacs-deixis-ask-model
+Override the text operations' provider and model.
+@item cmacs-deixis-ask-system-prompt
+@itemx cmacs-deixis-ask-voice-system-suffix
+The system prompt, and what is added when the answer will be spoken.
+@item cmacs-deixis-ask-menu
+The questions the door by hand offers.
+@item cmacs-deixis-ask-toast
+Refusals and failures also as a bar toast (@code{t}).
+@end table
+
+@node Deixis Ask Internals
+@section Additions, reaches and tests
+
+Three additions to @file{cmacs-deixis.el}, all additive:
+@code{cmacs-deixis-unclaimed-functions}, the hook
+@code{cmacs-deixis-filter} runs after the commands;
+@code{cmacs-deixis-referent-now} (and @code{cmacs-deixis--pointer-now}),
+what the pointer is on at this moment with nothing spoken; and
+@code{:frame-x} / @code{:frame-y} on a frame referent, the pixel it was
+resolved from.
+
+Reaches into other files, stated so that a change there knows about
+here.  The voice path sets the loop's
+@code{cmacs-voice-loop--stream-open} and @code{--tts-tail} and calls
+@code{--set-state}, @code{--feed-reply} and
+@code{cmacs-voice-loop-speak}.  Speech is tapped with @code{:before}
+advice on @code{cmacs-ai-output-append}, @code{cmacs-ai-output-finish}
+and @code{cmacs-ai-output--settle-followup}, installed at the first
+spoken question --- the device the loop itself uses on
+@code{cmacs-ai-chat--stream-callback} --- acting only on this file's
+result buffer while a spoken question is in flight.  The follow-up path
+reads @code{cmacs-ai-output--compose-marker}, @code{--session},
+@code{--request} and @code{--done}.  The door by hand calls
+@code{cmacs-gowl-ai-field--choose} and @code{--read-instruction}; the
+OCR path calls @code{cmacs-gowl-tools--screen-text}; the deny check
+calls @code{cmacs-gowl-edit-field--denied-p}.
+
+@file{test/cmacs/cmacs-deixis-ask-tests.el} is pure ERT, 37 tests.  The
+compositor, gsurf, the edit-field session, tesseract, the model and the
+voice loop are stubs; the redaction functions are stubbed too, so the
+result does not depend on the privacy rules of the machine running the
+suite.  The buffer extractor, the question table, the prompt,
+@code{cmacs-ai-textops-stream} and the result window's follow-up path
+are the real code.  Covered: extractor selection per referent kind and
+the open registry; the thing chosen at a position and its size limits;
+diagnostics; refusal of an excluded buffer, window, URL, denied window,
+closed window, and of everything when the rules signal, each before any
+read; redaction of foreign text; the OCR box arithmetic; field selection
+falling through to OCR; the web view; the question table, including
+what is @emph{not} taken; two referents end to end; a spoken answer
+shown and spoken; ``and that one?'' reusing the session; barge-in; the
+door by hand, the menu card and the AI menu entry.
+
+Not covered, and needing a live session: the text-input read against a
+real application, tesseract on real pixels, a page's JavaScript in
+WebKit, a real provider's stream (in particular what a cancelled stream
+delivers), and speech with a real barge-in.

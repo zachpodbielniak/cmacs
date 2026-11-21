@@ -54,7 +54,13 @@ the recognizer's words and their times, finds the demonstratives
 (@code{cmacs-deixis-find}), binds each to what the pointer rested on
 while it was spoken (@code{cmacs-deixis-resolve}), runs a local command
 if the utterance is one (@code{cmacs-deixis-run-command} --- no model
-involved, nothing sent anywhere), and otherwise sends the utterance on
+involved, nothing sent anywhere), otherwise offers it to
+@code{cmacs-deixis-unclaimed-functions} (called with @code{(TEXT
+BINDINGS)} until one returns non-@code{nil}, which means it dealt with
+the utterance --- this is where deictic @emph{questions} are recognised,
+@pxref{CMacs Deixis Ask}; being asked only after the commands, a
+function there can never take an utterance a command matches), and
+otherwise sends the utterance on
 to the loop's route @emph{annotated} (@code{cmacs-deixis-annotate}).  An
 utterance with no demonstrative passes through untouched.  A pending
 yes/no confirmation is answered before the filter is asked.

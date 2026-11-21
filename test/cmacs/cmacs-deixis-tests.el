@@ -562,6 +562,10 @@ does.  Region and point fallbacks are off unless BODY turns them on."
       (let ((cmacs-deixis--segments '((7 . 10000)))
             (cmacs-deixis--calibration nil)
             (cmacs-deixis-resolved-functions nil)
+            ;; This is the filter with nobody claiming what the commands
+            ;; leave: deictic questions (cmacs-deixis-ask) have their
+            ;; own suite.
+            (cmacs-deixis-unclaimed-functions nil)
             (cmacs-voice-loop--last-target 'chat))
         ;; A command: taken, nothing to send.
         (should-not (cmacs-deixis-filter

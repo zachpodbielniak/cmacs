@@ -24,7 +24,8 @@ With the mode on, the voice loop hands every final utterance to =cmacs-deixis-fi
 2. finds the demonstratives (=cmacs-deixis-find=);
 3. binds each to what the pointer rested on while it was spoken (=cmacs-deixis-resolve=);
 4. runs a local command if the utterance is one (=cmacs-deixis-run-command=) -- no model involved, and nothing is sent anywhere;
-5. otherwise sends the utterance on to the loop's route *annotated* (=cmacs-deixis-annotate=).
+5. otherwise offers it to =cmacs-deixis-unclaimed-functions= (called with =(TEXT BINDINGS)= until one returns non-nil, which means it dealt with the utterance) -- this is where deictic /questions/ are recognised, "what is that?", see [[file:cmacs-deixis-ask.org][cmacs-deixis-ask]]; being asked only after the commands, a function there can never take an utterance a command matches;
+6. otherwise sends the utterance on to the loop's route *annotated* (=cmacs-deixis-annotate=).
 
 An utterance with no demonstrative passes through untouched.  A pending yes/no confirmation is answered before the filter is asked.
 
