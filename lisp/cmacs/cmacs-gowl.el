@@ -64,6 +64,7 @@
 (declare-function cmacs-gowl-gabbrev--on-start "cmacs-gowl-gabbrev" ())
 (declare-function cmacs-gowl-bar-slots--on-start "cmacs-gowl-bar-slots" ())
 (declare-function cmacs-context-setup "cmacs-context" ())
+(declare-function cmacs-brigade-undo-setup "cmacs-brigade-undo" ())
 (defvar cmacs-gowl-broadcast-enable)
 (defvar cmacs-gowl-broadcast-teams)
 (defvar cmacs-gowl-broadcast-rules)
@@ -2106,6 +2107,10 @@ thread is running and applies configuration."
   ;; to the switcher; a nil key binds nothing.
   (when (require 'cmacs-context nil t)
     (cmacs-context-setup))
+  ;; Undo the last agent action from anywhere (cmacs-brigade-undo.el).
+  ;; Binds `cmacs-brigade-undo-key'; a nil key binds nothing.
+  (when (require 'cmacs-brigade-undo nil t)
+    (cmacs-brigade-undo-setup))
   ;; Text expansion (cmacs-gowl-gabbrev.el).  Its module is in the
   ;; default set too: this gives it the `cmacs-gowl-gabbrev-*'
   ;; configuration -- files, espanso, Elisp matches, the abbrev tables

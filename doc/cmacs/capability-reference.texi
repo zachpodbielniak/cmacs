@@ -2,9 +2,46 @@
 @c   admin/cmacs-capability-audit.sh --write-docs
 @c test/cmacs/cmacs-capability-tests.el fails when this is stale.
 
-312 tools.  Each is reachable by its wire name over MCP and
+314 tools.  Each is reachable by its wire name over MCP and
 @code{org.cmacs.Editor1.Tools.Call}, and by the CLI words shown, on the
 surfaces listed.
+
+@subheading action
+
+@table @code
+@item action_log
+List the actions (destructive tool calls) you made in this session, newest first, with what undoing each would do. One line per action: #ID time caller tool [state] arguments -> result (undo would ...). State is done, undone, irreversible, stale, failed-to-undo or nothing-to-undo. Use action_undo with an ID to take one back.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool action log}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool action log --limit 5}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{limit} @tab integer @tab no @tab Most actions to list (default 20)
+@item @code{all} @tab boolean @tab no @tab Every caller's actions, not only yours (needs a grant in cmacs-brigade-undo-log-all-callers)
+@end multitable
+
+@item action_undo
+Undo actions you made, by ID (see action_log) or, without an ID, your most recent one; with count, your last COUNT, newest first. You can only undo your own actions. An undo is refused, with the reason, when something changed since your action (the text you wrote was edited, the window you moved was moved again); a run stops at the first action that cannot be undone.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool action undo}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab no @tab The action to undo, from action_log
+@item @code{count} @tab integer @tab no @tab Undo your last COUNT undoable actions (ignored with id)
+@end multitable
+
+@end table
 
 @subheading agent
 
@@ -113,7 +150,7 @@ Check on a subagent you spawned. States are draft, queued, starting, running, wa
 
 @table @code
 @item ai_call
-Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but with 'tools':true the model is given the built-in agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a multi-turn tool loop on a worker thread. Optional 'provider' / 'system' / 'model' behave as for ai_prompt.
+Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but with 'tools':true the model is given the built-in agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a multi-turn tool loop on a worker thread. Optional 'provider' / 'system' / 'model' / 'images' behave as for ai_prompt.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool ai call}
@@ -130,6 +167,7 @@ Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but w
 @item @code{system} @tab string @tab no @tab System prompt
 @item @code{model} @tab string @tab no @tab Model name
 @item @code{tools} @tab boolean @tab no @tab Give the model the built-in agent tools
+@item @code{images} @tab array of object @{path, data, mime@} @tab no @tab Images sent with the prompt: each @{path@} (a file in the workspace, as project_read_file reads it) or @{data, mime@} (base64 PNG/JPEG/GIF/WebP bytes)
 @end multitable
 
 @item ai_embed_similarity
@@ -214,7 +252,7 @@ Open a cmacs-ai chat buffer. If PROMPT is given, the prompt is sent as the first
 @end multitable
 
 @item ai_prompt
-Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'provider' (claude / openai / gemini / grok / ollama / claude-code / opencode / claude-tmux / grok-build / antigravity / cursor) overrides the default; optional 'system' is a system prompt; optional 'model' overrides the provider's default model.
+Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'provider' (claude / openai / gemini / grok / ollama / claude-code / opencode / claude-tmux / grok-build / antigravity / cursor) overrides the default; optional 'system' is a system prompt; optional 'model' overrides the provider's default model. Optional 'images' sends pictures with the prompt; a provider that cannot take them is refused, never sent text alone.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool ai prompt}
@@ -230,6 +268,7 @@ Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'prov
 @item @code{provider} @tab string @tab no @tab Provider name
 @item @code{system} @tab string @tab no @tab System prompt
 @item @code{model} @tab string @tab no @tab Model name
+@item @code{images} @tab array of object @{path, data, mime@} @tab no @tab Images sent with the prompt: each @{path@} (a file in the workspace, as project_read_file reads it) or @{data, mime@} (base64 PNG/JPEG/GIF/WebP bytes)
 @end multitable
 
 @item ai_research

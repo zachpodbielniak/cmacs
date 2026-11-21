@@ -60,6 +60,7 @@ interaction.
 * CMacs AI::                    ai-glib multi-provider coding agent.
 * CMacs AI Menu::               The universal AI right-click menu.
 * CMacs AI Harness::            An agentic AI session in a buffer.
+* CMacs AI Images::             Pictures in: image input for cmacs-ai.
 * CMacs Libregnum::             Embedded libregnum 3D scene buffers.
 * CMacs Gnuseye::               GNU's Eye live planetary globe.
 * CMacs Graphcore::             Shared graph model and layout solver.
@@ -80,6 +81,7 @@ interaction.
 * CMacs Journal Restore::       Put me back where I was: checkpoints and restore.
 * CMacs Journal Daily::         The day's note, written from the journal.
 * CMacs Context::               Named arrangements you switch between.
+* CMacs Brigade Undo::          Undoing what an agent did.
 * CMacs Redact::                One privacy rule set for every model-facing surface.
 * CMacs Deixis::                Deictic voice: "move that there" bound to what was pointed at.
 * CMacs Deixis Ask::            Questions about what you point at.
@@ -3057,6 +3059,8 @@ again.  Two targets are exceptions, on purpose: a function target, and
 (@pxref{gowl Macros}).  Remapped keys
 and clicks go through the compositor's own decisions, and Super+Escape
 on a claimed keyboard always reaches the escape hatches.
+
+@include gowl-input-remap-pads.texi
 
 @subsection Commands and options
 
@@ -10188,6 +10192,9 @@ walkthrough.
 @include cmacs-ai-harness.texi
 
 @c ===================================================================
+@include ai-images.texi
+
+@c ===================================================================
 @node CMacs Libregnum
 @chapter CMacs Libregnum: Embedded 3D Scene Buffers
 
@@ -13867,6 +13874,9 @@ viewport; a low-resolution proxy keeps playback near real-time.
 
 @c ===================================================================
 @include context.texi
+
+@c ===================================================================
+@include brigade-undo.texi
 
 @c ===================================================================
 @include redact.texi
