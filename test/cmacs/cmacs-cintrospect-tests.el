@@ -230,5 +230,95 @@ which made it a test of the build state rather than of the code."
           (should (eq (cmacs-c-call h) t)))
       (cmacs-c-handle-dispose h))))
 
+;;; ─── Where the JIT keeps its files ─────────────────────────────
+;;
+;; `cmacs-c-compile' used to write /tmp/cmacs-jit-<id>.c and .so, with
+;; ids restarting at 1 in every process: predictable names in a
+;; world-writable directory.  Somebody else could create the name first
+;; (as a link to write through, or as an object for this process to
+;; dlopen), and two cmacs processes overwrote each other's files.  The
+;; files now live in a directory private to the process.
+
+(defun cmacs-cintrospect-test--compile-in-child ()
+  "Compile one function in a child Emacs; return (SO-PATH DIR-MODES).
+Nil when the child printed nothing usable."
+  (with-temp-buffer
+    (call-process
+     (expand-file-name invocation-name invocation-directory) nil t nil
+     "--batch" "-Q" "--eval"
+     (prin1-to-string
+      '(let* ((h (cmacs-c-compile "Lisp_Object t_(void) { return Qt; }"
+                                  "t_" "Lisp_Object(void)"))
+              (so (plist-get (cmacs-c-handle-info h) :so-path)))
+         ;; Left undisposed on purpose: exit has to clean up.
+         (princ (format "@@%S@@"
+                        (list so (file-modes (file-name-directory so))))))))
+    (goto-char (point-min))
+    (and (re-search-forward "@@\\((.*)\\)@@" nil t)
+         (car (read-from-string (match-string 1))))))
+
+(ert-deftest cintro-jit-files-are-in-a-private-directory ()
+  "The source and the object are in a 0700 directory of this process."
+  (skip-unless (cmacs-cintrospect-test--jit-available-p))
+  (let* ((h (cmacs-c-compile "Lisp_Object t_(void) { return Qt; }"
+                             "t_" "Lisp_Object(void)"))
+         (so (plist-get (cmacs-c-handle-info h) :so-path))
+         (src (concat (file-name-sans-extension so) ".c"))
+         (dir (file-name-directory so)))
+    (unwind-protect
+        (progn
+          ;; Not a name anybody could have predicted and made first.
+          (should-not (string-match-p "\\`/tmp/cmacs-jit-[0-9]+\\.so\\'" so))
+          (should (string-match-p "/cmacs-jit-[A-Za-z0-9]\\{6\\}/[0-9]+\\.so\\'"
+                                  so))
+          ;; A real directory, ours, closed to everyone else.
+          (should (file-directory-p dir))
+          (should-not (file-symlink-p (directory-file-name dir)))
+          (should (= (file-modes dir) #o700))
+          (should (= (file-attribute-user-id (file-attributes dir))
+                     (user-uid)))
+          ;; Under the runtime directory when there is a usable one.
+          (let ((runtime (getenv "XDG_RUNTIME_DIR")))
+            (when (and runtime (file-name-absolute-p runtime)
+                       (file-directory-p runtime)
+                       (= (logand (file-modes runtime) #o077) 0))
+              (should (string-prefix-p (file-name-as-directory
+                                        (expand-file-name runtime))
+                                       dir))))
+          ;; The files themselves: regular, not links, the source 0600.
+          (should (file-regular-p so))
+          (should-not (file-symlink-p so))
+          (should (file-regular-p src))
+          (should-not (file-symlink-p src))
+          (should (= (file-modes src) #o600)))
+      (cmacs-c-handle-dispose h))
+    ;; Unloading removes both.
+    (should-not (file-exists-p so))
+    (should-not (file-exists-p src))))
+
+(ert-deftest cintro-jit-two-processes-do-not-share-files ()
+  "Another cmacs gets another directory, and removes it when it exits.
+Handle ids restart at 1 in every process, so with a shared directory the
+second process's 1.so would be the first's."
+  (skip-unless (cmacs-cintrospect-test--jit-available-p))
+  (let* ((h (cmacs-c-compile "Lisp_Object t_(void) { return Qt; }"
+                             "t_" "Lisp_Object(void)"))
+         (ours (plist-get (cmacs-c-handle-info h) :so-path)))
+    (unwind-protect
+        (let* ((child (cmacs-cintrospect-test--compile-in-child))
+               (theirs (car child)))
+          (skip-unless (stringp theirs))
+          (should-not (equal theirs ours))
+          (should-not (equal (file-name-directory theirs)
+                             (file-name-directory ours)))
+          (should (= (cadr child) #o700))
+          ;; The child never disposed its handle; exiting did the work.
+          (should-not (file-exists-p theirs))
+          (should-not (file-exists-p (file-name-directory theirs)))
+          ;; And took nothing of ours with it.
+          (should (file-exists-p ours))
+          (should (eq (cmacs-c-call h) t)))
+      (cmacs-c-handle-dispose h))))
+
 (provide 'cmacs-cintrospect-tests)
 ;;; cmacs-cintrospect-tests.el ends here

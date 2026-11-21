@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <ctype.h>
+#include <limits.h>
 
 /* ── Handle registry ─────────────────────────────────────────────── */
 
@@ -36,8 +37,8 @@ typedef struct CmacsJitHandle
   void *dl_handle;
   void *fn_addr;
   char *fn_name;
-  char *src_path;       /* /tmp/cmacs-jit-<id>.c (kept for debugging) */
-  char *so_path;        /* /tmp/cmacs-jit-<id>.so */
+  char *src_path;       /* <private dir>/<id>.c (kept for debugging) */
+  char *so_path;        /* <private dir>/<id>.so */
   CmacsCintroJitSig sig;
   /* Persisted source for `cmacs-c-handle-info'. */
   char *source;
@@ -71,6 +72,159 @@ set_diagnostics (const char *s)
   jit_last_diagnostics = s ? strdup (s) : NULL;
 }
 
+/* ── The private directory ────────────────────────────────────────── */
+
+/* Where the sources and shared objects live.
+
+   They used to be /tmp/cmacs-jit-<id>.c and .so, with ids restarting
+   at 1 in every process: predictable names in a world-writable
+   directory.  Anyone on the machine could create the name first -- as
+   a symbolic link, so that the source was written through it to a file
+   of their choosing, or as a shared object of their own for this
+   process to dlopen -- and two cmacs processes overwrote each other's
+   files and could load each other's code.
+
+   Now each process has one directory of its own, made by mkdtemp
+   (mode 0700, a name nobody can guess, created or the call fails),
+   under $XDG_RUNTIME_DIR when that is usable and the temporary
+   directory otherwise.  Nothing else can create a name inside it, and
+   the files in it are still opened exclusively and never through a
+   link.  It is removed at exit.  */
+
+static char *jit_dir;          /* The directory, or NULL before first use.  */
+static pid_t jit_dir_pid;      /* The process that made it.  */
+static bool jit_atexit_registered;
+
+/* True when PATH is a directory of ours that nobody else can enter:
+   a real directory (not a link to one), owned by this user, with no
+   permission bits for group or others.  */
+static bool
+jit_dir_is_private (const char *path)
+{
+  struct stat st;
+
+  if (lstat (path, &st) != 0)
+    return false;
+  return (S_ISDIR (st.st_mode)
+          && st.st_uid == geteuid ()
+          && (st.st_mode & (S_IRWXG | S_IRWXO)) == 0);
+}
+
+/* The directory to make the private one in.  $XDG_RUNTIME_DIR is the
+   right place -- per user, mode 0700, on tmpfs, emptied at logout --
+   but only when it really is that; an unset, relative or borrowed one
+   falls back to the temporary directory, where mkdtemp's guarantees
+   are what protect us.  */
+static const char *
+jit_base_dir (void)
+{
+  const char *dir = getenv ("XDG_RUNTIME_DIR");
+
+  if (dir != NULL && dir[0] == '/' && jit_dir_is_private (dir))
+    return dir;
+  dir = getenv ("TMPDIR");
+  if (dir != NULL && dir[0] == '/')
+    return dir;
+  return "/tmp";
+}
+
+/* Remove what this process put in its directory, and the directory.
+   Runs at exit.  A process forked from the one that made the directory
+   inherits these variables and must leave the files alone: they are
+   its parent's, and the parent is still using them.  */
+static void
+jit_remove_private_dir (void)
+{
+  if (jit_dir == NULL || jit_dir_pid != getpid ())
+    return;
+  for (CmacsJitHandle *h = jit_handles_head; h != NULL; h = h->next)
+    {
+      if (h->so_path) unlink (h->so_path);
+      if (h->src_path) unlink (h->src_path);
+    }
+  rmdir (jit_dir);
+}
+
+/* Return this process's private directory, creating it on first use,
+   or NULL with errno set.  Called with jit_mutex held.
+
+   The directory is checked on every use and replaced when it is no
+   longer what was made: a cleaner may have removed it during a long
+   session, and after a fork it is the parent's.  */
+static const char *
+jit_private_dir_locked (void)
+{
+  if (jit_dir != NULL
+      && jit_dir_pid == getpid ()
+      && jit_dir_is_private (jit_dir))
+    return jit_dir;
+
+  const char *base = jit_base_dir ();
+  size_t len = strlen (base) + sizeof "/cmacs-jit-XXXXXX";
+  char *template = malloc (len);
+
+  if (template == NULL)
+    {
+      errno = ENOMEM;
+      return NULL;
+    }
+  snprintf (template, len, "%s/cmacs-jit-XXXXXX", base);
+  if (mkdtemp (template) == NULL)
+    {
+      int saved = errno;
+      free (template);
+      errno = saved;
+      return NULL;
+    }
+
+  /* The old name is forgotten, not freed into: handles made before
+     still hold their own copies of their paths.  */
+  free (jit_dir);
+  jit_dir = template;
+  jit_dir_pid = getpid ();
+  if (!jit_atexit_registered)
+    {
+      atexit (jit_remove_private_dir);
+      jit_atexit_registered = true;
+    }
+  return jit_dir;
+}
+
+/* Create PATH for writing and return a stream, or NULL with errno set.
+   O_EXCL: the file must not exist, so a name somebody else made is an
+   error and not a file to write into.  O_NOFOLLOW: nor a link to
+   one.  Mode 0600.  */
+static FILE *
+jit_create_exclusive (const char *path)
+{
+  int fd = open (path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                 S_IRUSR | S_IWUSR);
+
+  if (fd < 0)
+    return NULL;
+  FILE *f = fdopen (fd, "w");
+  if (f == NULL)
+    {
+      int saved = errno;
+      close (fd);
+      unlink (path);
+      errno = saved;
+    }
+  return f;
+}
+
+/* True when PATH is a regular file of ours and not a link: what gcc
+   must have left for dlopen to be handed it.  */
+static bool
+jit_file_is_ours (const char *path)
+{
+  struct stat st;
+
+  return (lstat (path, &st) == 0
+          && S_ISREG (st.st_mode)
+          && st.st_uid == geteuid ());
+}
+
 /* ── Lifecycle ────────────────────────────────────────────────────── */
 
 bool
@@ -102,6 +256,10 @@ cmacs_cintrospect_jit_shutdown (void)
   jit_handles_head = NULL;
   free (jit_last_diagnostics);
   jit_last_diagnostics = NULL;
+  if (jit_dir != NULL && jit_dir_pid == getpid ())
+    rmdir (jit_dir);
+  free (jit_dir);
+  jit_dir = NULL;
   jit_unlock ();
 }
 
@@ -282,7 +440,11 @@ dispatch later `cmacs-c-call' invocations.
 
 The source is compiled by spawning `gcc' as a subprocess with
 debug info enabled, so the compiled function is itself
-DWARF-introspectable via `cmacs-c-symbol-info'.  Cmacs internals
+DWARF-introspectable via `cmacs-c-symbol-info'.  The source and the
+shared object are written to a directory private to this process (mode
+0700, under $XDG_RUNTIME_DIR when set, else the temporary directory),
+which is removed when Emacs exits; `cmacs-c-handle-info' reports the
+object's path.  Cmacs internals
 (make_string, Fcons, build_string, ...) resolve at dlopen time
 because cmacs is linked with `-Wl,--export-dynamic'.
 
@@ -303,18 +465,39 @@ Default EXPECTED-SIG is "Lisp_Object(void)".  */)
               build_string ("cmacs-c-compile: unsupported signature"),
               build_string (sig_str));
 
+  /* The two paths, in this process's private directory.  Nothing
+     below signals while the lock is held.  */
+  char src_path[PATH_MAX], so_path[PATH_MAX];
+  int dir_errno = 0;
+  bool have_paths = false;
+
   jit_lock ();
   intmax_t id = jit_next_handle_id++;
+  const char *dir = jit_private_dir_locked ();
+  if (dir == NULL)
+    dir_errno = errno;
+  else
+    {
+      int n1 = snprintf (src_path, sizeof src_path, "%s/%lld.c",
+                         dir, (long long) id);
+      int n2 = snprintf (so_path, sizeof so_path, "%s/%lld.so",
+                         dir, (long long) id);
+      have_paths = (n1 > 0 && (size_t) n1 < sizeof src_path
+                    && n2 > 0 && (size_t) n2 < sizeof so_path);
+      if (!have_paths)
+        dir_errno = ENAMETOOLONG;
+    }
   jit_unlock ();
 
-  /* Write source to /tmp/cmacs-jit-<id>.c. */
-  char src_path[256], so_path[256];
-  snprintf (src_path, sizeof src_path,
-            "/tmp/cmacs-jit-%lld.c", (long long) id);
-  snprintf (so_path, sizeof so_path,
-            "/tmp/cmacs-jit-%lld.so", (long long) id);
+  if (!have_paths)
+    xsignal2 (Qerror,
+              build_string ("cmacs-c-compile: can't create private directory"),
+              build_string (strerror (dir_errno)));
 
-  FILE *f = fopen (src_path, "w");
+  /* Write the source.  The name cannot exist -- the directory is ours
+     alone and the id is new -- so one that does is refused rather than
+     written into.  */
+  FILE *f = jit_create_exclusive (src_path);
   if (f == NULL)
     xsignal2 (Qerror,
               build_string ("cmacs-c-compile: can't open temp source"),
@@ -322,6 +505,16 @@ Default EXPECTED-SIG is "Lisp_Object(void)".  */)
   fwrite (SDATA (source), 1, SBYTES (source), f);
   fputc ('\n', f);
   fclose (f);
+
+  /* gcc creates the object itself and would write through whatever is
+     at that name; nothing may be there.  */
+  struct stat so_st;
+  if (lstat (so_path, &so_st) == 0 || errno != ENOENT)
+    {
+      unlink (src_path);
+      xsignal1 (Qerror,
+                build_string ("cmacs-c-compile: object path already exists"));
+    }
 
   /* Spawn gcc. */
   char *diag = NULL;
@@ -337,10 +530,21 @@ Default EXPECTED-SIG is "Lisp_Object(void)".  */)
       free (msg);
       free (diag);
       unlink (src_path);
+      unlink (so_path);
       xsignal1 (intern ("cmacs-cintrospect-compile-error"), lmsg);
     }
   set_diagnostics (diag);
   free (diag);
+
+  /* What is loaded into this process must be the file gcc just wrote:
+     a regular file of ours, not a link to something else.  */
+  if (!jit_file_is_ours (so_path))
+    {
+      unlink (so_path); unlink (src_path);
+      xsignal1 (Qerror,
+                build_string ("cmacs-c-compile: compiled object is not a "
+                              "regular file of this user"));
+    }
 
   /* dlopen + dlsym. */
   void *dlh = dlopen (so_path, RTLD_NOW | RTLD_LOCAL);

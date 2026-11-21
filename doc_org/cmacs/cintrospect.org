@@ -192,6 +192,8 @@ way through the link:
 | =cmacs-c-handle-info HANDLE= | plist |
 | =cmacs-c-handle-dispose HANDLE= | t |
 
+*Where the files go.* =cmacs-c-compile= writes the source and the shared object to a directory private to the process: =cmacs-jit-XXXXXX=, made by =mkdtemp= (mode 0700), under =$XDG_RUNTIME_DIR= when that is a private directory of yours and under =$TMPDIR= or =/tmp= otherwise. The files are =<id>.c= (created exclusively, mode 0600, never through a link) and =<id>.so=; the object is checked to be a regular file of yours before it is loaded. =cmacs-c-handle-dispose= removes both, and the directory goes when Emacs exits. They used to be =/tmp/cmacs-jit-<id>.c= and =.so= with ids restarting at 1 in every process: predictable names in a world-writable directory, which another user could create first, and which two cmacs processes overwrote for each other. =cmacs-c-handle-info= reports the object's path as =:so-path=. A crash leaves the directory behind; in the runtime directory it is cleared at logout.
+
 In Phase 1 these signal =cmacs-cintrospect-not-implemented=.
 
 ** cpatch DEFUNs (requires --enable-cmacs-cpatch)
