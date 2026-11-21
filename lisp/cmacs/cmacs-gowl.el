@@ -57,6 +57,7 @@
 (defvar cmacs-gowl-hotkey-scripts)
 (declare-function cmacs-gowl-floatdesk--on-start "cmacs-gowl-floatdesk" ())
 (declare-function cmacs-gowl-edit-field-setup "cmacs-gowl-edit-field" ())
+(declare-function cmacs-gowl-ai-field-setup "cmacs-gowl-ai-field" ())
 (declare-function cmacs-gowl-power--on-start "cmacs-gowl-power" ())
 (declare-function cmacs-gowl-power--on-stop "cmacs-gowl-power" ())
 (declare-function cmacs-gowl-power-apply "cmacs-gowl-power" (backdrop crt))
@@ -2095,6 +2096,10 @@ thread is running and applies configuration."
   ;; Binds `cmacs-gowl-edit-field-key'; a nil key binds nothing.
   (when (require 'cmacs-gowl-edit-field nil t)
     (cmacs-gowl-edit-field-setup))
+  ;; AI actions on any text field, no frame (cmacs-gowl-ai-field.el).
+  ;; Binds `cmacs-gowl-ai-field-key'; a nil key binds nothing.
+  (when (require 'cmacs-gowl-ai-field nil t)
+    (cmacs-gowl-ai-field-setup))
   ;; Text expansion (cmacs-gowl-gabbrev.el).  Its module is in the
   ;; default set too: this gives it the `cmacs-gowl-gabbrev-*'
   ;; configuration -- files, espanso, Elisp matches, the abbrev tables

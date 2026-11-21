@@ -414,7 +414,13 @@ otherwise put the editor half off the screen."
   state           ; `reading', `editing', `committing' or `closing'
   gone            ; non-nil once the window has disappeared
   conflict        ; a fresh read that differed from `text', or nil
-  note)           ; what the header line should warn about, or nil
+  note            ; what the header line should warn about, or nil
+  ;; A HEADLESS session has no buffer and no frame: another feature (the
+  ;; AI field commands) borrowed the read and the write-back, and
+  ;; `handler' is told what would otherwise have been shown in an
+  ;; editor.  See "Headless sessions" below.
+  handler         ; nil, or a function (EVENT SESSION &rest ARGS)
+  no-fallback)    ; non-nil never reaches for the clipboard fallback
 
 (defvar cmacs-gowl-edit-field--sessions nil
   "The fields being edited, as session structs.")
@@ -443,6 +449,42 @@ Never signals: most of this file runs from the compositor's keybind or
 from a callback in the main loop, where an error has nobody to reach."
   (apply #'message (concat "edit-field: " format-string) args)
   nil)
+
+;;;; Headless sessions
+;;
+;; Everything this file knows about reaching a field -- the text-input
+;; read, the clipboard fallback, the verify-before-write, the deny
+;; lists, the password refusal -- is also what a feature with no editor
+;; needs.  Such a feature opens a session with a handler
+;; (`cmacs-gowl-edit-field-read-async') and is called back at the
+;; points where an editor session would have opened, closed or put a
+;; note in its header line:
+;;
+;;   (HANDLER \='read SESSION TEXT CURSOR ANCHOR)
+;;       the field was read; CURSOR and ANCHOR are character indexes
+;;       into TEXT and differ when the application reports a selection.
+;;       The session stays open, for `cmacs-gowl-edit-field-write-async'
+;;       or `cmacs-gowl-edit-field-release'.
+;;   (HANDLER \='committed SESSION)   the new text is in the field
+;;   (HANDLER \='unchanged SESSION)   the new text was what is there
+;;   (HANDLER \='failed SESSION WHY)  the read or the write did not
+;;       happen; WHY is a sentence for the user.
+;;
+;; After any event but `read' the session is closed already.  A
+;; headless session never moves the keyboard: where an editor session
+;; hands focus back to its window, a headless one leaves it alone.
+
+(defun cmacs-gowl-edit-field--notify (session event &rest args)
+  "Tell SESSION's handler about EVENT with ARGS.
+Return non-nil if SESSION is headless, nil if it has an editor (and so
+nothing was told).  Never signals: this runs from compositor callbacks."
+  (let ((handler (cmacs-gowl-edit-field--session-handler session)))
+    (when handler
+      (condition-case err
+          (apply handler event session args)
+        (error (cmacs-gowl-edit-field--say
+                "handler failed: %s" (error-message-string err))))
+      t)))
 
 ;;;; Waiting for focus, without waiting
 ;;
@@ -509,13 +551,16 @@ Call ELSE instead if it does not within
 (defun cmacs-gowl-edit-field--mark-gone (session)
   "Record that SESSION's window has disappeared, and say so."
   (unless (cmacs-gowl-edit-field--session-gone session)
-    (setf (cmacs-gowl-edit-field--session-gone session) t
-          (cmacs-gowl-edit-field--session-note session)
-          "the window is gone -- C-c M-w copies this text")
-    (cmacs-gowl-edit-field--refresh session)
-    (cmacs-gowl-edit-field--say
-     "the window being edited is gone; the text is still in %s"
-     (buffer-name (cmacs-gowl-edit-field--session-buffer session)))))
+    (setf (cmacs-gowl-edit-field--session-gone session) t)
+    (if (cmacs-gowl-edit-field--session-handler session)
+        ;; No buffer holds the text: whoever borrowed the session does.
+        (cmacs-gowl-edit-field--failed session "the window is gone")
+      (setf (cmacs-gowl-edit-field--session-note session)
+            "the window is gone -- C-c M-w copies this text")
+      (cmacs-gowl-edit-field--refresh session)
+      (cmacs-gowl-edit-field--say
+       "the window being edited is gone; the text is still in %s"
+       (buffer-name (cmacs-gowl-edit-field--session-buffer session))))))
 
 (defun cmacs-gowl-edit-field--sync-hooks ()
   "Listen to the compositor while there is a session, and only then."
@@ -724,10 +769,15 @@ from a timer."
 
 (defun cmacs-gowl-edit-field--open (session text cursor anchor)
   "Start editing TEXT for SESSION, point at CURSOR, region to ANCHOR.
-CURSOR and ANCHOR are character indexes."
-  (setf (cmacs-gowl-edit-field--session-state session) 'editing)
-  (cmacs-gowl-edit-field--fill-buffer session text cursor anchor)
-  (cmacs-gowl-edit-field--show session))
+CURSOR and ANCHOR are character indexes.  A headless session gets the
+text handed to its handler instead of an editor."
+  (if (cmacs-gowl-edit-field--session-handler session)
+      (progn
+        (setf (cmacs-gowl-edit-field--session-state session) 'held)
+        (cmacs-gowl-edit-field--notify session 'read text cursor anchor))
+    (setf (cmacs-gowl-edit-field--session-state session) 'editing)
+    (cmacs-gowl-edit-field--fill-buffer session text cursor anchor)
+    (cmacs-gowl-edit-field--show session)))
 
 ;;;; Ending a session
 
@@ -787,23 +837,35 @@ edits in it is kept, so a slip of the hand loses nothing."
                                       (buffer-name buffer)))))))
 
 (defun cmacs-gowl-edit-field--failed (session why)
-  "SESSION's commit did not happen, for the reason WHY: keep editing."
-  (setf (cmacs-gowl-edit-field--session-state session) 'editing
-        (cmacs-gowl-edit-field--session-note session) why)
-  (cmacs-gowl-edit-field--refresh session)
-  ;; Back to the editor, so the text and the reason are in front of
-  ;; the user rather than behind the window that refused them.
-  (let ((frame (cmacs-gowl-edit-field--session-frame session)))
-    (when (frame-live-p frame)
-      (when-let* ((client (cmacs-gowl-edit-field--frame-client session)))
-        (ignore-errors (gowl-focus-client client)))
-      (ignore-errors (select-frame-set-input-focus frame))))
-  (cmacs-gowl-edit-field--say "%s" why))
+  "SESSION's commit did not happen, for the reason WHY: keep editing.
+A headless session has no editor to keep: it is closed, and its handler
+is told WHY."
+  (if (cmacs-gowl-edit-field--session-handler session)
+      (progn
+        (cmacs-gowl-edit-field--close session)
+        (cmacs-gowl-edit-field--notify session 'failed why)
+        nil)
+    (setf (cmacs-gowl-edit-field--session-state session) 'editing
+          (cmacs-gowl-edit-field--session-note session) why)
+    (cmacs-gowl-edit-field--refresh session)
+    ;; Back to the editor, so the text and the reason are in front of
+    ;; the user rather than behind the window that refused them.
+    (let ((frame (cmacs-gowl-edit-field--session-frame session)))
+      (when (frame-live-p frame)
+        (when-let* ((client (cmacs-gowl-edit-field--frame-client session)))
+          (ignore-errors (gowl-focus-client client)))
+        (ignore-errors (select-frame-set-input-focus frame))))
+    (cmacs-gowl-edit-field--say "%s" why)))
 
 (defun cmacs-gowl-edit-field--committed (session)
   "SESSION's text is in the field: close the editor."
-  (cmacs-gowl-edit-field--close session nil t)
-  (cmacs-gowl-edit-field--say "field updated"))
+  (if (cmacs-gowl-edit-field--session-handler session)
+      (progn
+        ;; No refocus: a headless session never took the keyboard away.
+        (cmacs-gowl-edit-field--close session)
+        (cmacs-gowl-edit-field--notify session 'committed))
+    (cmacs-gowl-edit-field--close session nil t)
+    (cmacs-gowl-edit-field--say "field updated")))
 
 ;;;; Committing through text-input
 
@@ -812,8 +874,12 @@ edits in it is kept, so a slip of the hand loses nothing."
   (let ((edit (cmacs-gowl-edit-field--compute-replace old new cursor)))
     (cond
      ((null edit)
-      (cmacs-gowl-edit-field--close session nil t)
-      (cmacs-gowl-edit-field--say "nothing changed"))
+      (if (cmacs-gowl-edit-field--session-handler session)
+          (progn
+            (cmacs-gowl-edit-field--close session)
+            (cmacs-gowl-edit-field--notify session 'unchanged))
+        (cmacs-gowl-edit-field--close session nil t)
+        (cmacs-gowl-edit-field--say "nothing changed")))
      ((not (condition-case nil
                (gowl-text-field-replace
                 (cmacs-gowl-edit-field--session-client session)
@@ -965,19 +1031,26 @@ no text field has its focus)"))))))
 
 (defun cmacs-gowl-edit-field--read-failed (session why)
   "SESSION could not be started, or its refetch failed, for the reason WHY."
-  (if (buffer-live-p (cmacs-gowl-edit-field--session-buffer session))
+  (if (or (buffer-live-p (cmacs-gowl-edit-field--session-buffer session))
+          (cmacs-gowl-edit-field--session-handler session))
       ;; A refetch from inside an editor: the editor stays as it was.
+      ;; A headless session: its handler hears about it.
       (cmacs-gowl-edit-field--failed session why)
     (cmacs-gowl-edit-field--close session)
     (cmacs-gowl-edit-field--say "%s" why)))
 
 (defun cmacs-gowl-edit-field--try-fallback (session why)
   "Read SESSION's field through the fallback, or report WHY it was not read."
-  (if (cmacs-gowl-edit-field--fallback-allowed-p
-       (cmacs-gowl-edit-field--session-app-id session)
-       (cmacs-gowl-edit-field--session-title session))
+  (if (cmacs-gowl-edit-field--session-fallback-allowed-p session)
       (cmacs-gowl-edit-field--clipboard-read session)
     (cmacs-gowl-edit-field--read-failed session why)))
+
+(defun cmacs-gowl-edit-field--session-fallback-allowed-p (session)
+  "Return non-nil if the clipboard fallback may be used for SESSION."
+  (and (not (cmacs-gowl-edit-field--session-no-fallback session))
+       (cmacs-gowl-edit-field--fallback-allowed-p
+        (cmacs-gowl-edit-field--session-app-id session)
+        (cmacs-gowl-edit-field--session-title session))))
 
 (defun cmacs-gowl-edit-field--on-read (session result)
   "Act on RESULT, the compositor's answer to reading SESSION's field."
@@ -999,9 +1072,7 @@ no text field has its focus)"))))))
            "the application does not say what is in that field")))
        ((and (not (plist-get result :complete))
              (eq cmacs-gowl-edit-field-partial-action 'fallback)
-             (cmacs-gowl-edit-field--fallback-allowed-p
-              (cmacs-gowl-edit-field--session-app-id session)
-              (cmacs-gowl-edit-field--session-title session)))
+             (cmacs-gowl-edit-field--session-fallback-allowed-p session))
         (cmacs-gowl-edit-field--clipboard-read session))
        (t
         (setf (cmacs-gowl-edit-field--session-method session) 'text-input
@@ -1040,53 +1111,161 @@ Meant for a compositor key (`cmacs-gowl-edit-field-key', bound by
 program when it is wanted.  Returns at once: the text arrives, and the
 editor opens, a moment later."
   (interactive)
+  (let* ((target (cmacs-gowl-edit-field-focused-target))
+         (id (plist-get target :id))
+         (existing (and id (cl-find id cmacs-gowl-edit-field--sessions
+                                    :key #'cmacs-gowl-edit-field--session-id))))
+    (cond
+     ((plist-get target :refused)
+      (cmacs-gowl-edit-field--say "%s" (plist-get target :refused)))
+     ;; Already editing a field of this window: show that editor.
+     (existing
+      (cond
+       ((cmacs-gowl-edit-field--session-handler existing)
+        (cmacs-gowl-edit-field--say
+         "another command is working on that window's field"))
+       ((buffer-live-p (cmacs-gowl-edit-field--session-buffer existing))
+        (cmacs-gowl-edit-field--show existing))))
+     (t
+      (cmacs-gowl-edit-field--start-read
+       (cmacs-gowl-edit-field--session-create
+        :client (plist-get target :client) :id id
+        :app-id (plist-get target :app-id)
+        :title (plist-get target :title)
+        :state 'reading))))
+    nil))
+
+(defun cmacs-gowl-edit-field--start-read (session)
+  "Register SESSION and ask the compositor for its field's text."
+  (push session cmacs-gowl-edit-field--sessions)
+  (cmacs-gowl-edit-field--sync-hooks)
+  (unless (condition-case nil
+              (gowl-text-field-read
+               (cmacs-gowl-edit-field--session-client session)
+               (lambda (result)
+                 (cmacs-gowl-edit-field--on-read session result)))
+            (error nil))
+    ;; No text input reaches the window at all.
+    (cmacs-gowl-edit-field--try-fallback
+     session
+     "that window has no text input; its fields cannot be read")))
+
+;;;; The read and the write-back, for other features
+
+(defun cmacs-gowl-edit-field-focused-target ()
+  "Describe the window whose text field a command would act on now.
+The value is a plist.  When the field may be touched it has :client,
+:id (the window's gowl id), :app-id, :title and :pid; when it may not,
+it has :refused, a sentence saying why -- no compositor, no focused
+window, the keyboard being in Emacs itself, or a window on
+`cmacs-gowl-edit-field-deny' -- and, where a window was found, the
+same keys.  Never signals and never waits."
   (let ((why (cmacs-gowl-edit-field--unavailable))
-        (client nil) (info nil) (id nil) (app-id nil) (title nil))
+        (client nil) (info nil) (id nil) (app-id nil) (title nil) (pid nil))
     (unless why
       (setq client (ignore-errors (gowl-focused-client))
             info (and client (ignore-errors (gowl-client-info client)))
             id (alist-get 'id info)
             app-id (alist-get 'app-id info)
-            title (alist-get 'title info)))
+            title (alist-get 'title info)
+            pid (and client (ignore-errors (gowl-client-pid client))))
+      (setq why
+            (cond
+             ((null id) "no window has the keyboard")
+             ;; One of Emacs's own frames (an embedded application is
+             ;; another process, and is fair game).
+             ((and (not (alist-get 'embedded info))
+                   (eql pid (emacs-pid)))
+              "the keyboard is in Emacs already; put it in another \
+program's text field first")
+             ((cmacs-gowl-edit-field--denied-p app-id title)
+              (format "%s is on `cmacs-gowl-edit-field-deny'; its fields \
+are left alone"
+                      (if (string-empty-p (or app-id "")) title app-id))))))
+    `(,@(and why (list :refused why))
+      :client ,client :id ,id :app-id ,app-id :title ,title :pid ,pid)))
+
+(defun cmacs-gowl-edit-field-read-async (handler &optional target no-fallback)
+  "Read the focused text field with no editor; tell HANDLER what came.
+HANDLER is called as described under \"Headless sessions\" in this
+file: (HANDLER \='read SESSION TEXT CURSOR ANCHOR) once the text is
+here, or (HANDLER \='failed SESSION WHY).  TARGET is a plist from
+`cmacs-gowl-edit-field-focused-target' (asked for when nil); a refused
+one fails at once.  With NO-FALLBACK the clipboard fallback is not
+used whatever `cmacs-gowl-edit-field-fallback' says.
+
+Password fields, the deny lists, the partial-read policy and the
+fallback are exactly `cmacs-gowl-edit-field's.  Returns the session,
+or nil when nothing was started; HANDLER has been told either way, and
+may be called before this returns."
+  (let* ((target (or target (cmacs-gowl-edit-field-focused-target)))
+         (id (plist-get target :id))
+         (session (cmacs-gowl-edit-field--session-create
+                   :client (plist-get target :client) :id id
+                   :app-id (plist-get target :app-id)
+                   :title (plist-get target :title)
+                   :state 'reading :handler handler
+                   :no-fallback no-fallback)))
     (cond
-     (why (cmacs-gowl-edit-field--say "%s" why))
-     ((null id)
-      (cmacs-gowl-edit-field--say "no window has the keyboard"))
-     ;; One of Emacs's own frames (an embedded application is another
-     ;; process, and is fair game).
-     ((and (not (alist-get 'embedded info))
-           (eql (ignore-errors (gowl-client-pid client)) (emacs-pid)))
-      (cmacs-gowl-edit-field--say
-       "the keyboard is in Emacs already; put it in another program's \
-text field first"))
-     ((cmacs-gowl-edit-field--denied-p app-id title)
-      (cmacs-gowl-edit-field--say
-       "%s is on `cmacs-gowl-edit-field-deny'; its fields are left alone"
-       (if (string-empty-p (or app-id "")) title app-id)))
-     ;; Already editing a field of this window: show that editor.
+     ((plist-get target :refused)
+      (cmacs-gowl-edit-field--notify session 'failed
+                                     (plist-get target :refused))
+      nil)
+     ;; One conversation with a window's input method at a time.
      ((cl-find id cmacs-gowl-edit-field--sessions
                :key #'cmacs-gowl-edit-field--session-id)
-      (let ((session (cl-find id cmacs-gowl-edit-field--sessions
-                              :key #'cmacs-gowl-edit-field--session-id)))
-        (when (buffer-live-p (cmacs-gowl-edit-field--session-buffer session))
-          (cmacs-gowl-edit-field--show session))))
+      (cmacs-gowl-edit-field--notify
+       session 'failed "that window's field is being edited already")
+      nil)
      (t
-      (let ((session (cmacs-gowl-edit-field--session-create
-                      :client client :id id :app-id app-id :title title
-                      :state 'reading)))
-        (push session cmacs-gowl-edit-field--sessions)
-        (cmacs-gowl-edit-field--sync-hooks)
-        (unless (condition-case nil
-                    (gowl-text-field-read
-                     client
-                     (lambda (result)
-                       (cmacs-gowl-edit-field--on-read session result)))
-                  (error nil))
-          ;; No text input reaches the window at all.
-          (cmacs-gowl-edit-field--try-fallback
-           session
-           "that window has no text input; its fields cannot be read")))))
-    nil))
+      (cmacs-gowl-edit-field--start-read session)
+      session))))
+
+(defun cmacs-gowl-edit-field-write-async (session new)
+  "Replace the text SESSION read with NEW, in its field.
+SESSION is a headless session that has delivered its `read'.  Its
+window must hold the keyboard NOW: this does not move focus, and the
+caller is the one who knows whether typing there is still wanted.  The
+field is read again first (`cmacs-gowl-edit-field-verify') and left
+alone if it changed.  SESSION's handler hears `committed', `unchanged'
+or `failed'; the session is closed by then."
+  (cond
+   ((not (memq session cmacs-gowl-edit-field--sessions))
+    (cmacs-gowl-edit-field--notify session 'failed
+                                   "the field is no longer held"))
+   ((or (cmacs-gowl-edit-field--session-gone session)
+        (not (cmacs-gowl-edit-field--client-live-p
+              (cmacs-gowl-edit-field--session-id session))))
+    (cmacs-gowl-edit-field--mark-gone session)
+    ;; `--mark-gone' reports once; a session it had marked before is
+    ;; still to be closed.
+    (when (memq session cmacs-gowl-edit-field--sessions)
+      (cmacs-gowl-edit-field--failed session "the window is gone")))
+   (t
+    (setf (cmacs-gowl-edit-field--session-state session) 'committing)
+    (if (eq (cmacs-gowl-edit-field--session-method session) 'clipboard)
+        (cmacs-gowl-edit-field--commit-clipboard session new)
+      (cmacs-gowl-edit-field--commit-text-input session new))))
+  nil)
+
+(defun cmacs-gowl-edit-field-release (session)
+  "Let go of SESSION, a headless session, without writing anything.
+Its handler is not called.  Harmless on a session already closed."
+  (when (memq session cmacs-gowl-edit-field--sessions)
+    (cmacs-gowl-edit-field--close session))
+  nil)
+
+(defun cmacs-gowl-edit-field-session-info (session)
+  "Return what is known of SESSION's field, as a plist.
+:id, :app-id and :title of its window, :method (`text-input' or
+`clipboard'), :text as read, and :complete, nil when :text is only the
+part of the field around the cursor."
+  (list :id (cmacs-gowl-edit-field--session-id session)
+        :app-id (cmacs-gowl-edit-field--session-app-id session)
+        :title (cmacs-gowl-edit-field--session-title session)
+        :method (cmacs-gowl-edit-field--session-method session)
+        :text (cmacs-gowl-edit-field--session-text session)
+        :complete (cmacs-gowl-edit-field--session-complete session)))
 
 (defun cmacs-gowl-edit-field--current ()
   "Return this buffer's session, or signal that it has none."

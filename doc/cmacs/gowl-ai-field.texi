@@ -1,0 +1,478 @@
+@c gowl-ai-field.texi --- the AI Commands on Any Text Field chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node Gowl AI Field
+@chapter Gowl AI Field: AI Commands on Any Text Field
+
+@cindex AI field
+@cindex text field, AI commands on
+@cindex text-input-v3
+@cindex gowl, text fields
+@findex cmacs-gowl-ai-field
+
+With the keyboard in a text field of @emph{any} window---a browser's
+comment box, a chat client, a form---one key reads that field, runs a
+cmacs-ai text action on it (fix the spelling and grammar, rewrite it,
+shorten it, translate it, or whatever you type), and writes the model's
+answer straight back into the field.  No Emacs frame opens.  It is the
+sibling of the editor (@pxref{Gowl Edit Field}): that one brings the
+text to Emacs, this one brings the model to the text.
+
+It needs @command{cmacs --gowl}, for the same reason the editor does:
+only the compositor sits between an application and its input method.
+
+@lisp
+(add-hook 'cmacs-gowl-mode-hook #'cmacs-gowl-ai-field-setup)
+@end lisp
+
+@vindex cmacs-gowl-ai-field-key
+@findex cmacs-gowl-ai-field-setup
+That binds @code{cmacs-gowl-ai-field-key} (@kbd{Super+Ctrl+a}) in the
+compositor.
+
+Five things about it, stated plainly:
+
+@itemize @bullet
+@item
+@strong{It acts on the selection if there is one, otherwise on the
+whole field.}  @xref{Gowl AI Field Scope}.
+@item
+@strong{The answer is written once.}  The model streams, but an
+application cannot take a stream of edits reliably, so the answer is
+collected and sent as one edit---one undo step in the application.
+@item
+@strong{It never types into the wrong window.}  If the keyboard has
+moved by the time the answer arrives, or the field no longer holds what
+was read, nothing is typed anywhere: the answer goes to the kill ring
+and a toast says so.  It never moves focus to make a write possible.
+@item
+@strong{The text is sent to a model.}  That is the point of it.  What
+is refused, and what is deliberately @emph{not} redacted, is under
+@ref{Gowl AI Field Privacy}.
+@item
+@strong{Nothing blocks the desktop.}  Every wait---for the application,
+the menu card, the model---is a callback or a timer.
+@end itemize
+
+@menu
+* Gowl AI Field Usage::         The commands, the chooser, cancel and undo.
+* Gowl AI Field Scope::         What is acted on.
+* Gowl AI Field Writing::       Writing the answer back.
+* Gowl AI Field Actions::       Actions, prompts, provider and model.
+* Gowl AI Field Privacy::       What is refused and what is not redacted.
+* Gowl AI Field Options::       Options.
+* Gowl AI Field Sessions::      Headless edit-field sessions, for other features.
+* Gowl AI Field Limitations::   Limitations and files.
+@end menu
+
+@node Gowl AI Field Usage
+@section Using it
+
+@enumerate
+@item
+Put the keyboard in a text field in any window.  Select part of the
+text if you only want that part changed.
+@item
+Press @kbd{Super+Ctrl+a}.  The compositor's menu card lists the
+actions, titled with what they will act on (``AI on the selection'',
+``AI on this field'').
+@item
+Pick one.  A toast on the bar says what is running and on how much
+text.
+@item
+The answer replaces the text.  A toast says it is done.
+@end enumerate
+
+@table @code
+@findex cmacs-gowl-ai-field
+@item cmacs-gowl-ai-field
+Choose an action for the focused field; while one runs, offer to cancel
+it.
+@findex cmacs-gowl-ai-field-proofread
+@item cmacs-gowl-ai-field-proofread
+Fix spelling and grammar, changing nothing else.
+@findex cmacs-gowl-ai-field-rewrite
+@item cmacs-gowl-ai-field-rewrite
+Rewrite: clearer and tighter.
+@findex cmacs-gowl-ai-field-shorten
+@item cmacs-gowl-ai-field-shorten
+Shorten, keeping the facts and the voice.
+@findex cmacs-gowl-ai-field-translate
+@item cmacs-gowl-ai-field-translate
+Translate into @code{cmacs-gowl-ai-field-translate-language}.
+@findex cmacs-gowl-ai-field-custom
+@item cmacs-gowl-ai-field-custom
+Rewrite as an instruction you type says.
+@findex cmacs-gowl-ai-field-run
+@item cmacs-gowl-ai-field-run
+Run any action of @code{cmacs-gowl-ai-field-actions} by name.
+@findex cmacs-gowl-ai-field-undo
+@item cmacs-gowl-ai-field-undo
+Put back the text the last action replaced.
+@findex cmacs-gowl-ai-field-cancel
+@item cmacs-gowl-ai-field-cancel
+Cancel the action in progress.
+@end table
+
+@vindex cmacs-gowl-ai-field-action-keys
+All of them return at once.  The direct commands skip the menu; give
+them keys with @code{cmacs-gowl-ai-field-action-keys}:
+
+@lisp
+(setq cmacs-gowl-ai-field-action-keys
+      '(("Super+Ctrl+g" . proofread)
+        ("Super+Ctrl+s" . shorten)))
+@end lisp
+
+@subheading The chooser
+
+@vindex cmacs-gowl-ai-field-chooser
+The list is drawn by gowl's menu card (the @samp{menu} module's
+@samp{menu-choose} command), so it appears over the application and
+typing filters it, exactly as @kbd{Super+space} does.  No Emacs frame
+is involved.  When the card is not available---the menu module is not
+loaded---or @code{cmacs-gowl-ai-field-chooser} is @code{minibuffer},
+the choice is read with @code{completing-read} in a small floating
+minibuffer-only frame instead.
+
+The same frame is where a free-form instruction is typed (``Custom
+instruction...''): the menu card can pick a row but cannot take a
+sentence.  That read occupies Emacs's thread, as the gowl menu's does,
+and not the compositor's.  When it is over the keyboard is handed back
+to the window it came from.
+
+When there is an edit to undo in the focused window, the list ends with
+an @samp{Undo: ...} row.
+
+@subheading Progress and cancelling
+
+@vindex cmacs-gowl-ai-field-progress-interval
+@vindex cmacs-gowl-ai-field-timeout
+@vindex cmacs-gowl-ai-field-cancel-key
+One action runs at a time.  A toast is shown when the model is asked,
+every @code{cmacs-gowl-ai-field-progress-interval} seconds while it
+answers (with how many characters have arrived), and at the end.
+Pressing @kbd{Super+Ctrl+a} while an action is running offers
+@samp{Cancel: ...} and @samp{Let it finish} instead of the actions;
+@code{cmacs-gowl-ai-field-cancel} (and
+@code{cmacs-gowl-ai-field-cancel-key}, unset by default) cancels with
+no menu.  A cancelled action stops the model request, lets go of the
+field and types nothing.  A model that has not answered after
+@code{cmacs-gowl-ai-field-timeout} seconds (120) is given up on the
+same way.
+
+@subheading Undo
+
+The text as it was read is kept.  @code{cmacs-gowl-ai-field-undo} puts
+it back, on two conditions: the window the edit was made in holds the
+keyboard, and its field still holds exactly the answer.  A field edited
+since is not overwritten---the old text goes to the kill ring and a
+toast says so.  The application's own undo works as well, since it saw
+one edit.
+
+Only the last edit is kept, and only for this Emacs session.
+
+@node Gowl AI Field Scope
+@section What is acted on
+
+The field is read the way the editor reads it (@pxref{Gowl Edit
+Field}), by the same code.
+
+@itemize @bullet
+@item
+@strong{A selection}, when the application reports one over
+text-input-v3: only the selected text is sent, and only it is replaced.
+@item
+@strong{The whole text the application reported}, otherwise.
+@item
+@strong{A window around the cursor}, when the field is longer than the
+protocol can carry (about 4000 bytes).  Only that window is rewritten,
+and the toast says ``the text around the cursor''.  With
+@code{cmacs-gowl-edit-field-partial-action} set to @code{fallback} the
+whole field is fetched through the clipboard instead.
+@item
+@vindex cmacs-gowl-ai-field-clipboard-fallback
+@strong{The whole field, through the clipboard fallback}, for a window
+with no text input (X11 programs, some toolkits).  A selection cannot
+be learnt that way.  The fallback and its deny list are the editor's
+(@code{cmacs-gowl-edit-field-fallback},
+@code{cmacs-gowl-edit-field-fallback-deny}---never a terminal);
+@code{cmacs-gowl-ai-field-clipboard-fallback} set to @code{nil} turns
+it off for AI actions only.
+@end itemize
+
+@vindex cmacs-gowl-ai-field-max-chars
+Text that is empty, longer than @code{cmacs-gowl-ai-field-max-chars}
+(20000), or longer than @code{cmacs-ai-target-max-chars} is refused: a
+rewrite of clipped text would be written back over the whole.
+
+@node Gowl AI Field Writing
+@section Writing the answer back
+
+When the answer is complete:
+
+@enumerate
+@item
+A code fence or a pair of quotes the model put around it against orders
+is removed (@code{cmacs-ai-proofread--strip-wrapping}, as the in-place
+proofreader does).
+@item
+The focused window is compared with the one that was read.  If it is
+another, the answer is put on the kill ring and nothing is typed.
+@item
+The field is read again (@code{cmacs-gowl-edit-field-verify}).  If its
+text is not what was read, the answer is put on the kill ring and
+nothing is typed.
+@item
+One edit is sent: ``delete these bytes around the cursor, insert
+this'', the smallest that turns the old text into the new.
+@end enumerate
+
+The kill ring is also where the answer goes when the application does
+not take the edit, or the window was closed while the model was
+working.
+
+@node Gowl AI Field Actions
+@section Actions and prompts
+
+@vindex cmacs-gowl-ai-field-actions
+@code{cmacs-gowl-ai-field-actions} is an alist of @code{(@var{name}
+. @var{plist})}, in menu order.
+
+@table @code
+@item :label
+The menu row.
+@item :op
+The cmacs-ai text operation that supplies the prompts: @code{proofread}
+or @code{rephrase}.
+@item :how
+How to do it: a string, or a function returning one.  Omitted, the
+operation's own default.
+@item :ask
+Non-@code{nil} reads @code{:how} from the user when the action is
+chosen.
+@item :system
+A system prompt of your own instead of the operation's.
+@end table
+
+The prompts are not copies.  An action names an operation in
+@code{cmacs-ai-textops--specs}, and its system prompt is read through
+that operation's variable when the action runs---
+@code{cmacs-ai-proofread-system-prompt},
+@code{cmacs-ai-rephrase-system-prompt}---so customising those for the
+region commands changes a text field's answers too.  The user message
+is built by the same function the region commands use.
+
+The shipped actions: @code{proofread}, @code{rewrite}, @code{shorten},
+@code{formal}, @code{friendly}, @code{translate}, @code{custom}.
+Adding one:
+
+@lisp
+(add-to-list 'cmacs-gowl-ai-field-actions
+             '(bullets :label "As a bullet list" :op rephrase
+                       :how "Turn it into a short bullet list.")
+             t)
+@end lisp
+
+Whatever the model answers replaces the text, so a @code{:system} of
+your own must make it answer with the new text and nothing else.
+
+@subheading Provider and model
+
+@vindex cmacs-gowl-ai-field-provider
+@vindex cmacs-gowl-ai-field-model
+By default field actions use what the region text commands use:
+@code{cmacs-ai-textops-provider} and @code{cmacs-ai-textops-model}
+(and, where those are @code{nil}, @code{cmacs-ai-default-provider} and
+@code{cmacs-ai-default-model}).  @code{cmacs-gowl-ai-field-provider}
+overrides the provider for this feature alone;
+@code{cmacs-gowl-ai-field-model} then goes with it, and @code{nil}
+means that provider's default rather than a model inherited from
+another provider.
+
+@node Gowl AI Field Privacy
+@section Privacy
+
+@cindex redaction, text fields
+The text of the field is sent to the configured model.  That cannot be
+otherwise, and the user asked for it by name.
+
+@strong{The field's text is not passed through
+@code{cmacs-redact-text}.}  This is deliberate.  The redaction rules
+exist to keep what the user did @emph{not} offer away from a model;
+here the user pointed at this text and asked for it to be rewritten.
+Redacting it would also be destructive: the model would rewrite a text
+with holes punched in it, and that would be written back over the
+original.
+
+What is honoured, before anything is read:
+
+@itemize @bullet
+@item
+@strong{The edit-field deny list}, @code{cmacs-gowl-edit-field-deny}:
+password managers, password prompts, the lock screen.
+@item
+@strong{The redaction rule set, asked about the window.}
+@code{cmacs-redact-window} is called with the focused window's app-id,
+title and pid.  A window the rules exclude is refused.  So is every
+window when the rules have failed to load, or the redaction library
+cannot be loaded at all: this fails closed.
+@item
+@strong{Password fields.}  A field its application marks as a password
+or PIN (content purpose 8 or 9, or the hidden-text or sensitive-data
+hint) is refused once read, and never reaches the model or the
+clipboard fallback.
+@end itemize
+
+Nothing but the field's text and the instruction reaches the model: not
+the window's title, not its application.
+
+One limit to know: through the clipboard fallback an application cannot
+say that a field is a password field.  Applications do not copy out of
+those, but set @code{cmacs-gowl-ai-field-clipboard-fallback} to
+@code{nil} if the model should only ever see text an application
+described over text-input.
+
+@node Gowl AI Field Options
+@section Options
+
+@table @code
+@item cmacs-gowl-ai-field-key
+Compositor key of the chooser (@code{"Super+Ctrl+a"}); @code{nil} for
+none.
+@item cmacs-gowl-ai-field-undo-key
+Compositor key of the undo (@code{nil}).
+@item cmacs-gowl-ai-field-cancel-key
+Compositor key of the cancel (@code{nil}).
+@item cmacs-gowl-ai-field-action-keys
+Alist of @code{(@var{key} . @var{action})} run with no menu
+(@code{nil}).
+@item cmacs-gowl-ai-field-actions
+The actions, in menu order (seven of them).
+@item cmacs-gowl-ai-field-translate-language
+What @code{translate} translates into (@code{"English"}).
+@item cmacs-gowl-ai-field-provider
+Provider for this feature; @code{nil} means the text commands'.
+@item cmacs-gowl-ai-field-model
+Model for this feature (@code{nil}).
+@item cmacs-gowl-ai-field-chooser
+@code{card} (the menu card, the default) or @code{minibuffer}.
+@item cmacs-gowl-ai-field-clipboard-fallback
+Whether the editor's clipboard fallback may be used (@code{t}).
+@item cmacs-gowl-ai-field-max-chars
+Longest text sent to a model (20000).
+@item cmacs-gowl-ai-field-timeout
+Seconds to wait for the model (120); @code{nil} for no limit.
+@item cmacs-gowl-ai-field-progress-interval
+Seconds between progress toasts (5); @code{nil} for none.
+@item cmacs-gowl-ai-field-toast
+Report on the gowl bar as well as in the echo area (@code{t}).
+@item cmacs-gowl-ai-field-prompt-frame-name
+Title of the minibuffer frame (@code{"cmacs-ai-field-prompt"}); a float
+rule matches it.
+@item cmacs-gowl-ai-field-prompt-frame-width
+Its width in columns (80).
+@end table
+
+@code{cmacs-gowl-ai-field-setup} unbinds the keys it bound last time
+before binding, so a key taken out of an option stops working on the
+next call.
+
+The deny lists, the fallback, the partial-read policy and the
+verify-before-write are the editor's options (@pxref{Gowl Edit Field}).
+
+@node Gowl AI Field Sessions
+@section For other features: headless edit-field sessions
+
+@cindex headless session, edit field
+Reaching a field is @file{cmacs-gowl-edit-field.el}'s business and
+stays there.  To make that possible it gained @dfn{headless sessions}:
+a session with a handler instead of an editor frame.  Any feature that
+needs to read or replace a foreign text field should use these rather
+than the C primitives, and so inherit the deny lists, the password
+refusal, the fallback and the verify.
+
+@defun cmacs-gowl-edit-field-focused-target
+Return a plist describing the focused window: @code{:client},
+@code{:id}, @code{:app-id}, @code{:title}, @code{:pid}, and
+@code{:refused @var{why}} when its fields may not be touched.
+@end defun
+
+@defun cmacs-gowl-edit-field-read-async handler &optional target no-fallback
+Read the focused field with no editor and return the session.
+@end defun
+
+@defun cmacs-gowl-edit-field-write-async session new
+Replace what @var{session} read with @var{new}.  Does not move focus.
+@end defun
+
+@defun cmacs-gowl-edit-field-release session
+Let go of @var{session} without writing.
+@end defun
+
+@defun cmacs-gowl-edit-field-session-info session
+Return @code{:id}, @code{:app-id}, @code{:title}, @code{:method},
+@code{:text} and @code{:complete} of @var{session}.
+@end defun
+
+The handler is called as:
+
+@table @code
+@item (@var{handler} 'read @var{session} @var{text} @var{cursor} @var{anchor})
+The text is here.  @var{cursor} and @var{anchor} are character indexes;
+they differ for a selection.  The session stays open.
+@item (@var{handler} 'committed @var{session})
+The new text is in the field.
+@item (@var{handler} 'unchanged @var{session})
+The new text was what the field held.
+@item (@var{handler} 'failed @var{session} @var{why})
+The read or the write did not happen; @var{why} is a sentence for the
+user.
+@end table
+
+After any event but @code{read} the session is closed already.  A
+headless session never moves the keyboard.  The editor command itself
+is unchanged; a window whose field a headless session holds answers the
+editor key with a message, and the other way round.
+
+@node Gowl AI Field Limitations
+@section Limitations
+
+@itemize @bullet
+@item
+One action at a time, and one level of undo.
+@item
+The answer is the model's: a ``rewrite'' can change what the text says.
+The undo, and the application's own, are one key away.
+@item
+A field longer than text-input carries is rewritten a window at a time
+unless the clipboard fallback is used for it.
+@item
+Through the clipboard fallback the write is ``select all, paste'':
+whether the application pasted cannot be known, so ``done'' there means
+``sent''.
+@item
+Typing a free-form instruction needs an Emacs frame for the moment it
+takes.
+@item
+The redaction check is of the @emph{window}.  Text in the field is sent
+as it is, on purpose.
+@end itemize
+
+@subheading Files
+
+@table @file
+@item lisp/cmacs/cmacs-gowl-ai-field.el
+This feature.
+@item lisp/cmacs/cmacs-gowl-edit-field.el
+The read, the write-back, the policies; headless sessions.
+@item lisp/cmacs/cmacs-ai-textops.el
+The operations and prompts the actions reuse.
+@item lisp/cmacs/cmacs-ai-proofread.el
+The proofreading prompt and the answer clean-up.
+@item cmacs/gowl/cmacs-gowl-textfield.c
+The text-input primitives.
+@item test/cmacs/cmacs-gowl-ai-field-tests.el
+ERT suite, with the compositor and the model faked.
+@end table
