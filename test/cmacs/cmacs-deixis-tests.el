@@ -694,6 +694,385 @@ The filter's text is what goes down the route; nil sends nothing."
     (should (equal (car sent) "what is that"))))
 
 
+;;;; A bare hand pointing, and which pointer is believed
+
+(defvar cmacs-handtrack-pointer-mode)
+
+(defun cmacs-deixis-tests--hand-dwell (rests from to &optional min-ms)
+  "What the hand history's dwell DEFUN would say of RESTS for FROM..TO.
+RESTS is a list of (BEGIN END SAMPLE): the hand held the pointing pose
+on one spot from BEGIN to END.  As in C, the rest that lasted longest
+inside the window wins, one shorter than MIN-MS (default 120) is none,
+:time is clipped to the window and :since is not."
+  (let ((best nil) (best-d -1))
+    (dolist (e rests)
+      (let ((d (- (min to (nth 1 e)) (max from (nth 0 e)))))
+        (when (and (>= d (or min-ms 120)) (> d best-d))
+          (setq best e best-d d))))
+    (and best
+         (append (list :time (max from (nth 0 best)) :duration best-d
+                       :since (nth 0 best))
+                 (nth 2 best)))))
+
+(defmacro cmacs-deixis-tests--with-hand (rests &rest body)
+  "Run BODY with the hand's pointing history answering from RESTS.
+The compositor is \"running\", with two windows -- client 12, a browser,
+and client 7, a terminal -- so a hand sample resolves the way a mouse
+sample does.  `hand-enabled' records what the history was last told.
+Only the `hand' pointer is registered; BODY may add others."
+  (declare (indent 1))
+  `(let* ((rests ,rests)
+          (hand-enabled 'untouched)
+          (cmacs-deixis--pointers nil)
+          (cmacs-deixis-pointer-order '(hand gowl))
+          (cmacs-deixis-fallback-to-point nil)
+          (cmacs-deixis-latency-ms 0)
+          (cmacs-deixis-parked-ms 2000)
+          (cmacs-deixis-hand-confidence 0.9)
+          (cmacs-deixis-last-bindings nil)
+          (cmacs-handtrack-pointer-mode nil))
+     (ignore hand-enabled)
+     (cl-letf (((symbol-function 'cmacs-handtrack-point-history-dwell)
+                (lambda (&rest args)
+                  (cmacs-deixis-tests--hand-dwell rests (nth 0 args) (nth 1 args)
+                                                  (nth 3 args))))
+               ((symbol-function 'cmacs-handtrack-point-history-at)
+                (lambda (&rest args)
+                  (cmacs-deixis-tests--hand-dwell rests (car args) (car args) 0)))
+               ((symbol-function 'cmacs-handtrack-point-history-enable)
+                (lambda (&rest args) (setq hand-enabled (car args))))
+               ((symbol-function 'cmacs-deixis--gowl-live-p) (lambda (&rest _) t))
+               ((symbol-function 'gowl-list-clients)
+                (lambda (&rest _) '(browser term)))
+               ((symbol-function 'gowl-client-pid) (lambda (&rest _) 1))
+               ((symbol-function 'gowl-client-info)
+                (lambda (&rest args)
+                  (if (eq (car args) 'browser)
+                      '((id . 12) (title . "wlroots docs") (app-id . "librewolf")
+                        (geometry 0 0 1280 1440))
+                    '((id . 7) (title . "~") (app-id . "gst")
+                      (geometry 1280 0 1280 1440))))))
+       (cmacs-deixis-register-pointer 'hand #'cmacs-deixis--hand-pointer
+                                      :start #'cmacs-deixis--hand-start
+                                      :stop #'cmacs-deixis--hand-stop)
+       ,@body)))
+
+(defconst cmacs-deixis-tests--hand-on-browser
+  '(:x 400.0 :y 300.0 :client-id 12 :monitor 0 :hand right :confidence 1.0
+    :u 0.16 :v 0.21 :layout t)
+  "A hand sample over client 12, as the C ring reports it.")
+
+(defconst cmacs-deixis-tests--hand-on-second-screen
+  '(:x 2900.0 :y 400.0 :client-id 0 :monitor 1 :hand right :confidence 1.0
+    :u 0.18 :v 0.37 :layout t)
+  "A hand sample over bare desktop on the second output.")
+
+(ert-deftest cmacs-deixis-test-choose-referent ()
+  "A parked pointer gives way to one that has just come to rest."
+  (let ((cmacs-deixis-parked-ms 2000)
+        (parked '(:label "parked" :since 0))
+        (fresh '(:label "fresh" :since 9500))
+        (edge '(:label "edge" :since 8000))
+        (silent '(:label "says nothing")))
+    (cl-flet ((pick (candidates)
+                (plist-get (cmacs-deixis-choose-referent candidates 10000)
+                           :label)))
+      (should-not (cmacs-deixis-choose-referent nil 10000))
+      (should (equal (pick (list parked)) "parked"))
+      ;; Order decides between two that are both being used...
+      (should (equal (pick (list fresh edge)) "fresh"))
+      (should (equal (pick (list edge fresh)) "edge"))
+      ;; ... but not in favour of one that was left lying, whichever
+      ;; way round they are listed.
+      (should (equal (pick (list parked fresh)) "fresh"))
+      (should (equal (pick (list fresh parked)) "fresh"))
+      ;; Exactly the limit is still pointing; a millisecond more is not.
+      (let ((cmacs-deixis-parked-ms 1999))
+        (should (equal (pick (list edge fresh)) "fresh")))
+      ;; Everything parked: the order again.
+      (should (equal (pick (list parked '(:label "older" :since -5))) "parked"))
+      ;; A pointer that gives no :since is taken at its word.
+      (should (equal (pick (list parked silent)) "says nothing"))
+      (should (equal (pick (list silent fresh)) "says nothing"))
+      ;; A word with no time: nothing can be called parked.
+      (should (equal (plist-get (cmacs-deixis-choose-referent
+                                 (list parked fresh) nil)
+                                :label)
+                     "parked")))))
+
+(ert-deftest cmacs-deixis-test-hand-referent ()
+  "A bare hand's rest resolves like the mouse's, approximately."
+  (cmacs-deixis-tests--with-hand
+      `((200 700 ,cmacs-deixis-tests--hand-on-browser))
+    (cl-letf (((symbol-function 'gowl-list-monitors) (lambda (&rest _) nil))
+              ((symbol-function 'gowl-monitor-info) (lambda (&rest _) nil)))
+      (let* ((b (car (cmacs-deixis-resolve "close that"
+                                           '(("close" 0 200) ("that" 300 500))
+                                           0)))
+             (r (plist-get b :referent)))
+        (should (eq (plist-get r :device) 'hand))
+        (should (eq (plist-get r :hand) 'right))
+        (should (eq (plist-get r :kind) 'window))
+        (should (eq (plist-get r :client) 'browser))
+        (should (eql (plist-get r :client-id) 12))
+        (should (plist-get r :approximate))
+        (should (= (plist-get r :since) 200))
+        (should (string-match-p "librewolf.*client 12" (plist-get r :label)))
+        ;; The window is 150..800 and the hand was there for 500 of
+        ;; those 650 ms: 0.9 * 1.0 * (0.5 + 0.5 * 500/650).
+        (should (< (abs (- (plist-get r :confidence)
+                           (* 0.9 (+ 0.5 (* 0.5 (/ 500.0 650))))))
+                   1e-6))
+        (should (<= (plist-get r :confidence) cmacs-deixis-hand-confidence))
+        ;; The model is told it is approximate.
+        (should (string-match-p
+                 "client 12) \\[approximate\\]"
+                 (cmacs-deixis-annotate "close that" (list b)))))
+      ;; A weaker pose is a weaker referent.
+      (setq rests `((200 700 (:confidence 0.6
+                              ,@cmacs-deixis-tests--hand-on-browser))))
+      (let ((r (plist-get (car (cmacs-deixis-resolve
+                                "close that" '(("close" 0 200) ("that" 300 500))
+                                0))
+                          :referent)))
+        (should (< (plist-get r :confidence) 0.5)))
+      ;; A window that closed since: named, stale, and worth nothing.
+      (setq rests `((200 700 (:client-id 99
+                              ,@cmacs-deixis-tests--hand-on-browser))))
+      (let ((r (plist-get (car (cmacs-deixis-resolve
+                                "close that" '(("close" 0 200) ("that" 300 500))
+                                0))
+                          :referent)))
+        (should (plist-get r :stale))
+        (should (= (plist-get r :confidence) 0.0))
+        (should-not (cmacs-deixis--desktop-window-p r)))
+      ;; Bare desktop: the output.
+      (setq rests `((200 700 ,cmacs-deixis-tests--hand-on-second-screen)))
+      (let ((r (plist-get (car (cmacs-deixis-resolve
+                                "focus there" '(("focus" 0 200) ("there" 300 500))
+                                0))
+                          :referent)))
+        (should (eq (plist-get r :kind) 'monitor))
+        (should (eql (plist-get r :monitor) 1))
+        (should (eq (plist-get r :device) 'hand))))))
+
+(ert-deftest cmacs-deixis-test-hand-needs-a-rest ()
+  "A hand passing through the word's window refers to nothing."
+  (cmacs-deixis-tests--with-hand
+      ;; 60 ms of the pose inside the window.
+      `((400 460 ,cmacs-deixis-tests--hand-on-browser))
+    (let ((b (cmacs-deixis-resolve "close that"
+                                   '(("close" 0 200) ("that" 300 500)) 0)))
+      (should-not (plist-get (car b) :referent))
+      (should-not (cmacs-deixis-run-command "close that" b))))
+  ;; No history in this build at all: the provider answers nil.
+  (let ((cmacs-handtrack-pointer-mode nil))
+    (cl-letf (((symbol-function 'cmacs-deixis--hand-live-p) (lambda (&rest _) nil)))
+      (should-not (cmacs-deixis--hand-pointer 1000)))))
+
+(ert-deftest cmacs-deixis-test-hand-without-compositor ()
+  "With no compositor the fractions across the output go to Emacs's frames."
+  (cmacs-deixis-tests--with-hand
+      `((200 700 (:layout nil ,@cmacs-deixis-tests--hand-on-browser)))
+    (let ((seen nil))
+      (cl-letf (((symbol-function 'cmacs-deixis--hand-frame-referent)
+                 (lambda (&rest args)
+                   (setq seen args)
+                   (list :kind 'buffer-position :window 'win :buffer 'buf
+                         :position 42 :approximate t :confidence (nth 1 args)
+                         :label "buffer: notes.org, line 3 (position 42)"))))
+        (let ((r (plist-get (car (cmacs-deixis-resolve
+                                  "focus there"
+                                  '(("focus" 0 200) ("there" 300 500)) 0))
+                            :referent)))
+          (should (eq (plist-get r :kind) 'buffer-position))
+          (should (eq (plist-get r :device) 'hand))
+          (should (= (plist-get (car seen) :u) 0.16))
+          (should (< (abs (- (plist-get r :confidence) 0.9)) 1e-6))))))
+  ;; The real resolver never signals, whatever the display is.
+  (should-not (condition-case nil
+                  (progn (cmacs-deixis--hand-frame-referent '(:u 0.5 :v 0.5) 1.0)
+                         nil)
+                (error t))))
+
+(ert-deftest cmacs-deixis-test-hand-with-pointer-mode ()
+  "In pointer mode the hand is the gowl pointer, as before."
+  (cmacs-deixis-tests--with-hand nil
+    (cl-letf (((symbol-function 'cmacs-deixis--gowl-pointer)
+               (lambda (&rest _) cmacs-deixis-tests--browser)))
+      (should-not (cmacs-deixis--hand-pointer 1000))
+      (let ((cmacs-handtrack-pointer-mode t))
+        (let ((r (cmacs-deixis--hand-pointer 1000)))
+          (should (eq (plist-get r :device) 'hand))
+          (should (eq (plist-get r :client) 'browser))
+          ;; It is the real pointer: not a camera's guess.
+          (should-not (plist-get r :approximate)))
+        ;; The other hand, bare and pointing, comes first.
+        (setq rests `((0 5000 (:client-id 7
+                               ,@cmacs-deixis-tests--hand-on-browser))))
+        (let* ((cmacs-deixis-lookup-window '(800 . 1400))
+               (r (cmacs-deixis--hand-pointer 1000)))
+          (should (eq (plist-get r :client) 'term))
+          (should (plist-get r :approximate)))))))
+
+(ert-deftest cmacs-deixis-test-hand-and-mouse-arbitration ()
+  "A still mouse does not outvote a pointing hand, nor a lying hand a mouse."
+  (let ((mouse-since 0))
+    (cl-flet ((that ()
+                (plist-get
+                 (car (cmacs-deixis-resolve "close that"
+                                            '(("close" 9000 9200)
+                                              ("that" 9300 9500))
+                                            0))
+                 :referent)))
+      (cmacs-deixis-tests--with-hand
+          `((9200 9700 ,cmacs-deixis-tests--hand-on-browser))
+        (cmacs-deixis-register-pointer
+         'gowl (lambda (_ms)
+                 (list :kind 'window :client 'term :client-id 7 :monitor 0
+                       :confidence 1.0 :since mouse-since :label "window: gst")))
+        ;; The mouse has not moved for nine seconds; the hand has just
+        ;; been raised.  The hand, in either order.
+        (dolist (order '((hand gowl) (gowl hand)))
+          (let ((cmacs-deixis-pointer-order order))
+            (should (eq (plist-get (that) :device) 'hand))
+            (should (eq (plist-get (that) :client) 'browser))))
+        ;; Both in use: the order decides.
+        (setq mouse-since 9100)
+        (let ((cmacs-deixis-pointer-order '(gowl hand)))
+          (should (eq (plist-get (that) :device) 'gowl)))
+        (let ((cmacs-deixis-pointer-order '(hand gowl)))
+          (should (eq (plist-get (that) :device) 'hand)))
+        ;; The hand has been lying in the pose since long before, and
+        ;; the mouse was just moved: the mouse, though the hand is
+        ;; listed first.
+        (setq rests `((1000 9700 ,cmacs-deixis-tests--hand-on-browser)))
+        (let ((cmacs-deixis-pointer-order '(hand gowl)))
+          (should (eq (plist-get (that) :device) 'gowl))
+          (should (eq (plist-get (that) :client) 'term)))
+        ;; Both left lying: the order again.
+        (setq mouse-since 0)
+        (let ((cmacs-deixis-pointer-order '(hand gowl)))
+          (should (eq (plist-get (that) :device) 'hand)))
+        ;; No hand in the pose: the mouse answers, parked or not.
+        (setq rests nil)
+        (should (eq (plist-get (that) :device) 'gowl))))))
+
+(ert-deftest cmacs-deixis-test-hand-move-that-there ()
+  "\"Move that there\" with two rests of a bare hand, bound by word time."
+  (cmacs-deixis-tests--with-gowl
+    (cmacs-deixis-tests--with-hand
+        `((200 700 ,cmacs-deixis-tests--hand-on-browser)
+          ;; On the way across the hand is out of the pose.
+          (1300 2000 ,cmacs-deixis-tests--hand-on-second-screen))
+      (let* ((text "move that over there")
+             (words '(("move" 0 200) ("that" 300 500) ("over" 1200 1300)
+                      ("there" 1500 1800)))
+             (said nil)
+             (bindings (cmacs-deixis-resolve text words 0)))
+        (should (equal (mapcar (lambda (b)
+                                 (plist-get (plist-get b :referent) :kind))
+                               bindings)
+                       '(window monitor)))
+        (should (equal (mapcar (lambda (b) (plist-get b :marker)) bindings)
+                       '(1 2)))
+        (cl-letf (((symbol-function 'message)
+                   (lambda (&rest args) (push (apply #'format args) said))))
+          (should (eq (cmacs-deixis-run-command text bindings) 'move)))
+        (should (equal calls '((to-monitor browser mon-1))))
+        ;; What the hand was taken to mean is said before it is acted on.
+        (should (cl-some (lambda (m)
+                           (string-match-p
+                            "by hand.*that = window: librewolf.*there = monitor 1"
+                            m))
+                         said))
+        ;; Said in the other order, the times bind the other way round.
+        (setq calls nil)
+        (should-not
+         (cmacs-deixis-run-command
+          "move that over there"
+          (cmacs-deixis-resolve
+           "move that over there"
+           '(("move" 1000 1200) ("that" 1500 1800) ("over" 2600 2700)
+             ("there" 2800 3000))
+           0)))
+        ;; "that" was the bare desktop, "there" nothing: no command.
+        (should-not calls)))))
+
+(ert-deftest cmacs-deixis-test-hand-destructive-is-confirmed ()
+  "\"Close that\" by hand asks first, and says a hand pointed."
+  (cmacs-deixis-tests--with-gowl
+    (cmacs-deixis-tests--with-hand
+        `((200 700 ,cmacs-deixis-tests--hand-on-browser))
+      (let ((asked nil) (said nil)
+            (cmacs-deixis-confirm-destructive t))
+        (cl-letf (((symbol-function 'cmacs-deixis--confirm)
+                   (lambda (prompt action) (setq asked (cons prompt action))))
+                  ((symbol-function 'message)
+                   (lambda (&rest args) (push (apply #'format args) said))))
+          (should (eq (cmacs-deixis-tests--say
+                       "close that" '(("close" 0 200) ("that" 300 500)))
+                      'close))
+          (should-not calls)
+          (should (string-match-p "client 12" (car asked)))
+          (should (string-match-p "pointed at by hand" (car asked)))
+          (should (cl-some (lambda (m) (string-match-p "that = window" m)) said))
+          (funcall (cdr asked))
+          (should (equal calls '((close browser))))
+          ;; The announcement is an option; the confirmation is not its.
+          (setq said nil asked nil)
+          (let ((cmacs-deixis-announce-hand nil))
+            (cmacs-deixis-tests--say
+             "close that" '(("close" 0 200) ("that" 300 500))))
+          (should-not said)
+          (should (string-match-p "pointed at by hand" (car asked)))))))
+  ;; The mouse's question is as it was.
+  (cmacs-deixis-tests--with-gowl
+    (cmacs-deixis-tests--with-pointer `((0 9000 ,cmacs-deixis-tests--browser))
+      (let ((asked nil))
+        (cl-letf (((symbol-function 'cmacs-deixis--confirm)
+                   (lambda (prompt action) (setq asked (cons prompt action)))))
+          (cmacs-deixis-tests--say
+           "close that" '(("close" 0 200) ("that" 300 500)))
+          (should (string-match-p "client 12" (car asked)))
+          (should-not (string-match-p "by hand" (car asked))))))))
+
+(ert-deftest cmacs-deixis-test-hand-history-follows-sampling ()
+  "The hand's ring is on exactly while deixis samples, and emptied after."
+  (should (plist-get (alist-get 'hand cmacs-deixis--pointers) :start))
+  (should (plist-get (alist-get 'hand cmacs-deixis--pointers) :stop))
+  (cmacs-deixis-tests--with-hand nil
+    (let ((cmacs-deixis--sampling nil))
+      (cmacs-deixis--set-sampling t)
+      (should (eq hand-enabled t))
+      (cmacs-deixis--set-sampling nil)
+      ;; Turning the history off is what empties it.
+      (should (eq hand-enabled nil)))))
+
+(ert-deftest cmacs-deixis-test-hand-clock ()
+  "Hand samples are read on the clock they were written with."
+  ;; The compositor's clock, or a test's: the same clock, no offset.
+  (let ((cmacs-deixis-clock-function (lambda () 5)))
+    (should (= (cmacs-deixis--hand-clock-offset) 0)))
+  ;; Hand tracking without a compositor: `cmacs-deixis-now-ms' is wall
+  ;; time and the ring is monotonic, a constant apart.
+  (let ((asked nil))
+    (cl-letf (((symbol-function 'gowl-pointer-history-now) nil)
+              ((symbol-function 'cmacs-handtrack-point-history-now)
+               (lambda (&rest _) 700))
+              ((symbol-function 'cmacs-deixis-now-ms) (lambda (&rest _) 1000700))
+              ((symbol-function 'cmacs-handtrack-point-history-dwell)
+               (lambda (&rest args)
+                 (setq asked (list (nth 0 args) (nth 1 args)))
+                 nil)))
+      (fmakunbound 'gowl-pointer-history-now)
+      (should (= (cmacs-deixis--hand-clock-offset) -1000000))
+      (let ((cmacs-deixis-lookup-window '(1000500 . 1000900))
+            (cmacs-handtrack-pointer-mode nil))
+        (cmacs-deixis--hand-pointer 1000700)
+        (should (equal asked '(500 900)))))))
+
+
 ;;;; The compositor's ring (needs a live compositor)
 
 (ert-deftest cmacs-deixis-test-gowl-history-without-compositor ()

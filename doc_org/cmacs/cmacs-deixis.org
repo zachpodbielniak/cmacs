@@ -133,9 +133,46 @@ When the window under the pointer is Emacs's own frame, the referent is refined 
 | =gowl=  | the ring above                                                                                       | implemented; needs a live compositor to exercise                                                    |
 | =emacs= | =mouse-pixel-position=, sampled by a timer every =cmacs-deixis-sample-interval= (0.1 s), only where no compositor is running | implemented                                                                                         |
 | =vr=    | =cmacs-lrg-vr-pointed-window=, sampled by the same timer while a VR session is active                | implemented at window granularity: the laser's accessor gives the window, so the position is that window's point |
-| =hand=  | a camera-tracked hand                                                                                | a stub with one real case: with =cmacs-handtrack-pointer-mode= the hand /is/ the gowl pointer and the ring already has it; otherwise handtrack exposes no aim point and the provider returns nil |
+| =hand=  | a camera-tracked hand                                                                                | implemented, two cases: a bare hand holding the pointing pose (its own ring, below), and with =cmacs-handtrack-pointer-mode= the hand that /is/ the gowl pointer (the ring above already has it) |
 
-Order is =cmacs-deixis-pointer-order=; the first pointer with an answer wins.
+** A bare hand
+
+Without =cmacs-handtrack-pointer-mode= -- or for the hand that is not driving the pointer -- you point by holding the pointing pose in front of the camera: index finger out, the other three curled.  Say "that" while the fingertip rests over a window.
+
+*What this is and is not.*  One camera sees where a fingertip is in its image; it cannot see where the finger is aimed.  So a bare hand is a cursor held in the air, not a ray: the index fingertip is mapped onto the screen through the same active region and output the hand cursor uses (=cmacs-handtrack-pointer-region=, =cmacs-handtrack-pointer-output=), by the same C function.  A fingertip at the region's edge is at the screen's edge; one more than a tenth of the region beyond it points at nothing.  With =cmacs-handtrack-pointer-output= nil the output is the one the mouse pointer is on, so a bare hand cannot reach a second monitor unless that option names it.  A finger aimed straight at the camera is foreshortened to a stub and does not read as pointing; hold it up, as you would to touch a pane of glass.  Every hand referent is flagged =:approximate= and its confidence is capped (=cmacs-deixis-hand-confidence=, 0.9).
+
+*The pose* (=cmacs_ht_point_pose= in =cmacs/handtrack/cmacs-handtrack-point-history.c=, pure: 26 joints in, a verdict out).  For each finger the classifier takes its /reach/: how much further from the wrist the fingertip is than its own knuckle, in metres on the hand scaled to the standard palm (0.094 m), which is what makes the pinch thresholds distance-independent too.  A straight finger reaches about 0.075; one folded into the palm about zero or less.  Pointing is index reach of at least =cmacs-handtrack-point-extend= (0.055) with none of middle, ring and little past =cmacs-handtrack-point-curl= (0.035), and the thumb not on the index tip (that is a pinch, which means something else).  The thumb is otherwise ignored.  Confidence is 0.5 exactly on a threshold and 1.0 from 0.02 m clear of both.
+
+*The ring.*  512 fixed entries: monotonic ms, hand, pose confidence, the position as fractions across the output and as layout pixels, the id of the client under it, the monitor index.  One entry per camera frame in which a hand was pointing and none otherwise -- unlike the mouse ring an entry is an event, not a state -- so about seventeen seconds of uninterrupted pointing.  It is appended on the main thread, where inference results arrive (=ht_on_result=), from C structs only: no allocation, no Lisp object, nothing that can signal.  The position is One-Euro smoothed (=cmacs-handtrack-point-min-cutoff=, =-beta=), restarting whenever the hand leaves the pose so it does not glide in from where it last was.  What is under the fingertip is the compositor's own hit test, asked through =cmacs_gowl_pointer_history_hit=, which takes the gowl lock itself; on a locked session it refuses and nothing is stored.  With no compositor only the fractions mean anything, and they are resolved against Emacs's frames when the word arrives.
+
+*The clock* is the mouse ring's, CLOCK_MONOTONIC milliseconds.  A sample carries the time its camera frame /arrived/ (taken on the camera's streaming thread, before inference), not the time its result reached the main thread, so the tens of milliseconds the networks take are not in it.  What is left is the camera's own delay -- exposure, readout, transport -- which the pipeline does not report: =cmacs-handtrack-point-latency-ms= (40, an assumption) is taken off every sample, and =M-x cmacs-handtrack-point-calibrate= measures it (pinch with one hand, press a key with the other at the same instant; the frame the pinch closed in is stamped the way pointing samples are).  In a build with hand tracking and no compositor =cmacs-deixis-now-ms= is wall time; the provider measures the constant between the two clocks and applies it.
+
+*A rest is required.*  =cmacs-handtrack-point-history-dwell= groups one hand's samples into rests -- over the same window, within =cmacs-handtrack-point-radius= (96 px) of where the run began, with no gap over 250 ms -- and answers with the one that lasted longest inside the word's window, but only if it lasted =cmacs-handtrack-point-dwell-ms= (120) there.  A hand passing through the pose on its way somewhere else refers to nothing, and the provider does not fall back to wherever the hand was at the word's instant.
+
+| DEFUN                                                                    | Returns                                                                                                                              |
+|--------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------|
+| =(cmacs-handtrack-point-history-enable BOOL)=                            | non-nil when pointing is now being noted.  Turning it off empties the ring.                                                          |
+| =(cmacs-handtrack-point-history-at MS)=                                  | =(:time :x :y :client-id :monitor :hand :confidence :u :v :layout)= for the latest sample at or before MS, nil if none within 250 ms |
+| =(cmacs-handtrack-point-history-dwell FROM-MS TO-MS &optional RADIUS MIN-MS)= | the same, means over the rest, plus =:duration= and =:since= (when the rest really began, possibly long before FROM-MS)         |
+| =(cmacs-handtrack-point-history-clear)=                                  | empties the ring                                                                                                                     |
+| =(cmacs-handtrack-point-history-status)=                                 | =:enabled :samples :capacity :stored :pointing :pinch-left :pinch-right :latency-ms :now=                                            |
+| =(cmacs-handtrack-point-history-now)=                                    | the monotonic clock in ms                                                                                                            |
+
+The plists have the mouse ring's keys so the resolver treats them alike, with one difference: there is no =:client=, only =:client-id=, and the provider looks the id up among the live clients (=gowl-list-clients=).  From there a hand sample goes through =cmacs-deixis--gowl-referent= exactly as a mouse sample does -- a desktop window, refined to the Emacs window and buffer position inside Emacs's own frame, a =:stale= referent for a window that has closed, else the monitor.
+
+The ring is on only between the provider's =:start= and =:stop= (while deixis is sampling), and it is emptied when it is turned off *and* whenever hand tracking closes: where you pointed does not outlive the session that saw it.
+
+There is no on-screen marker of where a bare hand is taken to be pointing.  Nothing existing draws one cheaply -- the hand cursor is the real pointer, the VR laser lives in the 3D scene -- so the feedback is after the fact: the echo area names what each hand-pointed word resolved to before a command acts on it (=cmacs-deixis-announce-hand=).
+
+** Which pointer is believed
+
+Every registered pointer is asked, and =cmacs-deixis-choose-referent= picks among the answers.  The two kinds fail in opposite ways: a mouse always has an answer, because it is always somewhere; a hand has one only while it holds the pose.  "First answer wins" would let whichever is listed first shadow the other for good.  So a referent may say when its pointer came to rest on it (=:since=), and one that came to rest more than =cmacs-deixis-parked-ms= (2000) before the word's window opened is /parked/ -- where it was left, not where anyone is pointing.
+
+- The first candidate, in =cmacs-deixis-pointer-order=, that is not parked wins.
+- When every candidate is parked, the first.
+- A pointer that gives no =:since= is taken at its word.
+
+A mouse left lying where it was does not outvote a hand raised to point, whichever is listed first; a hand left lying in the pointing pose does not outvote a mouse just moved; when both are in use the order decides.  For the gowl pointer =:since= is the time of the ring entry in force when its dwell began (a mouse nobody is touching makes no new entries); for the Lisp-sampled pointers, the ring entry's own time; for a hand, the first sample of the rest.  The function is pure -- referents in, one of them out.
 
 ** Adding one
 
@@ -168,7 +205,9 @@ Simple utterances run locally.  An utterance is reduced to a canonical form -- l
 
 They use existing DEFUNs only (=gowl-move-client-to-monitor=, =gowl-client-set-geometry=, =gowl-set-tags=, =gowl-swap-clients=, =gowl-close-client=, =gowl-focus-client=).  A window embedded in an Emacs window is not moved (its place belongs to Emacs).  =open= reads the one file name or URL at the position, locally, to act on it; that is the only place buffer text is read, and it is not sent anywhere.
 
-Destructive commands ask first (=cmacs-deixis-confirm-destructive=): through =cmacs-voice-confirm= -- a spoken yes/no or y/n, with the loop armed so the answer needs no wake phrase -- when the voice commands are loaded, else =y-or-n-p=.
+Destructive commands ask first (=cmacs-deixis-confirm-destructive=): through =cmacs-voice-confirm= -- a spoken yes/no or y/n, with the loop armed so the answer needs no wake phrase -- when the voice commands are loaded, else =y-or-n-p=.  The question names what would be closed, whatever pointed at it, and ends "(pointed at by hand)" when a bare hand did.
+
+A bare hand's aim is approximate, so any command acting on a hand referent first says in the echo area what each word was taken to mean -- "Deixis (by hand): that = window: librewolf -- 'wlroots docs' (client 12)" (=cmacs-deixis-announce-hand=).  Labels only, as in the legend.
 
 ** Defining one
 
@@ -186,7 +225,8 @@ The argument list names the referents in spoken order.  The body may start with 
 * Privacy
 
 - The pointers are sampled only while =cmacs-deixis-mode= is on *and* the voice loop is listening (its state is neither =idle= nor =paused=).  The mode follows =cmacs-voice-loop-state-change-functions=.
-- Samples live in fixed rings in memory: the compositor's 512 entries, and at most 128 entries for each Lisp-sampled pointer.  Stopping empties them.
+- Samples live in fixed rings in memory: the compositor's 512 entries, the hand's 512, and at most 128 entries for each Lisp-sampled pointer.  Stopping empties them.
+- The hand's ring is also emptied whenever hand tracking closes (=cmacs-handtrack-close=, so turning =cmacs-handtrack-mode= off or losing the camera), and holds nothing for the hand driving the pointer.  No camera frame and no landmark is kept: a sample is a time, a hand, a confidence, a position and a client id.
 - Nothing is written to disk and nothing is sampled on a locked session.
 - What reaches a model is the legend: ids, titles, buffer names and positions.  Never buffer text, never coordinates of anything but the pointed spot.
 
@@ -201,7 +241,10 @@ The argument list names the referents in spoken order.  The body may start with 
 | =cmacs-deixis-clause-followers=       | i, we, you, ...    | after these, "that" is a conjunction                       |
 | =cmacs-deixis-pronoun-blockers=       | is, was, will, ... | after these, "it" points at nothing                        |
 | =cmacs-deixis-filler-words=           | please, over, the, ... | dropped before command matching                        |
-| =cmacs-deixis-pointer-order=          | =(vr hand gowl emacs)= | which pointer is asked first                           |
+| =cmacs-deixis-pointer-order=          | =(vr hand gowl emacs)= | which pointer is preferred among those not parked      |
+| =cmacs-deixis-parked-ms=              | 2000               | a pointer at rest longer than this before the word gives way |
+| =cmacs-deixis-hand-confidence=        | 0.9                | the most a bare hand's referent can be trusted             |
+| =cmacs-deixis-announce-hand=          | t                  | say what a hand-pointed word resolved to before acting     |
 | =cmacs-deixis-elsewhere-confidence=   | 0.8                | pointer confidence that overrides an active region         |
 | =cmacs-deixis-fallback-to-point=      | t                  | "this" with nothing pointed at means point                 |
 | =cmacs-deixis-fallback-word-ms=       | 350                | per-word guess when a transcript has no times              |
@@ -210,6 +253,20 @@ The argument list names the referents in spoken order.  The body may start with 
 | =cmacs-deixis-annotate-for-commands=  | nil                | annotate on the =commands= route too                       |
 
 Hook: =cmacs-deixis-resolved-functions=, run with =(TEXT BINDINGS)= after every resolved utterance.
+
+The bare hand's own options are in =cmacs-handtrack.el= (group =cmacs-handtrack-point=) and are pushed to C through =cmacs-handtrack-set-option=:
+
+| Variable                                | Default | Meaning                                                              |
+|-----------------------------------------+---------+----------------------------------------------------------------------|
+| =cmacs-handtrack-point-hand=            | =any=   | which hand's pointing is noted                                       |
+| =cmacs-handtrack-point-extend=          | 0.055   | index reach that is "straight", metres on the standard palm          |
+| =cmacs-handtrack-point-curl=            | 0.035   | the most the other three fingers may reach                           |
+| =cmacs-handtrack-point-min-confidence=  | 0.5     | pose confidence a frame needs to be noted                            |
+| =cmacs-handtrack-point-dwell-ms=        | 120     | how long a hand must rest to be a referent                           |
+| =cmacs-handtrack-point-radius=          | 96      | layout pixels within which it is one rest                            |
+| =cmacs-handtrack-point-latency-ms=      | 40      | the camera's delay, taken off each sample's time; calibrate it       |
+| =cmacs-handtrack-point-min-cutoff=      | 1.2     | One-Euro minimum cutoff for the fingertip, Hz                        |
+| =cmacs-handtrack-point-beta=            | 0.02    | One-Euro speed coefficient                                           |
 
 * Voice-loop additions
 
@@ -223,4 +280,8 @@ Three additive hooks in =lisp/cmacs/cmacs-voice-loop.el=, usable by anything:
 
 =test/cmacs/cmacs-deixis-tests.el= is pure ERT: stub pointers answering from a table of times, synthetic word times, every gowl DEFUN stubbed.  It covers token merging (=▁= pieces, leading spaces, punctuation, CJK), proportional interpolation, the wake-phrase-tolerant alignment, detection, two different referents in one utterance, the latency shift, window and dwell, the region rule, "it", the annotated format, the command matcher and each built-in, stale client ids, the filter, the segment clock, the Lisp rings, and that sampling follows the mode and the loop.
 
-Not covered by ERT, and needing a live session: the C ring against a real compositor, the C word builder against a real sherpa model, and every timing figure above.
+It also covers the bare hand with the history's DEFUNs stubbed: the arbitration table (=cmacs-deixis-choose-referent=), a still mouse against a raised hand and a lying hand against a moved mouse in both orders, resolution through the mouse's path (window, stale window, monitor) and against frames, the dwell requirement, pointer mode, "move that there" from two rests, the confirmation and announcement, the clock offset, and that the ring follows sampling.
+
+=test/cmacs/cmacs-handtrack-point-tests.el= drives the C: hands are built as MediaPipe landmarks (a flat hand with each finger straight or folded) and run through =cmacs-handtrack--simulate-point=, the path live results take.  It covers the pose table (pointing against open palm, fist, two fingers, pinch; both hands; half the size), the thresholds as options, the mapping through the region onto outputs at and away from the origin, off-screen, read-by-time across two rests, the dwell requirement and a sweeping hand, one hand against the other, pinch-onset stamping and the calibration arithmetic, that closing the tracker or turning the history off empties the ring, and "move that there" end to end from landmarks and word times.  Source guards, which need no C, check that the ring's file sees neither =lisp.h= nor gowl, allocates nothing and writes nothing, that results reach it from =ht_on_result= stamped with the frame's time, and that the cursor and the pointing hand share one mapping function.
+
+Not covered by ERT, and needing a live session: the C ring against a real compositor, the C word builder against a real sherpa model, the pointing pose against a real hand and camera (the thresholds are from hand proportions, not from recordings), and every timing figure above.

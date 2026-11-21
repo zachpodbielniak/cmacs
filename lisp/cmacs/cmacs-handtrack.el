@@ -40,6 +40,14 @@
 ;; A hand that leaves view, a camera that stops, or turning the mode off
 ;; releases any held button.
 ;;
+;; Without pointer mode a hand can still POINT, for `cmacs-deixis'
+;; ("move that there"): index finger out, the other three curled.  While
+;; deixis is listening, the fingertip's place on the screen is noted per
+;; camera frame in a ring in memory (cmacs-handtrack-point-history.c),
+;; stamped with the frame's time, and read back by the time of the
+;; spoken word.  See the `cmacs-handtrack-point' options and
+;; \\[cmacs-handtrack-point-calibrate].
+;;
 ;; Models are not shipped and never fetched behind your back:
 ;; \\[cmacs-handtrack-download-models] puts them in
 ;; `cmacs-handtrack-models-directory' when you ask.  The camera opens
@@ -61,6 +69,9 @@
 (declare-function cmacs-handtrack-set-option "cmacs-handtrack-defuns.c"
                   (key value))
 (declare-function cmacs-handtrack-event-codes "cmacs-handtrack-defuns.c")
+(declare-function cmacs-handtrack-point-history-now "cmacs-handtrack-defuns.c")
+(declare-function cmacs-handtrack-point-history-status
+                  "cmacs-handtrack-defuns.c")
 
 (defvar cmacs-handtrack-pointer-mode)
 
@@ -69,11 +80,15 @@
   :group 'cmacs
   :prefix "cmacs-handtrack-")
 
-(defun cmacs-handtrack--set (key)
-  "A :set function that also pushes the value to C option KEY."
+(defun cmacs-handtrack--set (key &optional needs)
+  "A :set function that also pushes the value to C option KEY.
+NEEDS, a function symbol, names a primitive that came in with KEY: the
+value is pushed only when it is there, so a binary older than this file
+is not handed an option it would refuse."
   (lambda (sym value)
     (set-default-toplevel-value sym value)
-    (when (fboundp 'cmacs-handtrack-set-option)
+    (when (and (fboundp 'cmacs-handtrack-set-option)
+               (or (null needs) (fboundp needs)))
       (cmacs-handtrack-set-option key value))))
 
 (defcustom cmacs-handtrack-models-directory
@@ -188,6 +203,91 @@ pointer at the output's edge, so a smaller region needs less reach."
   :type 'number
   :set (cmacs-handtrack--set 'pointer-beta))
 
+(defgroup cmacs-handtrack-point nil
+  "A bare camera hand pointing at the screen, for `cmacs-deixis'.
+One camera sees where a fingertip is in its image, not where the finger
+is aimed, so the fingertip is a cursor held in the air: it is mapped
+onto the screen through `cmacs-handtrack-pointer-region' and
+`cmacs-handtrack-pointer-output', exactly as the hand cursor is."
+  :group 'cmacs-handtrack
+  :prefix "cmacs-handtrack-point-")
+
+(defcustom cmacs-handtrack-point-hand 'any
+  "The hand whose pointing is noted: `left', `right' or `any'.
+The hand driving the pointer in `cmacs-handtrack-pointer-mode' is never
+noted; it is the pointer."
+  :type '(choice (const any) (const left) (const right))
+  :set (cmacs-handtrack--set 'point-hand
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-extend 0.055
+  "How straight the index finger must be to be pointing.
+Metres, on a hand scaled to a standard palm (0.094 m from the wrist to
+the middle knuckle, so the distance to the camera does not matter): how
+much further from the wrist the fingertip must be than its own knuckle.
+A straight index finger measures about 0.075; lower this if pointing is
+missed, raise it if a relaxed hand is taken for pointing."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-extend
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-curl 0.035
+  "How curled the middle, ring and little fingers must be.
+The same measure as `cmacs-handtrack-point-extend': the most any of the
+three fingertips may reach past its knuckle.  A finger folded into the
+palm measures about zero or less."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-curl
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-min-confidence 0.5
+  "Confidence a frame's pointing pose needs to be noted (0..1).
+A pose exactly on both thresholds is 0.5 and one 0.02 m clear of them
+is 1.0; nothing under 0.5 is ever pointing."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-min-confidence
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-dwell-ms 120
+  "Milliseconds a pointing hand must rest on one spot to mean it.
+A hand passing through the pointing pose on its way somewhere else
+rests nowhere this long and refers to nothing."
+  :type 'natnum
+  :set (cmacs-handtrack--set 'point-dwell
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-radius 96
+  "Layout pixels within which a pointing fingertip is resting on one spot.
+Twice what the mouse gets: a hand held in the air is not that still."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-radius
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-latency-ms 40
+  "Milliseconds between the camera seeing a frame and cmacs receiving it.
+Taken off each pointing sample's time, so that it lines up with the
+spoken word.  The time the networks take is NOT in this -- a sample is
+stamped when its frame arrives, before inference -- only the camera's
+own exposure, readout and transport.  The default is an assumption for
+a 30 frames-a-second USB camera, not a measurement:
+\\[cmacs-handtrack-point-calibrate] measures it on yours."
+  :type 'integer
+  :set (cmacs-handtrack--set 'point-latency
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-min-cutoff 1.2
+  "One-Euro minimum cutoff for the pointing fingertip, in Hz.
+Lower holds a still finger steadier, at the price of lag."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-min-cutoff
+                             'cmacs-handtrack-point-history-enable))
+
+(defcustom cmacs-handtrack-point-beta 0.02
+  "One-Euro speed coefficient for the pointing fingertip."
+  :type 'number
+  :set (cmacs-handtrack--set 'point-beta
+                             'cmacs-handtrack-point-history-enable))
+
 (defun cmacs-handtrack-built-p ()
   "Return non-nil when this build has hand tracking."
   (fboundp 'cmacs-handtrack-open))
@@ -243,6 +343,19 @@ Only ever run by you: nothing in cmacs fetches a model by itself."
     (cmacs-handtrack-set-option 'pointer-min-cutoff
                                 cmacs-handtrack-pointer-min-cutoff)
     (cmacs-handtrack-set-option 'pointer-beta cmacs-handtrack-pointer-beta)
+    (when (fboundp 'cmacs-handtrack-point-history-enable)
+      (cmacs-handtrack-set-option 'point-hand cmacs-handtrack-point-hand)
+      (cmacs-handtrack-set-option 'point-extend cmacs-handtrack-point-extend)
+      (cmacs-handtrack-set-option 'point-curl cmacs-handtrack-point-curl)
+      (cmacs-handtrack-set-option 'point-min-confidence
+                                  cmacs-handtrack-point-min-confidence)
+      (cmacs-handtrack-set-option 'point-dwell cmacs-handtrack-point-dwell-ms)
+      (cmacs-handtrack-set-option 'point-radius cmacs-handtrack-point-radius)
+      (cmacs-handtrack-set-option 'point-latency
+                                  cmacs-handtrack-point-latency-ms)
+      (cmacs-handtrack-set-option 'point-min-cutoff
+                                  cmacs-handtrack-point-min-cutoff)
+      (cmacs-handtrack-set-option 'point-beta cmacs-handtrack-point-beta))
     (cmacs-handtrack-set-target cmacs-handtrack-target)))
 
 ;;;###autoload
@@ -343,6 +456,71 @@ Off by default; turning it off releases anything held."
       (error
        (setq cmacs-handtrack-pointer-mode nil)
        (signal (car err) (cdr err)))))))
+
+
+;;;; Calibrating the pointing history's clock
+
+(defconst cmacs-handtrack--point-calibration-reach 1500
+  "Milliseconds either side of the key press a pinch may be and count.")
+
+(defun cmacs-handtrack--point-calibration (press status)
+  "The camera delay a key press at PRESS and STATUS's last pinch imply.
+PRESS is on the clock of `cmacs-handtrack-point-history-now'; STATUS is
+`cmacs-handtrack-point-history-status'.  Return (OFFSET . LATENCY), or
+nil when no hand closed a pinch near PRESS.  OFFSET is how many
+milliseconds after the key the pinch was stamped, with the latency
+correction now in force; LATENCY is the value of
+`cmacs-handtrack-point-latency-ms' that would have made it zero."
+  (let* ((pinches (delq nil (list (plist-get status :pinch-left)
+                                  (plist-get status :pinch-right))))
+         (near (cl-remove-if
+                (lambda (ms)
+                  (> (abs (- ms press))
+                     cmacs-handtrack--point-calibration-reach))
+                pinches))
+         ;; Both hands pinched: the one nearer the key is the one meant.
+         (pinch (car (sort near (lambda (a b)
+                                  (< (abs (- a press)) (abs (- b press))))))))
+    (when pinch
+      (let ((offset (- pinch press)))
+        (cons offset (+ (or (plist-get status :latency-ms) 0) offset))))))
+
+(defun cmacs-handtrack--point-calibration-report (press)
+  "Say what the pinch nearest the key press at PRESS measured."
+  (let ((cal (cmacs-handtrack--point-calibration
+              press (cmacs-handtrack-point-history-status))))
+    (if (null cal)
+        (message "Hands: no pinch seen near the key press; is a hand in view?")
+      (message "Hands: the pinch was stamped %+d ms from the key.  \
+For that to be 0, set `cmacs-handtrack-point-latency-ms' to %d \
+(a camera frame is %d ms, so repeat and take the middle)."
+               (car cal) (cdr cal) 33))))
+
+;;;###autoload
+(defun cmacs-handtrack-point-calibrate ()
+  "Measure the delay between the camera and the pointing history's clock.
+With hands tracked (`cmacs-handtrack-mode'), close a thumb-index pinch
+with one hand and press a key with the other at the same instant.  The
+frame in which the pinch closed is stamped the way pointing samples
+are; its distance from the key press is shown, with the value of
+`cmacs-handtrack-point-latency-ms' that would make it zero.
+
+Your own timing and the camera's frame interval (33 ms at 30 frames a
+second) are in that figure, so repeat it a few times and take the
+middle.  It is the companion of `cmacs-deixis-calibrate', which
+measures the same thing for the spoken word."
+  (interactive)
+  (unless (fboundp 'cmacs-handtrack-point-history-status)
+    (user-error "This build has no pointing history"))
+  (unless (plist-get (cmacs-handtrack-status) :running)
+    (user-error "Turn on `cmacs-handtrack-mode' first"))
+  (read-event "Pinch with one hand and press a key with the other, \
+at the same instant: ")
+  (let ((press (cmacs-handtrack-point-history-now)))
+    ;; The frame holding the pinch may still be in the networks; ask
+    ;; once it has had time to come out, without blocking anything.
+    (run-at-time 0.7 nil #'cmacs-handtrack--point-calibration-report press)
+    (message "Hands: looking for the pinch...")))
 
 (provide 'cmacs-handtrack)
 

@@ -69,6 +69,15 @@
 (declare-function gowl-swap-clients "cmacs-gowl.c")
 (declare-function gowl-close-client "cmacs-gowl.c")
 (declare-function gowl-focus-client "cmacs-gowl.c")
+(declare-function gowl-list-clients "cmacs-gowl.c")
+(declare-function cmacs-handtrack-point-history-now "cmacs-handtrack-defuns.c")
+(declare-function cmacs-handtrack-point-history-enable
+                  "cmacs-handtrack-defuns.c" (enable))
+(declare-function cmacs-handtrack-point-history-at
+                  "cmacs-handtrack-defuns.c" (ms))
+(declare-function cmacs-handtrack-point-history-dwell
+                  "cmacs-handtrack-defuns.c"
+                  (from-ms to-ms &optional radius min-ms))
 (declare-function cmacs-lrg-vr-active-p "cmacs-lrgvr.c")
 (declare-function cmacs-lrg-vr-pointed-window "cmacs-lrgvr.c")
 (declare-function cmacs-voice-run-later "cmacs-voice")
@@ -150,10 +159,41 @@ So \"please move that window over there\" is \"move <object> <place>\"."
   :type '(repeat string))
 
 (defcustom cmacs-deixis-pointer-order '(vr hand gowl emacs)
-  "The pointing devices to ask, in order; the first with an answer wins.
-Names are those given to `cmacs-deixis-register-pointer'.  A registered
-pointer not listed here is asked after the listed ones."
+  "The pointing devices, in order of preference.
+Every device is asked, and of those with an answer the first in this
+order wins -- except that a device which has been PARKED on its answer
+for longer than `cmacs-deixis-parked-ms' gives way to one that came to
+rest on its own answer more recently (see
+`cmacs-deixis-choose-referent').  So a mouse left lying where it was
+does not outvote a hand raised to point, and a hand left lying in the
+pointing pose does not outvote a mouse just moved.  Names are those
+given to `cmacs-deixis-register-pointer'.  A registered pointer not
+listed here comes after the listed ones."
   :type '(repeat symbol))
+
+(defcustom cmacs-deixis-parked-ms 2000
+  "How long a pointer may have rested on a thing and still be pointing at it.
+A pointer that came to rest on its answer more than this many
+milliseconds before the word's window opened is parked: it is where it
+was left, not where anyone is pointing.  A parked pointer still answers
+when nothing else does."
+  :type 'natnum)
+
+(defcustom cmacs-deixis-hand-confidence 0.9
+  "The most a bare hand's referent can be trusted (0..1).
+One camera sees where a fingertip is in its image, not where the finger
+is aimed, so a hand's answer is never as sure as a mouse's.  The
+referent's confidence is this, times the confidence of the pointing
+pose, times the share of the word's window the hand rested there."
+  :type 'number)
+
+(defcustom cmacs-deixis-announce-hand t
+  "Whether a command run on something pointed at by hand says what that was.
+A bare hand's aim is approximate, so before a deictic command acts on a
+hand referent the echo area names what each word resolved to.
+Destructive commands are confirmed as well, whatever pointed
+\(`cmacs-deixis-confirm-destructive'), and the question says a hand did."
+  :type 'boolean)
 
 (defcustom cmacs-deixis-elsewhere-confidence 0.8
   "How sure a pointer must be to override an active region.
@@ -426,20 +466,50 @@ between the two, and only in memory."
             (cl-remove-if (lambda (n) (memq n cmacs-deixis-pointer-order))
                           (reverse known)))))
 
+(defun cmacs-deixis--parked-p (referent from)
+  "Non-nil when REFERENT's pointer has been lying on it since long before FROM.
+A referent says when its pointer came to rest there with :since (ms).
+One that does not say is taken at its word: not parked."
+  (let ((since (plist-get referent :since)))
+    (and (numberp since) (numberp from)
+         (> (- from since) cmacs-deixis-parked-ms))))
+
+(defun cmacs-deixis-choose-referent (candidates from)
+  "Choose among CANDIDATES for a word whose window opens at FROM (ms).
+CANDIDATES are the referents of the pointers that had an answer, in
+order of preference (`cmacs-deixis-pointer-order').  The first that is
+not parked wins: one whose pointer came to rest on it no more than
+`cmacs-deixis-parked-ms' before FROM, or that gives no :since at all.
+When every candidate is parked, the first.  Pure: referents in, one of
+them out.
+
+The point is that the two kinds of pointer fail in opposite ways.  A
+mouse always has an answer, because it is always somewhere; a hand has
+one only while it holds the pointing pose.  Plain \"first answer wins\"
+therefore lets whichever is listed first shadow the other for good, and
+a rule about recency is what lets a deliberate gesture with either beat
+the one that was merely left where it was."
+  (or (cl-find-if-not (lambda (r) (cmacs-deixis--parked-p r from)) candidates)
+      (car candidates)))
+
 (defun cmacs-deixis--pointer-referent (ms from to)
-  "What the first pointer with an answer pointed at around MS, or nil.
-FROM and TO bound the word's window."
+  "What was being pointed at around MS, or nil.
+FROM and TO bound the word's window.  Every registered pointer is
+asked; `cmacs-deixis-choose-referent' picks among the answers."
   (let ((cmacs-deixis-lookup-window (and from to (cons from to))))
-    (cl-loop for name in (cmacs-deixis--pointer-names)
-             for fn = (plist-get (alist-get name cmacs-deixis--pointers) :function)
-             ;; A broken provider costs its own answer, not the utterance.
-             for r = (and fn (condition-case err
-                                 (funcall fn ms)
-                               (error (message "Deixis: pointer %s: %s" name
-                                               (error-message-string err))
-                                      nil)))
-             when r return (if (plist-get r :device) r
-                             (append r (list :device name))))))
+    (cmacs-deixis-choose-referent
+     (cl-loop for name in (cmacs-deixis--pointer-names)
+              for fn = (plist-get (alist-get name cmacs-deixis--pointers)
+                                  :function)
+              ;; A broken provider costs its own answer, not the utterance.
+              for r = (and fn (condition-case err
+                                  (funcall fn ms)
+                                (error (message "Deixis: pointer %s: %s" name
+                                                (error-message-string err))
+                                       nil)))
+              when r collect (if (plist-get r :device) r
+                               (append r (list :device name))))
+     from)))
 
 
 ;;;; Referents inside Emacs
@@ -572,13 +642,24 @@ position under the pointer -- looked up now, hence approximate."
                     :label (cmacs-deixis--gowl-monitor-label monitor x y))
               where)))))
 
+(defun cmacs-deixis--gowl-since (sample)
+  "When the pointer came to be where pointer-history SAMPLE has it (ms).
+A dwell's :time is clipped to the window it was asked about; the ring
+entry in force at that moment says when the pointer really got there.
+A mouse nobody is touching makes no new entries, so this is how a
+parked pointer is told from one that has just arrived."
+  (let ((time (plist-get sample :time)))
+    (or (and time (plist-get (gowl-pointer-history-at time) :time))
+        time)))
+
 (defun cmacs-deixis--gowl-pointer (ms)
   "The gowl pointer's referent around MS, from the compositor's ring."
   (when (cmacs-deixis--gowl-live-p)
     (let* ((w cmacs-deixis-lookup-window)
            (sample (or (and w (gowl-pointer-history-dwell (car w) (cdr w)))
-                       (gowl-pointer-history-at ms))))
-      (and sample (cmacs-deixis--gowl-referent sample)))))
+                       (gowl-pointer-history-at ms)))
+           (r (and sample (cmacs-deixis--gowl-referent sample))))
+      (and r (append r (list :since (cmacs-deixis--gowl-since sample)))))))
 
 (defun cmacs-deixis--gowl-start ()
   "Start the compositor's pointer ring."
@@ -675,8 +756,12 @@ Returns (ENTRY . DURATION-MS), or nil."
 (defun cmacs-deixis--emacs-pointer (ms)
   "The plain Emacs mouse's referent around MS."
   (when-let* ((hit (cmacs-deixis--ring-lookup cmacs-deixis--mouse-ring ms))
-              (e (car hit)))
-    (cmacs-deixis--frame-referent (nth 1 e) (nth 2 e) (nth 3 e) (cdr hit))))
+              (e (car hit))
+              (r (cmacs-deixis--frame-referent (nth 1 e) (nth 2 e) (nth 3 e)
+                                               (cdr hit))))
+    ;; A ring entry means "from this time on": its time is when the
+    ;; mouse came to rest here.
+    (append r (list :since (car e)))))
 
 (defun cmacs-deixis--vr-pointer (ms)
   "The VR laser's referent around MS: the Emacs window it was on.
@@ -687,19 +772,137 @@ so the position is that window's point."
               ((window-live-p win)))
     (let ((buf (window-buffer win)) (pos (window-point win)))
       (list :kind 'buffer-position :window win :buffer buf :position pos
-            :approximate t :confidence (cdr hit)
+            :approximate t :confidence (cdr hit) :since (car (car hit))
             :label (cmacs-deixis--buffer-label buf pos)))))
+
+
+;;;; A camera-tracked hand
+
+;; Two cases.  With `cmacs-handtrack-pointer-mode' on, one hand IS the
+;; gowl pointer and the compositor's ring already holds where it went.
+;; Without it -- or for the other hand -- a hand points by holding the
+;; pointing pose (index finger out, the other three curled), and
+;; handtrack keeps a ring of its own of where the fingertip then was on
+;; the screen (cmacs/handtrack/cmacs-handtrack-point-history.c), on the
+;; compositor's clock and stamped with the camera frame's time.
+;;
+;; One camera cannot see where a finger is AIMED, only where its tip is
+;; in the image.  So this is a cursor held in the air, mapped onto the
+;; screen like the hand cursor, and every referent it yields is
+;; approximate and capped at `cmacs-deixis-hand-confidence'.
+
+(defun cmacs-deixis--hand-live-p ()
+  "Non-nil when this build keeps a history of where a bare hand pointed."
+  (fboundp 'cmacs-handtrack-point-history-dwell))
+
+(defun cmacs-deixis--hand-clock-offset ()
+  "Milliseconds to add to a time of `cmacs-deixis-now-ms' for the hand ring.
+The hand ring is always on CLOCK_MONOTONIC.  So is `cmacs-deixis-now-ms'
+whenever the compositor is built in, and then this is 0.  In a build
+with hand tracking and no compositor that clock is wall time, and the
+two are a constant apart, measured here."
+  (if (or cmacs-deixis-clock-function
+          (fboundp 'gowl-pointer-history-now)
+          (not (fboundp 'cmacs-handtrack-point-history-now)))
+      0
+    (- (cmacs-handtrack-point-history-now) (cmacs-deixis-now-ms))))
+
+(defun cmacs-deixis--gowl-client-by-id (id)
+  "The live desktop window with client id ID, or nil.
+The hand ring names a window by id, as the mouse ring does internally: a
+window can close between the sample and the lookup."
+  (and (integerp id) (> id 0)
+       (fboundp 'gowl-list-clients)
+       (cl-find-if (lambda (c)
+                     (eql (alist-get 'id (ignore-errors (gowl-client-info c)))
+                          id))
+                   (ignore-errors (gowl-list-clients)))))
+
+(defun cmacs-deixis--hand-frame-referent (sample confidence)
+  "Resolve hand SAMPLE against Emacs's own frames, with no compositor.
+The fingertip's fractions across the output (:u, :v) are laid over the
+monitor the selected frame is on, and the frame whose edges contain
+that point is asked what is there.  Where the window system does not
+tell a frame its own position (Wayland), every frame appears to sit at
+the monitor's origin, and this is as approximate as that."
+  (when-let* ((u (plist-get sample :u))
+              (v (plist-get sample :v))
+              (geom (ignore-errors (frame-monitor-geometry (selected-frame))))
+              (sx (+ (nth 0 geom) (* u (max 0 (1- (nth 2 geom))))))
+              (sy (+ (nth 1 geom) (* v (max 0 (1- (nth 3 geom)))))))
+    (cl-loop for frame in (frame-list)
+             for e = (and (frame-visible-p frame)
+                          (ignore-errors (frame-edges frame 'native-edges)))
+             when (and e (<= (nth 0 e) sx) (< sx (nth 2 e))
+                       (<= (nth 1 e) sy) (< sy (nth 3 e)))
+             return (cmacs-deixis--frame-referent
+                     frame (- sx (nth 0 e)) (- sy (nth 1 e)) confidence))))
+
+(defun cmacs-deixis--hand-referent (sample &optional clock-offset)
+  "Turn hand-history SAMPLE (a plist) into a referent, or nil.
+With the compositor running and layout pixels in the sample, the
+position resolves exactly as the mouse's does
+\(`cmacs-deixis--gowl-referent'): a desktop window, refined inside
+Emacs's own frame to the Emacs window and buffer position, else the
+monitor.  Otherwise it resolves against Emacs's frames alone.
+CLOCK-OFFSET is `cmacs-deixis--hand-clock-offset', taken back off the
+sample's :since."
+  (let* ((pose (min 1.0 (max 0.0 (or (plist-get sample :confidence) 0.5))))
+         (r (if (and (plist-get sample :layout) (cmacs-deixis--gowl-live-p))
+                (cmacs-deixis--gowl-referent
+                 (append (list :client (cmacs-deixis--gowl-client-by-id
+                                        (plist-get sample :client-id)))
+                         sample))
+              (cmacs-deixis--hand-frame-referent sample 1.0))))
+    (when r
+      ;; Leading keys shadow R's own (`plist-get' takes the first).
+      (append
+       (list :device 'hand
+             :hand (plist-get sample :hand)
+             :approximate t
+             ;; R's confidence is the share of the window spent there
+             ;; (0 for a window that has closed); the pose and the cap
+             ;; scale it down.
+             :confidence (* cmacs-deixis-hand-confidence pose
+                            (or (plist-get r :confidence) 0.5))
+             :since (and (plist-get sample :since)
+                         (- (plist-get sample :since) (or clock-offset 0))))
+       r))))
+
+(defun cmacs-deixis--hand-bare-pointer (ms)
+  "What a hand in the pointing pose rested on around MS, or nil.
+With a word's window, only a rest of at least
+`cmacs-handtrack-point-dwell-ms' inside it counts: a hand passing
+through refers to nothing, and there is no falling back to wherever it
+was at the one instant MS."
+  (when (cmacs-deixis--hand-live-p)
+    (let* ((off (cmacs-deixis--hand-clock-offset))
+           (w cmacs-deixis-lookup-window)
+           (sample (if w
+                       (cmacs-handtrack-point-history-dwell (+ (car w) off)
+                                                            (+ (cdr w) off))
+                     (cmacs-handtrack-point-history-at (+ ms off)))))
+      (and sample (cmacs-deixis--hand-referent sample off)))))
 
 (defun cmacs-deixis--hand-pointer (ms)
   "A camera-tracked hand's referent around MS.
-A stub with one real case.  With `cmacs-handtrack-pointer-mode' on, the
-hand IS the gowl pointer, so the compositor's ring already holds where
-it pointed.  Without it a desktop hand has no target at all (its
-gestures act on the selected window), and handtrack exposes no accessor
-for an aim point; then this returns nil."
-  (when (bound-and-true-p cmacs-handtrack-pointer-mode)
-    (when-let* ((r (cmacs-deixis--gowl-pointer ms)))
-      (append (list :device 'hand) r))))
+A bare hand holding the pointing pose comes first.  Failing that, with
+`cmacs-handtrack-pointer-mode' on the hand IS the gowl pointer, and the
+compositor's ring holds where it went."
+  (or (cmacs-deixis--hand-bare-pointer ms)
+      (when (bound-and-true-p cmacs-handtrack-pointer-mode)
+        (when-let* ((r (cmacs-deixis--gowl-pointer ms)))
+          (append (list :device 'hand) r)))))
+
+(defun cmacs-deixis--hand-start ()
+  "Start noting where a bare hand points."
+  (when (fboundp 'cmacs-handtrack-point-history-enable)
+    (cmacs-handtrack-point-history-enable t)))
+
+(defun cmacs-deixis--hand-stop ()
+  "Stop noting where a bare hand points, which empties its ring."
+  (when (fboundp 'cmacs-handtrack-point-history-enable)
+    (cmacs-handtrack-point-history-enable nil)))
 
 (cmacs-deixis-register-pointer 'gowl #'cmacs-deixis--gowl-pointer
                                :start #'cmacs-deixis--gowl-start
@@ -708,7 +911,9 @@ for an aim point; then this returns nil."
                                :start #'cmacs-deixis--lisp-sampling-start
                                :stop #'cmacs-deixis--lisp-sampling-stop)
 (cmacs-deixis-register-pointer 'vr #'cmacs-deixis--vr-pointer)
-(cmacs-deixis-register-pointer 'hand #'cmacs-deixis--hand-pointer)
+(cmacs-deixis-register-pointer 'hand #'cmacs-deixis--hand-pointer
+                               :start #'cmacs-deixis--hand-start
+                               :stop #'cmacs-deixis--hand-stop)
 
 
 ;;;; Resolving
@@ -930,6 +1135,23 @@ value (a string) being the question.  BODY reports a refusal with
    (t (cmacs-deixis--run-later
        (lambda () (when (y-or-n-p (concat prompt " ")) (funcall action)))))))
 
+(defun cmacs-deixis--by-hand (bindings)
+  "The bindings of BINDINGS whose referent a bare hand pointed at."
+  (cl-remove-if-not
+   (lambda (b)
+     (let ((r (plist-get b :referent)))
+       (and (eq (plist-get r :device) 'hand) (plist-get r :approximate))))
+   bindings))
+
+(defun cmacs-deixis--hand-summary (bindings)
+  "What each hand-pointed word of BINDINGS resolved to, as one line, or nil.
+Labels only -- ids, titles, buffer names -- as in the legend."
+  (when-let* ((by-hand (cmacs-deixis--by-hand bindings)))
+    (mapconcat (lambda (b)
+                 (format "%s = %s" (plist-get b :word)
+                         (plist-get (plist-get b :referent) :label)))
+               by-hand "; ")))
+
 (defun cmacs-deixis-run-command (text bindings)
   "Run the deictic command TEXT with BINDINGS matches; non-nil if one did.
 A command matches when its pattern matches the canonical form and every
@@ -953,10 +1175,18 @@ runs from the command loop, after this returns."
                              (let ((cmacs-deixis-command-words canon))
                                (ignore-errors
                                  (apply (plist-get def :confirm) referents))))))
+         ;; A hand's aim is approximate: say what it was taken to mean
+         ;; before anything acts on it.
+         (when-let* ((cmacs-deixis-announce-hand)
+                     (summary (cmacs-deixis--hand-summary bindings)))
+           (message "Deixis (by hand): %s" summary))
          (if question
-             (cmacs-deixis--confirm (if (stringp question) question
-                                      (format "Really %s?" name))
-                                    action)
+             (cmacs-deixis--confirm
+              (concat (if (stringp question) question
+                        (format "Really %s?" name))
+                      (if (cmacs-deixis--by-hand bindings)
+                          " (pointed at by hand)" ""))
+              action)
            (cmacs-deixis--run-later action))
          name)))))
 

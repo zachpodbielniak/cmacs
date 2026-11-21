@@ -194,6 +194,28 @@ cmacs_gowl_pointer_history_forget (void)
   cmacs_gowl_unlock ();
 }
 
+bool
+cmacs_gowl_pointer_history_hit (double x, double y, unsigned int *client,
+                                int *monitor)
+{
+  GowlClient *c;
+
+  cmacs_gowl_lock ();
+  /* The same refusals as a pointer sample: no compositor, or a locked
+     session, which has nothing to point at.  */
+  if (cmacs_gowl_compositor == NULL
+      || gowl_compositor_is_locked (cmacs_gowl_compositor))
+    {
+      cmacs_gowl_unlock ();
+      return false;
+    }
+  c = gowl_compositor_client_at (cmacs_gowl_compositor, x, y);
+  *client = c != NULL ? gowl_client_get_id (c) : 0;
+  *monitor = history_monitor_at (x, y);
+  cmacs_gowl_unlock ();
+  return true;
+}
+
 /* The live client with ID, or NULL: the window a sample named may have
    closed since.  Caller holds the lock.  */
 static GowlClient *

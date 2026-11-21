@@ -1623,7 +1623,7 @@ if test "$with_cmacs_handtrack" != "no"; then
     [AC_MSG_NOTICE([onnxruntime not found -- cmacs-handtrack builds without inference])])
   AC_DEFINE([HAVE_CMACS_HANDTRACK], 1, [CMacs camera hand tracking])
   CMACS_HANDTRACK_OBJ="cmacs-handtrack-init.o cmacs-handtrack-defuns.o \
-    cmacs-handtrack-model.o cmacs-handtrack-ort.o cmacs-handtrack-worker.o"
+    cmacs-handtrack-model.o cmacs-handtrack-ort.o cmacs-handtrack-worker.o cmacs-handtrack-point-history.o"
 fi
 # The hand-gesture classifier is shared by VR hands and camera hands:
 # one object, linked once, when either is built.

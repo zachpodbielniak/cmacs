@@ -48,9 +48,11 @@ stores keyboard events, nothing more.  */
 #include "coding.h"
 #include "cmacs-hand-gesture.h"
 #include "cmacs-handtrack.h"
+#include "cmacs-handtrack-point-history.h"
 #include "cmacs-libregnum.h"
 #ifdef HAVE_CMACS_GOWL
 #include "cmacs-gowl-pointer.h"
+#include "cmacs-gowl-pointer-history.h"
 #endif
 #include "cmacs-glib-loop.h"
 
@@ -137,6 +139,11 @@ struct ht_tracker
 {
   LrgVRHandState hands[2];       /* 0 left, 1 right */
   struct cmacs_hg_state g;
+  /* The landmarks each side was mapped from in the frame ht_track last
+     saw, or NULL.  They point into that call's argument: read them
+     before it goes away (ht_point_step does, straight after) and never
+     later.  */
+  const CmacsHtLandmarks *lm[2];
 };
 
 static struct
@@ -192,26 +199,56 @@ euro_step (struct ht_euro *e, double x, double dt, double min_cutoff,
   return e->x;
 }
 
+/* The camera's active region onto an output: image point IU, IV
+   (image-normalised, mirrored) as *U, *V, 0..1 across REGION and
+   clamped to it.  Returns how far outside the region the point was, as
+   a fraction of the region's size (<= 0: inside).  The one place this
+   arithmetic lives: the hand cursor and a bare pointing hand
+   (ht_point_step) both go through it, so "the edge of the region is the
+   edge of the screen" means the same to both.  */
+static float
+ht_region_uv (const float *region, float iu, float iv, float *u, float *v)
+{
+  float rw = region[2] - region[0], rh = region[3] - region[1];
+  float ru = rw > 1e-3f ? (iu - region[0]) / rw : 0.5f;
+  float rv = rh > 1e-3f ? (iv - region[1]) / rh : 0.5f;
+
+  *u = CLAMP (ru, 0.0f, 1.0f);
+  *v = CLAMP (rv, 0.0f, 1.0f);
+  return fmaxf (fmaxf (-ru, ru - 1.0f), fmaxf (-rv, rv - 1.0f));
+}
+
+/* U, V (0..1 across the output) as layout pixels on output GEOM,
+   through a One-Euro filter whose state is EX, EY and *LAST_US.  NOW is
+   in microseconds.  */
+static void
+ht_output_smooth (struct ht_euro *ex, struct ht_euro *ey, gint64 *last_us,
+                  float u, float v, const int *geom, gint64 now,
+                  double min_cutoff, double beta, double *x, double *y)
+{
+  double dt = *last_us > 0 ? (double) (now - *last_us) / 1e6 : 0.0;
+
+  if (dt > 0.5)
+    dt = 0.0;                    /* back after a gap: start afresh */
+  *x = euro_step (ex, geom[0] + (double) u * (geom[2] - 1), dt, min_cutoff,
+                  beta);
+  *y = euro_step (ey, geom[1] + (double) v * (geom[3] - 1), dt, min_cutoff,
+                  beta);
+  *last_us = now;
+}
+
 /* The cursor hand's pointer position on output GEOM, smoothed, from
    landmarks LM (image-normalised, mirrored).  */
 static void
 cursor_target (struct ht_cursor *c, const CmacsHtLandmarks *lm,
                const int *geom, gint64 now, double *x, double *y)
 {
-  float u = 0.5f * (lm->lm[2][0] + lm->lm[5][0]);
-  float v = 0.5f * (lm->lm[2][1] + lm->lm[5][1]);
-  float rw = c->region[2] - c->region[0], rh = c->region[3] - c->region[1];
-  double dt = c->last_us > 0 ? (double) (now - c->last_us) / 1e6 : 0.0;
+  float u, v;
 
-  u = rw > 1e-3f ? CLAMP ((u - c->region[0]) / rw, 0.0f, 1.0f) : 0.5f;
-  v = rh > 1e-3f ? CLAMP ((v - c->region[1]) / rh, 0.0f, 1.0f) : 0.5f;
-  if (dt > 0.5)
-    dt = 0.0;                    /* back after a gap: start afresh */
-  *x = euro_step (&c->ex, geom[0] + (double) u * (geom[2] - 1), dt,
-                  c->min_cutoff, c->beta);
-  *y = euro_step (&c->ey, geom[1] + (double) v * (geom[3] - 1), dt,
-                  c->min_cutoff, c->beta);
-  c->last_us = now;
+  ht_region_uv (c->region, 0.5f * (lm->lm[2][0] + lm->lm[5][0]),
+                0.5f * (lm->lm[2][1] + lm->lm[5][1]), &u, &v);
+  ht_output_smooth (&c->ex, &c->ey, &c->last_us, u, v, geom, now,
+                    c->min_cutoff, c->beta, x, y);
 }
 
 static void
@@ -319,6 +356,8 @@ ht_track (struct ht_tracker *tr, const CmacsHtLandmarks *lm, int n,
       seen[side] = true;
       side_lm[side] = &lm[i];
     }
+  tr->lm[0] = side_lm[0];
+  tr->lm[1] = side_lm[1];
   memset (smp, 0, sizeof smp);
   for (side = 0; side < 2; side++)
     {
@@ -440,6 +479,10 @@ cursor_watch (struct ht_cursor *c, struct ht_pointer_out *out, gint64 now)
     cursor_release (c, out);
 }
 
+static void ht_point_result (const CmacsHtResult *r);
+static void ht_point_forget (void);
+static bool ht_point_set_option (Lisp_Object key, Lisp_Object value);
+
 /* ------------------------------------------------------------ applying -- */
 
 static void
@@ -550,6 +593,9 @@ ht_on_result (const CmacsHtResult *r)
                   now, &hd.cursor, have_geom ? geom : NULL, &ht_desktop,
                   act, HT_ACTIONS);
   }
+  /* Where a bare hand is pointing, for `cmacs-deixis'.  Stamped with
+     the time the frame arrived, not with now.  */
+  ht_point_result (r);
   for (i = 0; i < n; i++)
     if (!cursor_apply (&hd.cursor, &ht_desktop, &act[i]))
       ht_apply (&act[i]);
@@ -693,6 +739,7 @@ thread.  Prefer `cmacs-handtrack-mode'.  Return t, or signal.  */)
   lrg_vr_hand_state_reset (&hd.tr.hands[1]);
   hd.cursor.have_last = false;
   hd.cursor.ex.init = hd.cursor.ey.init = false;
+  ht_point_forget ();
   if (!cmacs_ht_worker_start (&cfg, ht_on_result, &err))
     {
       Lisp_Object msg = build_string (err != NULL ? err : "hand tracking failed");
@@ -713,6 +760,9 @@ DEFUN ("cmacs-handtrack-close", Fcmacs_handtrack_close,
   ht_watchdog_set (false);
   lrg_vr_hand_state_reset (&hd.tr.hands[0]);
   lrg_vr_hand_state_reset (&hd.tr.hands[1]);
+  hd.tr.lm[0] = hd.tr.lm[1] = NULL;
+  /* Where the user pointed does not outlive the session that saw it.  */
+  ht_point_forget ();
   return Qnil;
 }
 
@@ -790,10 +840,26 @@ KEY is one of:
   `pointer-deadzone'    pixels the pointer must move before it is sent (1.5)
   `pointer-min-cutoff'  One-Euro minimum cutoff, Hz (1.2): lower is steadier
   `pointer-beta'        One-Euro speed coefficient (0.02): higher is snappier
-The thresholds apply from the next `cmacs-handtrack-open'.  Return VALUE.  */)
+and, for a bare hand pointing (`cmacs-handtrack-point-history-enable'):
+  `point-hand'          `any', `left' or `right' (any)
+  `point-extend'        how far past its knuckle the index tip must reach
+                        from the wrist, metres on the standard palm (0.055)
+  `point-curl'          ... and the most any of the other three may (0.035)
+  `point-min-confidence' pose confidence a sample needs, 0..1 (0.5)
+  `point-dwell'         milliseconds a hand must rest to be a referent (120)
+  `point-radius'        layout pixels within which it is one rest (96)
+  `point-latency'       milliseconds from the camera seeing a frame to the
+                        frame reaching cmacs, taken off each sample's
+                        time (40)
+  `point-min-cutoff'    One-Euro minimum cutoff for the fingertip, Hz (1.2)
+  `point-beta'          One-Euro speed coefficient for it (0.02)
+The two detector thresholds apply from the next `cmacs-handtrack-open'.
+Return VALUE.  */)
   (Lisp_Object key, Lisp_Object value)
 {
   CHECK_SYMBOL (key);
+  if (ht_point_set_option (key, value))
+    return value;
   if (EQ (key, intern_c_string ("swap-hands")))
     {
       hd.swap_hands = !NILP (value);
@@ -1232,6 +1298,596 @@ Return (CX CY SIZE ROTATION) in pixels and radians.  */)
                 make_float (roi.size), make_float (roi.rotation));
 }
 
+/* ---------------------------------------------------------------------
+   A bare hand pointing.
+
+   For `cmacs-deixis': "move THAT over THERE", said while pointing at
+   the screen with an index finger and no pointer mode.  Each result in
+   which a hand holds the pointing pose (cmacs-handtrack-point-history.c:
+   index out, the other three curled, not a pinch) leaves one sample in
+   a ring -- where its index fingertip was on the screen, and what was
+   there -- stamped with the time the camera frame ARRIVED, not the time
+   inference finished.  Deixis reads the ring by time once the
+   transcript is in.
+
+   The fingertip goes through the hand cursor's own mapping
+   (ht_region_uv, ht_output_smooth): the camera's active region onto one
+   output, One-Euro smoothed.  That makes it a cursor held in the air,
+   not a ray: one camera sees where the fingertip is in its image and
+   cannot tell where the finger is aimed.  The docs say so.
+
+   The hand that drives the pointer in `cmacs-handtrack-pointer-mode' is
+   left out: it already is the gowl pointer, and the compositor's ring
+   has it.
+
+   Runs from the GLib dispatch that delivers results, on the main
+   thread: it must not signal and makes no Lisp object.  What is under
+   the fingertip is asked of the compositor through
+   cmacs_gowl_pointer_history_hit, which takes the gowl lock itself.
+   Off until `cmacs-handtrack-point-history-enable'; emptied when that
+   turns it off and when the tracker closes.
+   --------------------------------------------------------------------- */
+
+/* A fingertip this far outside the active region (a fraction of the
+   region's size) is pointing past the edge of the screen: nothing.  */
+#define HT_POINT_OVERSHOOT 0.10f
+
+/* With no compositor to ask there are no layout pixels.  The fingertip
+   is then filtered on a screen of this size, so the filter's
+   parameters mean what they mean for the cursor, and only its
+   fractions across the output (u, v) are any use to the reader.  */
+static const int ht_point_nominal[4] = { 0, 0, 1920, 1080 };
+
+struct ht_point_filter
+{
+  struct ht_euro ex, ey;
+  gint64 last_us;
+  bool was_pinched;
+};
+
+static struct
+{
+  struct cmacs_ht_point_params pose;
+  int hand;                      /* -1 either, 0 left, 1 right */
+  float min_confidence;
+  float min_cutoff, beta;        /* One-Euro parameters */
+  gint64 dwell_ms;               /* shortest rest that is a referent */
+  gint64 latency_ms;             /* camera delay, off each sample's time */
+  double radius;                 /* layout pixels that are one rest */
+  struct ht_point_filter f[2];
+  gint64 pinch_ms[2];            /* last pinch onset, sample time; 0: none */
+  bool pointing[2];              /* in the last result */
+  unsigned long samples;         /* stored since startup */
+} pt = {
+  .pose = { CMACS_HT_POINT_EXTEND_M, CMACS_HT_POINT_CURL_M },
+  .hand = -1, .min_confidence = 0.5f, .min_cutoff = 1.2f, .beta = 0.02f,
+  .dwell_ms = 120, .latency_ms = 40, .radius = CMACS_HT_POINT_RADIUS,
+};
+
+static gint64
+ht_point_now (void)
+{
+  return g_get_monotonic_time () / 1000;
+}
+
+static void
+ht_point_filter_reset (struct ht_point_filter *f)
+{
+  f->ex.init = f->ey.init = false;
+  f->last_us = 0;
+}
+
+/* Empty the ring and forget everything derived from hands seen so far.
+   The ring stays enabled or not as it was.  */
+static void
+ht_point_forget (void)
+{
+  int side;
+
+  cmacs_ht_point_clear ();
+  for (side = 0; side < 2; side++)
+    {
+      ht_point_filter_reset (&pt.f[side]);
+      pt.f[side].was_pinched = false;
+      pt.pinch_ms[side] = 0;
+      pt.pointing[side] = false;
+    }
+}
+
+/* The output a bare hand points at: the one `pointer-output' names,
+   else the one the pointer is on -- the hand cursor's choice.  False,
+   with the nominal screen in GEOM, when there is no compositor.  */
+static bool
+ht_point_desktop_geom (int *geom)
+{
+#ifdef HAVE_CMACS_GOWL
+  if (cmacs_gowl_output_geometry (hd.cursor.output[0] != '\0'
+                                  ? hd.cursor.output : NULL,
+                                  &geom[0], &geom[1], &geom[2], &geom[3])
+      && geom[2] > 0 && geom[3] > 0)
+    return true;
+#endif
+  memcpy (geom, ht_point_nominal, sizeof ht_point_nominal);
+  return false;
+}
+
+/* One frame of pointing.  TR is as ht_track just left it (its hands and
+   the landmarks they came from).  MS is the samples' time, NOW_US the
+   smoothing filter's clock.  GEOM is the output to map onto, or NULL
+   for the desktop's.  DESKTOP is true for live results: the cursor hand
+   is then skipped and what is under the fingertip is asked of the
+   compositor; false (tests) stores bare positions.  Returns how many
+   samples were stored.  Must not signal.  */
+static int
+ht_point_step (const struct ht_tracker *tr, gint64 ms, gint64 now_us,
+               const int *geom, bool desktop)
+{
+  int dgeom[4], side, stored = 0;
+  bool have_dgeom = false, layout = geom != NULL;
+
+  for (side = 0; side < 2; side++)
+    {
+      const LrgVRHandState *st = &tr->hands[side];
+      const CmacsHtLandmarks *lm = tr->lm[side];
+      struct ht_point_filter *f = &pt.f[side];
+      struct cmacs_ht_point_pose pose;
+      struct cmacs_ht_point_sample s;
+      const int *g = geom;
+      float u = 0.5f, v = 0.5f;
+      double x, y;
+      bool pinched;
+
+      pt.pointing[side] = false;
+      if (!st->active || lm == NULL)
+        {
+          ht_point_filter_reset (f);
+          f->was_pinched = false;
+          continue;
+        }
+
+      /* When this hand last closed a pinch, for
+         `cmacs-handtrack-point-calibrate': a moment the user can mark
+         with a key, on the same clock as the samples.  A time and
+         nothing else, so it is kept whether or not the ring is on.  */
+      pinched = lrg_vr_hand_state_is_pinched (st);
+      if (pinched && !f->was_pinched)
+        pt.pinch_ms[side] = ms;
+      f->was_pinched = pinched;
+
+      if (!cmacs_ht_point_enabled ()
+          || (pt.hand >= 0 && pt.hand != side)
+          || (desktop && hd.cursor.enabled && hd.cursor.hand == side))
+        continue;
+
+      cmacs_ht_point_pose (st, &pt.pose, &pose);
+      /* MediaPipe's landmark 8 is the index fingertip.  */
+      if (!pose.pointing || pose.confidence < pt.min_confidence
+          || ht_region_uv (hd.cursor.region, lm->lm[8][0], lm->lm[8][1],
+                           &u, &v) > HT_POINT_OVERSHOOT)
+        {
+          /* The next time it points it starts where it then is, not
+             gliding there from where it last was.  */
+          ht_point_filter_reset (f);
+          continue;
+        }
+      pt.pointing[side] = true;
+
+      if (g == NULL)
+        {
+          /* Asked only now: most frames have no pointing hand, and the
+             answer costs the gowl lock.  */
+          if (!have_dgeom)
+            {
+              layout = ht_point_desktop_geom (dgeom);
+              have_dgeom = true;
+            }
+          g = dgeom;
+        }
+      ht_output_smooth (&f->ex, &f->ey, &f->last_us, u, v, g, now_us,
+                        (double) pt.min_cutoff, (double) pt.beta, &x, &y);
+
+      memset (&s, 0, sizeof s);
+      s.ms = ms;
+      s.x = x;
+      s.y = y;
+      s.u = g[2] > 1 ? (float) ((x - g[0]) / (double) (g[2] - 1)) : 0.5f;
+      s.v = g[3] > 1 ? (float) ((y - g[1]) / (double) (g[3] - 1)) : 0.5f;
+      s.confidence = pose.confidence;
+      s.hand = (guint8) side;
+      s.layout = layout;
+      s.monitor = -1;
+#ifdef HAVE_CMACS_GOWL
+      /* What a click there would land on, as the mouse ring notes it.
+         False: the session is locked (or the compositor has gone), and
+         what a hand does in front of a lock screen is nobody's
+         business.  */
+      if (desktop && layout
+          && !cmacs_gowl_pointer_history_hit (x, y, &s.client, &s.monitor))
+        continue;
+#endif
+      if (cmacs_ht_point_push (&s))
+        {
+          stored++;
+          pt.samples++;
+        }
+    }
+  return stored;
+}
+
+/* Every inference result, after ht_track (main thread, GLib dispatch).
+   The sample's time is the frame's arrival on the camera's streaming
+   thread -- the same clock as the mouse ring's -- less the camera's own
+   delay; inference time is not in it at all.  */
+static void
+ht_point_result (const CmacsHtResult *r)
+{
+  ht_point_step (&hd.tr, r->frame_us / 1000 - pt.latency_ms, r->frame_us,
+                 NULL, true);
+}
+
+/* The `point-*' options of `cmacs-handtrack-set-option'.  True when KEY
+   was one of them.  Signals on a bad VALUE (called from the DEFUN).  */
+static bool
+ht_point_set_option (Lisp_Object key, Lisp_Object value)
+{
+  static const char *const names[] = {
+    "point-extend", "point-curl", "point-min-confidence", "point-dwell",
+    "point-radius", "point-latency", "point-min-cutoff", "point-beta"
+  };
+  size_t which;
+  double d;
+
+  if (EQ (key, intern_c_string ("point-hand")))
+    {
+      pt.hand = EQ (value, intern_c_string ("left")) ? 0
+                : EQ (value, intern_c_string ("right")) ? 1 : -1;
+      return true;
+    }
+  for (which = 0; which < G_N_ELEMENTS (names); which++)
+    if (EQ (key, intern_c_string (names[which])))
+      break;
+  if (which == G_N_ELEMENTS (names))
+    return false;
+
+  CHECK_NUMBER (value);
+  d = XFLOATINT (value);
+  switch (which)
+    {
+    case 0: case 1:              /* metres on a 0.094 m palm */
+      if (d < -0.1 || d > 0.2)
+        args_out_of_range (value, key);
+      if (which == 0)
+        pt.pose.extend_m = (float) d;
+      else
+        pt.pose.curl_m = (float) d;
+      break;
+    case 2:
+      if (d < 0.0 || d > 1.0)
+        args_out_of_range (value, key);
+      pt.min_confidence = (float) d;
+      break;
+    case 3:
+      if (d < 0.0 || d > 10000.0)
+        args_out_of_range (value, key);
+      pt.dwell_ms = (gint64) d;
+      break;
+    case 4:
+      if (d <= 0.0)
+        args_out_of_range (value, key);
+      pt.radius = d;
+      break;
+    case 5:
+      if (d < -2000.0 || d > 2000.0)
+        args_out_of_range (value, key);
+      pt.latency_ms = (gint64) d;
+      break;
+    case 6:
+      if (d <= 0.0)
+        args_out_of_range (value, key);
+      pt.min_cutoff = (float) d;
+      break;
+    default:
+      if (d < 0.0)
+        args_out_of_range (value, key);
+      pt.beta = (float) d;
+      break;
+    }
+  return true;
+}
+
+/* The plist a lookup returns; the keys of `gowl-pointer-history-at',
+   less :client (see the DEFUNs), plus the hand's own.  DURATION < 0: a
+   single sample, with no :duration and no :since.  */
+static Lisp_Object
+ht_point_plist (gint64 ms, double x, double y, float u, float v,
+                float confidence, guint client, gint monitor, int hand,
+                bool layout, gint64 duration, gint64 since)
+{
+  Lisp_Object tail = Qnil;
+
+  if (duration >= 0)
+    tail = list4 (intern_c_string (":duration"), make_int (duration),
+                  intern_c_string (":since"), make_int (since));
+  tail = Fcons (intern_c_string (":layout"), Fcons (layout ? Qt : Qnil, tail));
+  tail = Fcons (intern_c_string (":v"),
+                Fcons (make_float ((double) v), tail));
+  tail = Fcons (intern_c_string (":u"),
+                Fcons (make_float ((double) u), tail));
+  tail = Fcons (intern_c_string (":confidence"),
+                Fcons (make_float ((double) confidence), tail));
+  tail = Fcons (intern_c_string (":hand"),
+                Fcons (intern_c_string (hand == 0 ? "left" : "right"), tail));
+  tail = Fcons (intern_c_string (":monitor"),
+                Fcons (monitor >= 0 ? make_fixnum (monitor) : Qnil, tail));
+  tail = Fcons (intern_c_string (":client-id"),
+                Fcons (make_fixnum ((EMACS_INT) client), tail));
+  tail = Fcons (intern_c_string (":y"), Fcons (make_float (y), tail));
+  tail = Fcons (intern_c_string (":x"), Fcons (make_float (x), tail));
+  return Fcons (intern_c_string (":time"), Fcons (make_int (ms), tail));
+}
+
+/* A time argument in milliseconds, integer or float.  */
+static gint64
+ht_point_ms_arg (Lisp_Object ms)
+{
+  CHECK_NUMBER (ms);
+  return (gint64) XFLOATINT (ms);
+}
+
+DEFUN ("cmacs-handtrack-point-history-now",
+       Fcmacs_handtrack_point_history_now,
+       Scmacs_handtrack_point_history_now, 0, 0, 0,
+       doc: /* Return the monotonic clock in milliseconds.
+This is the clock the pointing history's samples are stamped with
+\(CLOCK_MONOTONIC), the same one as `gowl-pointer-history-now'; it has
+no relation to `float-time'.  */)
+  (void)
+{
+  return make_int (ht_point_now ());
+}
+
+DEFUN ("cmacs-handtrack-point-history-enable",
+       Fcmacs_handtrack_point_history_enable,
+       Scmacs_handtrack_point_history_enable, 1, 1, 0,
+       doc: /* Start (ENABLE non-nil) or stop noting where a hand points.
+While on, and while hands are tracked (`cmacs-handtrack-mode'), every
+camera frame in which a hand holds the pointing pose -- index finger
+out, the other three curled -- leaves one sample in a fixed ring in
+memory: when, which hand, how sure, where its fingertip was on the
+screen and which window was there.  About seventeen seconds of
+uninterrupted pointing.  Nothing is written anywhere else, nothing is
+noted while the session is locked, and the ring is emptied when this
+turns it off and whenever hand tracking stops.
+
+The hand that drives the pointer in `cmacs-handtrack-pointer-mode' is
+not noted here: it is the pointer, and `gowl-pointer-history-enable'
+has it.
+
+Return non-nil when the history is now on.  */)
+  (Lisp_Object enable)
+{
+  cmacs_ht_point_set_enabled (!NILP (enable));
+  if (NILP (enable))
+    ht_point_forget ();
+  return cmacs_ht_point_enabled () ? Qt : Qnil;
+}
+
+DEFUN ("cmacs-handtrack-point-history-clear",
+       Fcmacs_handtrack_point_history_clear,
+       Scmacs_handtrack_point_history_clear, 0, 0, 0,
+       doc: /* Forget where hands have pointed.  The history stays on or off.  */)
+  (void)
+{
+  ht_point_forget ();
+  return Qnil;
+}
+
+DEFUN ("cmacs-handtrack-point-history-status",
+       Fcmacs_handtrack_point_history_status,
+       Scmacs_handtrack_point_history_status, 0, 0, 0,
+       doc: /* Return a plist describing the pointing history.
+Keys: :enabled, :samples (in the ring now), :capacity, :stored (since
+startup), :pointing (the hands holding the pose in the last result: a
+list of `left' and `right'), :pinch-left and :pinch-right (when each
+hand last closed a pinch, on the clock of
+`cmacs-handtrack-point-history-now', or nil), :latency-ms (the
+`point-latency' option) and :now.  */)
+  (void)
+{
+  Lisp_Object pointing = Qnil;
+
+  if (pt.pointing[1])
+    pointing = Fcons (intern_c_string ("right"), pointing);
+  if (pt.pointing[0])
+    pointing = Fcons (intern_c_string ("left"), pointing);
+  return list (intern_c_string (":enabled"),
+               cmacs_ht_point_enabled () ? Qt : Qnil,
+               intern_c_string (":samples"),
+               make_fixnum ((EMACS_INT) cmacs_ht_point_count ()),
+               intern_c_string (":capacity"),
+               make_fixnum (CMACS_HT_POINT_RING),
+               intern_c_string (":stored"), make_uint (pt.samples),
+               intern_c_string (":pointing"), pointing,
+               intern_c_string (":pinch-left"),
+               pt.pinch_ms[0] != 0 ? make_int (pt.pinch_ms[0]) : Qnil,
+               intern_c_string (":pinch-right"),
+               pt.pinch_ms[1] != 0 ? make_int (pt.pinch_ms[1]) : Qnil,
+               intern_c_string (":latency-ms"), make_int (pt.latency_ms),
+               intern_c_string (":now"), make_int (ht_point_now ()));
+}
+
+DEFUN ("cmacs-handtrack-point-history-at",
+       Fcmacs_handtrack_point_history_at,
+       Scmacs_handtrack_point_history_at, 1, 1, 0,
+       doc: /* Return where a hand was pointing at time MS.
+MS is on the clock of `cmacs-handtrack-point-history-now'.  The value is
+a plist
+  (:time T :x X :y Y :client-id ID :monitor N :hand HAND
+   :confidence C :u U :v V :layout LAYOUT)
+for the latest sample at or before MS, as `gowl-pointer-history-at'
+gives for the mouse: T is the time the camera frame was taken, X and Y
+layout pixels, ID the id of the window that was under the fingertip
+\(0: none) and N the index of the output in `gowl-list-monitors'.  HAND
+is `left' or `right', C the confidence of the pointing pose (0.5..1),
+and U, V the position as fractions across the output.  LAYOUT is nil
+when no compositor was there to give layout pixels; then only U and V
+mean anything.  There is no :client: look ID up among the live clients.
+
+A sample is one frame of pointing, not a state that lasts: return nil
+when the history is off or no hand was pointing within a quarter of a
+second before MS.  */)
+  (Lisp_Object ms)
+{
+  struct cmacs_ht_point_sample s;
+
+  if (!cmacs_ht_point_at (ht_point_ms_arg (ms), &s))
+    return Qnil;
+  return ht_point_plist (s.ms, s.x, s.y, s.u, s.v, s.confidence, s.client,
+                         s.monitor, s.hand, s.layout, -1, 0);
+}
+
+DEFUN ("cmacs-handtrack-point-history-dwell",
+       Fcmacs_handtrack_point_history_dwell,
+       Scmacs_handtrack_point_history_dwell, 2, 4, 0,
+       doc: /* Return where a hand rested longest between FROM-MS and TO-MS.
+The pointing samples in that window are grouped into rests -- runs of
+one hand over the same window that stay within RADIUS layout pixels
+\(default: the `point-radius' option, 96) of where the run began, with no
+gap longer than a quarter of a second -- and the rest that lasted
+longest inside the window wins; of equals, the earliest.  A rest shorter
+than MIN-MS milliseconds (default: the `point-dwell' option, 120) is not
+one: a hand passing through on its way somewhere else points at
+nothing.
+
+The value is as for `cmacs-handtrack-point-history-at', with X, Y, U, V
+and C the means over the rest's samples in the window, T its first
+sample there, and added :duration (milliseconds inside the window) and
+:since (when the rest really began, which may be well before FROM-MS:
+a hand left lying in the pose has an old one).  Return nil when the
+history is off or holds no such rest.  */)
+  (Lisp_Object from_ms, Lisp_Object to_ms, Lisp_Object radius,
+   Lisp_Object min_ms)
+{
+  struct cmacs_ht_point_rest r;
+  double rad = pt.radius;
+  gint64 min = pt.dwell_ms;
+
+  if (!NILP (radius))
+    {
+      CHECK_NUMBER (radius);
+      rad = XFLOATINT (radius);
+    }
+  if (!NILP (min_ms))
+    min = ht_point_ms_arg (min_ms);
+  if (!cmacs_ht_point_rest (ht_point_ms_arg (from_ms),
+                            ht_point_ms_arg (to_ms), rad, min, &r))
+    return Qnil;
+  return ht_point_plist (r.begin, r.x, r.y, r.u, r.v, r.confidence, r.client,
+                         r.monitor, r.hand, r.layout, r.duration, r.since);
+}
+
+DEFUN ("cmacs-handtrack--point-pose", Fcmacs_handtrack__point_pose,
+       Scmacs_handtrack__point_pose, 1, 3, 0,
+       doc: /* Classify LANDMARKS (63 numbers) as pointing or not.  For tests.
+RIGHT non-nil: a right hand.  ASPECT defaults to 0.75.  The thresholds
+and the active region are the current options.  Return a plist:
+:pointing, :confidence, :index-reach and :other-reach (metres on the
+standard palm), :pinch-distance, :u and :v (the index fingertip as
+fractions across the output) and :outside (how far beyond the active
+region it is, as a fraction of the region; zero or less inside).  */)
+  (Lisp_Object landmarks, Lisp_Object right, Lisp_Object aspect)
+{
+  CmacsHtLandmarks lm;
+  LrgVRHandState st;
+  struct cmacs_ht_point_pose pose;
+  float u, v, outside;
+
+  ht_landmarks_of (landmarks, &lm);
+  cmacs_ht_to_hand_state (&lm, NILP (aspect) ? 0.75f : ht_float (aspect),
+                          !NILP (right), &st);
+  cmacs_ht_point_pose (&st, &pt.pose, &pose);
+  outside = ht_region_uv (hd.cursor.region, lm.lm[8][0], lm.lm[8][1], &u, &v);
+  return list (intern_c_string (":pointing"), pose.pointing ? Qt : Qnil,
+               intern_c_string (":confidence"),
+               make_float ((double) pose.confidence),
+               intern_c_string (":index-reach"),
+               make_float ((double) pose.index_reach),
+               intern_c_string (":other-reach"),
+               make_float ((double) pose.other_reach),
+               intern_c_string (":pinch-distance"),
+               make_float ((double) pose.pinch_m),
+               intern_c_string (":u"), make_float ((double) u),
+               intern_c_string (":v"), make_float ((double) v),
+               intern_c_string (":outside"), make_float ((double) outside));
+}
+
+DEFUN ("cmacs-handtrack--simulate-point", Fcmacs_handtrack__simulate_point,
+       Scmacs_handtrack__simulate_point, 2, 2, 0,
+       doc: /* Run camera FRAMES through the pointing history on output GEOMETRY.
+For tests.  FRAMES is as for `cmacs-handtrack--simulate': a list of
+\(MILLISECONDS LEFT RIGHT), each hand nil or 63 landmark numbers.
+MILLISECONDS is the time each sample is stored with, as it stands (the
+`point-latency' option is not taken off).  GEOMETRY is (X Y WIDTH
+HEIGHT).  The frames go through the same mapping, pose test, smoothing
+and ring as live results do, with the current options, and into the
+real ring -- which must be on (`cmacs-handtrack-point-history-enable')
+and is not emptied first.  No compositor is asked what is under the
+fingertip: every sample has client 0 and no monitor.  Return the number
+of samples stored.  */)
+  (Lisp_Object frames, Lisp_Object geometry)
+{
+  struct ht_tracker tr;
+  Lisp_Object tail;
+  int geom[4], k, stored = 0;
+
+  for (k = 0, tail = geometry; k < 4; k++, tail = Fcdr (tail))
+    {
+      CHECK_FIXNUM (Fcar (tail));
+      geom[k] = (int) XFIXNUM (Fcar (tail));
+    }
+  if (geom[2] <= 0 || geom[3] <= 0)
+    args_out_of_range (geometry, Qnil);
+  memset (&tr, 0, sizeof tr);
+  lrg_vr_hand_state_reset (&tr.hands[0]);
+  lrg_vr_hand_state_reset (&tr.hands[1]);
+  ht_point_filter_reset (&pt.f[0]);
+  ht_point_filter_reset (&pt.f[1]);
+  pt.f[0].was_pinched = pt.f[1].was_pinched = false;
+  CHECK_LIST (frames);
+  for (tail = frames; CONSP (tail); tail = XCDR (tail))
+    {
+      Lisp_Object fr = XCAR (tail), l, r;
+      CmacsHtLandmarks lm[2];
+      struct cmacs_hg_action act[HT_ACTIONS];
+      gint64 ms;
+      int n = 0;
+
+      CHECK_CONS (fr);
+      CHECK_FIXNUM (XCAR (fr));
+      ms = XFIXNUM (XCAR (fr));
+      l = Fnth (make_fixnum (1), fr);
+      r = Fnth (make_fixnum (2), fr);
+      if (!NILP (l))
+        {
+          ht_landmarks_of (l, &lm[n]);
+          lm[n++].handedness = 0.0f;
+        }
+      if (!NILP (r))
+        {
+          ht_landmarks_of (r, &lm[n]);
+          lm[n++].handedness = 1.0f;
+        }
+      ht_track (&tr, lm, n, 0.75f, ms * 1000, NULL, NULL, &ht_desktop, act,
+                HT_ACTIONS);
+      stored += ht_point_step (&tr, ms, ms * 1000, geom, false);
+    }
+  /* A live result after this starts its filters afresh.  */
+  ht_point_filter_reset (&pt.f[0]);
+  ht_point_filter_reset (&pt.f[1]);
+  pt.f[0].was_pinched = pt.f[1].was_pinched = false;
+  return make_fixnum (stored);
+}
+
 void
 syms_of_cmacs_handtrack_defuns (void)
 {
@@ -1256,6 +1912,14 @@ syms_of_cmacs_handtrack_defuns (void)
   defsubr (&Scmacs_handtrack__decode);
   defsubr (&Scmacs_handtrack__letterbox);
   defsubr (&Scmacs_handtrack__roi_from_palm);
+  defsubr (&Scmacs_handtrack_point_history_now);
+  defsubr (&Scmacs_handtrack_point_history_enable);
+  defsubr (&Scmacs_handtrack_point_history_clear);
+  defsubr (&Scmacs_handtrack_point_history_status);
+  defsubr (&Scmacs_handtrack_point_history_at);
+  defsubr (&Scmacs_handtrack_point_history_dwell);
+  defsubr (&Scmacs_handtrack__point_pose);
+  defsubr (&Scmacs_handtrack__simulate_point);
 }
 
 #endif /* HAVE_CMACS_HANDTRACK */
