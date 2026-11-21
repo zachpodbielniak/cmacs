@@ -883,6 +883,9 @@ A target can be a function.  It runs on the *press*, on Emacs's main thread --- 
 | =:map=       | =(INPUT . TARGET)= pairs                                                |
 | =:unmatched= | =pass= (default) or =drop=: inputs the map leaves out                   |
 | =:log=       | non-nil to log every remap this rule makes                              |
+| =:grab=      | non-nil: a matched game controller is hidden from everything else       |
+| =:analog=    | thresholds, deadzone, inversion and speeds for sticks (see below)       |
+| =:virtual-pad= | NAME, or =(:name NAME :id "VVVV:PPPP" :buttons ... :axes ...)=: the gamepad stick/trigger/pad-button targets drive |
 
 INPUT is a =KEY_*= or =BTN_*= name, =left= / =middle= / =right= / =side= / =extra=, or =WHEEL_UP= / =WHEEL_DOWN= / =WHEEL_LEFT= / =WHEEL_RIGHT=, as a symbol or a string.
 
@@ -901,6 +904,51 @@ INPUT is a =KEY_*= or =BTN_*= name, =left= / =middle= / =right= / =side= / =extr
 
 Remapped keys and clicks go through the compositor's own decisions, so keybinds, the Emacs key intercept and InputCapture see them, and =Super+Escape= on a claimed keyboard always reaches the escape hatches.
 
+*** Game controllers and virtual pads
+:PROPERTIES:
+:CUSTOM_ID: gowl-input-remap-pads
+:END:
+
+Game controllers work in both directions.  As *sources*: a rule with =:match '(:id "045e:028e" :type gamepad)= (or =joystick=) claims a gamepad, and its buttons (=BTN_SOUTH=, =pad-a=, =left-bumper=), stick directions (=ABS_X+=, =left-stick-up=, =dpad-left=) and whole axes (=ABS_RX=, =right-stick-x=) become inputs.  gowl reads the pad itself (libinput ignores joysticks) and opens it only once a rule matches; =:grab t= hides it from the game while it is remapped.  As *outputs*: =:virtual-pad "NAME"= declares a gamepad made through =/dev/uinput= (named =gowl virtual pad: NAME=), created on its first press and destroyed when no rule declares it, when the module is disabled and when the compositor stops.
+
+#+begin_src elisp
+;; Left stick as WASD, hidden from the game
+(cmacs-gowl-input-remap-define "stick-wasd"
+  :match '(:id "045e:028e" :type gamepad)
+  :grab t
+  :analog '(:press 0.5 :release 0.3)
+  :map '((left-stick-up . (key KEY_W)) (left-stick-left . (key KEY_A))
+         (left-stick-down . (key KEY_S)) (left-stick-right . (key KEY_D))))
+
+;; Right stick as the mouse (continuous: a declared exception)
+(cmacs-gowl-input-remap-define "pad-mouse"
+  :match '(:id "045e:028e" :type gamepad)
+  :analog '(:pointer-speed 1500 :scroll-rate 12)
+  :map '((right-stick-x . (pointer x)) (right-stick-y . (pointer y))
+         (left-stick-y . (scroll vertical)) (pad-a . (button left))))
+
+;; A keypad as a controller, for a game that only reads gamepads
+(cmacs-gowl-input-remap-define "keypad-pad"
+  :match '(:id "1234:5678" :type keyboard)
+  :virtual-pad "keypad"
+  :map '((KEY_KP8 . (stick left :y -1)) (KEY_KP2 . (stick left :y 1))
+         (KEY_KP4 . (stick left :x -1)) (KEY_KP6 . (stick left :x 1))
+         (KEY_KP0 . (pad-button BTN_SOUTH)) (KEY_KPENTER . (trigger right))))
+#+end_src
+
+| TARGET                        | Does                                                           |
+|-------------------------------+----------------------------------------------------------------|
+| =(pointer x)= / =(pointer y)= | a whole axis moves the pointer while deflected (continuous)    |
+| =(scroll vertical)=           | a whole axis scrolls in wheel notches while deflected (continuous) |
+| =(stick SIDE :x V)=           | holds the virtual stick (=left=, =right=, =dpad=) while held   |
+| =(stick SIDE)= on =mouse-x=/=mouse-y= | the virtual stick follows the mouse (continuous)       |
+| =(trigger SIDE [VALUE])=      | pulls a virtual trigger while held                             |
+| =(pad-button BTN)=            | holds a virtual button while held                              |
+
+Held keys on one stick combine: opposite directions cancel and W+D is up-right on the unit circle.  A stick direction used as a key is one press through hysteresis (=:press= / =:release= in =:analog=), so it stays inside one-to-one; the continuous targets are listed in each rule's =continuous= field by =cmacs-gowl-input-remap-list=.  =:analog= also takes =:deadzone=, =:invert= (a list of axes), =:centred=, =:pointer-curve=, =:pointer-accel=, =:mouse-gain= and =:mouse-idle-ms=.  =cmacs-gowl-input-remap-pads= lists the virtual pads.
+
+*Permissions.*  Reading a controller needs read access to its =/dev/input/eventN= (the =uaccess= ACL a desktop gives joystick nodes); a virtual pad needs write access to =/dev/uinput=.  Without it the rule still loads, the first press logs why, and =cmacs-gowl-input-remap-status= shows =pad-error=.  The live session only ever opens a controller one of your rules matches, so a test pad is invisible to it.  The schema, the defaults and the worked examples are in =deps/gowl/docs/input-remap.org=.
+
 *** Commands and options
 :PROPERTIES:
 :CUSTOM_ID: gowl-input-remap-commands
@@ -914,7 +962,8 @@ Remapped keys and clicks go through the compositor's own decisions, so keybinds,
 | =cmacs-gowl-input-remap-list=             | The rules in force, as alists                           |
 | =cmacs-gowl-input-remap-devices=          | Buffer of every keyboard and pointer, claimed or not    |
 | =cmacs-gowl-input-remap-identify=         | Report the next device pressed; =:match= to kill ring   |
-| =cmacs-gowl-input-remap-status=           | Enabled, rule and claim counts                          |
+| =cmacs-gowl-input-remap-status=           | Enabled, rule and claim counts, virtual pads            |
+| =cmacs-gowl-input-remap-pads=             | The virtual gamepads, as alists                         |
 | =cmacs-gowl-input-remap-enable= / =-disable= | Load / release without losing the rules             |
 | =cmacs-gowl-input-remap-rule-json=        | The text a rule becomes (what the module reads)         |
 

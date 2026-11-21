@@ -37,6 +37,22 @@
 ;; action whose form calls back in here through the same idle dispatch
 ;; every custom keybind uses.  What that code does is your business.
 ;;
+;; Game controllers take part too: a gamepad's buttons and stick
+;; directions (`ABS_X+', `left-stick-up', `pad-a') map to keys and
+;; clicks like a pedal's, a whole stick axis can drive the pointer or
+;; scroll, and keys or the mouse can drive a VIRTUAL gamepad (uinput)
+;; for a game that only reads controllers:
+;;
+;;   (cmacs-gowl-input-remap-define "keypad-pad"
+;;     :match '(:id "1234:5678" :type keyboard)
+;;     :virtual-pad "keypad"
+;;     :map '((KEY_KP8 . (stick left :y -1)) (KEY_KP6 . (stick left :x 1))
+;;            (KEY_KP0 . (pad-button BTN_SOUTH))))
+;;
+;; Continuous targets -- (pointer x), (scroll vertical), and a stick
+;; following the mouse, (stick right) on `mouse-x' -- are declared
+;; exceptions to one-to-one, as the macro target is.
+;;
 ;; Everything goes through `gowl-run-command' and the module's
 ;; `inputremap-' words, the same ones the IPC socket, MCP and D-Bus
 ;; reach, so no new C primitive is involved.  See the "Per-device input
@@ -204,12 +220,26 @@ TARGET is one of:
   (command \"LINE\")                    one module command, on press
   (macro NAME [ARGS])                 a gowl macro, on press (loads the
                                       macro module; outside one-to-one)
+  (pointer x|y)                       a whole stick axis moves the pointer
+                                      (continuous; outside one-to-one)
+  (scroll vertical|horizontal)        a whole stick axis scrolls (same)
+  (stick SIDE :x V) / (stick SIDE :y V)
+                                      hold the rule's virtual pad stick
+                                      (SIDE left, right or dpad; V -1..1)
+  (stick SIDE)                        on mouse-x/mouse-y: the stick follows
+                                      the mouse (continuous)
+  (trigger SIDE [VALUE])              pull a virtual trigger while held
+  (pad-button BTN)                    hold a virtual pad button
   a function                          Elisp, called on the press
 Anything holding more than one output is refused."
   (cond
    ((memq target '(pass drop)) (symbol-name target))
    ((member target '("pass" "drop")) target)
-   ((and (consp target) (memq (car target) '(key button action command)))
+   ((and (consp target) (memq (car target) '(stick trigger)))
+    (cmacs-gowl-input-remap--pad-target rule input target))
+   ((and (consp target)
+         (memq (car target) '(key button action command pointer scroll
+                                  pad-button)))
     (let ((kind (car target))
           (args (cdr target)))
       (when (cl-some (lambda (a) (memq a cmacs-gowl-input-remap--forbidden))
@@ -259,11 +289,93 @@ Anything holding more than one output is refused."
                 rule input))
    (t (user-error "Input remap %s/%s: unknown target %S" rule input target))))
 
+(defun cmacs-gowl-input-remap--pad-target (rule input target)
+  "The JSON value for a (stick ...) or (trigger ...) TARGET of RULE/INPUT."
+  (let ((kind (car target))
+        (side (cadr target))
+        (rest (cddr target)))
+    (when (cl-some (lambda (a) (memq a cmacs-gowl-input-remap--forbidden))
+                   rest)
+      (user-error "Input remap %s/%s: one input maps to one output -- no sequences, delays or repeats"
+                  rule input))
+    (unless (memq (intern (cmacs-gowl-input-remap--name (or side "")))
+                  (if (eq kind 'stick) '(left right dpad) '(left right)))
+      (user-error "Input remap %s/%s: (%s %s ...): the side is left or right%s"
+                  rule input kind side (if (eq kind 'stick) " (or dpad)" "")))
+    (if (eq kind 'trigger)
+        (progn
+          (when (and rest (or (cdr rest) (not (numberp (car rest)))))
+            (user-error "Input remap %s/%s: (trigger SIDE [VALUE])" rule input))
+          (append (list (cons 'trigger (cmacs-gowl-input-remap--name side)))
+                  (and rest (list (cons 'value (float (car rest)))))))
+      ;; A stick: one of :x or :y (a diagonal is two keys, which
+      ;; combine), or nothing for a stick that follows the mouse.
+      (let ((x (plist-member rest :x))
+            (y (plist-member rest :y)))
+        (cl-loop for (k _) on rest by #'cddr
+                 unless (memq k '(:x :y))
+                 do (user-error "Input remap %s/%s: (stick SIDE :x V) or (stick SIDE :y V)"
+                                rule input))
+        (when (and x y)
+          (user-error "Input remap %s/%s: a stick target takes :x or :y, not both; a diagonal is two keys"
+                      rule input))
+        (let ((v (cadr (or x y))))
+          (when (and (or x y) (not (numberp v)))
+            (user-error "Input remap %s/%s: the deflection is a number in -1..1"
+                        rule input))
+          (append (list (cons 'stick (cmacs-gowl-input-remap--name side)))
+                  (cond (x (list (cons 'x (float v))))
+                        (y (list (cons 'y (float v)))))))))))
+
+(defconst cmacs-gowl-input-remap--analog-keys
+  '(:deadzone :press :release :invert :centred :pointer-speed
+    :pointer-curve :pointer-accel :scroll-rate :mouse-gain :mouse-idle-ms)
+  "The keys of a rule's `:analog' plist, as the module reads them.")
+
+(defun cmacs-gowl-input-remap--analog (rule analog)
+  "The JSON `analog' object for ANALOG, the settings plist of RULE."
+  (let (out)
+    (cl-loop for (key value) on analog by #'cddr do
+             (unless (memq key cmacs-gowl-input-remap--analog-keys)
+               (user-error "Input remap %s: unknown :analog key %s" rule key))
+             (push (cons (intern (substring (symbol-name key) 1))
+                         (if (memq key '(:invert :centred))
+                             (vconcat (mapcar #'cmacs-gowl-input-remap--name
+                                              (ensure-list value)))
+                           (if (numberp value) value
+                             (user-error "Input remap %s: :analog %s is a number"
+                                         rule key))))
+                   out))
+    (nreverse out)))
+
+(defun cmacs-gowl-input-remap--virtual-pad (rule pad)
+  "The JSON `virtual-pad' object for PAD of RULE: a name, or a plist.
+The plist keys are :name, :id \"VVVV:PPPP\", :buttons and :axes."
+  (if (or (stringp pad) (symbolp pad))
+      (list (cons 'name (cmacs-gowl-input-remap--name pad)))
+    (let (out)
+      (cl-loop for (key value) on pad by #'cddr do
+               (pcase key
+                 ((or :name :id)
+                  (push (cons (intern (substring (symbol-name key) 1))
+                              (format "%s" value))
+                        out))
+                 ((or :buttons :axes)
+                  (push (cons (intern (substring (symbol-name key) 1))
+                              (vconcat (mapcar #'cmacs-gowl-input-remap--name
+                                               value)))
+                        out))
+                 (_ (user-error "Input remap %s: unknown :virtual-pad key %s"
+                                rule key))))
+      (unless (assq 'name out)
+        (user-error "Input remap %s: :virtual-pad needs a :name" rule))
+      (nreverse out))))
+
 (defun cmacs-gowl-input-remap--match (rule match)
   "The JSON `match' object for MATCH, the device plist of RULE.
 Keys: `:name' (glob on the device name), `:id' (\"VVVV:PPPP\" hex),
 `:vendor' and `:product' (integers or hex strings), `:sysname' (glob)
-and `:type' (`keyboard', `pointer' or `any')."
+and `:type' (`keyboard', `pointer', `gamepad', `joystick' or `any')."
   (let (out)
     (cl-loop for (key value) on match by #'cddr do
              (pcase key
@@ -295,11 +407,15 @@ the place every one-to-one check on the Elisp side happens."
          (map (plist-get plist :map))
          (unmatched (plist-get plist :unmatched))
          (log (plist-get plist :log))
+         (grab (plist-get plist :grab))
+         (analog (plist-get plist :analog))
+         (pad (plist-get plist :virtual-pad))
          (rule `((name . ,name)
                  (match . ,(cmacs-gowl-input-remap--match name match))))
          (pairs nil))
     (cl-loop for (key _) on plist by #'cddr
-             unless (memq key '(:match :map :unmatched :log))
+             unless (memq key '(:match :map :unmatched :log :grab :analog
+                                       :virtual-pad))
              do (user-error "Input remap %s: unknown key %s%s" name key
                             (if (memq key cmacs-gowl-input-remap--forbidden)
                                 " -- one input maps to one output" "")))
@@ -311,6 +427,15 @@ the place every one-to-one check on the Elisp side happens."
                                                unmatched))))))
     (when log
       (setq rule (append rule '((log . t)))))
+    (when grab
+      (setq rule (append rule '((grab . t)))))
+    (when analog
+      (setq rule (append rule `((analog . ,(cmacs-gowl-input-remap--analog
+                                            name analog))))))
+    (when pad
+      (setq rule (append rule `((virtual-pad
+                                 . ,(cmacs-gowl-input-remap--virtual-pad
+                                     name pad))))))
     ;; One entry per input; a repeated input would be two outputs.
     (dolist (entry map)
       (unless (consp entry)
@@ -344,18 +469,34 @@ PLIST keys:
 
   :match PLIST    which devices: :name GLOB, :id \"VVVV:PPPP\",
                   :vendor N, :product N, :sysname GLOB,
-                  :type keyboard|pointer|any.  At least one of the
-                  first five is required.
+                  :type keyboard|pointer|gamepad|joystick|any.  At
+                  least one of the first five is required.
   :map ALIST      (INPUT . TARGET) pairs.  INPUT is a KEY_* or BTN_*
-                  name, left/middle/right/side/extra, or
-                  WHEEL_UP/DOWN/LEFT/RIGHT, as a symbol or string.
+                  name, left/middle/right/side/extra,
+                  WHEEL_UP/DOWN/LEFT/RIGHT, a stick direction (ABS_X+,
+                  left-stick-up, dpad-left), a whole axis (ABS_RX,
+                  right-stick-x), a pad button (BTN_SOUTH, pad-a) or
+                  mouse motion (mouse-x, mouse-y), as a symbol or string.
   :unmatched      `pass' (default) or `drop': inputs :map leaves out.
   :log            non-nil to log every remap this rule makes.
+  :grab           non-nil to take a matched game controller from
+                  everything else (the game included) while remapped.
+  :analog PLIST   :deadzone, :press, :release, :invert (axes),
+                  :centred, :pointer-speed, :pointer-curve,
+                  :pointer-accel, :scroll-rate, :mouse-gain,
+                  :mouse-idle-ms.
+  :virtual-pad    NAME, or (:name NAME :id \"VVVV:PPPP\" :buttons
+                  (BTN_...) :axes (ABS_...)): the gamepad its stick,
+                  trigger and pad-button targets drive.
 
 TARGET is `pass', `drop', (key \"Super+9\"), (key KEY_F13),
-\(button middle), (action ACTION [ARG]), (command \"LINE\"), or a
+\(button middle), (action ACTION [ARG]), (command \"LINE\"),
+\(pointer x), (scroll vertical), (stick left :y -1), (stick right) on
+mouse motion, (trigger right [VALUE]), (pad-button BTN_SOUTH), or a
 function called with the rule name and input on the press, on the
-main thread.  One input, one output: lists and delays are refused.
+main thread.  One input, one output: lists and delays are refused;
+pointer, scroll and a stick following the mouse are continuous, the
+declared exceptions.
 
 Loads the module the first time.  When the compositor is not running
 yet, the rule is kept and installed when it starts."
@@ -429,6 +570,11 @@ reported and swallowed, as a custom keybind's is."
                         (error-message-string err)))))))
 
 ;;;; Devices and identify mode
+
+(defun cmacs-gowl-input-remap-pads ()
+  "The virtual gamepads the module drives, as alists: name, device,
+vendor-product, created, failed, holds."
+  (cmacs-gowl-input-remap--json "inputremap-pads"))
 
 (defun cmacs-gowl-input-remap-list-devices ()
   "Every connected keyboard and pointer, as alists."

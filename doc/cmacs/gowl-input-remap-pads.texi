@@ -1,0 +1,87 @@
+@c gowl-input-remap-pads.texi --- Game controllers and virtual pads
+@c Included from cmacs.texi in the "Per-device Input Remapping" section,
+@c before "@subsection Commands and options".
+@c Copyright (C) 2026  Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@subsection Game controllers and virtual pads
+@cindex gamepad, remapping
+@cindex joystick, remapping
+@cindex virtual gamepad
+@cindex uinput
+
+Game controllers work in both directions.  As @emph{sources}: a rule
+with @code{:match '(:id "045e:028e" :type gamepad)} (or
+@code{joystick}) claims a gamepad, and its buttons (@code{BTN_SOUTH},
+@code{pad-a}, @code{left-bumper}), stick directions (@code{ABS_X+},
+@code{left-stick-up}, @code{dpad-left}) and whole axes (@code{ABS_RX},
+@code{right-stick-x}) become inputs.  gowl reads the pad itself
+(libinput ignores joysticks) and opens it only once a rule matches;
+@code{:grab t} hides it from the game while it is remapped.  As
+@emph{outputs}: @code{:virtual-pad "NAME"} declares a gamepad made
+through @file{/dev/uinput} (named @samp{gowl virtual pad: NAME}),
+created on its first press and destroyed when no rule declares it,
+when the module is disabled and when the compositor stops.
+
+@lisp
+;; Left stick as WASD, hidden from the game
+(cmacs-gowl-input-remap-define "stick-wasd"
+  :match '(:id "045e:028e" :type gamepad)
+  :grab t
+  :analog '(:press 0.5 :release 0.3)
+  :map '((left-stick-up . (key KEY_W)) (left-stick-left . (key KEY_A))
+         (left-stick-down . (key KEY_S)) (left-stick-right . (key KEY_D))))
+
+;; Right stick as the mouse (continuous: a declared exception)
+(cmacs-gowl-input-remap-define "pad-mouse"
+  :match '(:id "045e:028e" :type gamepad)
+  :analog '(:pointer-speed 1500 :scroll-rate 12)
+  :map '((right-stick-x . (pointer x)) (right-stick-y . (pointer y))
+         (left-stick-y . (scroll vertical)) (pad-a . (button left))))
+
+;; A keypad as a controller, for a game that only reads gamepads
+(cmacs-gowl-input-remap-define "keypad-pad"
+  :match '(:id "1234:5678" :type keyboard)
+  :virtual-pad "keypad"
+  :map '((KEY_KP8 . (stick left :y -1)) (KEY_KP2 . (stick left :y 1))
+         (KEY_KP4 . (stick left :x -1)) (KEY_KP6 . (stick left :x 1))
+         (KEY_KP0 . (pad-button BTN_SOUTH)) (KEY_KPENTER . (trigger right))))
+@end lisp
+
+@table @code
+@item (pointer x) @r{/} (pointer y)
+A whole axis moves the pointer while deflected (continuous).
+@item (scroll vertical)
+A whole axis scrolls in wheel notches while deflected (continuous).
+@item (stick @var{side} :x @var{v})
+Holds the virtual stick (@code{left}, @code{right}, @code{dpad}) while
+the input is held.
+@item (stick @var{side})
+On @code{mouse-x} / @code{mouse-y}: the virtual stick follows the
+mouse (continuous).
+@item (trigger @var{side} [@var{value}])
+Pulls a virtual trigger while held.
+@item (pad-button @var{btn})
+Holds a virtual button while held.
+@end table
+
+Held keys on one stick combine: opposite directions cancel and W+D is
+up-right on the unit circle.  A stick direction used as a key is one
+press through hysteresis (@code{:press} / @code{:release} in
+@code{:analog}), so it stays inside one-to-one; the continuous targets
+are listed in each rule's @code{continuous} field by
+@code{cmacs-gowl-input-remap-list}.  @code{:analog} also takes
+@code{:deadzone}, @code{:invert} (a list of axes), @code{:centred},
+@code{:pointer-curve}, @code{:pointer-accel}, @code{:mouse-gain} and
+@code{:mouse-idle-ms}.  @code{cmacs-gowl-input-remap-pads} lists the
+virtual pads.
+
+@strong{Permissions.}  Reading a controller needs read access to its
+@file{/dev/input/event@var{N}} (the @code{uaccess} ACL a desktop gives
+joystick nodes); a virtual pad needs write access to
+@file{/dev/uinput}.  Without it the rule still loads, the first press
+logs why, and @code{cmacs-gowl-input-remap-status} shows
+@code{pad-error}.  The live session only ever opens a controller one
+of your rules matches, so a test pad is invisible to it.  The schema,
+the defaults and the worked examples are in
+@file{deps/gowl/docs/input-remap.org}.
