@@ -8,8 +8,9 @@
 ;; The tools of cmacs/mcp/cmacs-mcp-tools-ai.c, moved onto the capability
 ;; table (doc_org/cmacs/cmacs-capability.org has the recipe).  The wire
 ;; names, parameter names and required/optional split are the C ones, so
-;; nothing that called `ai_prompt' has to change; the C handlers stay as
-;; the fallback for a build without the brigade.
+;; nothing that called `ai_prompt' has to change.  That C file is
+;; deleted; the schema these tools must keep is what it published,
+;; frozen in test/cmacs/data/mcp-wire-schema.json.
 ;;
 ;; Three things differ from the C handlers, all on purpose:
 ;;
@@ -32,10 +33,9 @@
 ;;     the registry's "Error: ..." form, and each surface reports it in
 ;;     its own way.  The C returned "error: ..." as an ordinary result.
 ;;
-;; Not here: `ai_list_models' (the only primitive, `cmacs-ai-list-models',
-;; blocks for up to thirty seconds of network per provider and has no
-;; asynchronous form, so it stays in C until one exists), and the
-;; libresearch tools `web_research', `web_lql' and `web_search_show',
+;; Not here: `ai_list_models', which is cmacs-ai-models-tools.el (the
+;; only primitive blocks for up to thirty seconds of network per
+;; provider, so it runs in a child process), and the libresearch tools `web_research', `web_lql' and `web_search_show',
 ;; which cmacs-brigade-research.el already registers.
 ;;
 ;; The `ai_' tools are published to MCP, D-Bus and the CLI but not to
@@ -206,6 +206,7 @@ optional 'model' overrides the provider's default model."
      (system string "System prompt" :optional t)
      (model string "Model name" :optional t))
   :group 'ai :surfaces '(mcp dbus cli) :async t :timeout 600
+  :destructive t
   :example "emacsctl tool ai prompt --prompt 'Name three GLib main-loop sources'"
   (cmacs-ai-tools--one-shot
    done
@@ -227,6 +228,7 @@ multi-turn tool loop on a worker thread.  Optional 'provider' / \
      (model string "Model name" :optional t)
      (tools boolean "Give the model the built-in agent tools" :optional t))
   :group 'ai :surfaces '(mcp dbus cli) :async t :timeout 1800
+  :destructive t
   :example "emacsctl tool ai call --prompt 'What is in ./README.org?' --tools"
   (cmacs-ai-tools--one-shot
    done
@@ -260,6 +262,11 @@ otherwise.  Generation takes tens of seconds."
      (quality string "Quality level" :optional t)
      (buffer string "Target buffer name" :optional t))
   :group 'ai :async t :timeout 300
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Ai.GenerateImage
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool ai generate-image --prompt 'a brass orrery' --aspect 16:9"
   (require 'cmacs-ai-image)
   (require 'cmacs-ai-image-chat)
@@ -364,6 +371,7 @@ provider's default model.  Returns the buffer name."
      (provider string "Provider name" :optional t)
      (model string "Model name" :optional t))
   :group 'ai :surfaces '(mcp dbus cli)
+  :destructive t
   :example "emacsctl tool ai open-chat --provider claude"
   (require 'cmacs-ai-chat)
   (let ((buf (cmacs-ai-chat-open (cmacs-ai-tools--provider provider)

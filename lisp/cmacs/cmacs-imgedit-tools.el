@@ -13,10 +13,10 @@
 ;; the recipe), reaching in-process agents, MCP clients,
 ;; org.cmacs.Editor1.Tools and `emacsctl tool imgedit ...' from one
 ;; definition.  Wire names, parameter names and the required/optional
-;; split are the C ones; the C file stays as the fallback for a build
-;; without the brigade, and
-;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when the
-;; two drift.
+;; split are the C ones.  The C file is deleted; the schema it
+;; published is frozen in test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; Every tool works on a document HANDLE, the integer `imgedit_new' or
 ;; `imgedit_open' returned, so the model layer is driven headlessly: no
@@ -131,6 +131,7 @@ The message is the C handler's: WHAT must be A|B|C."
     ((handle integer "Document handle")
      (path string "Destination file; the extension picks the format"))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit save --handle 1 --path /tmp/out.png"
   (cmacs-imgedit-save (cmacs-imgedit-tools--int handle "handle") path)
   "saved")
@@ -160,6 +161,7 @@ The message is the C handler's: WHAT must be A|B|C."
      (b integer "Blue, 0-255")
      (a integer "Alpha, 0-255 (default 255)" :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit set-color --handle 1 --r 255 --g 0 --b 0"
   (cmacs-imgedit-set-color (cmacs-imgedit-tools--int handle "handle")
                            (cmacs-imgedit-tools--int r "r")
@@ -182,6 +184,7 @@ rect/circle/ellipse."
      (filled boolean "Fill a rect, circle or ellipse" :optional t)
      (thickness integer "Stroke width in pixels (default 1)" :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit draw-shape --handle 1 --shape rect \
 --x1 10 --y1 10 --x2 90 --y2 60 --filled true"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
@@ -214,6 +217,7 @@ invert|grayscale."
      (amount number "Strength, for the kinds that take one (default 0)"
              :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit adjust --handle 1 --kind contrast \
 --amount 1.2"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
@@ -242,6 +246,7 @@ sharpen|edge|emboss|bloom."
      (kind string "Which filter")
      (radius integer "Radius for blur and pixelate (default 2)" :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit filter --handle 1 --kind blur --radius 4"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
         (kind (cmacs-imgedit-tools--choice
@@ -264,6 +269,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
     ((handle integer "Document handle")
      (kind string "Which transform"))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit transform --handle 1 --kind rotate-cw"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
         (kind (cmacs-imgedit-tools--choice
@@ -284,6 +290,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
      (text string "Text to draw")
      (size integer "Font size in pixels (default 16)" :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit draw-text --handle 1 --x 8 --y 8 \
 --text Hello"
   (let ((h (cmacs-imgedit-tools--int handle "handle")))
@@ -298,6 +305,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
     ((handle integer "Document handle")
      (name string "Name for the layer" :optional t))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit add-layer --handle 1 --name Notes"
   (format "layer %d"
           (cmacs-imgedit-add-layer (cmacs-imgedit-tools--int handle "handle")
@@ -307,6 +315,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
     "Undo the last edit on the document."
     ((handle integer "Document handle"))
   :group 'imgedit
+  :destructive t
   :example "emacsctl tool imgedit undo --handle 1"
   ;; An empty undo stack is an answer, not a failure.
   (if (cmacs-imgedit-undo (cmacs-imgedit-tools--int handle "handle"))

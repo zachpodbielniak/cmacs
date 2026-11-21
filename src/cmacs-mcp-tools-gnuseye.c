@@ -1,1 +1,0 @@
-./../cmacs/mcp/cmacs-mcp-tools-gnuseye.c

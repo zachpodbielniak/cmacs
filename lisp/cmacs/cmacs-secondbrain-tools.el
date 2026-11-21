@@ -10,22 +10,13 @@
 ;; (doc_org/cmacs/cmacs-capability.org has the recipe): the ones that
 ;; drive the ARMS view, and the ingester's cancel, migrate and doctor.
 ;; Wire names, parameter names and the required/optional split are the C
-;; ones; the C handlers stay as the fallback for a build without the
-;; brigade.
+;; ones.  That C file is deleted; the schema these tools must keep is
+;; what it published, frozen in test/cmacs/data/mcp-wire-schema.json.
 ;;
 ;; `secondbrain_ingest', `secondbrain_ingest_status', `secondbrain_tree'
-;; and `secondbrain_find' are NOT here: cmacs-secondbrain-ingest-tools.el
-;; registered them before this file existed, and a second registration
-;; of a name replaces the first.
-;;
-;; `secondbrain_search' is not here either.  Its plain form calls
-;; `cmacs-secondbrain-search', which no file defines -- the substring
-;; search exists only as the interactive `cmacs-secondbrain-find', which
-;; reads the minibuffer -- and its semantic form
-;; (`cmacs-secondbrain-search-semantic') embeds the query synchronously,
-;; a network round trip on the dispatch thread with no asynchronous
-;; counterpart.  It stays in C until the view grows a non-interactive
-;; search.
+;; and `secondbrain_find' are in cmacs-secondbrain-ingest-tools.el, and
+;; `secondbrain_search' -- whose C called a function that does not
+;; exist -- in cmacs-secondbrain-search-tools.el.
 ;;
 ;; What differs from the C handlers, on purpose:
 ;;
@@ -102,6 +93,11 @@ as four concentric rings (Applications, Routines, Memory, Skills). Set \
 'three_d' for the free 3D view rather than the flat one."
     ((three_d boolean "Free 3D view" :optional t))
   :group 'secondbrain
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.SecondBrain.Open
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool secondbrain open --three-d"
   (require 'cmacs-secondbrain)
   (if three_d (cmacs-secondbrain-3d) (cmacs-secondbrain))
@@ -114,6 +110,11 @@ force-directed graph.  The change animates."
     ((kind string "rings, circle, hex or force"
            :enum ("rings" "circle" "hex" "force")))
   :group 'secondbrain
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.SecondBrain.SetLayout
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool secondbrain set-layout --kind hex"
   (unless (member kind cmacs-secondbrain-tools--layouts)
     (error "secondbrain_set_layout: 'kind' must be one of %s"
@@ -130,6 +131,11 @@ collapsed, so this is how you see what is inside one."
     ((id string "Node id; omit for all" :optional t)
      (collapse boolean "Collapse instead" :optional t))
   :group 'secondbrain
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.SecondBrain.Expand
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool secondbrain expand --id memory/areas"
   (let ((collapsed (and collapse t)))
     (with-current-buffer (cmacs-secondbrain-tools--buffer)
@@ -191,6 +197,11 @@ come from."
   "Cancel an ingest job by id."
     ((id string "Job id, e.g. sbi-3"))
   :group 'secondbrain :returns 'json
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.SecondBrain.IngestCancel
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool secondbrain ingest-cancel --id sbi-3"
   (require 'cmacs-secondbrain-ingest)
   (unless (cmacs-secondbrain-tools--text id)

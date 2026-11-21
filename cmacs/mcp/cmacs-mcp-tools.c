@@ -79,17 +79,23 @@ cmacs_mcp_temp_path (const gchar *template)
 /* ── Master registration ──────────────────────────────────────────── */
 
 void
-cmacs_mcp_register_all_tools (McpServer *server)
+cmacs_mcp_register_c_tools (McpServer *server)
 {
+  /* The tools that are still hand-written C, and only those: the
+     privileged set (eval, send_keys, gi_call, the *_eval tools, ...),
+     the C introspection family, and the four that return an image.
+     `admin/cmacs-capability-audit.sh --remainder' lists them with the
+     reason each stays.  Their order here is the order they have always
+     been registered in.
+
+     Every other MCP tool is a `cmacs-brigade-deftool' form in
+     lisp/cmacs/cmacs-*-tools.el, published by the last call below; the
+     C handlers those replaced were deleted, and what they promised a
+     client is frozen in test/cmacs/data/mcp-wire-schema.json.  */
   cmacs_mcp_tools_eval_register (server);
-  cmacs_mcp_tools_buffer_register (server);
-  cmacs_mcp_tools_window_register (server);
   cmacs_mcp_tools_input_register (server);
   cmacs_mcp_tools_process_register (server);
-  cmacs_mcp_tools_debug_register (server);
-  cmacs_mcp_tools_edit_register (server);
   cmacs_mcp_tools_shell_register (server);
-  cmacs_mcp_tools_project_register (server);
 
 #ifdef HAVE_CMACS_GI
   cmacs_mcp_tools_gi_register (server);
@@ -103,30 +109,6 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_cintrospect_register (server);
 #endif
 
-#ifdef HAVE_CMACS_AUDIO
-  cmacs_mcp_tools_audio_register (server);
-#endif
-
-#ifdef HAVE_CMACS_AI
-  cmacs_mcp_tools_ai_register (server);
-#endif
-
-#ifdef HAVE_CMACS_GSURF
-  cmacs_mcp_tools_gsurf_register (server);
-#endif
-
-#ifdef HAVE_CMACS_LIBREGNUM
-  cmacs_mcp_tools_libregnum_register (server);
-#endif
-
-#ifdef HAVE_CMACS_GNUSEYE
-  cmacs_mcp_tools_gnuseye_register (server);
-#endif
-
-#ifdef HAVE_CMACS_SECONDBRAIN
-  cmacs_mcp_tools_secondbrain_register (server);
-#endif
-
 #ifdef HAVE_CMACS_CAD
   cmacs_mcp_tools_cad_register (server);
 #endif
@@ -134,32 +116,20 @@ cmacs_mcp_register_all_tools (McpServer *server)
 #ifdef HAVE_CMACS_LRGTERM
   cmacs_mcp_tools_lrgterm_register (server);
 #endif
+}
 
-#ifdef HAVE_CMACS_IMGEDIT
-  cmacs_mcp_tools_imgedit_register (server);
-#endif
+void
+cmacs_mcp_register_all_tools (McpServer *server)
+{
+  cmacs_mcp_register_c_tools (server);
 
-#ifdef HAVE_CMACS_CALCULATOR
-  cmacs_mcp_tools_calculator_register (server);
-#endif
-
-#ifdef HAVE_CMACS_VIDSTUDIO
-  cmacs_mcp_tools_vidstudio_register (server);
-#endif
-
-#ifdef HAVE_CMACS_DBEXPLORER
-  cmacs_mcp_tools_dbexplorer_register (server);
-#endif
-
-#ifdef HAVE_CMACS_AI_BRIGADE
-  /* Last, so it sees every hand-written tool.  A registry tool whose
-     name one of them already serves is published only when it comes
-     from a migrated family (it then replaces the C tool, which was its
-     fallback); any other collision is skipped with a warning, so a
-     user tool called "eval" cannot quietly take over the real one.
-     See publish_one in cmacs-mcp-tools-brigade.c.  */
+  /* The tool registry, in every build (it needs no AI subsystem).
+     Last, so it sees every hand-written tool: a registry tool is never
+     published under a name one of them already serves, so a tool of
+     anyone's called "eval" cannot quietly take over the real one.  See
+     publish_one in cmacs-mcp-tools-brigade.c, which also tells the
+     session when the registry's Lisp side failed to load.  */
   cmacs_mcp_tools_brigade_register (server);
-#endif
 }
 
 #endif /* HAVE_CMACS_MCP */

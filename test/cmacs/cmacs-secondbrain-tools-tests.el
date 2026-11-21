@@ -5,12 +5,16 @@
 
 ;;; Commentary:
 
-;; lisp/cmacs/cmacs-secondbrain-tools.el replaces part of
-;; cmacs/mcp/cmacs-mcp-tools-secondbrain.c while that file stays as the
-;; fallback, so the first thing tested is that the two have not drifted:
-;; every migrated tool has the C tool's name, its parameters in its
-;; order, their types and the same required set -- and every C tool is
-;; accounted for as migrated here, registered elsewhere, or left in C.
+;; lisp/cmacs/cmacs-secondbrain-tools.el is part of the second brain's
+;; MCP tools.
+;; The C handlers these tools replaced were deleted once the registry
+;; was published by every build with an MCP server.  What they promised
+;; a client -- frozen from a real tools/list beforehand, in
+;; test/cmacs/data/mcp-wire-schema.json -- is what the first test holds
+;; the family to, through cmacs-wire-schema.el: each tool's name, its
+;; parameters in order, their types and the required set.
+;; Every tool the C file had is accounted for as migrated here,
+;; registered elsewhere, or (none now) left in C.
 ;;
 ;; The rest is behaviour with the view's primitives stubbed: the tools
 ;; act on the one second-brain buffer and say so when it is not open, a
@@ -29,6 +33,17 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
 (require 'cmacs-capability)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 
 (defconst cmacs-secondbrain-tools-tests--migrated
   '("secondbrain_open" "secondbrain_set_layout" "secondbrain_expand"
@@ -44,7 +59,9 @@
 
 (defconst cmacs-secondbrain-tools-tests--left-in-c
   '("secondbrain_search")
-  "The C tools deliberately not migrated; see the file's commentary.")
+  "The C tools neither file above provides.
+`secondbrain_search' is cmacs-secondbrain-search-tools.el's, tested in
+cmacs-secondbrain-ingest-tools-tests.el.")
 
 (defun cmacs-secondbrain-tools-tests--root ()
   "Return the source tree's root, or nil when it cannot be found."
@@ -52,36 +69,6 @@
               (or load-file-name buffer-file-name default-directory)
               "lisp/cmacs/cmacs-secondbrain-tools.el")))
     (and dir (file-name-as-directory (expand-file-name dir)))))
-
-(defun cmacs-secondbrain-tools-tests--c-tools (file)
-  "Parse the MCP tool registrations in the C FILE.
-Return a list of (NAME PARAMS REQUIRED): PARAMS is a list of
-\(PARAM . TYPE) in schema order, REQUIRED the list of required names."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((starts nil) (out nil))
-      (while (re-search-forward "sb_add (server, \"\\([a-z_]+\\)\"" nil t)
-        (push (cons (match-string 1) (match-beginning 0)) starts))
-      (setq starts (nreverse starts))
-      (while starts
-        (let ((name (car (car starts)))
-              (beg (cdr (car starts)))
-              (end (if (cdr starts) (cdr (cadr starts)) (point-max)))
-              (params nil) (required nil))
-          (goto-char beg)
-          (while (re-search-forward
-                  "\\\\\"\\([a-z_]+\\)\\\\\":{\\\\\"type\\\\\":\\\\\"\\([a-z]+\\)\\\\\""
-                  end t)
-            (push (cons (match-string 1) (match-string 2)) params))
-          (goto-char beg)
-          (when (re-search-forward "\\\\\"required\\\\\":\\[\\([^]]*\\)\\]" end t)
-            (let ((list (match-string 1)) (at 0))
-              (while (string-match "\\\\\"\\([a-z_]+\\)\\\\\"" list at)
-                (push (match-string 1 list) required)
-                (setq at (match-end 0)))))
-          (push (list name (nreverse params) (nreverse required)) out))
-        (setq starts (cdr starts)))
-      (nreverse out))))
 
 (defmacro cmacs-secondbrain-tools-tests--with-family (&rest body)
   "Run BODY with a private registry holding only the secondbrain family."
@@ -113,47 +100,27 @@ The cell's car becomes (STATUS TEXT) when the tool settles."
 
 ;;;; The family is the C family
 
-(defun cmacs-secondbrain-tools-tests--check-against-c (c names)
-  "Assert each tool in NAMES matches its entry in C, the parsed C tools."
-  (dolist (name names)
-    (pcase-let* ((`(,_ ,params ,required) (assoc name c))
-                 (entry (cmacs-capability-describe-tool name)))
-      (ert-info ((format "tool %s" name))
-        (should entry)
-        (should (equal (mapcar (lambda (p)
-                                 (cons (plist-get p :name)
-                                       (plist-get p :type)))
-                               (plist-get entry :params))
-                       params))
-        (should (equal (cl-loop for p in (plist-get entry :params)
-                                when (plist-get p :required)
-                                collect (plist-get p :name))
-                       required))))))
-
 (ert-deftest cmacs-secondbrain-tools-test-family-matches-c ()
-  "Every migrated tool has its C twin's name, parameters, types and required set."
-  (let* ((root (cmacs-secondbrain-tools-tests--root))
-         (file (and root (expand-file-name
-                          "cmacs/mcp/cmacs-mcp-tools-secondbrain.c" root))))
-    (skip-unless (and file (file-readable-p file)))
-    (cmacs-secondbrain-tools-tests--with-family
-      (let ((c (cmacs-secondbrain-tools-tests--c-tools file)))
-        (should (equal (sort (mapcar #'car c) #'string<)
-                       (sort (append cmacs-secondbrain-tools-tests--migrated
-                                     cmacs-secondbrain-tools-tests--elsewhere
-                                     cmacs-secondbrain-tools-tests--left-in-c
-                                     nil)
-                             #'string<)))
-        ;; Exactly the migrated ones: this file must not register a name
-        ;; the ingest tools own, because the later registration wins.
-        (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
-                                     (cmacs-capability-describe))
-                             #'string<)
-                       (sort (copy-sequence
-                              cmacs-secondbrain-tools-tests--migrated)
-                             #'string<)))
-        (cmacs-secondbrain-tools-tests--check-against-c
-         c cmacs-secondbrain-tools-tests--migrated)))))
+  "Every migrated tool keeps its frozen name, parameters, types and required set."
+  (skip-unless (cmacs-secondbrain-tools-tests--root))
+  (cmacs-secondbrain-tools-tests--with-family
+    (let ((c (cmacs-wire-schema-names "cmacs-mcp-tools-secondbrain.c")))
+      (should (equal (sort (copy-sequence c) #'string<)
+                     (sort (append cmacs-secondbrain-tools-tests--migrated
+                                   cmacs-secondbrain-tools-tests--elsewhere
+                                   cmacs-secondbrain-tools-tests--left-in-c
+                                   nil)
+                           #'string<)))
+      ;; Exactly the migrated ones: this file must not register a name
+      ;; the ingest tools own, because the later registration wins.
+      (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
+                                   (cmacs-capability-describe))
+                           #'string<)
+                     (sort (copy-sequence
+                            cmacs-secondbrain-tools-tests--migrated)
+                           #'string<)))
+      (dolist (name cmacs-secondbrain-tools-tests--migrated)
+        (cmacs-wire-schema-should-match name)))))
 
 (ert-deftest cmacs-secondbrain-tools-test-migrate-is-gated ()
   "`secondbrain_migrate' is destructive, confirmed, and not on D-Bus by default."

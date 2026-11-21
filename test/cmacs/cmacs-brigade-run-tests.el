@@ -1170,10 +1170,15 @@ saw a brigade with no tools."
     (with-temp-buffer
       (insert-file-contents file)
       (let ((text (buffer-string)))
+        ;; The registry and its families, which is what fills the
+        ;; mirror; and the fabric on top where it is built.  The order
+        ;; is no longer a matter of text position -- the publisher is a
+        ;; repeatable pass and the loading is its own function -- and
+        ;; cmacs-rig-test-wire-lists-migrated-tools holds the result:
+        ;; a real session lists the tools.
+        (should (string-search "(require 'cmacs-brigade-tools)" text))
         (should (string-search "(require 'cmacs-brigade nil t)" text))
-        ;; before the mirror is walked, not after
-        (should (< (string-search "(require 'cmacs-brigade nil t)" text)
-                   (string-search "cmacs_brigade_registry_foreach" text)))))))
+        (should (string-search "cmacs_brigade_registry_foreach" text))))))
 
 
 ;;;; Confirmation must never prompt from a dispatch
@@ -1370,9 +1375,18 @@ editable and survives a restart like a hand-written one."
           (k (with-temp-buffer (insert-file-contents ctl) (buffer-string))))
       (dolist (m '("Providers" "Models"))
         (should (string-match-p (format "name='%s'" m) d)))
-      ;; Spawn's XML and its g_variant_get must agree, or every call fails
+      ;; Spawn's XML and what reads its arguments must agree, or every
+      ;; call fails.  What reads them is now a row of the forwarding
+      ;; table, naming the four in the XML's order.
       (should (string-match-p "name='model' direction='in'" d))
-      (should (string-search "\"(&s&s&s&s)\"" d))
+      (let ((table (expand-file-name
+                    "cmacs/dbus/cmacs-dbus-forward-table.h"
+                    cmacs-brigade-tests--root)))
+        (should (file-readable-p table))
+        (should (string-search
+                 "\"Spawn\", \"agent_spawn\", \"task,agent?,title?,model?\""
+                 (with-temp-buffer (insert-file-contents table)
+                                   (buffer-string)))))
       (dolist (v '("brigade providers" "brigade models"))
         (should (string-search v k)))
       (should (string-search "s?:model" k)))))

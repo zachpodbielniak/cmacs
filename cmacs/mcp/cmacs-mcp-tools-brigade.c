@@ -1,5 +1,5 @@
 /*
- * cmacs-mcp-tools-brigade.c — MCP publication for brigade tools
+ * cmacs-mcp-tools-brigade.c — MCP publication for registry tools
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -20,18 +20,47 @@
  * in-process agent execute the identical handler with the identical
  * confirmation and hook behaviour.  Two paths into one implementation
  * is the whole point; two implementations would drift.
+ *
+ * ── What needs the brigade, and what does not ───────────────────────
+ *
+ * The publisher is part of the MCP server: it is compiled in every
+ * build that has one, and needs only the registry mirror
+ * (cmacs/core/cmacs-tool-registry.c) and the Lisp files
+ * cmacs-brigade-registry.el, cmacs-brigade-tools.el and
+ * cmacs-capability.el, none of which need the AI subsystems.  That is
+ * what makes a migrated tool family the ONLY implementation of its
+ * tools: a build with MCP and no brigade publishes the same Lisp tools
+ * a full build does, and the hand-written C handlers those tools
+ * replaced have been deleted.
+ *
+ * ── When the Lisp side does not load ────────────────────────────────
+ *
+ * Nothing stands in for a registry tool any more, so a table that did
+ * not load -- or a tool family inside it that did not -- is a set of
+ * tools missing from every client, and must not be silent.  Each
+ * session is told: the reason is appended to the server's instructions
+ * (which a client reads at `initialize'), it is logged once, and a tool
+ * called `capability_doctor' is always listed.  That tool is normally
+ * the registry's own (cmacs-capability.el); when the registry itself is
+ * what failed, a C stand-in below answers with the load error.
+ *
+ * The scoped sockets further down are a brigade feature -- they exist
+ * to hold a CLI agent to its allowlist, and the allowlist gate is the
+ * brigade's -- and stay under HAVE_CMACS_AI_BRIGADE.
  */
 
 #include <config.h>
 
 #ifdef HAVE_CMACS_MCP
-#ifdef HAVE_CMACS_AI_BRIGADE
 
 #include "lisp.h"
 #include "cmacs-mcp-tools.h"
 #include "cmacs-eval-dispatch.h"
 #include "cmacs-glib-loop.h"
+#include "cmacs-tool-registry.h"
+#ifdef HAVE_CMACS_AI_BRIGADE
 #include "cmacs-brigade.h"
+#endif
 
 #include <mcp.h>
 #include <glib.h>
@@ -42,7 +71,9 @@
 #include <unistd.h>
 
 /* The key a scope's task id is stored under on each of its sessions'
- * McpServer.  See scope_session_created.  */
+ * McpServer.  See scope_session_created.  Only a scoped socket ever
+ * sets it, so in a build without the brigade no session has one and
+ * every call belongs to no task.  */
 #define CMACS_BRIGADE_SCOPE_TASK_KEY "cmacs-brigade-scope-task"
 
 /* One handler for every brigade tool.  The tool name arrives as MCP's
@@ -166,6 +197,20 @@ schema_for_tool (const CmacsBrigadeTool *tool)
       pdesc = json_object_get_string_member_with_default (p, "description", "");
 
       json_builder_set_member_name (builder, pname);
+
+      /* An array or object parameter comes with its JSON Schema already
+         written (`cmacs-brigade--params-json'): items, properties,
+         required, nested as deep as the tool declared.  It is copied in
+         whole rather than rebuilt here, so what an MCP client is shown
+         is the one description the Lisp validator checks against.  */
+      if (json_object_has_member (p, "schema")
+          && JSON_NODE_HOLDS_OBJECT (json_object_get_member (p, "schema")))
+        {
+          json_builder_add_value (
+            builder, json_node_copy (json_object_get_member (p, "schema")));
+          continue;
+        }
+
       json_builder_begin_object (builder);
       json_builder_set_member_name (builder, "type");
       json_builder_add_string_value (builder, ptype);
@@ -194,36 +239,36 @@ schema_for_tool (const CmacsBrigadeTool *tool)
   return json_builder_get_root (builder);
 }
 
-/* True when SERVER already exposes a tool called NAME.
+/* ── Publishing the registry onto one McpServer ───────────────────────
  *
- * mcp_server_add_tool replaces on collision, so without this check a
- * user registering a tool called "eval" would silently take over the
- * real eval for every MCP client -- a privilege escalation dressed up
- * as a naming accident. */
-static gboolean
-server_has_tool (McpServer *server, const gchar *name)
-{
-  GList *tools = mcp_server_list_tools (server);
-  GList *l;
-  gboolean found = FALSE;
+ * A server is published to more than once.  A session's McpServer gets
+ * the registry when it is created; the process-lifetime internal server
+ * (cmacs_mcp_get_internal_server, which the cmacs-ai tool bridge reads)
+ * is created during startup, before any Lisp file can be loaded, and is
+ * brought up to date each time it is asked for.  So publishing has to
+ * be repeatable: what an earlier pass put on the server is replaced or
+ * removed, and what it did not put there is left alone.  */
 
-  for (l = tools; l != NULL; l = l->next)
-    {
-      const gchar *existing = mcp_tool_get_name (MCP_TOOL (l->data));
-      if (existing != NULL && strcmp (existing, name) == 0)
-        {
-          found = TRUE;
-          break;
-        }
-    }
-  g_list_free (tools);
-  return found;
-}
+/* Per-server record of the names this file published from the registry.
+ * Everything else on the server is a hand-written C tool.  */
+#define CMACS_REGISTRY_PUBLISHED_KEY "cmacs-registry-published"
+/* The server's instructions before any notice was appended.  */
+#define CMACS_REGISTRY_BASE_INSTRUCTIONS_KEY "cmacs-registry-base-instructions"
+/* The registry generation the server was last published at, plus one
+ * (so that zero means never).  */
+#define CMACS_REGISTRY_GENERATION_KEY "cmacs-registry-generation"
+
+typedef struct
+{
+  McpServer  *server;
+  GHashTable *builtin;     /* names of the C tools on SERVER */
+  GHashTable *seen;        /* names this pass published */
+} PublishPass;
 
 static void
 publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
 {
-  McpServer *server = user_data;
+  PublishPass *pass = user_data;
   g_autoptr (McpTool) mt = NULL;
   g_autoptr (JsonNode) schema = NULL;
 
@@ -234,28 +279,22 @@ publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
   if (tool->no_mcp)
     return;
 
-  /* A name the server already serves belongs to a hand-written C tool
-   * (this runs after every per-subsystem registration).  Two cases:
+  /* A name that belongs to one of the tools that are still hand-written
+   * C: the privileged ones -- `eval', `send_keys', `gi_call', ... --
+   * the C introspection family, and the ones that return an image.  A
+   * registry tool never takes such a name, whoever registered it and
+   * from whichever file: mcp_server_add_tool replaces on collision, and
+   * silently taking over `eval' for every MCP client is a privilege
+   * escalation dressed as a naming accident.
    *
-   *  - The tool comes from a migrated family, one of the files
-   *    `cmacs-capability-migrated-families' loads.  It IS that tool,
-   *    rewritten, and takes the name: mcp_server_add_tool replaces on
-   *    collision.  The C handler stays behind as the fallback for a
-   *    build without the brigade or a session whose Lisp side did not
-   *    load, which is why no family C file had to change.
-   *
-   *  - Anything else is a user's tool that happens to share a built-in
-   *    name, and is refused: silently taking over a built-in for every
-   *    MCP client is a privilege escalation dressed as a naming
-   *    accident.
-   *
-   * Replacing a tool does not change who may call it: the allowlist and
-   * the privileged set go by NAME (cmacs-brigade-allowlist.c), and the
-   * name is the same.  */
-  if (server_has_tool (server, tool->name) && !tool->replaces_builtin)
+   * There used to be an exception for the shipped tool families, whose
+   * tools replaced C twins of the same name.  The twins are deleted, so
+   * a family tool no longer collides with anything and the exception
+   * went with them.  */
+  if (g_hash_table_contains (pass->builtin, tool->name))
     {
-      g_warning ("cmacs-brigade: tool `%s' shadows a built-in MCP tool "
-                 "and was not published; rename it", tool->name);
+      g_warning ("cmacs-mcp: registry tool `%s' has the name of a built-in "
+                 "MCP tool and was not published; rename it", tool->name);
       return;
     }
 
@@ -265,11 +304,148 @@ publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
   mcp_tool_set_input_schema (mt, schema);
   /* The classification the policy filter uses is the same one the model
    * sees, so a tool cannot look harmless to a client while being
-   * treated as destructive by the filter (or vice versa). */
+   * treated as destructive by the filter (or vice versa).  mcp-glib
+   * writes a hint only when it differs from the protocol's default, so
+   * a destructive tool (readOnlyHint false, destructiveHint true: both
+   * defaults) goes out with no `annotations' at all, and a client reads
+   * that absence as "may modify".  */
   mcp_tool_set_read_only_hint (mt, !tool->destructive);
   mcp_tool_set_destructive_hint (mt, tool->destructive);
 
-  mcp_server_add_tool (server, mt, handle_brigade_tool, NULL, NULL);
+  /* Replaces what an earlier pass published under this name.  */
+  mcp_server_add_tool (pass->server, mt, handle_brigade_tool, NULL, NULL);
+  g_hash_table_add (pass->seen, g_strdup (tool->name));
+}
+
+/* The names publishing has put on SERVER so far; created on first use
+ * and owned by SERVER.  */
+static GHashTable *
+published_names (McpServer *server)
+{
+  GHashTable *names = g_object_get_data (G_OBJECT (server),
+                                         CMACS_REGISTRY_PUBLISHED_KEY);
+
+  if (names == NULL)
+    {
+      names = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+      g_object_set_data_full (G_OBJECT (server), CMACS_REGISTRY_PUBLISHED_KEY,
+                              names, (GDestroyNotify) g_hash_table_unref);
+    }
+  return names;
+}
+
+/* Put the registry's current contents on SERVER: add what is new,
+ * replace what changed, remove what was unregistered since the last
+ * pass, and never touch a C tool.  */
+static void
+publish_registry (McpServer *server)
+{
+  PublishPass pass;
+  GHashTable *published = published_names (server);
+  GHashTableIter iter;
+  gpointer key;
+  GList *tools, *l;
+
+  pass.server = server;
+  pass.builtin = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  pass.seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+  /* What is on the server and was not put there by an earlier pass is
+   * a C tool.  Collected once: asking the server per tool is a list of
+   * every tool, per tool.  */
+  tools = mcp_server_list_tools (server);
+  for (l = tools; l != NULL; l = l->next)
+    {
+      const gchar *name = mcp_tool_get_name (MCP_TOOL (l->data));
+
+      if (name != NULL && !g_hash_table_contains (published, name))
+        g_hash_table_add (pass.builtin, g_strdup (name));
+    }
+  g_list_free_full (tools, g_object_unref);
+
+  cmacs_brigade_registry_init ();
+  cmacs_brigade_registry_foreach (publish_one, &pass);
+
+  /* Published before, not in the registry now: unregistered, or moved
+   * off the `mcp' surface.  */
+  g_hash_table_iter_init (&iter, published);
+  while (g_hash_table_iter_next (&iter, &key, NULL))
+    if (!g_hash_table_contains (pass.seen, key))
+      mcp_server_remove_tool (server, key);
+
+  g_hash_table_remove_all (published);
+  g_hash_table_iter_init (&iter, pass.seen);
+  while (g_hash_table_iter_next (&iter, &key, NULL))
+    g_hash_table_add (published, g_strdup (key));
+
+  g_hash_table_unref (pass.builtin);
+  g_hash_table_unref (pass.seen);
+}
+
+/* ── A table that did not load ──────────────────────────────────────── */
+
+/* Why the Lisp side of the tool table did not load, or NULL when it
+ * did.  Main thread only, like everything else in this file.  */
+static gchar *registry_load_error;
+
+/* The notice last written to the log, so that a hundred sessions with
+ * the same broken family file log it once.  */
+static gchar *registry_logged_notice;
+
+/* The stand-in `capability_doctor': registered only when the registry
+ * did not provide the real one, which means the registry is what is
+ * broken.  It says so, with the error, instead of leaving a client to
+ * work out why two hundred tools are missing.  */
+static McpToolResult *
+handle_capability_doctor_fallback (McpServer *server, const gchar *name,
+                                   JsonObject *arguments, gpointer user_data)
+{
+  McpToolResult *result = mcp_tool_result_new (FALSE);
+  g_autofree gchar *text = NULL;
+
+  (void) server;
+  (void) name;
+  (void) arguments;
+  (void) user_data;
+
+  text = g_strdup_printf (
+    "The cmacs tool table did not load, so the only MCP tools on this "
+    "server are the hand-written ones (eval, send_keys, the screenshot "
+    "tools, ...).  Every other tool is MISSING, not disabled.\n"
+    "Reason: %s\n"
+    "The table is lisp/cmacs/cmacs-brigade-registry.el, "
+    "cmacs-brigade-tools.el and cmacs-capability.el; fix the error, then "
+    "evaluate (require 'cmacs-capability) and reconnect.",
+    registry_load_error != NULL
+    ? registry_load_error
+    : "unknown (the registry loaded but defined no `capability_doctor')");
+  mcp_tool_result_add_text (result, text);
+  return result;
+}
+
+/* What every client of this session should be told, or NULL when the
+ * table is whole.  Newly allocated.  */
+static gchar *
+registry_notice (void)
+{
+  g_autoptr (GError) err = NULL;
+  gchar *text;
+
+  if (registry_load_error != NULL)
+    return g_strdup_printf (
+      "NOTICE: cmacs could not load its tool table (%s), so most tools "
+      "are MISSING from this server (they are not disabled on purpose); "
+      "only the built-in ones are listed.  Call the capability_doctor "
+      "tool for details.\n", registry_load_error);
+
+  /* The families that failed, in the registry's own words.  A constant
+   * form: nothing a client sent is in it.  */
+  text = cmacs_dispatch_eval_string (
+    "(if (fboundp 'cmacs-capability-status-notice)"
+    " (cmacs-capability-status-notice) \"\")", &err);
+  if (text != NULL && *text == '\0')
+    g_clear_pointer (&text, g_free);
+  return text;
 }
 
 void
@@ -277,27 +453,141 @@ cmacs_mcp_tools_brigade_register (McpServer *server)
 {
   GError *err = NULL;
   gchar *res;
+  const gchar *base;
+  g_autofree gchar *notice = NULL;
 
   /* Load the Elisp side first.  The C mirror this publishes from is
    * filled by `cmacs-brigade-register-tool', and nothing else requires
-   * `cmacs-brigade' -- its eager-load block lives inside the file -- so
-   * without this the mirror is empty at server start and every MCP
-   * client sees a brigade with no tools, the subagent controls
-   * included.  Failure is not fatal: an MCP server with the built-in
-   * tools and none of the brigade's is still worth having. */
+   * the registry, so without this the mirror is empty at server start.
+   *
+   * The brigade first, and separately: it only exists in a build that
+   * has it (`cmacs-brigade-available-p' guards its eager-load block),
+   * and its failing must not keep the table from loading.  */
   res = cmacs_dispatch_eval_string ("(require 'cmacs-brigade nil t)", &err);
   if (res == NULL)
     {
-      g_warning ("cmacs-brigade: could not load the Lisp side for MCP: %s",
+      g_warning ("cmacs-mcp: cmacs-brigade failed to load: %s",
                  err ? err->message : "unknown error");
       g_clear_error (&err);
     }
-  else
-    g_free (res);
+  g_free (res);
 
-  cmacs_brigade_registry_init ();
-  cmacs_brigade_registry_foreach (publish_one, server);
+  /* Then the table: the registry, the dispatcher, and cmacs-capability
+   * with every tool family -- all of it brigade-free.  WITHOUT the
+   * `noerror' argument, and with each file named: a missing file is as
+   * much a failure as one that signals, and since the C handlers these
+   * tools replaced are gone, a failure here takes most of the tool list
+   * with it.  It is not fatal -- a server with only the built-in tools
+   * still starts -- but it is remembered, and every session is told.
+   * Tried again on every pass, so fixing the file and reconnecting is
+   * enough.  (A single family that fails is caught in Lisp, by
+   * `cmacs-capability--load-family', and reported through
+   * `cmacs-capability-status-notice' below.)  */
+  res = cmacs_dispatch_eval_string ("(progn (require 'cmacs-brigade-registry)"
+                                    " (require 'cmacs-brigade-tools)"
+                                    " (require 'cmacs-capability) \"ok\")",
+                                    &err);
+  g_clear_pointer (&registry_load_error, g_free);
+  if (res == NULL)
+    {
+      registry_load_error = g_strdup (err ? err->message : "unknown error");
+      g_clear_error (&err);
+    }
+  g_free (res);
+
+  publish_registry (server);
+  g_object_set_data (G_OBJECT (server), CMACS_REGISTRY_GENERATION_KEY,
+                     GUINT_TO_POINTER (cmacs_brigade_registry_generation ()
+                                       + 1));
+
+  /* `capability_doctor' is always listed.  Normally publish_registry has
+   * just published the registry's.  The stand-in is recorded as
+   * published, not as a C tool, so that the real one replaces it on a
+   * later pass, once the table loads.  */
+  {
+    GList *tools = mcp_server_list_tools (server), *l;
+    gboolean have = FALSE;
+
+    for (l = tools; l != NULL && !have; l = l->next)
+      have = g_strcmp0 (mcp_tool_get_name (MCP_TOOL (l->data)),
+                        "capability_doctor") == 0;
+    g_list_free_full (tools, g_object_unref);
+
+    if (!have)
+      {
+        g_autoptr (McpTool) doctor
+          = mcp_tool_new ("capability_doctor",
+                          "Report why tools are missing from this cmacs MCP "
+                          "server: its tool table failed to load.");
+
+        mcp_tool_set_read_only_hint (doctor, TRUE);
+        mcp_tool_set_destructive_hint (doctor, FALSE);
+        mcp_server_add_tool (server, doctor,
+                             handle_capability_doctor_fallback, NULL, NULL);
+        g_hash_table_add (published_names (server),
+                          g_strdup ("capability_doctor"));
+      }
+  }
+
+  /* The notice goes after the server's own instructions.  Those are
+   * remembered the first time, so that a later pass replaces the notice
+   * instead of appending a second one.  (For a session this runs before
+   * `initialize' is answered: the unix-socket server has already copied
+   * its instructions onto the session's McpServer.)  */
+  base = g_object_get_data (G_OBJECT (server),
+                            CMACS_REGISTRY_BASE_INSTRUCTIONS_KEY);
+  if (base == NULL)
+    {
+      const gchar *current = mcp_server_get_instructions (server);
+
+      g_object_set_data_full (G_OBJECT (server),
+                              CMACS_REGISTRY_BASE_INSTRUCTIONS_KEY,
+                              g_strdup (current != NULL ? current : ""),
+                              g_free);
+      base = g_object_get_data (G_OBJECT (server),
+                                CMACS_REGISTRY_BASE_INSTRUCTIONS_KEY);
+    }
+
+  notice = registry_notice ();
+  if (notice != NULL)
+    {
+      g_autofree gchar *instructions
+        = g_strconcat (base, *base != '\0' ? "\n" : "", notice, NULL);
+
+      mcp_server_set_instructions (server, instructions);
+
+      if (g_strcmp0 (notice, registry_logged_notice) != 0)
+        {
+          g_warning ("cmacs-mcp: %s", notice);
+          g_free (registry_logged_notice);
+          registry_logged_notice = g_strdup (notice);
+        }
+    }
+  else
+    {
+      if (*base != '\0' || mcp_server_get_instructions (server) != NULL)
+        mcp_server_set_instructions (server, base);
+      g_clear_pointer (&registry_logged_notice, g_free);
+    }
 }
+
+void
+cmacs_mcp_tools_brigade_sync (McpServer *server)
+{
+  guint stamp = GPOINTER_TO_UINT (
+    g_object_get_data (G_OBJECT (server), CMACS_REGISTRY_GENERATION_KEY));
+
+  /* Nothing registered or removed since this server was last published,
+   * and the table loaded then: nothing to do.  A load that failed is
+   * tried again every time; it may have been fixed.  */
+  if (stamp != 0 && registry_load_error == NULL
+      && stamp == cmacs_brigade_registry_generation () + 1)
+    return;
+
+  cmacs_mcp_tools_brigade_register (server);
+}
+
+#ifdef HAVE_CMACS_AI_BRIGADE
 
 /* ── Scoped sockets ───────────────────────────────────────────────────
  *
@@ -556,13 +846,39 @@ DEFUN ("cmacs-brigade-scope-list", Fcmacs_brigade_scope_list,
   return out;
 }
 
+#endif /* HAVE_CMACS_AI_BRIGADE */
+
+DEFUN ("cmacs-mcp-registry-load-error", Fcmacs_mcp_registry_load_error,
+       Scmacs_mcp_registry_load_error, 0, 0, 0,
+       doc: /* Return why the MCP server could not load the tool table, or nil.
+The table is the Lisp side of the tool registry: cmacs-brigade-registry,
+cmacs-brigade-tools and cmacs-capability with its tool families.  The
+server loads it when a session is set up; a string here is the error
+that load signalled, and means the sessions set up since then list only
+the hand-written C tools.  nil means the last load succeeded, or that
+no session has been set up yet.
+
+A single tool family that fails to load is not reported here but in
+`cmacs-capability-family-failures'; `cmacs-capability-doctor' shows
+both.  */)
+  (void)
+{
+  return registry_load_error != NULL ? build_string (registry_load_error)
+                                     : Qnil;
+}
+
 void
 syms_of_cmacs_mcp_tools_brigade (void)
 {
+  defsubr (&Scmacs_mcp_registry_load_error);
+  /* The mirror's DEFUNs.  The brigade registers them too when it is
+     built; whichever syms_of_ runs second finds them done.  */
+  syms_of_cmacs_tool_registry ();
+#ifdef HAVE_CMACS_AI_BRIGADE
   defsubr (&Scmacs_brigade_scope_open);
   defsubr (&Scmacs_brigade_scope_close);
   defsubr (&Scmacs_brigade_scope_list);
+#endif
 }
 
-#endif /* HAVE_CMACS_AI_BRIGADE */
 #endif /* HAVE_CMACS_MCP */

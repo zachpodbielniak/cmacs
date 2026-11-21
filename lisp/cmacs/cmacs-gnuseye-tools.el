@@ -13,9 +13,10 @@
 ;; has the recipe), so one definition reaches in-process agents, MCP
 ;; clients, org.cmacs.Editor1.Tools and `emacsctl tool gnuseye ...'.
 ;; The wire names, parameter names and required/optional split are the C
-;; ones; the C file stays as the fallback for a build without the
-;; brigade, and test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el
-;; fails when the two drift.
+;; ones.  The C file is deleted; the schema it published is frozen in
+;; test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; What differs from the C handlers, on purpose:
 ;;
@@ -82,6 +83,11 @@ sent."
     "Open the GNU's Eye live planetary globe buffer."
     ()
   :group 'gnuseye
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.GnusEye.Open
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gnuseye open"
   (require 'cmacs-gnuseye)
   (cmacs-gnuseye)
@@ -108,6 +114,11 @@ sent."
 vessels, quakes, launches, fires)."
     ((name string "Layer name, as gnuseye_list_layers reports it"))
   :group 'gnuseye
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.GnusEye.ToggleLayer
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gnuseye toggle-layer --name quakes"
   (require 'cmacs-gnuseye)
   (cmacs-gnuseye--load-layers)
@@ -128,6 +139,11 @@ units."
      (lon number "Longitude, degrees")
      (range number "Camera range in world units (default 14)" :optional t))
   :group 'gnuseye
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.GnusEye.FlyTo
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gnuseye fly-to --lat 51.5 --lon -0.12"
   (require 'cmacs-gnuseye)
   (let ((lat (cmacs-gnuseye-tools--number lat "lat"))
@@ -221,6 +237,11 @@ Entities entering/leaving emit podomation events."
      (lon number "Centre longitude, degrees")
      (radius-km number "Radius in kilometres"))
   :group 'gnuseye
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.GnusEye.AddGeofence
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gnuseye add-geofence --name home --lat 41.9 \
 --lon -87.6 --radius-km 50"
   (require 'cmacs-gnuseye)
@@ -259,6 +280,7 @@ animated precipitation radar, cloud imagery, wind particles, METARs, \
 and US alert zones; flies to the strongest active storm."
     ()
   :group 'gnuseye
+  :destructive t
   :example "emacsctl tool gnuseye weather-showcase"
   (require 'cmacs-gnuseye)
   (require 'cmacs-gnuseye-meteo)

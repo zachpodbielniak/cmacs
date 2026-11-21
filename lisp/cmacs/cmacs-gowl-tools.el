@@ -9,8 +9,9 @@
 ;; the capability table (doc_org/cmacs/cmacs-capability.org has the
 ;; recipe; cmacs-calculator-tools.el is the worked example).  The wire
 ;; names, parameter names and result shapes are the C ones, so nothing
-;; that called `gowl_list_clients' has to change; the C handlers stay as
-;; the fallback for a build without the brigade.
+;; that called `gowl_list_clients' has to change.  Those C handlers are
+;; deleted; the schema these tools must keep is what they published,
+;; frozen in test/cmacs/data/mcp-wire-schema.json.
 ;;
 ;; What a body calls is what the C handler called: a `gowl-*' DEFUN, or
 ;; the function in cmacs-gowl-macro.el / -broadcast.el / -hotkey.el /
@@ -45,15 +46,23 @@
 ;;     colours are refused for a region showing such a window; OCR text
 ;;     and clipboard previews go through `cmacs-redact-text'.
 ;;
+;; `gowl_macro_run', `gowl_broadcast_add_team', `gowl_broadcast_add_rule'
+;; and `gowl_hotkey_add' take an array or an object, which the registry
+;; can describe (`cmacs-brigade-tool-types').  Each hands its argument on
+;; to a module's command line as JSON, as the C did, so the body turns
+;; the alist it received back into text with
+;; `cmacs-brigade-structured-json'.  The one thing that differs from the
+;; C's text: an EMPTY array or object nested inside the argument is
+;; written as null (see that function), which gowl's flow-YAML reader
+;; takes for an empty value.
+;;
 ;; Not here, and still served by the C: `gowl_screenshot' (an image),
-;; `gowl_reload_config' (the C reloads from gowl's search path and
-;; re-applies monitor overrides; `gowl-reload-config' the DEFUN does
-;; neither), the tools whose schema has an object or array parameter the
-;; registry cannot express (`gowl_macro_run', `gowl_broadcast_add_team',
-;; `gowl_broadcast_add_rule', `gowl_hotkey_add'), and `gowl_hotkey_send',
-;; which is `send_keys' by another name and stays with the privileged
-;; set.  The `screensaver_*' tools registered from the same C file are
-;; another family.
+;; and `gowl_hotkey_send', which is `send_keys' by another name and
+;; stays with the privileged set.  `gowl_reload_config' is registered at
+;; the end of this file only when the DEFUN it needs exists -- see the
+;; comment there; without it nothing serves the name.  The
+;; `screensaver_*' tools that were registered from the same C file are
+;; cmacs-screensaver-tools.el.
 
 ;;; Code:
 
@@ -621,14 +630,36 @@ recording started, stopped, or was stopped from the keyboard."
 ;;;; Macros
 ;;
 ;; Each is one call into cmacs-gowl-macro.el, which loads the opt-in
-;; module and signals with the module's own explanation.  `gowl_macro_run'
-;; is not here: its `args' is an array, which the registry cannot
-;; describe, and it runs arbitrary C besides.
+;; module and signals with the module's own explanation.
 
 (defun cmacs-gowl-tools--macro (line)
   "Run the macro module command LINE; return its reply as the C did."
   (require 'cmacs-gowl-macro)
   (cmacs-gowl-tools--raw (cmacs-gowl-macro-command line)))
+
+(cmacs-brigade-deftool gowl-macro-run
+  "Run a gowl macro: in-process C (crispy) or an Elisp macro that \
+drives the compositor. Runs under gowl's fault guard and time \
+budget; a crash or runaway loop is stopped and held back. \
+Loads the opt-in macro module on first use."
+    ((name string "A macro name (a file on the macro path, a registered \
+or an Elisp macro), or a path to a .c file")
+     (args array "Arguments handed to the macro, in order"
+           :optional t :items string))
+  ;; Destructive, and in the allowlist's privileged set by name: a macro
+  ;; is arbitrary code in the compositor.
+  :group 'gowl :destructive t
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (cmacs-gowl-tools--missing "name"))
+  ;; The module splits its line with g_shell_parse_argv; every word is
+  ;; quoted the way the C quoted it, so a name or an argument with a
+  ;; space, a quote or a `;' in it is one word and nothing more.
+  (cmacs-gowl-tools--macro
+   (mapconcat #'identity
+              (append (list "macro-run --trigger=api --"
+                            (cmacs-gowl-tools--shell-quote name))
+                      (mapcar #'cmacs-gowl-tools--shell-quote args))
+              " ")))
 
 (cmacs-brigade-deftool gowl-macro-list
   "Every macro runnable by name, as JSON: name, kind (file, \
@@ -819,6 +850,51 @@ released. Or set strict one-press-one-window mode instead."
       (cmacs-gowl-tools--missing "state (on, off, toggle or panic)"))
     (cmacs-gowl-tools--broadcast (concat "broadcast-" state)))))
 
+(defun cmacs-gowl-tools--definition (object yaml what one-line-p)
+  "Return the text of a module definition given as OBJECT or as YAML.
+OBJECT is the alist an `object' parameter delivers and wins when given;
+it is written back out as JSON, which is flow YAML.  Otherwise YAML has
+to pass ONE-LINE-P, because the module's command is a line.  WHAT names
+the missing argument, in the C handler's words."
+  (cond
+   (object (cmacs-brigade-structured-json object '(:type "object")))
+   ((funcall one-line-p yaml) yaml)
+   (t (cmacs-gowl-tools--missing what))))
+
+(defun cmacs-gowl-tools--yaml-line-p (text)
+  "Non-nil when TEXT is present and has no newline.
+The broadcast handlers' own check, which unlike
+`cmacs-gowl-tools--one-line-p' lets a carriage return through."
+  (and (stringp text) (not (string-empty-p text))
+       (not (string-search "\n" text))))
+
+(cmacs-brigade-deftool gowl-broadcast-add-team
+  "Add, or replace by name, a broadcast team for this session."
+    ((team object "{name, slots: [{name, match, focus-key, delivery}], \
+groups: {NAME: [slot]}}; match is a filter such as app-id = eqgame.exe"
+           :optional t)
+     (yaml string "The same as one line of flow YAML" :optional t))
+  :group 'gowl :destructive t
+  (cmacs-gowl-tools--broadcast
+   (concat "broadcast-add-team "
+           (cmacs-gowl-tools--definition
+            team yaml "an object, or yaml (one line of flow YAML)"
+            #'cmacs-gowl-tools--yaml-line-p))))
+
+(cmacs-brigade-deftool gowl-broadcast-add-rule
+  "Add, or replace by name, a broadcast rule for this session; the \
+reply says when it cannot run."
+    ((rule object "{name, team, when, keys: {include, exclude}, \
+modifiers, targets, translate, mode, reset-ms, delivery, mouse, \
+delay-ms, local}" :optional t)
+     (yaml string "The same as one line of flow YAML" :optional t))
+  :group 'gowl :destructive t
+  (cmacs-gowl-tools--broadcast
+   (concat "broadcast-add-rule "
+           (cmacs-gowl-tools--definition
+            rule yaml "an object, or yaml (one line of flow YAML)"
+            #'cmacs-gowl-tools--yaml-line-p))))
+
 (cmacs-brigade-deftool gowl-broadcast-remove
   "Remove a broadcast team or rule."
     ((kind string "team or rule" :enum ("team" "rule"))
@@ -882,8 +958,31 @@ the slot back to its match" :optional t))
 
 ;;;; Hotkeys (AutoHotkey for gowl)
 ;;
-;; `gowl_hotkey_add' (an object parameter) and `gowl_hotkey_send' (keys
-;; typed into the focused window: the privileged set) stay in C.
+;; `gowl_hotkey_send' (keys typed into the focused window: the
+;; privileged set) stays in C.
+
+(cmacs-brigade-deftool gowl-hotkey-add
+  "Add a hotkey (or a section of them) for this session; refused \
+whole, with the reason, on any problem."
+    ((hotkey object "A hotkey entry {id, key, do, context, when, mode, \
+double, hold, ...} -- key in AutoHotkey notation (#!t, CapsLock & j, \
+~LButton) or gowl's (Super+Alt+t); do is a list of actions such as \
+{shell: CMD}, {send: KEYS}, {action: spawn, arg: PROGRAM} -- or a whole \
+section {hotkeys: [...], remaps: {...}, modes: {...}}" :optional t)
+     (yaml string "The same as one line of flow YAML" :optional t)
+     (id string "Name it, so adding again replaces it and \
+gowl_hotkey_remove takes it back" :optional t))
+  :group 'gowl :destructive t
+  (let ((text (cmacs-gowl-tools--definition
+               hotkey yaml
+               "a hotkey object, or yaml (one line of flow YAML)"
+               #'cmacs-gowl-tools--one-line-p)))
+    (when (and id (not (cmacs-gowl-tools--word-p id)))
+      (cmacs-gowl-tools--missing "id (one word)"))
+    (cmacs-gowl-tools--hotkey
+     (if id
+         (format "hotkey-add --id=%s %s" id text)
+       (concat "hotkey-add " text)))))
 
 (cmacs-brigade-deftool gowl-hotkey-status
   "Hotkeys (AutoHotkey for gowl): whether they are suspended, the \
@@ -1177,6 +1276,36 @@ window produces it. Replaces what the person has copied."
   :group 'gowl :destructive t
   (cmacs-gowl-tools--clipboard
    (format "clipboard-copy %d" (cmacs-gowl-tools--clipboard-id id))))
+
+;;;; Reloading the configuration
+;;
+;; The C handler did two things in one critical section: it reloaded the
+;; compositor's config from gowl's SEARCH PATH
+;; (gowl_config_load_yaml_from_search_path: ./data/config.yaml, the XDG
+;; config directory, then gowl's compiled-in sysconfdir and datadir, and
+;; the rules.d beside whichever was found) and re-applied the per-output
+;; overrides to the live monitors.  `gowl-reload-config' the DEFUN does
+;; neither: it loads one named file, or resets to defaults, and its
+;; docstring says it never searches.  The search path cannot be rebuilt
+;; here either -- two of its four directories are constants compiled
+;; into libgowl.
+;;
+;; So this tool exists only in a build that has the DEFUN that does what
+;; the C did, `gowl-reload-config-from-search-path'.  The C handler is
+;; deleted, so in a build without that DEFUN nothing is registered under
+;; the name and nothing serves it.
+
+(declare-function gowl-reload-config-from-search-path "cmacs-gowl.c" ())
+
+(when (fboundp 'gowl-reload-config-from-search-path)
+  (cmacs-brigade-deftool gowl-reload-config
+    "Reload the gowl compositor configuration from YAML."
+      ()
+    :group 'gowl :destructive t
+    (cmacs-gowl-tools--running)
+    (gowl-reload-config-from-search-path)
+    ;; `cmacs_dispatch_gowl_reload_config' answered the literal t.
+    "t"))
 
 (provide 'cmacs-gowl-tools)
 

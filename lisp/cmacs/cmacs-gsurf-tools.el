@@ -13,10 +13,11 @@
 ;; (doc_org/cmacs/cmacs-capability.org has the recipe), reaching
 ;; in-process agents, MCP clients, org.cmacs.Editor1.Tools and
 ;; `emacsctl tool gsurf ...' from one definition.  Wire names, parameter
-;; names and the required/optional split are the C ones; the C file
-;; stays as the fallback for a build without the brigade, and
-;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when the
-;; two drift.
+;; names and the required/optional split are the C ones.  The C file is
+;; deleted; the schema it published is frozen in
+;; test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; Redaction
 ;; ---------
@@ -37,7 +38,7 @@
 ;;   - `gsurf_snapshot' and `gsurf_print_pdf' produce a picture of the
 ;;     page, which cannot be rewritten afterwards, so they also ask
 ;;     `cmacs-redact-capture-refused-p' -- the check the C handler
-;;     makes -- which looks at the title as well as the URL.
+;;     made -- which looks at the title as well as the URL.
 ;;
 ;;   - The refusal is one fixed message, the same one a name that
 ;;     matches nothing gets (`cmacs-gsurf-tools--unavailable').  A
@@ -247,6 +248,11 @@ Refusals are as in `cmacs-gsurf-tools--target'."
 the buffer name."
     ((url string "URL or search query"))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Open
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf open --url https://www.gnu.org/"
   (require 'cmacs-gsurf)
   (cmacs-gsurf-mcp-open (cmacs-gsurf-tools--string url "url")))
@@ -257,6 +263,11 @@ the buffer name."
      (buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Navigate
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf navigate --url https://www.gnu.org/"
   ;; The one acting tool allowed on an excluded view: it sends the view
   ;; elsewhere and reports only the URL the caller supplied.
@@ -269,6 +280,11 @@ the buffer name."
     ((buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Back
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf back"
   (cmacs-gsurf-mcp-back (cmacs-gsurf-tools--target-name buffer)))
 
@@ -277,6 +293,11 @@ the buffer name."
     ((buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Forward
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf forward"
   (cmacs-gsurf-mcp-forward (cmacs-gsurf-tools--target-name buffer)))
 
@@ -285,6 +306,11 @@ the buffer name."
     ((buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Reload
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf reload"
   (cmacs-gsurf-mcp-reload (cmacs-gsurf-tools--target-name buffer)))
 
@@ -293,6 +319,11 @@ the buffer name."
     ((buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Stop
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf stop"
   (cmacs-gsurf-mcp-stop (cmacs-gsurf-tools--target-name buffer)))
 
@@ -394,6 +425,11 @@ the buffer name."
      (buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.SetZoom
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf set-zoom --level 1.25"
   (unless (numberp level)
     (error "level must be a number"))
@@ -406,6 +442,11 @@ text buffer.  Returns the buffer name; read it with gsurf_extract_text \
 once loaded."
     ((url string "URL or search query"))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.LiteOpen
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf lite-open --url https://www.gnu.org/"
   (require 'cmacs-gsurf-lite)
   ;; Returns as soon as the buffer exists; the page arrives in it later
@@ -457,6 +498,11 @@ after gsurf_lite_open."
     "Cancel an in-flight gsurf download by id."
     ((id integer "download id"))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.DownloadCancel
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf download-cancel --id 3"
   (require 'cmacs-gsurf)
   (require 'cmacs-gsurf-downloads)
@@ -544,6 +590,11 @@ getBoundingClientRect reports) in a gsurf page with a trusted click."
      (buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.Click
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf click --x 120 --y 48"
   (unless (and (numberp x) (numberp y))
     (error "x and y must be numbers"))
@@ -591,6 +642,11 @@ Asynchronous: returns at once; the outcome goes to the echo area."
      (buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.ClickElement
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf click-element --selector 'input[name=q]'"
   (cmacs-gsurf-mcp-click-element
    (cmacs-gsurf-tools--string selector "selector")
@@ -629,6 +685,11 @@ hardening, containers, form_autofill, modal, ...)."
     ((name string "module name")
      (enabled boolean "true to enable, false to disable"))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.ToggleModule
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf toggle-module --name adblock --enabled true"
   (require 'cmacs-gsurf)
   (let ((text (cmacs-gsurf-mcp-toggle-module
@@ -647,6 +708,11 @@ the modules (dark-mode-toggle, dark-mode-toggle-site, form-autofill, \
      (buffer string "gsurf buffer name; defaults to the most recent"
              :optional t))
   :group 'gsurf
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Gsurf.RunAction
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool gsurf run-action --action dark-mode-toggle"
   ;; "not handled" is an answer about the action, not a failure, and
   ;; stays text.  The helper refuses the actions that would prompt.

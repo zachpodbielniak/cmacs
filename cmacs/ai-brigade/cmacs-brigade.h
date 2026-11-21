@@ -45,45 +45,14 @@
 
 /* ── Tool registry mirror ─────────────────────────────────────────
  *
- * The authoritative registry is Elisp; this is the C mirror used for
- * MCP publication and the allowlist gate.  See cmacs-brigade-registry.c
- * for why it exists at all.  */
+ * The authoritative registry is Elisp; the C mirror used for MCP
+ * publication and the allowlist gate is CmacsBrigadeTool and the
+ * cmacs_brigade_registry_* functions.  They are declared in
+ * cmacs/core/cmacs-tool-registry.h, not here: the mirror is also
+ * compiled in a build that has an MCP server and no brigade, where this
+ * header declares nothing.  */
 
-enum cmacs_brigade_confirm
-{
-  CMACS_BRIGADE_CONFIRM_NONE = 0,
-  CMACS_BRIGADE_CONFIRM_ASK,
-  CMACS_BRIGADE_CONFIRM_ALWAYS
-};
-
-typedef struct
-{
-  gchar    *name;         /* wire name, e.g. "call_for_me" */
-  gchar    *description;
-  gchar    *params_json;  /* JSON array of parameter objects */
-  gchar    *group;        /* nullable; allowlist vocabulary */
-  gboolean  destructive;
-  enum cmacs_brigade_confirm confirm;
-  gboolean  async;
-  gint      timeout_ms;   /* 0 = use the default */
-  gboolean  no_mcp;       /* :surfaces excludes `mcp': mirrored for the
-                             allowlist gate, never published to MCP */
-  gboolean  replaces_builtin; /* registered by a shipped, migrated
-                             family (cmacs-capability.el): the MCP
-                             publisher lets it take the place of the
-                             hand-written C tool of the same name */
-} CmacsBrigadeTool;
-
-typedef void (*CmacsBrigadeToolFunc) (const CmacsBrigadeTool *tool,
-                                      gpointer user_data);
-
-extern void  cmacs_brigade_registry_init    (void);
-extern void  cmacs_brigade_registry_foreach (CmacsBrigadeToolFunc fn,
-                                             gpointer user_data);
-/* Returns a copy; free with cmacs_brigade_tool_destroy. */
-extern CmacsBrigadeTool *cmacs_brigade_registry_lookup (const gchar *name);
-extern void  cmacs_brigade_tool_destroy     (CmacsBrigadeTool *tool);
-extern guint cmacs_brigade_registry_size    (void);
+#include "cmacs-tool-registry.h"
 
 /* ── Allowlist gate ───────────────────────────────────────────────
  *

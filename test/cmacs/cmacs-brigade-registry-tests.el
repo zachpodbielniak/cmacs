@@ -38,7 +38,12 @@ pass for the wrong reason."
                 ,@body)
        (clrhash (cmacs-brigade--registry 'tool))
        (maphash (lambda (k v) (puthash k v (cmacs-brigade--registry 'tool)))
-                saved))))
+                saved)
+       ;; And the C mirror, which the body emptied: restoring only the
+       ;; Lisp table left every real tool unpublished for the rest of
+       ;; the run, which nothing noticed while each had a C twin.
+       (when (fboundp 'cmacs-brigade-registry-remirror)
+         (cmacs-brigade-registry-remirror)))))
 
 
 ;;;; Definition validation
@@ -348,6 +353,416 @@ either interchangeably."
                   "deliverable" "panel" "context-provider"
                   "approval-handler"))
     (should (fboundp (intern (format "cmacs-brigade-register-%s" kind))))))
+
+;;;; Structured parameters: arrays and objects
+
+(defmacro cmacs-brigade-tests--with-team-tool (&rest body)
+  "Run BODY with `test_team' registered: every structured shape at once.
+Its handler returns its arguments as a list, so a test can look at
+exactly what a body receives."
+  (declare (indent 0))
+  `(cmacs-brigade-tests--with-clean-registry
+     (cmacs-brigade-deftool test-team "Team."
+         ((name string "Team name")
+          (members array "Window ids" :items integer)
+          (rule object "Who joins" :optional t
+                :properties ((app string "App id")
+                             (title string "Title" :optional t)
+                             (on boolean "Enabled" :optional t)
+                             (mode string "Mode" :optional t
+                                   :enum ("all" "one"))))
+          (extra object "Anything" :optional t)
+          (steps array "Steps" :optional t
+                 :items (object :properties ((key string "Key")
+                                             (times integer "Repeat"
+                                                    :optional t)))))
+       (list name members rule extra steps))
+     ,@body))
+
+(defun cmacs-brigade-tests--team-param (name)
+  "Return the parsed parameter NAME of `test_team'."
+  (cl-find name (cmacs-brigade-tool-params
+                 (cmacs-brigade-registry-get 'tool 'test-team))
+           :key (lambda (p) (plist-get p :name)) :test #'equal))
+
+(ert-deftest cmacs-brigade-structured-types-are-declared ()
+  "`array' and `object' parse, with :items and :properties, and nest."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (should (equal (plist-get (cmacs-brigade-tests--team-param "members")
+                              :items)
+                   '(:type "integer")))
+    (let ((rule (cmacs-brigade-tests--team-param "rule")))
+      (should (equal (plist-get rule :type) "object"))
+      (should (equal (mapcar (lambda (p) (plist-get p :name))
+                             (plist-get rule :properties))
+                     '("app" "title" "on" "mode")))
+      ;; Members are parameters: required unless marked optional.
+      (should (plist-get (car (plist-get rule :properties)) :required))
+      (should-not (plist-get (cadr (plist-get rule :properties)) :required)))
+    ;; A free-form object carries neither key.
+    (should-not (plist-member (cmacs-brigade-tests--team-param "extra")
+                              :properties))
+    ;; An array of objects: the element is itself a schema.
+    (should (equal (plist-get
+                    (plist-get (cmacs-brigade-tests--team-param "steps")
+                               :items)
+                    :type)
+                   "object"))
+    ;; A scalar parameter's plist is what it always was.
+    (should-not (plist-member (cmacs-brigade-tests--team-param "name")
+                              :items))))
+
+(ert-deftest cmacs-brigade-structured-types-reject-nonsense ()
+  "Keys that would be ignored on every surface are refused at definition."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-clean-registry
+    (dolist (params '(((x string "d" :items string))
+                      ((x array "d" :properties ((a string "d"))))
+                      ((x array "d" :items frobnicate))
+                      ((x object "d" :properties ((a frobnicate "d"))))
+                      ((x object "d" :properties ((a string))))))
+      (ert-info ((format "%S" params))
+        (should-error (cmacs-brigade-register-tool
+                       :name 'bad :description "d" :handler #'ignore
+                       :params params)
+                      :type 'cmacs-brigade-tool-error)))))
+
+(ert-deftest cmacs-brigade-structured-value-shapes ()
+  "Whatever a surface delivers, a body sees a list or a symbol-keyed alist."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (let ((members (cmacs-brigade-tests--team-param "members"))
+          (rule (cmacs-brigade-tests--team-param "rule"))
+          (extra (cmacs-brigade-tests--team-param "extra"))
+          (steps (cmacs-brigade-tests--team-param "steps"))
+          (hash (make-hash-table :test 'equal)))
+      ;; An array: JSON text, a vector, a list -- one answer.  Declared
+      ;; integers arrive as integers however they were spelt.
+      (dolist (given (list "[1, \"2\", 3.0]" [1 "2" 3.0] '(1 "2" 3.0)))
+        (should (equal (cmacs-brigade-structured-value given members)
+                       '(1 2 3))))
+      (should (null (cmacs-brigade-structured-value "[]" members)))
+      (should (null (cmacs-brigade-structured-value "" members)))
+      ;; An object: JSON text, a hash table, an alist with string keys.
+      (puthash "app" "foot" hash)
+      (puthash "on" :false hash)
+      (dolist (given (list "{\"app\":\"foot\",\"on\":false}" hash
+                           '(("app" . "foot") ("on" . :false))))
+        (should (equal (cmacs-brigade-structured-value given rule)
+                       '((app . "foot") (on)))))
+      ;; Members the schema does not list are kept, in order.
+      (should (equal (cmacs-brigade-structured-value
+                      "{\"app\":\"a\",\"zzz\":[1,2]}" rule)
+                     '((app . "a") (zzz 1 2))))
+      ;; Free-form: parsed, and otherwise left alone.
+      (should (equal (cmacs-brigade-structured-value
+                      "{\"a\":{\"b\":[true,false,null,\"x\"]}}" extra)
+                     '((a (b t :false nil "x")))))
+      ;; An array of objects, each checked against the element schema.
+      (should (equal (cmacs-brigade-structured-value
+                      "[{\"key\":\"a\"},{\"key\":\"b\",\"times\":\"2\"}]"
+                      steps)
+                     '(((key . "a")) ((key . "b") (times . 2))))))))
+
+(ert-deftest cmacs-brigade-structured-value-errors-name-the-path ()
+  "A value that does not fit is refused with the argument and the path."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (pcase-dolist (`(,param ,given ,want)
+                   '(("members" "[1, \"x\"]" "members\\[1\\].*integer")
+                     ("members" "{\"a\":1}" "members.*array, not an object")
+                     ("members" "3" "members.*JSON array")
+                     ("members" "[1," "members.*JSON array")
+                     ("rule" "[1]" "rule.*object, not an array")
+                     ("rule" "{}" "rule\\.app.*required")
+                     ("rule" "{\"app\":null}" "rule\\.app.*required")
+                     ("rule" "{\"app\":\"a\",\"on\":\"maybe\"}"
+                      "rule\\.on.*true or false")
+                     ("rule" "{\"app\":\"a\",\"mode\":\"some\"}"
+                      "rule\\.mode.*one of: all, one")
+                     ("steps" "[{\"key\":\"a\"},{}]"
+                      "steps\\[1\\]\\.key.*required")))
+      (ert-info ((format "%s <- %s" param given))
+        (let ((err (should-error
+                    (cmacs-brigade-structured-value
+                     given (cmacs-brigade-tests--team-param param)))))
+          (should (string-match-p want (error-message-string err))))))))
+
+(ert-deftest cmacs-brigade-structured-arguments-reach-the-handler ()
+  "A tool call hands the body Lisp data; a bad argument is a failed call."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    ;; As a provider or an MCP client sends it: one JSON object.
+    (should (equal (read (cmacs-brigade-call-tool
+                          "test_team"
+                          "{\"name\":\"raid\",\"members\":[3,4],
+                            \"rule\":{\"app\":\"foot\",\"on\":true},
+                            \"extra\":{\"k\":[1]},
+                            \"steps\":[{\"key\":\"a\"}]}"))
+                   '("raid" (3 4) ((app . "foot") (on . t)) ((k 1))
+                     (((key . "a"))))))
+    ;; A model that stringified the array still gets through.
+    (should (equal (read (cmacs-brigade-call-tool
+                          "test_team"
+                          "{\"name\":\"raid\",\"members\":\"[3,4]\"}"))
+                   '("raid" (3 4) nil nil nil)))
+    ;; An optional object that was not given is nil, NOT the empty
+    ;; object: that would demand its required members.
+    (should (equal (read (cmacs-brigade-call-tool
+                          "test_team" "{\"name\":\"raid\",\"members\":[]}"))
+                   '("raid" nil nil nil nil)))
+    ;; A wrong element is an error the model can read and act on.
+    (should (string-match-p
+             "\\`Error: argument `members\\[0\\]' must be an integer"
+             (cmacs-brigade-call-tool
+              "test_team" "{\"name\":\"raid\",\"members\":[\"x\"]}")))
+    ;; The handler is the wrapped one, so a direct call -- the menu, a
+    ;; test -- converts too.
+    (should (equal (funcall (cmacs-brigade-tool-handler
+                             (cmacs-brigade-registry-get 'tool 'test-team))
+                            "raid" "[1]" "{\"app\":\"a\"}" nil nil)
+                   '("raid" (1) ((app . "a")) nil nil)))))
+
+(ert-deftest cmacs-brigade-structured-async-handler-keeps-done ()
+  "The wrapper leaves an :async handler's DONE argument alone."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-clean-registry
+    (cmacs-brigade-deftool test-later "Later."
+        ((items array "Items" :items string))
+      :async t
+      (funcall done (mapconcat #'identity items "+")))
+    (should (equal (cmacs-brigade-call-tool
+                    "test_later" "{\"items\":[\"a\",\"b\"]}")
+                   "a+b"))))
+
+(ert-deftest cmacs-brigade-structured-schema-for-the-mirror ()
+  "The JSON handed to the C mirror carries each structured schema whole."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (let* ((json (cmacs-brigade--params-json
+                  (cmacs-brigade-tool-params
+                   (cmacs-brigade-registry-get 'tool 'test-team))))
+           (params (json-parse-string json :object-type 'alist
+                                      :array-type 'list))
+           (by-name (lambda (name)
+                      (cl-find name params :test #'equal
+                               :key (lambda (p) (alist-get 'name p))))))
+      ;; A scalar is exactly what it was before these types existed, so
+      ;; a mirror built by an older binary reads it unchanged.
+      (should (equal (funcall by-name "name")
+                     '((name . "name") (type . "string")
+                       (description . "Team name") (required . t))))
+      (should (equal (alist-get 'schema (funcall by-name "members"))
+                     '((type . "array") (description . "Window ids")
+                       (items (type . "integer")))))
+      (let ((rule (alist-get 'schema (funcall by-name "rule"))))
+        (should (equal (alist-get 'type rule) "object"))
+        (should (equal (alist-get 'required rule) '("app")))
+        (should (equal (alist-get 'mode (alist-get 'properties rule))
+                       '((type . "string") (description . "Mode")
+                         (enum "all" "one")))))
+      ;; Free-form: the bare type, which is JSON Schema for "anything".
+      (should (equal (alist-get 'schema (funcall by-name "extra"))
+                     '((type . "object") (description . "Anything"))))
+      (should (equal (alist-get
+                      'required
+                      (alist-get 'items
+                                 (alist-get 'schema
+                                            (funcall by-name "steps"))))
+                     '("key"))))))
+
+(ert-deftest cmacs-brigade-structured-provider-params ()
+  "What an in-process provider is given: an item schema, and named members."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (let ((params (cmacs-brigade-tool-provider-params
+                   (cmacs-brigade-registry-get 'tool 'test-team))))
+      ;; Scalars: the four elements `cmacs-ai-tools-register' always took.
+      (should (equal (nth 0 params) '("name" "string" "Team name" t)))
+      ;; An array says what one element is: a bare array is a schema
+      ;; Gemini refuses and the others guess at.
+      (should (equal (nth 1 params)
+                     '("members" "array" "Window ids" t
+                       "{\"type\":\"integer\"}")))
+      ;; ai-glib has no nested properties, so an object's members are
+      ;; named where a model will read them.
+      (should (equal (nth 1 (nth 2 params)) "object"))
+      (should (string-match-p "app (string), title (string, optional)"
+                              (nth 2 (nth 2 params))))
+      (should (= (length (nth 2 params)) 4))
+      (should (equal (nth 3 params) '("extra" "object" "Anything" nil)))
+      (should (string-match-p "\"required\":\\[\"key\"\\]"
+                              (nth 4 (nth 4 params)))))))
+
+(ert-deftest cmacs-brigade-structured-json-round-trips ()
+  "`cmacs-brigade-structured-json' writes back what a body received."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-team-tool
+    (let ((extra (cmacs-brigade-tests--team-param "extra"))
+          (rule (cmacs-brigade-tests--team-param "rule"))
+          (members (cmacs-brigade-tests--team-param "members")))
+      (dolist (text '("{\"name\":\"raid\",\"slots\":[{\"name\":\"a\",\"on\":false}],\"groups\":{\"all\":[\"a\",\"b\"]}}"
+                      "{\"n\":[[1,2],[true,3]],\"s\":\"x y\",\"f\":1.5}"))
+        (should (equal (cmacs-brigade-structured-json
+                        (cmacs-brigade-structured-value text extra) extra)
+                       text)))
+      ;; The declared type settles what nil is at the top...
+      (should (equal (cmacs-brigade-structured-json nil extra) "{}"))
+      (should (equal (cmacs-brigade-structured-json nil members) "[]"))
+      ;; ...and what a declared boolean member is.
+      (should (equal (cmacs-brigade-structured-json
+                      (cmacs-brigade-structured-value
+                       "{\"app\":\"a\",\"on\":false}" rule)
+                      rule)
+                     "{\"app\":\"a\",\"on\":false}"))
+      ;; The documented limit: an empty container nested in free-form
+      ;; data has become nil by the time a body sees it, and is null.
+      (should (equal (cmacs-brigade-structured-json
+                      (cmacs-brigade-structured-value "{\"e\":{},\"l\":[]}"
+                                                      extra)
+                      extra)
+                     "{\"e\":null,\"l\":null}")))))
+
+(ert-deftest cmacs-brigade-structured-menu-tools ()
+  "The menu never offers a tool it cannot run, and asks for JSON as JSON."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (cmacs-brigade-tests--with-clean-registry
+    ;; The first parameter receives the clicked thing as text.
+    (should-error (cmacs-brigade-register-tool
+                   :name 'bad :description "d" :handler #'ignore :menu t
+                   :params '((targets array "Targets" :items string)))
+                  :type 'cmacs-brigade-tool-error)
+    ;; Off the menu surface there is nothing to refuse.
+    (should (cmacs-brigade-register-tool
+             :name 'fine :description "d" :handler #'ignore :menu t
+             :surfaces '(mcp agents)
+             :params '((targets array "Targets" :items string))))
+    ;; A later structured parameter is fine: it is read as JSON.
+    (cmacs-brigade-deftool test-tag "Tag."
+        ((text string "What") (tags array "Tags" :items string))
+      :menu t
+      (list text tags))
+    (let* ((tool (cmacs-brigade-registry-get 'tool 'test-tag))
+           (param (cadr (cmacs-brigade-tool-params tool)))
+           (prompts nil))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (prompt &rest _)
+                   (push prompt prompts)
+                   "[\"a\", \"b\"]")))
+        ;; Parsed at the prompt, and the prompt says what is wanted.
+        (should (equal (cmacs-brigade-read-param param) '("a" "b")))
+        (should (string-match-p "JSON, array of string" (car prompts)))
+        ;; A scalar is still read as plain text.
+        (should (equal (cmacs-brigade-read-param
+                        (car (cmacs-brigade-tool-params tool)))
+                       "[\"a\", \"b\"]")))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "nope")))
+        (should-error (cmacs-brigade-read-param param))))))
+
+(defun cmacs-brigade-tests--mcp-exchange (path requests want)
+  "Send REQUESTS, a list of JSON-RPC lines, to the MCP socket at PATH.
+Return everything received once the regexp WANT has matched, or after
+ten seconds."
+  (let* ((out "")
+         (proc (make-network-process
+                :name "brigade-structured-test" :family 'local :service path
+                :noquery t :coding 'utf-8-unix
+                :filter (lambda (_p s) (setq out (concat out s))))))
+    (unwind-protect
+        (progn
+          (process-send-string
+           proc
+           (concat
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            "\"params\":{\"protocolVersion\":\"2024-11-05\","
+            "\"capabilities\":{},\"clientInfo\":{\"name\":\"ert\","
+            "\"version\":\"0\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+            (mapconcat (lambda (r) (concat r "\n")) requests "")))
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (< (float-time) deadline)
+                        (not (string-match-p want out)))
+              (accept-process-output proc 0.1)))
+          out)
+      (ignore-errors (delete-process proc)))))
+
+(ert-deftest cmacs-brigade-structured-over-the-mcp-socket ()
+  "The wire path: a structured argument through a real MCP session.
+
+Everything above calls Lisp directly.  This one connects to a scoped
+socket and speaks JSON-RPC, so the arguments go through the C
+publisher's handler -- re-serialised, escaped, evaluated -- and the
+schema an MCP client is shown comes from the C mirror."
+  (skip-unless (cmacs-brigade-registry-tests--available-p))
+  (skip-unless (fboundp 'cmacs-brigade-scope-open))
+  (cmacs-brigade-tests--with-team-tool
+    (let* ((path (cmacs-brigade-scope-open "test_team"))
+           (out (unwind-protect
+                    (cmacs-brigade-tests--mcp-exchange
+                     path
+                     (list
+                      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}"
+                      (concat
+                       "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\","
+                       "\"params\":{\"name\":\"test_team\",\"arguments\":"
+                       "{\"name\":\"raid\",\"members\":[3,4],"
+                       "\"rule\":{\"app\":\"foot \\\"q\\\"\",\"on\":false},"
+                       "\"steps\":[{\"key\":\"a\"}]}}}")
+                      (concat
+                       "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\","
+                       "\"params\":{\"name\":\"test_team\",\"arguments\":"
+                       "{\"name\":\"raid\",\"members\":[\"x\"]}}}"))
+                     "\"id\":4")
+                  (cmacs-brigade-scope-close path)))
+           (replies (mapcar (lambda (line)
+                              (ignore-errors
+                                (json-parse-string line :object-type 'alist
+                                                   :array-type 'list)))
+                            (split-string out "\n" t)))
+           (reply (lambda (id)
+                    (cl-find id replies :key (lambda (r) (alist-get 'id r))))))
+      ;; The call: the body received a list and an alist, with the quote
+      ;; inside a member intact, and printed them back.
+      (let* ((result (alist-get 'result (funcall reply 3)))
+             (text (alist-get 'text (car (alist-get 'content result)))))
+        (should result)
+        (should-not (eq (alist-get 'isError result) t))
+        (should (equal (read text)
+                       '("raid" (3 4) ((app . "foot \"q\"") (on)) nil
+                         (((key . "a")))))))
+      ;; A bad element is an MCP error carrying the path.
+      (let* ((result (alist-get 'result (funcall reply 4)))
+             (text (alist-get 'text (car (alist-get 'content result)))))
+        (should (eq (alist-get 'isError result) t))
+        (should (string-match-p "members\\[0\\].*integer" text)))
+      ;; The schema.  Only a binary whose mirror carries per-parameter
+      ;; schemas can publish `items'; an older one publishes the bare
+      ;; type, which is what the mirror's docstring tells apart.
+      (let* ((tool (cl-find "test_team"
+                            (alist-get 'tools
+                                       (alist-get 'result (funcall reply 2)))
+                            :test #'equal
+                            :key (lambda (tool) (alist-get 'name tool))))
+             (props (alist-get 'properties (alist-get 'inputSchema tool))))
+        (should tool)
+        (should (equal (alist-get 'type (alist-get 'members props)) "array"))
+        (should (equal (alist-get 'type (alist-get 'rule props)) "object"))
+        (when (string-match-p "\"schema\" member"
+                              (or (documentation 'cmacs-brigade--mirror-put t)
+                                  ""))
+          (should (equal (alist-get 'items (alist-get 'members props))
+                         '((type . "integer"))))
+          (should (equal (alist-get 'required (alist-get 'rule props))
+                         '("app")))
+          (should (equal (alist-get
+                          'type
+                          (alist-get 'key
+                                     (alist-get
+                                      'properties
+                                      (alist-get 'items
+                                                 (alist-get 'steps props)))))
+                         "string")))))))
 
 (provide 'cmacs-brigade-registry-tests)
 

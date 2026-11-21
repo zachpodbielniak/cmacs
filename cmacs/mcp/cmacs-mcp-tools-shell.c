@@ -1,14 +1,28 @@
 /*
- * cmacs-mcp-tools-shell.c — Shell, scripting and media MCP tools
+ * cmacs-mcp-tools-shell.c — the shell, scripting and media MCP tools
+ * that are still C
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Exposes the cmacs runtime subsystems an agent reaches for: the bacon
- * shell, the crispy embedded C language, the podomation automation
- * engine, and GStreamer video.  Every tool is individually #ifdef-gated
- * on its subsystem, so this file compiles regardless of configure
- * flags; cmacs_mcp_tools_shell_register() only registers what is built.
+ * Five tools, kept as hand-written handlers on purpose:
+ *
+ *   bacon_eval, crispy_eval, podomation_eval_dsl, podomation_repl_eval
+ *       run code the caller supplies.  They are in the privileged set
+ *       the brigade's allowlist names, and stay where a change to them
+ *       is reviewed as a change to that set.
+ *   video_snapshot
+ *       returns a PNG; a registry tool returns text.
+ *
+ * Every tool is individually #ifdef-gated on its subsystem, so this
+ * file compiles regardless of configure flags;
+ * cmacs_mcp_tools_shell_register() only registers what is built.
+ *
+ * The other eight podomation_* tools and video_list that used to be
+ * registered here are registry tools now (lisp/cmacs/
+ * cmacs-podomation-tools.el, cmacs-video-tools.el), published by
+ * cmacs-mcp-tools-brigade.c; their C handlers were deleted.  What they
+ * promised a client is frozen in test/cmacs/data/mcp-wire-schema.json.
  */
 
 #include <config.h>
@@ -33,7 +47,15 @@ shell_error (const gchar *message)
   return result;
 }
 
-/* Helper: dispatch EXPR, wrap printed result (or error) in a result. */
+#endif
+
+#if defined(HAVE_CMACS_BACON) || defined(HAVE_CMACS_CRISPY) \
+  || defined(HAVE_CMACS_PODOMATION)
+
+/* Helper: dispatch EXPR, wrap printed result (or error) in a result.
+   Not for the video tool, which answers with an image: a build with
+   video and none of the three above must not be left with an unused
+   static function.  */
 static McpToolResult *
 shell_dispatch (const gchar *expr)
 {
@@ -97,72 +119,6 @@ handle_crispy_eval (McpServer *s, const gchar *n,
 /* ── podomation tools ─────────────────────────────────────────────── */
 
 #ifdef HAVE_CMACS_PODOMATION
-/* Build an elisp alist literal from a JSON object of string values.
-   Non-string members are skipped.  Returns "nil" for a NULL/empty
-   object.  Caller frees. */
-static gchar *
-podomation_data_alist (JsonObject *data)
-{
-  GList *members, *m;
-  GString *s;
-
-  if (data == NULL)
-    return g_strdup ("nil");
-  members = json_object_get_members (data);
-  if (members == NULL)
-    return g_strdup ("nil");
-
-  s = g_string_new ("(list");
-  for (m = members; m != NULL; m = m->next)
-    {
-      const gchar *key = m->data;
-      const gchar *val = json_object_get_string_member_with_default (
-        data, key, NULL);
-      g_autofree gchar *ek = NULL, *ev = NULL;
-      if (val == NULL)
-        continue;
-      ek = cmacs_dispatch_lisp_escape (key);
-      ev = cmacs_dispatch_lisp_escape (val);
-      g_string_append_printf (s, " (cons \"%s\" \"%s\")", ek, ev);
-    }
-  g_list_free (members);
-  g_string_append_c (s, ')');
-  return g_string_free (s, FALSE);
-}
-
-static McpToolResult *
-handle_podomation_emit_event (McpServer *s, const gchar *n,
-                              JsonObject *a, gpointer u)
-{
-  const gchar *event;
-  g_autofree gchar *ee = NULL, *data = NULL, *expr = NULL;
-
-  (void) s; (void) n; (void) u;
-
-  event = json_object_get_string_member_with_default (a, "event", NULL);
-  if (event == NULL)
-    return shell_error ("Missing required argument: event");
-
-  ee = cmacs_dispatch_lisp_escape (event);
-  data = podomation_data_alist (
-    json_object_has_member (a, "data")
-      ? json_object_get_object_member (a, "data") : NULL);
-  expr = g_strdup_printf (
-    "(progn (cmacs-podomation-emit-event \"%s\" %s)"
-    "       (format \"emitted %%s\" \"%s\"))",
-    ee, data, ee);
-  return shell_dispatch (expr);
-}
-
-static McpToolResult *
-handle_podomation_list_pods (McpServer *s, const gchar *n,
-                             JsonObject *a, gpointer u)
-{
-  (void) s; (void) n; (void) a; (void) u;
-  return shell_dispatch (
-    "(prin1-to-string (cmacs-podomation-list-pods))");
-}
-
 static McpToolResult *
 handle_podomation_eval_dsl (McpServer *s, const gchar *n,
                             JsonObject *a, gpointer u)
@@ -180,117 +136,6 @@ handle_podomation_eval_dsl (McpServer *s, const gchar *n,
   expr = g_strdup_printf (
     "(progn (cmacs-podomation-eval-dsl \"%s\") \"DSL evaluated\")", ed);
   return shell_dispatch (expr);
-}
-
-static McpToolResult *
-handle_podomation_stats (McpServer *s, const gchar *n,
-                         JsonObject *a, gpointer u)
-{
-  (void) s; (void) n; (void) a; (void) u;
-  return shell_dispatch ("(prin1-to-string (cmacs-podomation-stats))");
-}
-
-static McpToolResult *
-handle_podomation_list_modules (McpServer *s, const gchar *n,
-                                JsonObject *a, gpointer u)
-{
-  (void) s; (void) n; (void) a; (void) u;
-  return shell_dispatch (
-    "(prin1-to-string (cmacs-podomation-list-modules))");
-}
-
-static McpToolResult *
-handle_podomation_load_file (McpServer *s, const gchar *n,
-                             JsonObject *a, gpointer u)
-{
-  const gchar *file;
-  g_autofree gchar *ef = NULL, *expr = NULL;
-
-  (void) s; (void) n; (void) u;
-
-  file = json_object_get_string_member_with_default (a, "file", NULL);
-  if (file == NULL)
-    return shell_error ("Missing required argument: file");
-
-  ef = cmacs_dispatch_lisp_escape (file);
-  expr = g_strdup_printf (
-    "(let ((path (expand-file-name \"%s\")))"
-    "  (cmacs-podomation-load-file path)"
-    "  (format \"loaded %%s\" path))",
-    ef);
-  return shell_dispatch (expr);
-}
-
-static McpToolResult *
-handle_podomation_set_context (McpServer *s, const gchar *n,
-                               JsonObject *a, gpointer u)
-{
-  g_autofree gchar *alist = NULL, *expr = NULL;
-
-  (void) s; (void) n; (void) u;
-
-  if (!json_object_has_member (a, "context"))
-    return shell_error ("Missing required argument: context");
-
-  alist = podomation_data_alist (
-    json_object_get_object_member (a, "context"));
-  expr = g_strdup_printf (
-    "(progn (cmacs-podomation-set-context %s) \"context set\")",
-    alist);
-  return shell_dispatch (expr);
-}
-
-static McpToolResult *
-handle_podomation_reload (McpServer *s, const gchar *n,
-                          JsonObject *a, gpointer u)
-{
-  (void) s; (void) n; (void) a; (void) u;
-  return shell_dispatch (
-    "(progn (cmacs-podomation-reload) \"engine reloaded\")");
-}
-
-static McpToolResult *
-handle_podomation_control (McpServer *s, const gchar *n,
-                           JsonObject *a, gpointer u)
-{
-  const gchar *action;
-
-  (void) s; (void) n; (void) u;
-
-  action = json_object_get_string_member_with_default (a, "action", NULL);
-  if (action == NULL)
-    return shell_error ("Missing required argument: action");
-
-  if (g_strcmp0 (action, "start") == 0)
-    return shell_dispatch (
-      "(progn (cmacs-podomation-start) \"engine started\")");
-  if (g_strcmp0 (action, "stop") == 0)
-    return shell_dispatch (
-      "(progn (cmacs-podomation-stop) \"engine stopped\")");
-  if (g_strcmp0 (action, "status") == 0)
-    return shell_dispatch (
-      "(if (cmacs-podomation-running-p) \"running\" \"stopped\")");
-  if (g_strcmp0 (action, "run") == 0)
-    {
-      /* Run a pod's rules by name: cmacs-podomation-run-pod. */
-      const gchar *pod, *event;
-      g_autofree gchar *pe = NULL, *ee = NULL, *expr = NULL;
-
-      pod = json_object_get_string_member_with_default (a, "pod", NULL);
-      if (pod == NULL || *pod == '\0')
-        return shell_error ("action run needs a pod");
-      event = json_object_get_string_member_with_default (a, "event", "");
-      pe = cmacs_dispatch_lisp_escape (pod);
-      ee = cmacs_dispatch_lisp_escape (event);
-      expr = g_strdup_printf (
-        "(format \"ran %%s %%s\" \"%s\""
-        " (cmacs-podomation-run-pod \"%s\""
-        "  (and (> (length \"%s\") 0) \"%s\")))",
-        pe, pe, ee, ee);
-      return shell_dispatch (expr);
-    }
-
-  return shell_error ("action must be one of: start, stop, status, run");
 }
 
 static McpToolResult *
@@ -318,14 +163,6 @@ handle_podomation_repl_eval (McpServer *s, const gchar *n,
 /* ── video tools ──────────────────────────────────────────────────── */
 
 #ifdef HAVE_CMACS_VIDEO
-static McpToolResult *
-handle_video_list (McpServer *s, const gchar *n,
-                   JsonObject *a, gpointer u)
-{
-  (void) s; (void) n; (void) a; (void) u;
-  return shell_dispatch ("(prin1-to-string (cmacs-video-list))");
-}
-
 static McpToolResult *
 handle_video_snapshot (McpServer *s, const gchar *n,
                        JsonObject *a, gpointer u)
@@ -415,28 +252,6 @@ cmacs_mcp_tools_shell_register (McpServer *server)
 #endif
 
 #ifdef HAVE_CMACS_PODOMATION
-  tool = mcp_tool_new ("podomation_emit_event",
-    "Emit an event into the podomation automation engine, optionally "
-    "with a data object of string values.");
-  schema = cmacs_mcp_schema_from_string (
-    "{\"type\":\"object\",\"properties\":{"
-    "\"event\":{\"type\":\"string\","
-      "\"description\":\"Event name, e.g. on_buffer_save\"},"
-    "\"data\":{\"type\":\"object\","
-      "\"description\":\"Event payload (string values)\"}"
-    "},\"required\":[\"event\"]}");
-  mcp_tool_set_input_schema (tool, schema);
-  mcp_server_add_tool (server, tool, handle_podomation_emit_event,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_list_pods",
-    "List active podomation pods and their health status.");
-  mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_podomation_list_pods,
-                       NULL, NULL);
-  g_object_unref (tool);
-
   tool = mcp_tool_new ("podomation_eval_dsl",
     "Parse and execute a podomation DSL source string.");
   schema = cmacs_mcp_schema_from_string (
@@ -446,72 +261,6 @@ cmacs_mcp_tools_shell_register (McpServer *server)
     "},\"required\":[\"dsl\"]}");
   mcp_tool_set_input_schema (tool, schema);
   mcp_server_add_tool (server, tool, handle_podomation_eval_dsl,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_stats",
-    "Return podomation engine statistics: events dispatched, "
-    "handlers called/failed, pipe-chains executed, and start time.");
-  mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_podomation_stats,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_list_modules",
-    "List the loaded podomation modules (available event sources "
-    "and actions).");
-  mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_podomation_list_modules,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_load_file",
-    "Load and parse a .pod DSL file into the automation engine.");
-  schema = cmacs_mcp_schema_from_string (
-    "{\"type\":\"object\",\"properties\":{"
-    "\"file\":{\"type\":\"string\","
-      "\"description\":\"Path to a .pod DSL file\"}"
-    "},\"required\":[\"file\"]}");
-  mcp_tool_set_input_schema (tool, schema);
-  mcp_server_add_tool (server, tool, handle_podomation_load_file,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_set_context",
-    "Set the engine context variables (an object of string values) "
-    "exposed to the DSL as {context->key} bindings.");
-  schema = cmacs_mcp_schema_from_string (
-    "{\"type\":\"object\",\"properties\":{"
-    "\"context\":{\"type\":\"object\","
-      "\"description\":\"Context key/value pairs (string values)\"}"
-    "},\"required\":[\"context\"]}");
-  mcp_tool_set_input_schema (tool, schema);
-  mcp_server_add_tool (server, tool, handle_podomation_set_context,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_reload",
-    "Hot-reload the podomation engine configuration.");
-  mcp_server_add_tool (server, tool, handle_podomation_reload,
-                       NULL, NULL);
-  g_object_unref (tool);
-
-  tool = mcp_tool_new ("podomation_control",
-    "Control the podomation engine. action is one of \"start\", "
-    "\"stop\", \"status\", or \"run\" -- run pod's rules now, as if "
-    "its source had fired event (default: the pod's only bound event).");
-  schema = cmacs_mcp_schema_from_string (
-    "{\"type\":\"object\",\"properties\":{"
-    "\"action\":{\"type\":\"string\","
-    "\"enum\":[\"start\",\"stop\",\"status\",\"run\"],"
-      "\"description\":\"Lifecycle action, or run a pod\"},"
-    "\"pod\":{\"type\":\"string\","
-      "\"description\":\"Pod name, for action run\"},"
-    "\"event\":{\"type\":\"string\","
-      "\"description\":\"Event to fire, for action run (optional)\"}"
-    "},\"required\":[\"action\"]}");
-  mcp_tool_set_input_schema (tool, schema);
-  mcp_server_add_tool (server, tool, handle_podomation_control,
                        NULL, NULL);
   g_object_unref (tool);
 
@@ -531,12 +280,6 @@ cmacs_mcp_tools_shell_register (McpServer *server)
 #endif
 
 #ifdef HAVE_CMACS_VIDEO
-  tool = mcp_tool_new ("video_list",
-    "List all live cmacs-video stream handles.");
-  mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_video_list, NULL, NULL);
-  g_object_unref (tool);
-
   tool = mcp_tool_new ("video_snapshot",
     "Capture the current frame of a video stream and return it as a "
     "PNG image.");

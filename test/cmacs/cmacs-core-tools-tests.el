@@ -9,10 +9,10 @@
 ;; tool families (lisp/cmacs/cmacs-<family>-tools.el) are the editor-core
 ;; MCP tools moved onto the capability table.  Two things are held here:
 ;;
-;;   - Wire compatibility.  While the C handlers remain as the fallback
-;;     for a build without the brigade, every migrated tool must have the
-;;     name, the parameters, the parameter types and the required set its
-;;     C registration declares.  The C files are parsed as text.
+;;   - Wire compatibility.  The C handlers are deleted; every migrated
+;;     tool must keep the name, the parameters, the parameter types and
+;;     the required set its C registration declared, as frozen in
+;;     test/cmacs/data/mcp-wire-schema.json (cmacs-wire-schema.el).
 ;;
 ;;   - Behaviour, with the redaction contract (cmacs-redact.el) stubbed:
 ;;     an excluded buffer or file is left out of listings and is answered
@@ -29,6 +29,17 @@
 (require 'subr-x)
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 
 ;; The tool bodies `require' cmacs-redact, and every test stubs its
 ;; functions.  Load it here, once, before any stub goes in: a load from
@@ -91,6 +102,16 @@
 (defconst cmacs-core-tools-tests--layout
   '("split_window" "delete_window")
   "Tools that rearrange the frame: :destructive, no confirmation.")
+
+(defconst cmacs-core-tools-tests--session
+  '(("switch_to_buffer" . nil)
+    ("select_window" . t)
+    ("goto_line" . t))
+  "Tools that move the user's selection or point, as (WIRE . ON-DBUS).
+They change what the person at the keyboard is looking at, so they are
+:destructive (and not confirmed); the C never published them read-only.
+ON-DBUS is non-nil where a legacy D-Bus method has always done the same
+and is served from the tool, which therefore lists its surfaces.")
 
 (defun cmacs-core-tools-tests--root ()
   "Return the source tree's root, or nil when it cannot be found."
@@ -198,70 +219,29 @@ signalled, not turned into text."
 
 ;;;; Wire compatibility
 
-(defun cmacs-core-tools-tests--c-tools (file)
-  "Parse the MCP C FILE; return ((NAME PARAMS REQUIRED)...).
-PARAMS is a list of (PARAM-NAME . JSON-TYPE) in schema order and
-REQUIRED the list of required parameter names."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((out nil))
-      (while (re-search-forward "mcp_tool_new (\"\\([a-z_]+\\)\"" nil t)
-        (let* ((name (match-string 1))
-               (end (save-excursion
-                      (re-search-forward "g_object_unref (tool)" nil t)))
-               (params nil)
-               (required nil))
-          (save-excursion
-            (when (re-search-forward "\\\\\"properties\\\\\":{" end t)
-              (while (re-search-forward
-                      "\\\\\"\\([a-z_]+\\)\\\\\":{\\\\\"type\\\\\":\\\\\"\\([a-z]+\\)\\\\\""
-                      end t)
-                (push (cons (match-string 1) (match-string 2)) params))))
-          (save-excursion
-            (when (re-search-forward
-                   "\\\\\"required\\\\\":\\[\\([^]]*\\)\\]" end t)
-              (let ((text (match-string 1)) (start 0))
-                (while (string-match "\\\\\"\\([a-z_]+\\)\\\\\"" text start)
-                  (push (match-string 1 text) required)
-                  (setq start (match-end 0))))))
-          (push (list name (nreverse params) (nreverse required)) out)))
-      (nreverse out))))
-
 (ert-deftest cmacs-core-tools-test-families-match-c ()
-  "Every migrated tool has its C registration's name, params and types."
+  "Every migrated tool keeps its C registration's name, params and types.
+The C handlers are gone; what they published is the frozen wire schema
+\(test/cmacs/data/mcp-wire-schema.json, read through cmacs-wire-schema.el)."
   (cmacs-core-tools-tests--with-tools
     (let ((seen nil))
       (pcase-dolist (`(,_family ,c-file . ,names)
                      cmacs-core-tools-tests--families)
-        (let* ((path (expand-file-name (concat "cmacs/mcp/" c-file) root))
-               (c (progn (should (file-readable-p path))
-                         (cmacs-core-tools-tests--c-tools path))))
+        (let ((c (cmacs-wire-schema-names c-file)))
           (dolist (name names)
-            (let ((decl (assoc name c))
-                  (tool (cmacs-core-tools-tests--tool name)))
+            (let ((tool (cmacs-core-tools-tests--tool name)))
               (ert-info ((format "tool %s (%s)" name c-file))
-                ;; Still registered by the C file under this name...
-                (should decl)
-                ;; ...and by exactly one Lisp family.
+                ;; Published by that C file under this name...
+                (should (member name c))
+                ;; ...and now by exactly one Lisp family.
                 (should tool)
                 (should (equal (cmacs-brigade-tool-wire-name tool) name))
                 (should-not (member name seen))
                 (push name seen)
-                (let ((params (cmacs-brigade-tool-params tool)))
-                  (should (equal (mapcar (lambda (p)
-                                           (cons (plist-get p :name)
-                                                 (plist-get p :type)))
-                                         params)
-                                 (nth 1 decl)))
-                  (should (equal (mapcar (lambda (p) (plist-get p :name))
-                                         (seq-filter
-                                          (lambda (p)
-                                            (plist-get p :required))
-                                          params))
-                                 (nth 2 decl)))))))))
+                (cmacs-wire-schema-should-match name))))))
       ;; Nothing was registered that the table above does not name: a
       ;; tool added to a family file has to be added here, and so be
-      ;; checked against the C.
+      ;; checked against the frozen schema.
       (should (equal (sort (copy-sequence seen) #'string<)
                      (sort (mapcar (lambda (n)
                                      (cmacs-brigade-tool-wire-name
@@ -271,53 +251,33 @@ REQUIRED the list of required parameter names."
 
 (ert-deftest cmacs-core-tools-test-descriptions-match-c ()
   "Each migrated tool's description is the C one, word for word.
-The C text is split across string literals, so the comparison is on the
-words alone."
+The C text was folded across string literals, and the Lisp text is
+folded differently, so the comparison is on the words alone."
   (cmacs-core-tools-tests--with-tools
-    (pcase-dolist (`(,_family ,c-file . ,names)
+    (pcase-dolist (`(,_family ,_c-file . ,names)
                    cmacs-core-tools-tests--families)
-      (with-temp-buffer
-        (insert-file-contents
-         (expand-file-name (concat "cmacs/mcp/" c-file) root))
-        (dolist (name names)
-          (goto-char (point-min))
-          (should (re-search-forward
-                   (format "mcp_tool_new (\"%s\",[ \n]*" name) nil t))
-          (let ((start (point))
-                (words nil))
-            ;; Concatenate the adjacent literals up to the closing paren.
-            (re-search-forward ");" nil t)
-            (let ((text (buffer-substring-no-properties start (point)))
-                  (pos 0))
-              (while (string-match "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\""
-                                   text pos)
-                (push (match-string 1 text) words)
-                (setq pos (match-end 0))))
-            (let ((c-text (replace-regexp-in-string
-                           "\\\\\\(.\\)" "\\1"
-                           (apply #'concat (nreverse words))))
-                  (lisp-text (cmacs-brigade-tool-description
-                              (cmacs-core-tools-tests--tool name))))
-              (ert-info ((format "tool %s" name))
-                (should (equal (split-string lisp-text)
-                               (split-string c-text)))))))))))
+      (dolist (name names)
+        (cmacs-wire-schema-should-match name :description 'words)))))
 
 (ert-deftest cmacs-core-tools-test-privileged-stay-in-c ()
   "The privileged tools of these C files are not on the table."
   (cmacs-core-tools-tests--with-tools
     (dolist (name cmacs-core-tools-tests--left-in-c)
       (should-not (cmacs-core-tools-tests--tool name)))
-    ;; And they are still where they were.
+    ;; And they are still where they were: registered by the C.
     (dolist (pair '(("eval" . "cmacs-mcp-tools-eval.c")
                     ("send_to_process" . "cmacs-mcp-tools-process.c")
                     ("gi_call" . "cmacs-mcp-tools-gi.c")))
-      (should (assoc (car pair)
-                     (cmacs-core-tools-tests--c-tools
-                      (expand-file-name (concat "cmacs/mcp/" (cdr pair))
-                                        root)))))))
+      (should (member (car pair) (cmacs-wire-schema-names (cdr pair))))
+      (with-temp-buffer
+        (insert-file-contents
+         (expand-file-name (concat "cmacs/mcp/" (cdr pair)) root))
+        (should (search-forward
+                 (format "mcp_tool_new (\"%s\"" (car pair)) nil t))))))
 
 (ert-deftest cmacs-core-tools-test-writers-are-declared ()
-  "Writing tools are destructive and confirmed; reading tools are neither."
+  "Writing tools are destructive and confirmed; reading tools are neither.
+Tools that only move the selection are destructive and not confirmed."
   (cmacs-core-tools-tests--with-tools
     (dolist (n (cmacs-brigade-registry-list 'tool))
       (let* ((tool (cmacs-brigade-registry-get 'tool n))
@@ -333,6 +293,12 @@ words alone."
            ((member wire cmacs-core-tools-tests--layout)
             (should (cmacs-brigade-tool-destructive tool))
             (should-not (cmacs-brigade-tool-confirm tool)))
+           ((assoc wire cmacs-core-tools-tests--session)
+            (should (cmacs-brigade-tool-destructive tool))
+            (should-not (cmacs-brigade-tool-confirm tool))
+            (should (cmacs-brigade-tool-on-surface-p tool 'mcp))
+            (should (eq (and (cmacs-brigade-tool-on-surface-p tool 'dbus) t)
+                        (cdr (assoc wire cmacs-core-tools-tests--session)))))
            (t
             (should-not (cmacs-brigade-tool-destructive tool))
             (should-not (cmacs-brigade-tool-confirm tool))

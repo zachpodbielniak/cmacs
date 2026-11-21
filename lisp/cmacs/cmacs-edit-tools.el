@@ -430,6 +430,11 @@ window if one is showing."
     ((buffer string "Buffer name")
      (line integer "1-based line"))
   :group 'edit
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Edit.GotoLine
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   (require 'cmacs-core-tools)
   (unless (integerp line)
     (error "Missing required arguments: buffer, line"))

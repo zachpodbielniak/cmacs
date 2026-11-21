@@ -1,8 +1,18 @@
 /*
- * cmacs-mcp-tools-process.c — Process management MCP tools
+ * cmacs-mcp-tools-process.c — the `send_to_process' tool
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * `send_to_process' types caller-supplied input into a subprocess.  It is
+ * in the privileged set, and stays a hand-written handler so that a
+ * change to it is reviewed as a change to that set.
+ *
+ * The other tools that used to be registered here (list_processes)
+ * are registry tools now (lisp/cmacs/cmacs-process-tools.el), published
+ * by cmacs-mcp-tools-brigade.c; their C handlers were deleted.  What
+ * they promised a client is frozen in
+ * test/cmacs/data/mcp-wire-schema.json.
  */
 
 #include <config.h>
@@ -12,40 +22,6 @@
 #include "lisp.h"
 #include "cmacs-mcp-tools.h"
 #include "cmacs-eval-dispatch.h"
-
-/* ── list_processes ───────────────────────────────────────────────── */
-
-static McpToolResult *
-handle_list_processes (McpServer   *server,
-                       const gchar *name,
-                       JsonObject  *arguments,
-                       gpointer     user_data)
-{
-  g_autoptr (GError) error = NULL;
-  g_autofree gchar *result_str = NULL;
-  McpToolResult *result;
-
-  (void) server;
-  (void) name;
-  (void) arguments;
-  (void) user_data;
-
-  result_str = cmacs_dispatch_eval (
-    "(mapconcat"
-    "  (lambda (p)"
-    "    (format \"%s|%s|%s|%s\""
-    "      (process-name p)"
-    "      (symbol-name (process-status p))"
-    "      (or (and (process-buffer p) (buffer-name (process-buffer p))) \"\")"
-    "      (mapconcat #'identity (process-command p) \" \")))"
-    "  (process-list) \"\\n\")",
-    &error);
-
-  result = mcp_tool_result_new (result_str == NULL);
-  mcp_tool_result_add_text (result,
-    result_str ? result_str : error->message);
-  return result;
-}
 
 /* ── send_to_process ──────────────────────────────────────────────── */
 
@@ -97,13 +73,6 @@ cmacs_mcp_tools_process_register (McpServer *server)
 {
   McpTool *tool;
   JsonNode *schema;
-
-  /* list_processes */
-  tool = mcp_tool_new ("list_processes",
-    "List all Emacs subprocesses with name, status, buffer, and command.");
-  mcp_tool_set_read_only_hint (tool, TRUE);
-  mcp_server_add_tool (server, tool, handle_list_processes, NULL, NULL);
-  g_object_unref (tool);
 
   /* send_to_process */
   tool = mcp_tool_new ("send_to_process",

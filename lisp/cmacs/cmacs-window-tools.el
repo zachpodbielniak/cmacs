@@ -147,6 +147,11 @@ get_buffer_content fetches just the one you want)" :optional t))
     ((direction string "Direction to move (omit to cycle)"
                 :optional t :enum ("up" "down" "left" "right")))
   :group 'window
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.WindowManager.Other
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   (require 'cmacs-core-tools)
   (pcase direction
     ("up" (windmove-up))

@@ -1,0 +1,5639 @@
+{
+  "comment": ["The MCP wire schema, frozen.  Read by test/cmacs/cmacs-wire-schema.el.", "Each block is what tools/list returned for one tool while it was a hand-written C handler: name, description, inputSchema and annotations exactly as a client received them (annotations is absent when the C set no hint, which a client reads as not read-only).", "`source' is the C file that registered it, `order' its position in that file, `ifdef' the configure flags the registration was compiled under.  A client never saw those three.", "This file is edited on purpose and never regenerated wholesale.  Changing a published tool's parameters means editing its block in the same commit.  A new tool is added with cmacs-wire-schema-freeze-registry-tool, or by hand, when it should be held to its schema; tools sorted by name."],
+  "version": 1,
+  "tools": [
+    {
+      "name": "ai_call",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Send PROMPT to an AI provider and return the final answer (synchronous).  Like ai_prompt, but with 'tools':true the model is given the built-in agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a multi-turn tool loop.  WARNING: a tool loop blocks the cmacs main thread for its whole duration.  Optional 'provider' / 'system' / 'model' behave as for ai_prompt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "User prompt"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider name"
+          },
+          "system": {
+            "type": "string",
+            "description": "System prompt"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name"
+          },
+          "tools": {
+            "type": "boolean",
+            "description": "Give the model the built-in agent tools"
+          }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "ai_embed_similarity",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Cosine similarity of two texts' embeddings, in [-1, 1]: 1 is the same direction, 0 unrelated, -1 opposite.  Use it to judge whether two passages mean the same thing -- near-duplicate detection, or checking an answer against a source.  Needs a local embedding provider (ollama).  Optional 'model' overrides the default embedding model.  To SEARCH the notes corpus use memory_search instead; this compares two specific strings.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "description": "First text"
+          },
+          "b": {
+            "type": "string",
+            "description": "Second text"
+          },
+          "model": {
+            "type": "string",
+            "description": "Embedding model"
+          }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "ai_list_models",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "List the model names each cmacs-ai provider offers, as a JSON object mapping provider to an array of models.  Optional 'provider' restricts the query to one provider; otherwise all providers are queried (unavailable ones report inline).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Provider name"
+          }
+        }
+      }
+    },
+    {
+      "name": "ai_list_providers",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Return the list of supported cmacs-ai provider symbols.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "ai_lql",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Run an LQL query on the libresearch server and return its rows (at most 100 shown).  LQL pipes search results: search \"glib\", category: CODE | filter extra.stars > 100 | fields title, url -- or the shorthand gtk docs | filter site(\"docs.gtk.org\").  'explain' returns the plan without running it.  An invalid query reports the server's position and caret excerpt.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "LQL query"
+          },
+          "explain": {
+            "type": "boolean",
+            "description": "Plan without running"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "ai_open_chat",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Open a cmacs-ai chat buffer.  If PROMPT is given, the prompt is sent as the first user turn and streamed.  Optional 'model' overrides the provider's default model.  Returns the buffer name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Optional initial prompt"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider name"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name"
+          }
+        }
+      }
+    },
+    {
+      "name": "ai_prompt",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Send PROMPT to an AI provider via cmacs-ai (synchronous).  Optional 'provider' (claude / openai / gemini / grok / ollama / claude-code / opencode / claude-tmux / grok-build / antigravity / cursor) overrides the default; optional 'system' is a system prompt; optional 'model' overrides the provider's default model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "User prompt"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider name"
+          },
+          "system": {
+            "type": "string",
+            "description": "System prompt"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name"
+          }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "ai_research",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Research a question on the web with libresearch and return a cited answer: the answer with numbered citations [n], then the sources (title, URL).  Needs a libresearch server (cmacs-ai-libresearch-url). 'deep' lets the server run follow-up searches; 'pages' (1-20) is how many pages it reads.  WARNING: a run takes minutes, and the cmacs Lisp thread waits for it (the network runs on a worker thread).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question"
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "Run follow-up searches"
+          },
+          "pages": {
+            "type": "integer",
+            "description": "Pages to read, 1-20"
+          }
+        },
+        "required": ["question"]
+      }
+    },
+    {
+      "name": "ai_web_fetch",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Read a web page's text through libresearch (the server applies its own SSRF guard).  'archive' is never (default), fallback (use the Wayback Machine when the live page fails) or only; 'max_chars' (100-1000000) caps the text.  Returns title, URL, the archived copy if one stood in, then the text.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Page URL"
+          },
+          "archive": {
+            "type": "string",
+            "enum": ["never", "fallback", "only"],
+            "description": "Wayback Machine policy"
+          },
+          "max_chars": {
+            "type": "integer",
+            "description": "Longest text"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "apropos",
+      "source": "cmacs-mcp-tools-eval.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "Search for Emacs symbols matching a pattern. Returns one symbol per line.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Regexp pattern to match against symbol names"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "backtrace",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "Get the current Lisp backtrace.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "bacon_eval",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_BACON"],
+      "description": "Run a command in the embedded bacon shell. Returns the exit code and captured stdout/stderr.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Shell command line to execute"
+          }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "cad_assembly_bom",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 16,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Assembly NAME's bill of materials (part, quantity, volume, mass).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "name"]
+      }
+    },
+    {
+      "name": "cad_assembly_info",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 15,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Assembly NAME's solved state, DOF, and per-instance transforms.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "name"]
+      }
+    },
+    {
+      "name": "cad_assembly_interference",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 17,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Interferences (overlapping instance pairs + volume) in assembly NAME.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "name"]
+      }
+    },
+    {
+      "name": "cad_assembly_set_joint",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 18,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Drive JOINT (id) of assembly NAME to VALUE and re-solve (no source re-eval); report the new instance transforms.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "joint": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": ["path", "name", "joint", "value"]
+      }
+    },
+    {
+      "name": "cad_eval",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Re-evaluate a part; report ok+parts/error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_export",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Export the part to OUT in FORMAT (stl/stl-ascii/obj/step/iges).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "out": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "out"]
+      }
+    },
+    {
+      "name": "cad_feature_tree",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "The part's feature (CSG) tree as indented text.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_get_source",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Return a part's source text.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_inspect",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Mass properties: volume, area, triangles, watertight, COM, bbox.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_open",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Open a .cad/.ccad part; returns its language + capabilities.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_params",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "List a part's parameters and ranges.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_patch_source",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Replace the single occurrence of OLD with NEW in a part, then re-evaluate. Token-economical edits; errors if OLD is absent/ambiguous.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "old": {
+            "type": "string"
+          },
+          "new": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "old", "new"]
+      }
+    },
+    {
+      "name": "cad_print",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Upload GCODE to PRINTER. A print only STARTS when BOTH start and confirm are true; otherwise it only uploads (the safe default).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "printer": {
+            "type": "string"
+          },
+          "gcode": {
+            "type": "string"
+          },
+          "start": {
+            "type": "boolean"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": ["printer", "gcode"]
+      }
+    },
+    {
+      "name": "cad_printers",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "List configured printers.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "cad_section",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Section the part by an X/Y/Z plane at OFFSET; report segments + perimeter.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "axis": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "number"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_set_source",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Replace a part's whole SOURCE, write it, re-evaluate, and report ok+parts or the error with its source location. The edit-eval loop.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "source"]
+      }
+    },
+    {
+      "name": "cad_slice",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Export the part to STL and slice it to G-code (waits, default 300s).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "number"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "cad_snapshot",
+      "source": "cmacs-mcp-tools-cad.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_CAD"],
+      "description": "Render the part in a workbench viewport and return an inline PNG.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "calc_convert_units",
+      "source": "cmacs-mcp-tools-calculator.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_CALCULATOR"],
+      "description": "Evaluate EXPRESSION and convert it to UNITS; with no UNITS, reduce it to base SI.  Knows CODATA physical constants (c, G, h, hbar, k, Nav, me, mp), so '2 * G * 1.989e30 kg / c^2' reduces to the Schwarzschild radius of the Sun in metres, and '60 mph' converts to 'm/s'.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Expression with units, e.g. 60 mph"
+          },
+          "units": {
+            "type": "string",
+            "description": "Target units, e.g. m/s; omit to reduce to base SI"
+          }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "calc_describe",
+      "source": "cmacs-mcp-tools-calculator.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_CALCULATOR"],
+      "description": "Describe one calculator by NAME: its title, category, arguments, return value and documentation.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Calculator name, e.g. bscall"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "calc_eval",
+      "source": "cmacs-mcp-tools-calculator.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_CALCULATOR"],
+      "description": "Evaluate a calculator EXPRESSION numerically and return the result.  Uses desktop-calculator semantics: '/' and '*' associate left to right (so 2/3*4 is 2.667), angles are radians, and symbolic constants fold (e^(i*pi) is -1).  Arbitrary precision.  All registered calculators are callable as functions, e.g. 'bscall(100,100,0.05,0.2,1)' or 'lorentz(0.9)'.  Bad input is reported as an error rather than echoed back unevaluated.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Expression, e.g. sqrt(5/3*3^4)"
+          }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "calc_eval_symbolic",
+      "source": "cmacs-mcp-tools-calculator.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_CALCULATOR"],
+      "description": "Evaluate a calculator EXPRESSION symbolically, permitting free variables.  This is the computer-algebra path: deriv(x^3,x), integ(x^2,x), solve(x^2-4=0,x), taylor(sin(x),x,5), factor, expand.  Use calc_eval instead when a number is wanted.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Expression, e.g. deriv(x^3 + sin(x), x)"
+          }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "calc_list",
+      "source": "cmacs-mcp-tools-calculator.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_CALCULATOR"],
+      "description": "List the registered calculators, optionally only those in one CATEGORY (financial, physics, relativity, tax, ...).  Each is callable as a function from calc_eval.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Category to filter by"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "cmacs.c.addr_to_source",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Resolve a runtime address ADDR to (file line function).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "integer"
+          }
+        },
+        "required": ["addr"]
+      }
+    },
+    {
+      "name": "cmacs.c.call_handle",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Call a JIT compilation HANDLE with ARGS.  Phase 2 stub.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "cmacs.c.compile_snippet",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Compile a C SOURCE string to a callable handle.  Phase 2 --- currently returns the cmacs-cintrospect-not-implemented sentinel.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "cmacs.c.defun_info",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Return a plist describing the DEFUN named SYMBOL (Lisp side).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Lisp symbol name (e.g. buffer-string)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "cmacs.c.function_source",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Return (file . line) for the C function NAME, or nil.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "cmacs.c.list",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "List C-level entities of KIND (symbol|defun|object), optionally filtered by GLOB.  Returns a list of plists.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["symbol", "defun", "object"],
+            "description": "Kind of entity to list"
+          },
+          "glob": {
+            "type": "string",
+            "description": "Optional shell-glob filter"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max rows (default unlimited)"
+          }
+        },
+        "required": ["kind"]
+      }
+    },
+    {
+      "name": "cmacs.c.patch_defun",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT", "HAVE_CMACS_CPATCH"],
+      "description": "Hot-patch the DEFUN named SYMBOL to call the function at ADDR.  Gated on `cmacs-mcp-cintrospect-enable-patching' (default nil).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "integer"
+          }
+        },
+        "required": ["symbol", "addr"]
+      }
+    },
+    {
+      "name": "cmacs.c.patch_log",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT", "HAVE_CMACS_CPATCH"],
+      "description": "List currently-applied patches.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "cmacs.c.stack_trace",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Return a list of frame plists describing the current C stack.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "description": "Max frames (default 32)"
+          }
+        }
+      }
+    },
+    {
+      "name": "cmacs.c.symbol_info",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Return a plist describing the C symbol named NAME (file, line, addr, kind, object, size).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "C symbol name (e.g. Fbuffer_string)"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "cmacs.c.type_info",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT"],
+      "description": "Return a plist describing the C type NAME (struct/union/enum) with field offsets, sizes, and types.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "C type name (e.g. struct frame)"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "cmacs.c.unpatch_all",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT", "HAVE_CMACS_CPATCH"],
+      "description": "Panic button --- restore every patched DEFUN.  Returns the count.  NOT gated by enable-patching defcustom (you always want a panic out).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "cmacs.c.unpatch_defun",
+      "source": "cmacs-mcp-tools-cintrospect.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_CINTROSPECT", "HAVE_CMACS_CPATCH"],
+      "description": "Restore the original C function for the DEFUN named SYMBOL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "completions",
+      "source": "cmacs-mcp-tools-eval.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Get completion candidates for a symbol name prefix. Returns up to 100 matches.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prefix": {
+            "type": "string",
+            "description": "Symbol name prefix to complete"
+          }
+        },
+        "required": ["prefix"]
+      }
+    },
+    {
+      "name": "create_buffer",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "Create a new buffer with an optional initial content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "content": {
+            "type": "string",
+            "description": "Initial content"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "crispy_eval",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_CRISPY"],
+      "description": "Compile and run an inline crispy C code snippet. Returns the exit code.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "crispy C source to compile and execute"
+          }
+        },
+        "required": ["code"]
+      }
+    },
+    {
+      "name": "current_view",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "What the user is looking at right now: the visible buffers, most recently selected first, with the AI chat surfaces excluded. Call this when the user refers to \"here\", \"this\" or \"the above\" without naming a buffer.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_content": {
+            "type": "boolean",
+            "description": "Also return the buffers' text (default false: the listing alone is usually enough, and get_buffer_content fetches just the one you want)"
+          }
+        }
+      }
+    },
+    {
+      "name": "db_columns",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Describe one table's columns on CONNECTION: name, type, nullability, default and primary-key membership, as a JSON array.  TABLE and SCHEMA must be plain unquoted identifiers.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          },
+          "table": {
+            "type": "string",
+            "description": "Table or view name, e.g. users"
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema the table lives in; omit for the default"
+          }
+        },
+        "required": ["connection", "table"]
+      }
+    },
+    {
+      "name": "db_connect",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Open the saved connection named CONNECTION, so queries can run against it.  Names come from db_connections; a connection URL is not accepted.  Already-open connections are left alone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          }
+        },
+        "required": ["connection"]
+      }
+    },
+    {
+      "name": "db_connections",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "List the database connections this cmacs knows: the saved ones and which of them are currently open.  Returns a JSON array of {name, dialect, state, read_only}.  Every other db_* tool takes one of these names -- there is no way to open a database by URL.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "db_disconnect",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Close the connection named CONNECTION, releasing its database handle and dropping its cached schema.  The saved definition survives, so db_connect brings it back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          }
+        },
+        "required": ["connection"]
+      }
+    },
+    {
+      "name": "db_execute",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Run a writing SQL statement (INSERT/UPDATE/DELETE/DDL) on CONNECTION and return JSON {rows_affected, last_insert_rowid}.  This changes data: a connection marked read-only refuses it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          },
+          "sql": {
+            "type": "string",
+            "description": "Statement to execute, e.g. UPDATE users SET name = 'x' WHERE id = 1"
+          }
+        },
+        "required": ["connection", "sql"]
+      }
+    },
+    {
+      "name": "db_export",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Run SQL on CONNECTION and write the whole result to PATH in FORMAT (csv, json, org, ...), returning a status line rather than the data.  Use this instead of db_query when the result is too large to read back, or when it is wanted on disk.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          },
+          "sql": {
+            "type": "string",
+            "description": "Statement whose result is exported"
+          },
+          "format": {
+            "type": "string",
+            "description": "Registered exporter name, e.g. csv"
+          },
+          "path": {
+            "type": "string",
+            "description": "Destination file path"
+          }
+        },
+        "required": ["connection", "sql", "format", "path"]
+      }
+    },
+    {
+      "name": "db_query",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "Run a read-only SQL statement on CONNECTION and return its result as JSON {columns, rows, truncated, row_count}.  A statement that writes is refused here -- use db_execute for that.  MAX_ROWS caps the rows fetched; the reply is also cut at a fixed character budget, so prefer a narrow SELECT over 'SELECT *' on a big table.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          },
+          "sql": {
+            "type": "string",
+            "description": "Read-only statement, e.g. SELECT id, name FROM users LIMIT 20"
+          },
+          "max_rows": {
+            "type": "integer",
+            "description": "Maximum rows to fetch; omit for the configured default"
+          }
+        },
+        "required": ["connection", "sql"]
+      }
+    },
+    {
+      "name": "db_tables",
+      "source": "cmacs-mcp-tools-dbexplorer.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_DBEXPLORER"],
+      "description": "List the tables and views on CONNECTION as a JSON array of {name, kind, schema}, optionally restricted to one SCHEMA.  Start here before writing a query against an unfamiliar database.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Saved connection name from db_connections"
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema to restrict to; omit for the connection's default"
+          }
+        },
+        "required": ["connection"]
+      }
+    },
+    {
+      "name": "delete_window",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Delete (close) the currently selected window.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "describe_function",
+      "source": "cmacs-mcp-tools-eval.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Describe an Emacs Lisp function: arglist, docstring, and source location.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Function symbol name"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "describe_mode",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Get the current major mode and active minor modes.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "describe_variable",
+      "source": "cmacs-mcp-tools-eval.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "Describe an Emacs Lisp variable: current value and docstring.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Variable symbol name"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "edit_buffer",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "Replace an exact substring in a buffer. old_string must occur exactly once unless replace_all is true. Errors if not found.",
+      "annotations": {
+        "destructiveHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "old_string": {
+            "type": "string",
+            "description": "Exact text to replace"
+          },
+          "new_string": {
+            "type": "string",
+            "description": "Replacement text"
+          },
+          "replace_all": {
+            "type": "boolean",
+            "description": "Replace every occurrence (default false)"
+          }
+        },
+        "required": ["buffer", "old_string", "new_string"]
+      }
+    },
+    {
+      "name": "eval",
+      "source": "cmacs-mcp-tools-eval.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "Evaluate an Emacs Lisp expression and return the printed result. This is the universal gateway to all Emacs functionality.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Elisp expression to evaluate"
+          }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "execute_command",
+      "source": "cmacs-mcp-tools-input.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Execute an interactive Emacs command (M-x equivalent).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command name (e.g. save-buffer, find-file)"
+          }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "find_file",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 8,
+      "ifdef": [],
+      "description": "Open a file in Emacs (equivalent to C-x C-f / find-file).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path to open"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "generate_image",
+      "source": "cmacs-mcp-tools-ai.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_AI"],
+      "description": "Generate an image from a text prompt and insert it into a cmacs buffer.  In an Org buffer the image is attached to the current node and previewed inline; elsewhere it is saved under cmacs-ai-image-dir.  Optional 'references' is a comma-separated list of input images to condition on, each PATH or PATH::ROLE (e.g. \"logo.png::style,cat.jpg::subject\") -- roles tell the model what each reference is for.  Optional 'provider' (gemini / openai / grok), 'model', 'aspect' (e.g. 16:9), 'size' (e.g. 1024x1024) and 'quality'.  Optional 'buffer' names the target buffer; the current one is used otherwise.  WARNING: this blocks the cmacs main thread for the tens of seconds generation takes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What to depict"
+          },
+          "references": {
+            "type": "string",
+            "description": "Comma-separated PATH or PATH::ROLE reference images"
+          },
+          "provider": {
+            "type": "string",
+            "description": "gemini/openai/grok"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model id"
+          },
+          "aspect": {
+            "type": "string",
+            "description": "Aspect ratio"
+          },
+          "size": {
+            "type": "string",
+            "description": "Pixel size"
+          },
+          "quality": {
+            "type": "string",
+            "description": "Quality level"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "Target buffer name"
+          }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "get_buffer_content",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Read the text content of a buffer. Optionally specify start/end positions.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "start": {
+            "type": "integer",
+            "description": "Start position (1-based)"
+          },
+          "end": {
+            "type": "integer",
+            "description": "End position (1-based)"
+          }
+        },
+        "required": ["buffer"]
+      }
+    },
+    {
+      "name": "get_org_content",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "Parse an org-mode buffer into a structured JSON document: buffer keywords (#+TITLE etc.) plus a nested headline tree with title, level, todo, priority, tags, scheduled/deadline/closed, property drawers, and body text. match filters entries with org's agenda match syntax (e.g. \"work+urgent/TODO\").",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "match": {
+            "type": "string",
+            "description": "org agenda match string (tags/todo/property query); empty for all entries"
+          },
+          "max_depth": {
+            "type": "integer",
+            "description": "Limit headline depth (0 = unlimited)"
+          },
+          "include_body": {
+            "type": "boolean",
+            "description": "Include entry body text (default true)"
+          },
+          "include_properties": {
+            "type": "boolean",
+            "description": "Include property drawers (default true)"
+          }
+        },
+        "required": ["buffer"]
+      }
+    },
+    {
+      "name": "gi_call",
+      "source": "cmacs-mcp-tools-gi.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_GI"],
+      "description": "Call a GObject Introspection function. Requires the namespace to be loaded (use gi_require first via eval).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "GI namespace (e.g. Gtk, Gio)"
+          },
+          "function": {
+            "type": "string",
+            "description": "Function name"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Function arguments as strings"
+          }
+        },
+        "required": ["namespace", "function"]
+      }
+    },
+    {
+      "name": "gi_describe",
+      "source": "cmacs-mcp-tools-gi.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_GI"],
+      "description": "Describe a type or function in a GI namespace.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "GI namespace"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Type or function name"
+          }
+        },
+        "required": ["namespace", "symbol"]
+      }
+    },
+    {
+      "name": "gi_list_functions",
+      "source": "cmacs-mcp-tools-gi.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_GI"],
+      "description": "List all functions in a GI namespace.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "GI namespace"
+          }
+        },
+        "required": ["namespace"]
+      }
+    },
+    {
+      "name": "gi_list_namespaces",
+      "source": "cmacs-mcp-tools-gi.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_GI"],
+      "description": "List loaded GObject Introspection namespaces.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_add_geofence",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Add a geofence: a circle of RADIUS_KM about LAT, LON named NAME.  Entities entering/leaving emit podomation events.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          },
+          "radius_km": {
+            "type": "number"
+          }
+        },
+        "required": ["name", "lat", "lon", "radius_km"]
+      }
+    },
+    {
+      "name": "gnuseye_brief",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Summarise the entities currently indexed on the globe (counts by kind).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_cii",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Compute the country-instability index from active signals; returns the ranked ISO-A3 -> score JSON.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_fly_to",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Fly the globe camera to LAT, LON (degrees); optional RANGE world units.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          },
+          "range": {
+            "type": "number"
+          }
+        },
+        "required": ["lat", "lon"]
+      }
+    },
+    {
+      "name": "gnuseye_forecast",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Open the 7-day point-forecast panel (Open-Meteo) for LAT, LON.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": ["lat", "lon"]
+      }
+    },
+    {
+      "name": "gnuseye_list_layers",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "List GNU's Eye data layers with their on/off state and group.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_open",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Open the GNU's Eye live planetary globe buffer.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_query_entities",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Query indexed entities by KIND and/or a bounding box (WEST/SOUTH/EAST/NORTH degrees); returns JSON (capped by LIMIT).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "west": {
+            "type": "number"
+          },
+          "south": {
+            "type": "number"
+          },
+          "east": {
+            "type": "number"
+          },
+          "north": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "name": "gnuseye_refresh",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Refresh every enabled GNU's Eye layer now.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gnuseye_toggle_layer",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Toggle a data layer on/off by NAME (e.g. satellites, aircraft, vessels, quakes, launches, fires).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "gnuseye_weather_showcase",
+      "source": "cmacs-mcp-tools-gnuseye.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_GNUSEYE"],
+      "description": "Light the full weather picture: tropical cyclones (tracks/cones), animated precipitation radar, cloud imagery, wind particles, METARs, and US alert zones; flies to the strongest active storm.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "goto_line",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 6,
+      "ifdef": [],
+      "description": "Move point to a 1-based line number in a buffer, updating its window if one is showing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line"
+          }
+        },
+        "required": ["buffer", "line"]
+      }
+    },
+    {
+      "name": "gowl_broadcast_add_rule",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 34,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Add, or replace by name, a broadcast rule for this session; the reply says when it cannot run.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rule": {
+            "type": "object",
+            "description": "{name, team, when, keys: {include, exclude}, modifiers, targets, translate, mode, reset-ms, delivery, mouse, delay-ms, local}"
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_broadcast_add_team",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 33,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Add, or replace by name, a broadcast team for this session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "team": {
+            "type": "object",
+            "description": "{name, slots: [{name, match, focus-key, delivery}], groups: {NAME: [slot]}}; match is a filter such as app-id = eqgame.exe"
+          },
+          "yaml": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_broadcast_assign",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 36,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Put a window in a broadcast team's slot by hand.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "team": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "integer",
+            "description": "The window (default: the focused one); 0 hands the slot back to its match"
+          }
+        },
+        "required": ["team", "slot"]
+      }
+    },
+    {
+      "name": "gowl_broadcast_focus_slot",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 37,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Focus the window in a broadcast team's slot, viewing its tag.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "team": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          }
+        },
+        "required": ["slot"]
+      }
+    },
+    {
+      "name": "gowl_broadcast_list",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 31,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The broadcast teams and rules in force, each as YAML (JSON).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_broadcast_remove",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 35,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Remove a broadcast team or rule.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["team", "rule"]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "name"]
+      }
+    },
+    {
+      "name": "gowl_broadcast_set",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 32,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Switch input broadcasting on, off or toggle it (a toast shows the result), or panic: off, and every key held in any window released. Or set strict one-press-one-window mode instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["on", "off", "toggle", "panic"]
+          },
+          "strict": {
+            "type": "string",
+            "enum": ["on", "off", "toggle"]
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_broadcast_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 30,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Input broadcasting (multiboxing): whether it is on, strict mode, the toggle and panic keys, every team with the window in each slot, every rule with the reason it cannot run if any, and delivery counters (JSON). The module is opt-in.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_clipboard_copy",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 55,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Put a history entry back on the clipboard: the next paste in any window produces it. Replaces what the person has copied.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gowl_clipboard_entry",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 54,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The path of one history entry's stored bytes (exactly what was copied, in its MIME type).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gowl_clipboard_list",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 53,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The clipboard history, newest first: one line per entry, ID<TAB>MIME<TAB>BYTES<TAB>PREVIEW. This is everything the person copied -- passwords included -- so read it when the task needs it, not by habit. The Super+space menu keeps it private for the same reason.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_close_client",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 18,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Close the Wayland client matching a pattern.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Match pattern"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["app-id", "title"],
+            "description": "Match field (default: app-id)"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "gowl_drain_recording",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 25,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Take everything recorded since the last drain and leave the recording running. The reply carries dropped (since the last drain) and dropped_total, so a demonstration that overflowed the ring is reported rather than passed off as complete, plus active and stop_reason.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Token from gowl_start_recording"
+          }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "gowl_find_client",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Find a Wayland client by app-id or title pattern.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Search pattern"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["app-id", "title"],
+            "description": "Search field (default: app-id)"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "gowl_focus_client",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 17,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Give keyboard focus to the Wayland client matching a pattern.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Match pattern"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["app-id", "title"],
+            "description": "Match field (default: app-id)"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "gowl_focused_client",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Get info about the currently focused Wayland client.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_hotkey_add",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 41,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Add a hotkey (or a section of them) for this session; refused whole, with the reason, on any problem.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "hotkey": {
+            "type": "object",
+            "description": "A hotkey entry {id, key, do, context, when, mode, double, hold, ...} -- key in AutoHotkey notation (#!t, CapsLock & j, ~LButton) or gowl's (Super+Alt+t); do is a list of actions such as {shell: CMD}, {send: KEYS}, {action: spawn, arg: PROGRAM} -- or a whole section {hotkeys: [...], remaps: {...}, modes: {...}}"
+          },
+          "yaml": {
+            "type": "string",
+            "description": "The same as one line of flow YAML"
+          },
+          "id": {
+            "type": "string",
+            "description": "Name it, so adding again replaces it and gowl_hotkey_remove takes it back"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_hotkey_fire",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 45,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Run a hotkey's actions as if it had been pressed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gowl_hotkey_history",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 40,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The last 64 inputs the hotkey module saw (JSON): keycode, keysym, pressed, injected, swallowed and the hotkey each fired. The first thing to look at when a hotkey does not fire.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_hotkey_list",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 39,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Every hotkey and remap in force (JSON): id, key as written and canonical, context, mode, enabled, origin, description.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_hotkey_remove",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 42,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Remove a hotkey added at run time (one from the configuration is disabled instead).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gowl_hotkey_send",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 44,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Type keys or text into the focused window through the hotkey module.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "string",
+            "description": "AutoHotkey Send syntax: ^c, {Enter}, {Tab 3}, {Shift down}"
+          },
+          "text": {
+            "type": "string",
+            "description": "Literal text instead"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_hotkey_set",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 43,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Switch one hotkey on or off (id + enabled), suspend every hotkey, or enter a key mode.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "string",
+            "enum": ["on", "off", "toggle"]
+          },
+          "suspended": {
+            "type": "string",
+            "enum": ["on", "off", "toggle"]
+          },
+          "mode": {
+            "type": "string",
+            "description": "A key mode; default leaves every mode"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_hotkey_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 38,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Hotkeys (AutoHotkey for gowl): whether they are suspended, the key mode, counts of hotkeys, remaps, timers and hotstrings, the lock keys, the last hotkey fired and the last error (JSON). The module is opt-in; this loads it.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_list_clients",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "List all Wayland clients (JSON array with id, title, app-id, tags, geometry).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_list_keybinds",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "List all compositor keybinds.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_list_monitors",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "List monitors (JSON array with name, geometry, mode, scale, layout).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_macro_list",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 29,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Every macro runnable by name, as JSON: name, kind (file, registered, custom = Elisp, ...), path, held-back.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_macro_record",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 48,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The macro recorder (Super+Alt+r). start records the person's keys, clicks, drags and scrolls; stop writes last-recording.c (and NAME.c) and replies `recorded NAME STEPS PATH'; cancel discards; status reports. Starting from here needs gowl's `input-recording' consent, because it watches the person's input; the screen is framed while it runs and password prompts are not recorded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["start", "stop", "cancel", "status"]
+          },
+          "name": {
+            "type": "string",
+            "description": "With start: also write NAME.c"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "gowl_macro_run",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 28,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Run a gowl macro: in-process C (crispy) or an Elisp macro that drives the compositor. Runs under gowl's fault guard and time budget; a crash or runaway loop is stopped and held back. Loads the opt-in macro module on first use.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A macro name (a file on the macro path, a registered or an Elisp macro), or a path to a .c file"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "gowl_macro_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 46,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Running macros, held-back ones and why, the fault count, the time budget, triggers -- the macro module's status JSON.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_macro_stop",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 47,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Stop running macros.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "which": {
+            "type": "string",
+            "description": "A macro name, a run id or all (the default)"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_macro_voice_match",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 49,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Run the macro a sentence names, as Super+Alt+m does with what was said: a configured phrase, a macro's name said as words (\"pip corner 25\" runs pip-corner 25), or every word of a name. dry_run reports what it would run (heard, normalised, macro, args) and runs nothing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "gowl_macro_voice_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 50,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The voice listener's state: listening, command, time limit, last sentence heard, last error. There is no tool to start listening: the microphone is the person's to turn on.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gowl_pick_color",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 52,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "The colour of the screen at layout x, y, as \"#rrggbb\". The clipboard is left alone.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          }
+        },
+        "required": ["x", "y"]
+      }
+    },
+    {
+      "name": "gowl_recording_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 27,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Whether an input recording is running, its token, limits and counters, without consuming anything. Poll this to notice that a recording started, stopped, or was stopped from the keyboard.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_reload_config",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Reload the gowl compositor configuration from YAML.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_screen_text",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 51,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Read the text in a region of the screen (OCR via tesseract, the screenshot module's ocr-command), in layout coordinates as gowl_list_monitors and gowl_list_clients report them. Returns the text, \"\" when there is none. The clipboard is left alone unless copy is true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "language": {
+            "type": "string",
+            "description": "tesseract languages, e.g. eng+deu (default: the screenshot module's)"
+          },
+          "copy": {
+            "type": "boolean",
+            "description": "Also put the text on the clipboard (default false)"
+          }
+        },
+        "required": ["x", "y", "width", "height"]
+      }
+    },
+    {
+      "name": "gowl_screenshot",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 23,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Capture a screenshot and return it as a PNG image. With no arguments captures the whole desktop; mode selects desktop/window/all; client captures one matching client.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["desktop", "window", "all"],
+            "description": "Capture mode (default: desktop)"
+          },
+          "client": {
+            "type": "string",
+            "description": "Capture the client matching this pattern"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["app-id", "title"],
+            "description": "Client match field (default: app-id)"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_set_client_geometry",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 19,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Move and resize the Wayland client matching a pattern in one call.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Match pattern"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["app-id", "title"],
+            "description": "Match field (default: app-id)"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": ["pattern", "x", "y", "width", "height"]
+      }
+    },
+    {
+      "name": "gowl_set_layout",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 20,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Set the tiling layout: \"tile\", \"monocle\", or \"float\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "layout": {
+            "type": "string",
+            "enum": ["tile", "monocle", "float"],
+            "description": "Layout name"
+          }
+        },
+        "required": ["layout"]
+      }
+    },
+    {
+      "name": "gowl_set_monitor_transform",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 16,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Set the wl_output transform for a monitor (rotation/flip). transform is an integer 0-7: 0=normal, 1=90, 2=180, 3=270, 4=flipped, 5=flipped-90, 6=flipped-180, 7=flipped-270. To persist across sessions, add `transform:` under the matching output name in the YAML `monitors:` block.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Output name (e.g. eDP-1)"
+          },
+          "transform": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 7,
+            "description": "Transform code 0-7"
+          }
+        },
+        "required": ["name", "transform"]
+      }
+    },
+    {
+      "name": "gowl_spawn",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Spawn a command in the Wayland compositor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Shell command to spawn"
+          }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "gowl_start_recording",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 24,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Record real keyboard and pointer input so a human demonstration can be turned into a procedure. Returns a token for gowl_drain_recording and gowl_stop_recording. Bounded: the ring holds at most max_events (older events are dropped and counted) and the recording stops itself after max_seconds. Requires gowl's `input-recording' config key, which is separate from send_keys and off by default. While it runs the screen is framed in red and Super+Shift+Escape stops it. Capture is suppressed on the lock screen and for windows on the deny list, but gowl CANNOT see a password field inside an ordinary window -- review a trace before storing or sharing it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_seconds": {
+            "type": "integer",
+            "description": "Stop automatically after this many seconds (default 120, maximum 3600)"
+          },
+          "max_events": {
+            "type": "integer",
+            "description": "Ring size in events (default 4096, maximum 100000)"
+          }
+        }
+      }
+    },
+    {
+      "name": "gowl_stop_recording",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 26,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Stop the recording and take the tail, in the same shape gowl_drain_recording returns. Stopping a recording that already stopped itself still returns its remaining events exactly once.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Token from gowl_start_recording"
+          }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "gowl_workspace_list",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 21,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "List workspaces as plists (:id :name :tag-mask).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "gowl_workspace_switch",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 22,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Switch to the workspace with the given id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Workspace id"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gsurf_back",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Navigate a gsurf buffer back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_click",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 21,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Click at x,y (CSS pixels from the page's top-left, as getBoundingClientRect reports) in a gsurf page with a trusted click.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "CSS px from the left"
+          },
+          "y": {
+            "type": "number",
+            "description": "CSS px from the top"
+          },
+          "button": {
+            "type": "integer",
+            "description": "1 left (default), 2 middle, 3 right"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["x", "y"]
+      }
+    },
+    {
+      "name": "gsurf_click_element",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 24,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Click the first element matching a CSS selector in a gsurf page: it is scrolled into view, focused and clicked at its centre.  Asynchronous: returns at once; the outcome goes to the echo area.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string",
+            "description": "CSS selector"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["selector"]
+      }
+    },
+    {
+      "name": "gsurf_current",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return JSON for the current gsurf buffer (buffer/uri/title/progress).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_download_cancel",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 17,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Cancel an in-flight gsurf download by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "download id"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "gsurf_download_list",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 16,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a JSON array of known gsurf downloads (id/uri/dest/received/total/state).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_eval_js",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Run JavaScript in a gsurf buffer's page (fire-and-forget).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "JavaScript source"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["script"]
+      }
+    },
+    {
+      "name": "gsurf_extract_text",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 15,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return the rendered plain text of a gsurf-lite buffer (newest, or the named one).  Reads a JS-rendered or logged-in page as clean text after gsurf_lite_open.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_forward",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Navigate a gsurf buffer forward.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_get_title",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a gsurf buffer's page title.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_get_uri",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a gsurf buffer's current URI.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_list",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a JSON array of all open gsurf buffers.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_list_actions",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 28,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a JSON array of every gsurf action: name, description and handler (cmacs or module).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_list_containers",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 29,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return a JSON array of gsurf browsing containers (id, name, color, temporary, views, proxy).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_lite_open",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Open a URL as eww-style text: gsurf renders it offscreen (JavaScript runs, logins persist) and the post-JS page is dumped to a real Emacs text buffer.  Returns the buffer name; read it with gsurf_extract_text once loaded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL or search query"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "gsurf_modules_list",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Return JSON describing the loaded gsurf modules.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "gsurf_navigate",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Navigate a gsurf buffer to a URL (or search query).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL or search query"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "gsurf_open",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Open a URL (or search query) in a new gsurf browser buffer; returns the buffer name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL or search query"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "gsurf_permission_policy",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 20,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Set a permission policy for an origin and type (verdict \"allow\" or \"deny\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "description": "scheme://host:port"
+          },
+          "type": {
+            "type": "string",
+            "description": "geolocation/notification/media/..."
+          },
+          "verdict": {
+            "type": "string",
+            "description": "allow or deny"
+          }
+        },
+        "required": ["origin", "type", "verdict"]
+      }
+    },
+    {
+      "name": "gsurf_press_key",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 23,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Press and release one key in a gsurf page (trusted).  key is a DOM or X name (Enter, Tab, Escape, ArrowDown, PageDown, a, ...).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "key name or one character"
+          },
+          "modifiers": {
+            "type": "string",
+            "description": "e.g. ctrl+shift (ctrl, shift, alt/meta, super)"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["key"]
+      }
+    },
+    {
+      "name": "gsurf_print_pdf",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 19,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Print a gsurf buffer to a PDF at FILE (async); returns the path.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "output PDF path"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["file"]
+      }
+    },
+    {
+      "name": "gsurf_reload",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Reload a gsurf buffer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_run_action",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 27,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Run a gsurf action by name on a gsurf buffer (see gsurf_list_actions): core ones map to editor commands, the rest go to the modules (dark-mode-toggle, dark-mode-toggle-site, form-autofill, ...).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "action name"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "gsurf_set_cookie",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 25,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Add a cookie to a gsurf view's session (its container's cookie jar for a view in a container).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string",
+            "description": "example.com, or .example.com for subdomains too"
+          },
+          "path": {
+            "type": "string",
+            "description": "default /"
+          },
+          "secure": {
+            "type": "boolean"
+          },
+          "http_only": {
+            "type": "boolean"
+          },
+          "expires": {
+            "type": "integer",
+            "description": "Unix seconds; 0 = session cookie"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["name", "value", "domain"]
+      }
+    },
+    {
+      "name": "gsurf_set_zoom",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Set the zoom level (1.0 = 100%) of a gsurf buffer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "number",
+            "description": "zoom level"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["level"]
+      }
+    },
+    {
+      "name": "gsurf_snapshot",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 18,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Save a PNG snapshot of a gsurf buffer to FILE (async); returns the path.  Set full_page for the whole document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "output PNG path"
+          },
+          "full_page": {
+            "type": "boolean",
+            "description": "capture full document"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["file"]
+      }
+    },
+    {
+      "name": "gsurf_stop",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Stop loading in a gsurf buffer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        }
+      }
+    },
+    {
+      "name": "gsurf_toggle_module",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 26,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Enable or disable a loaded gsurf module by name (adblock, dark_mode, hardening, containers, form_autofill, modal, ...).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "module name"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "enabled"]
+      }
+    },
+    {
+      "name": "gsurf_type_text",
+      "source": "cmacs-mcp-tools-gsurf.c",
+      "order": 22,
+      "ifdef": ["HAVE_CMACS_GSURF"],
+      "description": "Type text into whatever has focus in a gsurf page, one trusted key press per character (newline = Enter).  Focus a field first with gsurf_click_element.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "UTF-8 text"
+          },
+          "buffer": {
+            "type": "string",
+            "description": "gsurf buffer name; defaults to the most recent"
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "imgedit_add_layer",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Append a transparent layer (becomes active); returns its index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "imgedit_adjust",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Adjust the active layer.  KIND: brightness|contrast|saturation|threshold|posterize (with AMOUNT) or invert|grayscale.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          }
+        },
+        "required": ["handle", "kind"]
+      }
+    },
+    {
+      "name": "imgedit_draw_shape",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Draw on the active layer (one undo step).  SHAPE: line|arrow (x1,y1 -> x2,y2), rect (corners x1,y1 / x2,y2), circle (centre x1,y1, radius x2), ellipse (centre x1,y1, radii x2,y2).  FILLED for rect/circle/ellipse.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "shape": {
+            "type": "string"
+          },
+          "x1": {
+            "type": "integer"
+          },
+          "y1": {
+            "type": "integer"
+          },
+          "x2": {
+            "type": "integer"
+          },
+          "y2": {
+            "type": "integer"
+          },
+          "filled": {
+            "type": "boolean"
+          },
+          "thickness": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "shape", "x1", "y1"]
+      }
+    },
+    {
+      "name": "imgedit_draw_text",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Draw TEXT at X,Y in the current colour (SIZE px; one undo step).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "x", "y", "text"]
+      }
+    },
+    {
+      "name": "imgedit_filter",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Filter the active layer.  KIND: blur|pixelate (RADIUS) or sharpen|edge|emboss|bloom.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "radius": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "kind"]
+      }
+    },
+    {
+      "name": "imgedit_info",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Describe the document: size, active layer, layer stack.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "imgedit_new",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Create a WIDTHxHEIGHT image document; returns its handle.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": ["width", "height"]
+      }
+    },
+    {
+      "name": "imgedit_open",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Open an image file (png/jpg/bmp/...); returns handle and size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "imgedit_save",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Flatten and save the document (format by extension).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["handle", "path"]
+      }
+    },
+    {
+      "name": "imgedit_set_color",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Set the draw colour (RGBA 0..255) used by the shape/text tools.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "r": {
+            "type": "integer"
+          },
+          "g": {
+            "type": "integer"
+          },
+          "b": {
+            "type": "integer"
+          },
+          "a": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "r", "g", "b"]
+      }
+    },
+    {
+      "name": "imgedit_transform",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Transform the whole document.  KIND: flip-h|flip-v|rotate-cw|rotate-ccw.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": ["handle", "kind"]
+      }
+    },
+    {
+      "name": "imgedit_undo",
+      "source": "cmacs-mcp-tools-imgedit.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_IMGEDIT"],
+      "description": "Undo the last edit on the document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "insert_org",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Insert text into an org buffer, org-aware: target a headline by exact title or slash outline path (creating missing components with create), position at the entry's body top/bottom or subtree-end, wrap in an org block (src with lang, quote, example, verse, center, or a custom name) or a drawer, or file it as a new child headline with optional todo keyword and tags. timestamp prepends an inactive org timestamp.",
+      "annotations": {
+        "destructiveHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text to insert"
+          },
+          "heading": {
+            "type": "string",
+            "description": "Target headline: exact title, or slash-separated outline path like Projects/cmacs/Log"
+          },
+          "position": {
+            "type": "string",
+            "enum": ["top", "bottom", "subtree-end", "point"],
+            "description": "Where in the entry (default bottom: end of the entry's own body, before child headings)"
+          },
+          "wrap": {
+            "type": "string",
+            "description": "Org block: src, quote, example, verse, center, or any custom #+begin_ name"
+          },
+          "lang": {
+            "type": "string",
+            "description": "Language for wrap=src"
+          },
+          "drawer": {
+            "type": "string",
+            "description": "Wrap in a :NAME: drawer (e.g. LOGBOOK)"
+          },
+          "child": {
+            "type": "string",
+            "description": "Create a child headline with this title; the text becomes its body"
+          },
+          "todo": {
+            "type": "string",
+            "description": "TODO keyword for the child headline"
+          },
+          "tags": {
+            "type": "string",
+            "description": "Colon-separated tags for the child"
+          },
+          "create": {
+            "type": "boolean",
+            "description": "Create missing heading path components"
+          },
+          "timestamp": {
+            "type": "boolean",
+            "description": "Prepend an inactive org timestamp"
+          }
+        },
+        "required": ["buffer", "text"]
+      }
+    },
+    {
+      "name": "kill_buffer",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Kill (close) a buffer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          }
+        },
+        "required": ["buffer"]
+      }
+    },
+    {
+      "name": "list_buffers",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "List all buffers with name, file, modified status, major-mode, and size. Returns pipe-separated fields, one buffer per line.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_frames",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "List all frames with name, dimensions, and selection status.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_hooks",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 6,
+      "ifdef": [],
+      "description": "List all non-nil hook variables and their values.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_processes",
+      "source": "cmacs-mcp-tools-process.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "List all Emacs subprocesses with name, status, buffer, and command.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_voices",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_AUDIO", "HAVE_CMACS_PIPER"],
+      "description": "List Piper voice .onnx files in cmacs-piper-voices-directory.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "list_whisper_models",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_AUDIO", "HAVE_CMACS_WHISPER"],
+      "description": "List whisper.cpp models available in cmacs-whisper-models-directory.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "list_windows",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "List all windows with buffer, point, dimensions, and position.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrg_editor_add_primitive",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,4 ico-sphere,5 cylinder,6 cone,7 torus,8 grid.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "primitive": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["primitive"]
+      }
+    },
+    {
+      "name": "lrg_editor_add_visual",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,5 light,6 camera,7 audio. ASSET is the model/image/tileset file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "integer"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["kind"]
+      }
+    },
+    {
+      "name": "lrg_editor_delete",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Delete node ID from the level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "lrg_editor_move",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Set node ID's position to (X Y Z) as one undoable edit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "x", "y", "z"]
+      }
+    },
+    {
+      "name": "lrg_editor_object_tree",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "List the libregnum editor's node tree (name/kind/depth/id).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrg_editor_open",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Open libregnum's editor (the lrgeditor shell) on PATH: a project directory or project.ryaml, a .rlevel/.rprefab, a .rseq, or any asset one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, ...); no PATH opens its welcome screen.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "lrg_editor_play",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 17,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Play-in-editor: instantiate the level into a runtime world and run it.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrg_editor_save",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 15,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Save the level to a .rlevel PATH.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "lrg_editor_select",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Select node ID in the editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "lrg_editor_stop",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 19,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Stop play-in-editor.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgeditor_action",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 21,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Run an lrgeditor action by id (e.g. file.save, edit.undo, play.start, view.top) in the embedded shell. lrgeditor_actions lists them.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "lrgeditor_actions",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 22,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "List the action ids the embedded lrgeditor shell registers.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgeditor_add_primitive",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,4 ico-sphere,5 cylinder,6 cone,7 torus,8 grid.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "primitive": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["primitive"]
+      }
+    },
+    {
+      "name": "lrgeditor_add_visual",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,5 light,6 camera,7 audio. ASSET is the model/image/tileset file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "integer"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["kind"]
+      }
+    },
+    {
+      "name": "lrgeditor_delete",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Delete node ID from the level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "lrgeditor_move",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Set node ID's position to (X Y Z) as one undoable edit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "x", "y", "z"]
+      }
+    },
+    {
+      "name": "lrgeditor_object_tree",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "List the libregnum editor's node tree (name/kind/depth/id).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgeditor_open",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Open libregnum's editor (the lrgeditor shell) on PATH: a project directory or project.ryaml, a .rlevel/.rprefab, a .rseq, or any asset one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, ...); no PATH opens its welcome screen.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "lrgeditor_play",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 18,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Play-in-editor: instantiate the level into a runtime world and run it.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgeditor_save",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 16,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Save the level to a .rlevel PATH.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "lrgeditor_select",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Select node ID in the editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "lrgeditor_socket",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 23,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Socket the embedded lrgeditor serves libregnum's editor protocol on (for lrgeditorctl --socket, its MCP verbs, or libregnum.el).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgeditor_stop",
+      "source": "cmacs-mcp-tools-libregnum.c",
+      "order": 20,
+      "ifdef": ["HAVE_CMACS_LIBREGNUM"],
+      "description": "Stop play-in-editor.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_camera_orbit",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Orbit the 3D camera around the panels (use lrgterm_dump_screen to see it).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_cycle_arrangement",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Cycle the 3D panel arrangement (single-panel -> per-window -> free).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_cycle_environment",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Cycle the 3D ambient environment (void -> workshop -> cockpit).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_focus_selected",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Bring the selected window's 3D panel front-and-centre (fly the camera to it and focus it; others recede). The 'command-the-room' gesture.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_pin_selected",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Pin the selected window's 3D panel in place so the arrangement no longer moves it.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_state",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Report the lrg 3D render mode, panel arrangement and ambient environment.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_3d_unpin_all",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Release all manually-placed 3D panels back to automatic layout.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_dump_screen",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Capture the lrg frame to a PNG and return it as an image, so you can see exactly what the libregnum/raylib backend is rendering.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_force_redraw",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Force a full redraw + present of the lrg frame.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_frame_info",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Report the output_lrg frame's pixel/char size, font and monitor.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lrgterm_render_stats",
+      "source": "cmacs-mcp-tools-lrgterm.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_LRGTERM"],
+      "description": "Report lrg display stats (frame count, visibility, focus, colour depth).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory_info",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Get GC statistics and memory usage counts.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "podomation_control",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Control the podomation engine. action is one of \"start\", \"stop\", \"status\", or \"run\" -- run pod's rules now, as if its source had fired event (default: the pod's only bound event).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["start", "stop", "status", "run"],
+            "description": "Lifecycle action, or run a pod"
+          },
+          "pod": {
+            "type": "string",
+            "description": "Pod name, for action run"
+          },
+          "event": {
+            "type": "string",
+            "description": "Event to fire, for action run (optional)"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "podomation_emit_event",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Emit an event into the podomation automation engine, optionally with a data object of string values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Event name, e.g. on_buffer_save"
+          },
+          "data": {
+            "type": "object",
+            "description": "Event payload (string values)"
+          }
+        },
+        "required": ["event"]
+      }
+    },
+    {
+      "name": "podomation_eval_dsl",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Parse and execute a podomation DSL source string.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dsl": {
+            "type": "string",
+            "description": "podomation DSL source text"
+          }
+        },
+        "required": ["dsl"]
+      }
+    },
+    {
+      "name": "podomation_list_modules",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "List the loaded podomation modules (available event sources and actions).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "podomation_list_pods",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "List active podomation pods and their health status.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "podomation_load_file",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Load and parse a .pod DSL file into the automation engine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to a .pod DSL file"
+          }
+        },
+        "required": ["file"]
+      }
+    },
+    {
+      "name": "podomation_reload",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Hot-reload the podomation engine configuration.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "podomation_repl_eval",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Evaluate one line of DSL input in the persistent podomation REPL. State (pods, variables) carries across calls, so this supports iterative authoring.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string",
+            "description": "A line of podomation DSL input"
+          }
+        },
+        "required": ["line"]
+      }
+    },
+    {
+      "name": "podomation_set_context",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Set the engine context variables (an object of string values) exposed to the DSL as {context->key} bindings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "object",
+            "description": "Context key/value pairs (string values)"
+          }
+        },
+        "required": ["context"]
+      }
+    },
+    {
+      "name": "podomation_stats",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_PODOMATION"],
+      "description": "Return podomation engine statistics: events dispatched, handlers called/failed, pipe-chains executed, and start time.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "process_status",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "Get Emacs process info: PID, uptime, version, system type.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "profiler_report",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 9,
+      "ifdef": [],
+      "description": "Get the CPU profiler report.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "profiler_start",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 7,
+      "ifdef": [],
+      "description": "Start the Emacs CPU profiler.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "profiler_stop",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 8,
+      "ifdef": [],
+      "description": "Stop the Emacs CPU profiler.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "project_find_files",
+      "source": "cmacs-mcp-tools-project.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Recursively find files in the workspace whose name matches an Emacs regexp (e.g. \"\\\\.c\\\\'\" for C files). The .git directory is skipped; up to 500 paths are returned relative to the workspace root.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Emacs regexp matched against file names"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "project_grep",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 7,
+      "ifdef": [],
+      "description": "Recursively grep for a pattern under a directory (defaults to the current default-directory; .git is excluded). Returns up to 200 'file:line:text' hits.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "regexp": {
+            "type": "string",
+            "description": "Basic grep regexp"
+          },
+          "directory": {
+            "type": "string",
+            "description": "Root directory to search (optional)"
+          },
+          "file_glob": {
+            "type": "string",
+            "description": "Restrict to files matching this glob (optional)"
+          }
+        },
+        "required": ["regexp"]
+      }
+    },
+    {
+      "name": "project_list_files",
+      "source": "cmacs-mcp-tools-project.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "List the immediate entries of a workspace directory (defaults to the workspace root). Directories are suffixed with '/'; files are followed by a tab and their size in bytes.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "Directory relative to the workspace root (optional)"
+          }
+        }
+      }
+    },
+    {
+      "name": "project_read_file",
+      "source": "cmacs-mcp-tools-project.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Read a file from the workspace. The path is relative to the workspace root (absolute paths must still resolve inside it). Returns the raw file contents.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to the workspace root"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "project_root",
+      "source": "cmacs-mcp-tools-project.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "Return the absolute path of the workspace root (the open project directory) that the other project_* tools resolve paths against.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "project_write_file",
+      "source": "cmacs-mcp-tools-project.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "Write a file in the workspace, creating parent directories as needed. The path is resolved against the workspace root and cannot escape it. Overwrites any existing file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to the workspace root"
+          },
+          "content": {
+            "type": "string",
+            "description": "Full new file contents"
+          }
+        },
+        "required": ["path", "content"]
+      }
+    },
+    {
+      "name": "recent_messages",
+      "source": "cmacs-mcp-tools-debug.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "Get recent entries from the *Messages* buffer.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "integer",
+            "description": "Number of lines to retrieve (default: 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "record_audio",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Capture microphone audio for SECONDS into OUTPUT_PATH (WAV). Returns the output path on success.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "number",
+            "description": "Duration in seconds"
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Optional WAV path"
+          }
+        },
+        "required": ["seconds"]
+      }
+    },
+    {
+      "name": "replace_in_buffer",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "Regexp search-and-replace across a whole buffer. Returns the number of matches replaced.",
+      "annotations": {
+        "destructiveHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "regexp": {
+            "type": "string",
+            "description": "Emacs regexp to match"
+          },
+          "replacement": {
+            "type": "string",
+            "description": "Replacement string (\\N backrefs allowed)"
+          }
+        },
+        "required": ["buffer", "regexp", "replacement"]
+      }
+    },
+    {
+      "name": "save_buffer",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 7,
+      "ifdef": [],
+      "description": "Save a buffer to its associated file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          }
+        },
+        "required": ["buffer"]
+      }
+    },
+    {
+      "name": "screensaver_list_configs",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "List the available screensaver config names (one per line).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "screensaver_pause",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Pause the animated wallpaper/lock rendering (the render child stops drawing; the GPU goes idle).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "screensaver_restart",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Kill and respawn the screensaver render child, re-applying the active wallpaper/lock sessions (recovery).",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "screensaver_resume",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Resume the animated wallpaper/lock rendering after a pause.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "screensaver_set_fps",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 15,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Set the animated wallpaper/lock target frame rate (1-240).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 240,
+            "description": "Target frames per second"
+          }
+        },
+        "required": ["fps"]
+      }
+    },
+    {
+      "name": "screensaver_set_wallpaper",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Set the animated libregnum screensaver wallpaper to a named config from cmacs-screensaver-configs (omit `config' for the default).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "type": "string",
+            "description": "Config name from cmacs-screensaver-configs (e.g. blackhole-cool)"
+          }
+        }
+      }
+    },
+    {
+      "name": "screensaver_status",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Get the out-of-process screensaver renderer status as a plist (:running :pid :fps :paused :gave-up :targets :wallpaper :lock :last-error).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "screensaver_stop_wallpaper",
+      "source": "cmacs-mcp-tools-gowl.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_GOWL"],
+      "description": "Stop the animated screensaver wallpaper, restoring the static one.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_buffer",
+      "source": "cmacs-mcp-tools-edit.c",
+      "order": 5,
+      "ifdef": [],
+      "description": "Search a buffer for a regexp. Returns up to 200 matches as 'LINE: TEXT' lines.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "regexp": {
+            "type": "string",
+            "description": "Emacs regexp to match"
+          }
+        },
+        "required": ["buffer", "regexp"]
+      }
+    },
+    {
+      "name": "secondbrain_doctor",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 15,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Which external programs (pandoc, pdftotext, yt-dlp, ffmpeg, ...) and cmacs features (office, whisper, ai) the ingester can use on this host.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "secondbrain_expand",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Expand or collapse a department.  With 'id', acts on that node; without one, acts on every department at once.  Departments start collapsed, so this is how you see what is inside one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Node id; omit for all"
+          },
+          "collapse": {
+            "type": "boolean",
+            "description": "Collapse instead"
+          }
+        }
+      }
+    },
+    {
+      "name": "secondbrain_find",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Search the notes for a query: semantic (embeddings + lexical fusion) when the memory index exists, text search otherwise.  Returns path, title, score and snippet per hit.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "secondbrain_ingest",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "File a URL, a file (PDF, Office, EPUB, mail, audio, video, YouTube, HTML, Markdown, data...) or literal text into the user's second brain as an Org note: summarised, tagged, placed in the PARA tree, linked to related notes and registered in its index.  Returns the QUEUED jobs with ids; the work runs asynchronously -- poll secondbrain_ingest_status until 'done' is true and read 'note_file'.  Set 'dry_run' to see the plan without doing anything.  Paths must be absolute.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "URL or absolute path; omit when text is given"
+          },
+          "text": {
+            "type": "string",
+            "description": "Literal text to ingest"
+          },
+          "para": {
+            "type": "string",
+            "enum": ["inbox", "projects", "areas", "resources", "detect"]
+          },
+          "category": {
+            "type": "string",
+            "description": "Sub path under the category, e.g. technical/linux"
+          },
+          "directory": {
+            "type": "string",
+            "description": "Exact root-relative directory, overriding para/category"
+          },
+          "tags": {
+            "type": "string",
+            "description": "Comma-separated tags"
+          },
+          "type": {
+            "type": "string",
+            "description": "Summary template: auto, general, meeting, book, youtube, ..."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Extra summary instructions"
+          },
+          "principle": {
+            "type": "boolean"
+          },
+          "no_summary": {
+            "type": "boolean"
+          },
+          "no_ai": {
+            "type": "boolean"
+          },
+          "sanitize": {
+            "type": "string",
+            "description": "'t' for the default redaction rules, or a comma list of rule names"
+          },
+          "title": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "File name seed"
+          },
+          "format": {
+            "type": "string",
+            "description": "Format of text: org, markdown, text, json, csv, html"
+          },
+          "crawl": {
+            "type": "boolean"
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "max_pages": {
+            "type": "integer"
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "link": {
+            "type": "boolean",
+            "description": "false to skip related notes"
+          },
+          "keep_source": {
+            "type": "boolean",
+            "description": "Copy the original beside the note"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "secondbrain_ingest_cancel",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Cancel an ingest job by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "secondbrain_ingest_status",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Status of an ingest job by 'id' (stage, progress, note_file, warnings, error, done); without an id, every job.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "secondbrain_migrate",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Plan -- or with 'apply', perform -- the bulk migration of the Markdown notes under 'dir' (default: the whole tree) into Org nodes in place: same directory, same base name, front matter mapped onto the header, links rewritten to ids.  Without 'apply' nothing is written and the plan lists every file and every link that would not resolve.  'remove' = 'trash' moves the originals to the trash afterwards.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "apply": {
+            "type": "boolean"
+          },
+          "include_archives": {
+            "type": "boolean"
+          },
+          "ai": {
+            "type": "boolean",
+            "description": "Summarise and tag with the model"
+          },
+          "remove": {
+            "type": "string",
+            "enum": ["trash"]
+          }
+        }
+      }
+    },
+    {
+      "name": "secondbrain_node_info",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Return the full record for a node id: title, role, ARMS ring, department and file.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "secondbrain_open",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Open the ARMS second-brain visualiser: the user's agentic workspace as four concentric rings (Applications, Routines, Memory, Skills). Set 'three_d' for the free 3D view rather than the flat one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "three_d": {
+            "type": "boolean",
+            "description": "Free 3D view"
+          }
+        }
+      }
+    },
+    {
+      "name": "secondbrain_refresh",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Re-read every enabled source and rebuild the graph.",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "secondbrain_search",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Highlight nodes matching QUERY, dimming the rest.  By default a substring match over names and paths, which is instant.  Set 'semantic' to embed the query and rank against the notes index instead -- slower, and worth it only when you do not know the name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "semantic": {
+            "type": "boolean"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "secondbrain_set_layout",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Switch the layout.  'rings' is the ARMS layout (concentric bands), 'circle' one circle per department, 'hex' a hex lattice, 'force' a force-directed graph.  The change animates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["rings", "circle", "hex", "force"]
+          }
+        },
+        "required": ["kind"]
+      }
+    },
+    {
+      "name": "secondbrain_sources",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "List the registered ARMS data sources -- where each ring's contents come from.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "secondbrain_stats",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "Counts for the open view: total nodes, how many are visible (the rest are inside collapsed departments), edges, and the layout.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "secondbrain_tree",
+      "source": "cmacs-mcp-tools-secondbrain.c",
+      "order": 12,
+      "ifdef": ["HAVE_CMACS_SECONDBRAIN"],
+      "description": "List the PARA notes tree as root-relative paths, optionally narrowed to one category and sub path, optionally with .org files.  Use it to see where a note could be filed.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "para": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "files": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "select_window",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 6,
+      "ifdef": [],
+      "description": "Select another window by direction (up/down/left/right) or cycle.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"],
+            "description": "Direction to move (omit to cycle)"
+          }
+        }
+      }
+    },
+    {
+      "name": "send_keys",
+      "source": "cmacs-mcp-tools-input.c",
+      "order": 1,
+      "ifdef": [],
+      "description": "Send a key sequence to Emacs (e.g. \"C-x C-f\", \"M-x\", \"RET\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "string",
+            "description": "Key sequence in Emacs notation (e.g. C-x C-s)"
+          }
+        },
+        "required": ["keys"]
+      }
+    },
+    {
+      "name": "send_to_process",
+      "source": "cmacs-mcp-tools-process.c",
+      "order": 2,
+      "ifdef": [],
+      "description": "Send a string to a running subprocess (e.g. shell input).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "process": {
+            "type": "string",
+            "description": "Process name"
+          },
+          "input": {
+            "type": "string",
+            "description": "String to send"
+          }
+        },
+        "required": ["process", "input"]
+      }
+    },
+    {
+      "name": "set_buffer_content",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 3,
+      "ifdef": [],
+      "description": "Replace text in a buffer. If start/end given, replaces that range; otherwise replaces entire buffer content.",
+      "annotations": {
+        "destructiveHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          },
+          "content": {
+            "type": "string",
+            "description": "New text content"
+          },
+          "start": {
+            "type": "integer",
+            "description": "Start position (1-based)"
+          },
+          "end": {
+            "type": "integer",
+            "description": "End position (1-based)"
+          }
+        },
+        "required": ["buffer", "content"]
+      }
+    },
+    {
+      "name": "speech_components",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Which engine and model serve each speech component and feature, and why (tab-separated: component[/feature], backend, model, source).",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "speech_diarize",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Who spoke when in an audio or video file: a speaker-labelled transcript.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "description": "Audio or video file"
+          }
+        },
+        "required": ["audio_path"]
+      }
+    },
+    {
+      "name": "speech_identify_speaker",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Which enrolled speaker an audio file sounds like, best matches first.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "description": "Audio or video file"
+          }
+        },
+        "required": ["audio_path"]
+      }
+    },
+    {
+      "name": "speech_models",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Installed and downloadable speech models (tab-separated: state, backend, id, components, description).  Downloads are started by the user in M-x cmacs-speech.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "Only models serving this component"
+          }
+        }
+      }
+    },
+    {
+      "name": "speech_set",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Choose the engine (and model) for a speech component, for this session only -- the user's saved choices are never changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "stt, stt-live, stt-stream, wake, vad, tts, diarize, speaker-id, punctuate, lang-id, audio-tag, denoise, separate"
+          },
+          "backend": {
+            "type": "string",
+            "description": "whisper, sherpa, piper, or auto"
+          },
+          "model": {
+            "type": "string",
+            "description": "Installed model id"
+          },
+          "feature": {
+            "type": "string",
+            "description": "Limit to one feature (dictate, voice-loop, ...)"
+          }
+        },
+        "required": ["component", "backend"]
+      }
+    },
+    {
+      "name": "speech_tag_audio",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "What sounds are in an audio file (speech, music, laughter, ...), with probabilities.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "description": "Audio or video file"
+          }
+        },
+        "required": ["audio_path"]
+      }
+    },
+    {
+      "name": "split_window",
+      "source": "cmacs-mcp-tools-window.c",
+      "order": 4,
+      "ifdef": [],
+      "description": "Split the current window vertically or horizontally.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": ["vertical", "horizontal"],
+            "description": "Split direction (default: vertical)"
+          }
+        }
+      }
+    },
+    {
+      "name": "switch_to_buffer",
+      "source": "cmacs-mcp-tools-buffer.c",
+      "order": 6,
+      "ifdef": [],
+      "description": "Switch the current window to display a buffer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string",
+            "description": "Buffer name"
+          }
+        },
+        "required": ["buffer"]
+      }
+    },
+    {
+      "name": "synthesize_speech",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Speak TEXT with the configured voice, or write it to OUTPUT_PATH as a WAV file.  VOICE picks an installed voice (see speech_models).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Text to speak"
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Optional WAV path"
+          },
+          "voice": {
+            "type": "string",
+            "description": "Installed voice id"
+          },
+          "backend": {
+            "type": "string",
+            "description": "sherpa or piper"
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "transcribe",
+      "source": "cmacs-mcp-tools-audio.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_AUDIO"],
+      "description": "Transcribe an audio or video file with the engine M-x cmacs-speech chose (whisper.cpp or sherpa-onnx).  Returns the transcript; with diarize, a speaker-labelled one.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "description": "Audio or video file (any format ffmpeg reads)"
+          },
+          "language": {
+            "type": "string",
+            "description": "ISO 2-letter code hint"
+          },
+          "backend": {
+            "type": "string",
+            "description": "whisper or sherpa (default: as configured)"
+          },
+          "model": {
+            "type": "string",
+            "description": "Installed model id (see speech_models)"
+          },
+          "diarize": {
+            "type": "boolean",
+            "description": "Label who spoke when"
+          }
+        },
+        "required": ["audio_path"]
+      }
+    },
+    {
+      "name": "video_list",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 13,
+      "ifdef": ["HAVE_CMACS_VIDEO"],
+      "description": "List all live cmacs-video stream handles.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "video_snapshot",
+      "source": "cmacs-mcp-tools-shell.c",
+      "order": 14,
+      "ifdef": ["HAVE_CMACS_VIDEO"],
+      "description": "Capture the current frame of a video stream and return it as a PNG image.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer",
+            "description": "Video stream handle from video_list"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "vidstudio_add_audio",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 8,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Add an audio file to the lane at FROM_FRAME with VOLUME.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "from_frame": {
+            "type": "integer"
+          },
+          "volume": {
+            "type": "number"
+          }
+        },
+        "required": ["handle", "path"]
+      }
+    },
+    {
+      "name": "vidstudio_add_clip",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 4,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Append a clip to TRACK.  KIND: video|image (PATH), solid (R G B), text (TEXT).  DURATION_FRAMES at project fps.  Video clips decode on a worker thread (see vidstudio_info's 'decoding' marker).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "track": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "duration_frames": {
+            "type": "integer"
+          },
+          "r": {
+            "type": "integer"
+          },
+          "g": {
+            "type": "integer"
+          },
+          "b": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "track", "kind"]
+      }
+    },
+    {
+      "name": "vidstudio_add_effect",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 6,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Append an effect to CLIP.  TYPE: 0 blur,1 bloom,2 color-grade,3 vignette,4 grain.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "clip": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "clip", "type"]
+      }
+    },
+    {
+      "name": "vidstudio_add_keyframe",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 7,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Add a keyframe on CLIP_ID: PARAM (0 opacity,1 x,2 y,3 scale,4 rotation) at FRAME (clip-relative) = VALUE, optional EASING.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "clip_id": {
+            "type": "integer"
+          },
+          "param": {
+            "type": "integer"
+          },
+          "frame": {
+            "type": "number"
+          },
+          "value": {
+            "type": "number"
+          },
+          "easing": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "clip_id", "param", "frame", "value"]
+      }
+    },
+    {
+      "name": "vidstudio_add_track",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 3,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Append a track (composites above lower tracks); returns its index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "vidstudio_export",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 11,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Export the timeline.  FORMAT mp4 (H.264) or gif.  Waits for any in-flight clip decodes, so output always has real frames.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": ["handle", "path"]
+      }
+    },
+    {
+      "name": "vidstudio_info",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 2,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Describe the project: size, fps, total frames, per-track clip layout.",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle"]
+      }
+    },
+    {
+      "name": "vidstudio_new",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 1,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Create a WIDTHxHEIGHT video project at FPS; returns its handle.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number"
+          }
+        },
+        "required": ["width", "height"]
+      }
+    },
+    {
+      "name": "vidstudio_render_frame",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 10,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Composite FRAME and write it to PATH as PNG (agent-viewable preview).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "frame": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["handle", "frame", "path"]
+      }
+    },
+    {
+      "name": "vidstudio_set_transition",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 5,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Set CLIP's leading transition.  TYPE: 0 fade,1 dissolve,2 wipe,3 slide,4 zoom,5 iris,6 flip,7 push,8 clock-wipe; -1 removes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "clip": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "integer"
+          },
+          "overlap_frames": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "clip", "type"]
+      }
+    },
+    {
+      "name": "vidstudio_split",
+      "source": "cmacs-mcp-tools-vidstudio.c",
+      "order": 9,
+      "ifdef": ["HAVE_CMACS_VIDSTUDIO"],
+      "description": "Split CLIP at AT_FRAME (relative to the clip start).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "integer"
+          },
+          "clip": {
+            "type": "integer"
+          },
+          "at_frame": {
+            "type": "integer"
+          }
+        },
+        "required": ["handle", "clip", "at_frame"]
+      }
+    }
+  ]
+}

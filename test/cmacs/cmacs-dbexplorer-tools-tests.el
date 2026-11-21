@@ -5,11 +5,13 @@
 
 ;;; Commentary:
 
-;; lisp/cmacs/cmacs-dbexplorer-tools.el provides every tool of
-;; cmacs/mcp/cmacs-mcp-tools-dbexplorer.c while that file stays as the
-;; fallback, so the first thing tested is that the two have not drifted:
-;; every tool has the C tool's name, its parameters in its order, their
-;; types and the same required set.
+;; lisp/cmacs/cmacs-dbexplorer-tools.el is the database MCP tool family.
+;; The C handlers these tools replaced were deleted once the registry
+;; was published by every build with an MCP server.  What they promised
+;; a client -- frozen from a real tools/list beforehand, in
+;; test/cmacs/data/mcp-wire-schema.json -- is what the first test holds
+;; the family to, through cmacs-wire-schema.el: each tool's name, its
+;; parameters in order, their types and the required set.
 ;;
 ;; The rest is what the C handlers used to guarantee before calling in,
 ;; and the registry's tools are reached without passing through them: a
@@ -30,6 +32,17 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
 (require 'cmacs-capability)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 
 (require 'json)
 
@@ -48,36 +61,6 @@
               (or load-file-name buffer-file-name default-directory)
               "lisp/cmacs/cmacs-dbexplorer-tools.el")))
     (and dir (file-name-as-directory (expand-file-name dir)))))
-
-(defun cmacs-dbexplorer-tools-tests--c-tools (file)
-  "Parse the MCP tool registrations in the C FILE.
-Return a list of (NAME PARAMS REQUIRED): PARAMS is a list of
-\(PARAM . TYPE) in schema order, REQUIRED the list of required names."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((starts nil) (out nil))
-      (while (re-search-forward "mcp_tool_new (\"\\([a-z_]+\\)\"" nil t)
-        (push (cons (match-string 1) (match-beginning 0)) starts))
-      (setq starts (nreverse starts))
-      (while starts
-        (let ((name (car (car starts)))
-              (beg (cdr (car starts)))
-              (end (if (cdr starts) (cdr (cadr starts)) (point-max)))
-              (params nil) (required nil))
-          (goto-char beg)
-          (while (re-search-forward
-                  "\\\\\"\\([a-z_]+\\)\\\\\":{\\\\\"type\\\\\":\\\\\"\\([a-z]+\\)\\\\\""
-                  end t)
-            (push (cons (match-string 1) (match-string 2)) params))
-          (goto-char beg)
-          (when (re-search-forward "\\\\\"required\\\\\":\\[\\([^]]*\\)\\]" end t)
-            (let ((list (match-string 1)) (at 0))
-              (while (string-match "\\\\\"\\([a-z_]+\\)\\\\\"" list at)
-                (push (match-string 1 list) required)
-                (setq at (match-end 0)))))
-          (push (list name (nreverse params) (nreverse required)) out))
-        (setq starts (cdr starts)))
-      (nreverse out))))
 
 (defmacro cmacs-dbexplorer-tools-tests--with-family (&rest body)
   "Run BODY with a private registry holding only the dbexplorer family."
@@ -109,23 +92,6 @@ The cell's car becomes (STATUS TEXT) when the tool settles."
 
 ;;;; The family is the C family
 
-(defun cmacs-dbexplorer-tools-tests--check-against-c (c names)
-  "Assert each tool in NAMES matches its entry in C, the parsed C tools."
-  (dolist (name names)
-    (pcase-let* ((`(,_ ,params ,required) (assoc name c))
-                 (entry (cmacs-capability-describe-tool name)))
-      (ert-info ((format "tool %s" name))
-        (should entry)
-        (should (equal (mapcar (lambda (p)
-                                 (cons (plist-get p :name)
-                                       (plist-get p :type)))
-                               (plist-get entry :params))
-                       params))
-        (should (equal (cl-loop for p in (plist-get entry :params)
-                                when (plist-get p :required)
-                                collect (plist-get p :name))
-                       required))))))
-
 (defun cmacs-dbexplorer-tools-tests--available-p ()
   "Non-nil when the family file can be loaded and registers its tools."
   (and (cmacs-dbexplorer-tools-tests--root)
@@ -134,26 +100,22 @@ The cell's car becomes (STATUS TEXT) when the tool settles."
        (cmacs-dbexplorer-available-p)))
 
 (ert-deftest cmacs-dbexplorer-tools-test-family-matches-c ()
-  "Every tool has its C twin's name, parameters, types and required set."
-  (let* ((root (cmacs-dbexplorer-tools-tests--root))
-         (file (and root (expand-file-name
-                          "cmacs/mcp/cmacs-mcp-tools-dbexplorer.c" root))))
-    (skip-unless (and file (file-readable-p file)
-                      (cmacs-dbexplorer-tools-tests--available-p)))
-    (cmacs-dbexplorer-tools-tests--with-family
-      (let ((c (cmacs-dbexplorer-tools-tests--c-tools file)))
-        (should (equal (sort (mapcar #'car c) #'string<)
-                       (sort (copy-sequence
-                              cmacs-dbexplorer-tools-tests--migrated)
-                             #'string<)))
-        (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
-                                     (cmacs-capability-describe))
-                             #'string<)
-                       (sort (copy-sequence
-                              cmacs-dbexplorer-tools-tests--migrated)
-                             #'string<)))
-        (cmacs-dbexplorer-tools-tests--check-against-c
-         c cmacs-dbexplorer-tools-tests--migrated)))))
+  "Every tool keeps its frozen name, parameters, types and required set."
+  (skip-unless (cmacs-dbexplorer-tools-tests--available-p))
+  (cmacs-dbexplorer-tools-tests--with-family
+    (let ((c (cmacs-wire-schema-names "cmacs-mcp-tools-dbexplorer.c")))
+      (should (equal (sort (copy-sequence c) #'string<)
+                     (sort (copy-sequence
+                            cmacs-dbexplorer-tools-tests--migrated)
+                           #'string<)))
+      (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
+                                   (cmacs-capability-describe))
+                           #'string<)
+                     (sort (copy-sequence
+                            cmacs-dbexplorer-tools-tests--migrated)
+                           #'string<)))
+      (dolist (name cmacs-dbexplorer-tools-tests--migrated)
+        (cmacs-wire-schema-should-match name)))))
 
 (ert-deftest cmacs-dbexplorer-tools-test-writes-are-gated ()
   "The writing tools are destructive, confirmed, and off D-Bus by default."
@@ -171,8 +133,8 @@ The cell's car becomes (STATUS TEXT) when the tool settles."
                              :destructive)))
     ;; Asked for confirmation with nobody to ask: declined, not run.
     (let ((cmacs-brigade-auto-approve nil) (ran nil))
-      (cl-letf (((symbol-function 'cmacs-dbexplorer-tool-execute)
-                 (lambda (&rest _) (setq ran t) "{}")))
+      (cl-letf (((symbol-function 'cmacs-dbexplorer-tool-execute-async)
+                 (lambda (done &rest _) (setq ran t) (funcall done "{}"))))
         (should (eq (car (car (cmacs-dbexplorer-tools-tests--call
                                "db_execute"
                                "{\"connection\":\"main\",\"sql\":\"DELETE FROM t\"}")))
@@ -285,14 +247,20 @@ two watchers `cmacs-dbexplorer-when-connected' was given."
   (skip-unless (cmacs-dbexplorer-tools-tests--available-p))
   (cmacs-dbexplorer-tools-tests--with-family
     (let ((log nil))
-      (cl-letf (((symbol-function 'cmacs-dbexplorer-tool-query)
-                 (lambda (&rest args) (push (cons 'query args) log) "{}"))
-                ((symbol-function 'cmacs-dbexplorer-tool-tables)
-                 (lambda (&rest args) (push (cons 'tables args) log) "[]"))
-                ((symbol-function 'cmacs-dbexplorer-tool-columns)
-                 (lambda (&rest args) (push (cons 'columns args) log) "{}"))
-                ((symbol-function 'cmacs-dbexplorer-tool-export)
-                 (lambda (&rest args) (push (cons 'export args) log) "{}")))
+      ;; The tools are :async and call the `-async' entry points, whose
+      ;; first argument is the DONE callback.
+      (cl-letf (((symbol-function 'cmacs-dbexplorer-tool-query-async)
+                 (lambda (done &rest args)
+                   (push (cons 'query args) log) (funcall done "{}")))
+                ((symbol-function 'cmacs-dbexplorer-tool-tables-async)
+                 (lambda (done &rest args)
+                   (push (cons 'tables args) log) (funcall done "[]")))
+                ((symbol-function 'cmacs-dbexplorer-tool-columns-async)
+                 (lambda (done &rest args)
+                   (push (cons 'columns args) log) (funcall done "{}")))
+                ((symbol-function 'cmacs-dbexplorer-tool-export-async)
+                 (lambda (done &rest args)
+                   (push (cons 'export args) log) (funcall done "{}"))))
         ;; What is well-formed goes through, with its values intact.
         (cmacs-dbexplorer-tools-tests--call
          "db_query" "{\"connection\":\"main\",\"sql\":\"select 1\",\"max_rows\":5}")
@@ -328,6 +296,74 @@ two watchers `cmacs-dbexplorer-when-connected' was given."
                                    (car bad) (cdr bad))))
                         'error))))
         (should-not log)))))
+
+(ert-deftest cmacs-dbexplorer-tools-test-nothing-waits ()
+  "Every tool that talks to a database is :async and returns before it answers."
+  (skip-unless (cmacs-dbexplorer-tools-tests--available-p))
+  (cmacs-dbexplorer-tools-tests--with-family
+    (dolist (name '("db_query" "db_tables" "db_columns" "db_execute"
+                    "db_export" "db_connect"))
+      (ert-info (name)
+        (should (plist-get (cmacs-capability-describe-tool name) :async))))
+    ;; The file's blocking helper is for the C handlers; no registered
+    ;; tool may reach it.  `sit-for' on the dispatch thread is the bug
+    ;; this conversion removed.
+    (cl-letf (((symbol-function 'cmacs-dbexplorer-tools--await)
+               (lambda (&rest _) (error "a registry tool waited")))
+              ((symbol-function 'sit-for)
+               (lambda (&rest _) (error "a registry tool called sit-for"))))
+      (cmacs-dbexplorer-tools-tests--with-explorer
+        (let ((query-args nil) (on-result nil))
+          (setq live (cmacs-dbexplorer-tools-tests--connection "main"))
+          (cl-letf (((symbol-function 'cmacs-dbexplorer-query)
+                     (lambda (connection sql &rest keys)
+                       (setq query-args (list connection sql)
+                             on-result (plist-get keys :on-result))
+                       nil))
+                    ((symbol-function 'cmacs-dbexplorer-tools--query-json)
+                     (lambda (result) (format "{\"got\":%S}" result))))
+            (let ((reply (cmacs-dbexplorer-tools-tests--call
+                          "db_query"
+                          "{\"connection\":\"main\",\"sql\":\"select 1\"}")))
+              ;; Started and not answered: the reply is still to come.
+              (should (equal (cadr query-args) "select 1"))
+              (should-not (car reply))
+              (funcall on-result "rows")
+              (should (equal (car reply) '(ok "{\"got\":\"rows\"}")))
+              ;; A second answer from the database layer changes nothing.
+              (funcall on-result "again")
+              (should (equal (car reply) '(ok "{\"got\":\"rows\"}"))))))))))
+
+(ert-deftest cmacs-dbexplorer-tools-test-async-failures ()
+  "A database error and a refused connect are failed calls, once."
+  (skip-unless (cmacs-dbexplorer-tools-tests--available-p))
+  (cmacs-dbexplorer-tools-tests--with-family
+    (cmacs-dbexplorer-tools-tests--with-explorer
+      ;; Not open yet: the tool starts the connect and waits on the hooks.
+      (let ((reply (cmacs-dbexplorer-tools-tests--call
+                    "db_tables" "{\"connection\":\"main\"}")))
+        (should-not (car reply))
+        (should (equal (assq 'connect log) '(connect "main")))
+        (funcall failed "main")
+        (should (equal (car reply) '(error "could not connect to main")))))
+    (cmacs-dbexplorer-tools-tests--with-explorer
+      (setq live (cmacs-dbexplorer-tools-tests--connection "main"))
+      (cl-letf (((symbol-function 'cmacs-dbexplorer-execute)
+                 (lambda (_connection _sql &rest keys)
+                   (funcall (plist-get keys :on-error) "read-only connection")
+                   nil)))
+        (should (equal (car (cmacs-dbexplorer-tools-tests--call
+                             "db_execute"
+                             "{\"connection\":\"main\",\"sql\":\"delete from t\"}"))
+                       '(error "read-only connection")))))
+    ;; A name that is not a saved connection never starts anything, and
+    ;; is reported through the call rather than left to a timer.
+    (cmacs-dbexplorer-tools-tests--with-explorer
+      (should (eq (car (car (cmacs-dbexplorer-tools-tests--call
+                             "db_query"
+                             "{\"connection\":\"a b\",\"sql\":\"select 1\"}")))
+                  'error))
+      (should-not (assq 'connect log)))))
 
 (provide 'cmacs-dbexplorer-tools-tests)
 

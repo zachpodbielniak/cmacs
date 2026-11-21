@@ -12,9 +12,10 @@
 ;; `cmacs-brigade-deftool' forms (doc_org/cmacs/cmacs-capability.org has
 ;; the recipe), reaching in-process agents, MCP clients,
 ;; org.cmacs.Editor1.Tools and `emacsctl tool lrgeditor ...' from one
-;; definition.  The C file stays as the fallback for a build without the
-;; brigade; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails
-;; when the two drift.
+;; definition.  The C file is deleted; the schema it published is frozen
+;; in test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; The editor is libregnum's `lrgeditor'.  The embedded shell
 ;; (M-x cmacs-lrgeditor, buffer *lrgeditor*) is preferred when it is
@@ -127,6 +128,11 @@ editor's primitives."
     ((primitive integer "Primitive type, 0-8")
      (name string "Name for the node (default Object)" :optional t))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.AddPrimitive
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-add-primitive)
   :example "emacsctl tool lrgeditor add-primitive --primitive 1 --name Crate"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -142,6 +148,11 @@ editor's primitives."
      (asset string "Model, image or tileset file" :optional t)
      (name string "Name for the node (default Object)" :optional t))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.AddVisual
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-add-visual)
   :example "emacsctl tool lrgeditor add-visual --kind 5 --name Sun"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -157,6 +168,11 @@ editor's primitives."
      (y number "Y")
      (z number "Z"))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Move
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-move)
   :example "emacsctl tool lrgeditor move --id 3 --x 0 --y 1.5 --z 0"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -171,6 +187,11 @@ editor's primitives."
     "Select node ID in the editor."
     ((id integer "Node id"))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Select
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-select)
   :example "emacsctl tool lrgeditor select --id 3"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -182,6 +203,11 @@ editor's primitives."
     "Delete node ID from the level."
     ((id integer "Node id"))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Delete
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-delete)
   :example "emacsctl tool lrgeditor delete --id 3"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -196,6 +222,11 @@ one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, \
 ...); no PATH opens its welcome screen."
     ((path string "Project, level or asset to open" :optional t))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Open
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-open)
   :example "emacsctl tool lrgeditor open --path ~/game/project.ryaml"
   ;; Required first: in a session that never loaded cmacs-lrgeditor.el
@@ -209,6 +240,11 @@ one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, \
     "Save the level to a .rlevel PATH."
     ((path string "Destination .rlevel file"))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Save
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-save)
   :example "emacsctl tool lrgeditor save --path ~/game/levels/one.rlevel"
   (let ((buf (car (cmacs-libregnum-tools--editor))))
@@ -220,6 +256,11 @@ one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, \
 it."
     ()
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Play
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-play)
   :example "emacsctl tool lrgeditor play"
   (pcase-let ((`(,buf . ,shell) (cmacs-libregnum-tools--editor)))
@@ -233,6 +274,11 @@ it."
     "Stop play-in-editor."
     ()
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Stop
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :aliases '(lrg-editor-stop)
   :example "emacsctl tool lrgeditor stop"
   (pcase-let ((`(,buf . ,shell) (cmacs-libregnum-tools--editor)))
@@ -247,6 +293,11 @@ play.start, view.top) in the embedded shell. lrgeditor_actions lists \
 them."
     ((id string "Action id, as lrgeditor_actions lists it"))
   :group 'lrgeditor
+  :destructive t
+  ;; Destructive, and on `dbus' and `cli' all the same:
+  ;; org.cmacs.Editor1.Lrg.Action
+  ;; has always done this, and is now served from this tool.
+  :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool lrgeditor action --id edit.undo"
   (let ((buf (cmacs-libregnum-tools--shell)))
     (unless (cmacs-lrgeditor-activate-action buf id)

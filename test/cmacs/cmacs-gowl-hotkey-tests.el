@@ -667,33 +667,43 @@ a fixed list and escapes its arguments before building Lisp."
         (should-not (string-match-p "gowl_compositor_" body))))))
 
 (ert-deftest cmacs-gowl-hotkey-test-mcp-source ()
-  "The cmacs MCP server registers the hotkey tools, escapes the lines
-it splices into Lisp, and checks ids are one word."
+  "The hotkey tools are registry tools, bar the one that types.
+They were handlers in cmacs/mcp/cmacs-mcp-tools-gowl.c that spliced
+escaped lines into Lisp; as `cmacs-brigade-deftool' forms they receive
+values and splice nothing.  `gowl_hotkey_send' types into the focused
+window and stays in C with the privileged set.  Every name is still in
+the frozen wire schema, which is what MCP clients were promised."
   (let ((tools (cmacs-gowl-hotkey-tests--source-file
-                "cmacs/mcp/cmacs-mcp-tools-gowl.c")))
-    (skip-unless tools)
+                "lisp/cmacs/cmacs-gowl-tools.el"))
+        (kept (cmacs-gowl-hotkey-tests--source-file
+               "cmacs/mcp/cmacs-mcp-tools-gowl.c"))
+        (schema (cmacs-gowl-hotkey-tests--source-file
+                 "test/cmacs/data/mcp-wire-schema.json")))
+    (skip-unless (and tools kept schema))
     (with-temp-buffer
-      (insert-file-contents tools)
+      (insert-file-contents schema)
       (dolist (name '("gowl_hotkey_status" "gowl_hotkey_list"
                       "gowl_hotkey_history" "gowl_hotkey_add"
                       "gowl_hotkey_remove" "gowl_hotkey_set"
                       "gowl_hotkey_send" "gowl_hotkey_fire"))
         (goto-char (point-min))
-        (should (search-forward (format "\"%s\"" name) nil t)))
-      (goto-char (point-min))
-      (should (re-search-forward "^gowl_hotkey_line " nil t))
-      (let ((body (buffer-substring (point)
-                                    (progn (re-search-forward "^}" nil t)
-                                           (point)))))
-        (should (string-match-p "cmacs_dispatch_lisp_escape (line)" body))
-        (should (string-match-p "cmacs-gowl-hotkey-command" body)))
-      (dolist (fn '("handle_gowl_hotkey_remove" "handle_gowl_hotkey_fire"))
+        (should (search-forward (format "\"%s\"" name) nil t))))
+    (with-temp-buffer
+      (insert-file-contents tools)
+      (dolist (name '("gowl-hotkey-status" "gowl-hotkey-list"
+                      "gowl-hotkey-history" "gowl-hotkey-add"
+                      "gowl-hotkey-remove" "gowl-hotkey-set"
+                      "gowl-hotkey-fire"))
         (goto-char (point-min))
-        (should (re-search-forward (concat "^" fn " ") nil t))
-        (let ((body (buffer-substring (point)
-                                      (progn (re-search-forward "^}" nil t)
-                                             (point)))))
-          (should (string-match-p "gowl_broadcast_word (id)" body)))))))
+        (should (re-search-forward
+                 (format "^(cmacs-brigade-deftool %s$" name) nil t)))
+      ;; the one that types is not offered from here
+      (goto-char (point-min))
+      (should-not (re-search-forward
+                   "^(cmacs-brigade-deftool gowl-hotkey-send$" nil t)))
+    (with-temp-buffer
+      (insert-file-contents kept)
+      (should (search-forward "\"gowl_hotkey_send\"" nil t)))))
 
 (ert-deftest cmacs-gowl-hotkey-test-emacsctl-source ()
   "emacsctl has a `compositor hotkey' row calling the D-Bus method."

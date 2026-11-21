@@ -38,6 +38,15 @@ override; registering an approval handler is the composable way."
 
 ;;;; Argument marshalling
 
+;; A mistake in a CALL -- a required argument left out, arguments that
+;; are not JSON -- is not `cmacs-brigade-tool-error': that one's message
+;; is "Invalid brigade tool definition", which sends a model looking for
+;; a fault in a tool that is defined perfectly well.  A sibling under
+;; `cmacs-brigade-error', not a child of the definition error, so a
+;; handler for one never swallows the other.
+(define-error 'cmacs-brigade-tool-call-error
+  "Invalid tool call" 'cmacs-brigade-error)
+
 (defun cmacs-brigade--coerce (value type)
   "Coerce VALUE, as delivered by a model, to TYPE.
 
@@ -60,6 +69,12 @@ handler that needs stricter validation can do it itself."
                  ((or :false "false" "no" 0) nil)
                  ((or 't "true" "yes") t)
                  (_ (and value t))))
+    ;; Structured values are passed through untouched: the tool's
+    ;; handler was wrapped at registration to turn whatever arrives --
+    ;; parsed data or JSON text -- into a list or an alist
+    ;; (`cmacs-brigade-structured-value').  Formatting one with "%s", as
+    ;; the scalar fallback below does, would destroy it.
+    ((or "array" "object") value)
     (_ (if (stringp value) value (and value (format "%s" value))))))
 
 (defun cmacs-brigade--tool-args (tool arg-alist)
@@ -78,7 +93,7 @@ message the model cannot act on."
         (cell (cmacs-brigade--coerce raw (plist-get p :type)))
         ((plist-get p :default) (plist-get p :default))
         ((plist-get p :required)
-         (signal 'cmacs-brigade-tool-error
+         (signal 'cmacs-brigade-tool-call-error
                  (list (format "%s: missing required argument `%s'"
                                (cmacs-brigade-tool-wire-name tool) key))))
         (t nil))))
@@ -96,7 +111,7 @@ message the model cannot act on."
                                          :false-object :false)))
           (mapcar (lambda (c) (cons (format "%s" (car c)) (cdr c))) parsed))
       (json-parse-error
-       (signal 'cmacs-brigade-tool-error
+       (signal 'cmacs-brigade-tool-call-error
                (list "tool arguments were not valid JSON"
                      (error-message-string err))))))
    ((listp json) json)
@@ -426,12 +441,10 @@ and the task it belongs to does not change."
       (let ((wire (cmacs-brigade-tool-wire-name tool)))
         (cmacs-ai-tools-register
          executor wire (cmacs-brigade-tool-description tool)
-         (cons (mapcar (lambda (p)
-                         (list (plist-get p :name)
-                               (plist-get p :type)
-                               (plist-get p :doc)
-                               (plist-get p :required)))
-                       (cmacs-brigade-tool-params tool))
+         ;; (NAME TYPE DOC REQUIRED [ITEM-SCHEMA-JSON]) per parameter;
+         ;; the registry builds it so an array's element schema and an
+         ;; object's members reach the provider.
+         (cons (cmacs-brigade-tool-provider-params tool)
                ;; The executor calls back with (NAME INPUT-JSON ID); the
                ;; allowlist is not re-checked because this executor was
                ;; built from it.

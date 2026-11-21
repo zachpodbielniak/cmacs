@@ -2,7 +2,7 @@
 @c   admin/cmacs-capability-audit.sh --write-docs
 @c test/cmacs/cmacs-capability-tests.el fails when this is stale.
 
-284 tools.  Each is reachable by its wire name over MCP and
+312 tools.  Each is reachable by its wire name over MCP and
 @code{org.cmacs.Editor1.Tools.Call}, and by the CLI words shown, on the
 surfaces listed.
 
@@ -119,7 +119,7 @@ Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but w
 @item CLI: @command{emacsctl tool ai call}
 @item Surfaces: mcp, dbus, cli
 @item Returns: string
-@item Flags: async (timeout 1800s)
+@item Flags: destructive, async (timeout 1800s)
 @item Example: @code{emacsctl tool ai call --prompt 'What is in ./README.org?' --tools}
 @end itemize
 
@@ -148,6 +148,22 @@ Cosine similarity of two texts' embeddings, in [-1, 1]: 1 is the same direction,
 @item @code{a} @tab string @tab yes @tab First text
 @item @code{b} @tab string @tab yes @tab Second text
 @item @code{model} @tab string @tab no @tab Embedding model
+@end multitable
+
+@item ai_list_models
+List the model names each cmacs-ai provider offers, as a JSON object mapping provider to an array of models. Optional 'provider' restricts the query to one provider; otherwise all providers are queried (unavailable ones report inline).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai list-models}
+@item Surfaces: mcp, dbus, cli
+@item Returns: json
+@item Flags: async (timeout 600s)
+@item Example: @code{emacsctl tool ai list-models --provider ollama}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{provider} @tab string @tab no @tab Provider name
 @end multitable
 
 @item ai_list_providers
@@ -186,6 +202,7 @@ Open a cmacs-ai chat buffer. If PROMPT is given, the prompt is sent as the first
 @item CLI: @command{emacsctl tool ai open-chat}
 @item Surfaces: mcp, dbus, cli
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool ai open-chat --provider claude}
 @end itemize
 
@@ -203,7 +220,7 @@ Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'prov
 @item CLI: @command{emacsctl tool ai prompt}
 @item Surfaces: mcp, dbus, cli
 @item Returns: string
-@item Flags: async (timeout 600s)
+@item Flags: destructive, async (timeout 600s)
 @item Example: @code{emacsctl tool ai prompt --prompt 'Name three GLib main-loop sources'}
 @end itemize
 
@@ -258,7 +275,7 @@ Generate an image from a text prompt and insert it into a cmacs buffer. In an Or
 @item CLI: @command{emacsctl tool ai generate-image}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
-@item Flags: async (timeout 300s)
+@item Flags: destructive, async (timeout 300s)
 @item Example: @code{emacsctl tool ai generate-image --prompt 'a brass orrery' --aspect 16:9}
 @end itemize
 
@@ -310,6 +327,7 @@ Capture microphone audio for SECONDS into OUTPUT_PATH (WAV). Returns the output 
 @item CLI: @command{emacsctl tool audio record}
 @item Surfaces: mcp, dbus, cli
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool audio record --seconds 5}
 @end itemize
 
@@ -385,6 +403,7 @@ Choose the engine (and model) for a speech component, for this session only -- t
 @item CLI: @command{emacsctl tool audio set}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool audio set --component tts --backend piper}
 @end itemize
 
@@ -417,9 +436,9 @@ Speak TEXT with the configured voice, or write it to OUTPUT_PATH as a WAV file. 
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool audio synthesize}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
-@item Flags: async (timeout 300s)
+@item Flags: destructive, async (timeout 300s)
 @item Example: @code{emacsctl tool audio synthesize --text 'Build finished'}
 @end itemize
 
@@ -569,8 +588,9 @@ Switch the current window to display a buffer.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool buffer switch-to-buffer}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -636,8 +656,9 @@ Drive JOINT (id) of assembly NAME to VALUE and re-solve (no source re-eval); rep
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool cad assembly-set-joint}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool cad assembly-set-joint --path ~/cad/arm.cad --name arm --joint 0 --value 45}
 @end itemize
 
@@ -935,6 +956,68 @@ List the registered calculators, optionally only those in one CATEGORY (financia
 
 @end table
 
+@subheading capability
+
+@table @code
+@item capability_doctor
+Report the health of this cmacs's tool table: which tool families loaded, which FAILED to load (their tools are then missing from this server, not disabled) and why, and whether the MCP server's copy of the table agrees with the editor's. Call it when a tool you expected is not listed.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool capability doctor}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool capability doctor}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
+@subheading context
+
+@table @code
+@item context_current
+Return the name of the context the user is in, or "none".
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool context current}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool context current}
+@end itemize
+
+Takes no arguments.
+
+@item context_list
+List the user's named contexts (saved arrangements of files, pages and applications), one per line: the name, whether it is the current one, how many applications and files it holds, its project and when it was last used. Use context_switch to switch to one.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool context list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool context list}
+@end itemize
+
+Takes no arguments.
+
+@item context_switch
+Switch the user's desktop to the named context: opens its files and pages, starts the applications it holds that are not running, moves the running ones to their tags and rebuilds the editor's windows. Nothing is closed. The user is asked before this runs. Returns as soon as the switch has been started.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool context switch}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@item Example: @code{emacsctl tool context switch --name work}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab The context's name, as context_list shows it
+@end multitable
+
+@end table
+
 @subheading data
 
 @table @code
@@ -1018,6 +1101,7 @@ Describe one table: its columns with types and nullability, and its primary key.
 @item CLI: @command{emacsctl tool database db-columns}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: async (timeout 45s)
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1074,7 +1158,7 @@ Run a statement that CHANGES the database -- INSERT, UPDATE, DELETE or DDL. Refu
 @item CLI: @command{emacsctl tool database db-execute}
 @item Surfaces: mcp, menu, agents
 @item Returns: string
-@item Flags: destructive, confirm=ask
+@item Flags: destructive, confirm=ask, async (timeout 45s)
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1090,7 +1174,7 @@ Export the results of a query to a file as csv or json.
 @item CLI: @command{emacsctl tool database db-export}
 @item Surfaces: mcp, menu, agents
 @item Returns: string
-@item Flags: destructive, confirm=ask
+@item Flags: destructive, confirm=ask, async (timeout 615s)
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1108,6 +1192,7 @@ Run a read-only SQL query and return the rows as JSON. Only reads are permitted:
 @item CLI: @command{emacsctl tool database db-query}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: async (timeout 45s)
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1124,6 +1209,7 @@ List the tables and views in a database.
 @item CLI: @command{emacsctl tool database db-tables}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: async (timeout 45s)
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1436,6 +1522,7 @@ Move point to a 1-based line number in a buffer, updating its window if one is s
 @item CLI: @command{emacsctl tool edit goto-line}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -1622,6 +1709,7 @@ Add a geofence: a circle of RADIUS_KM about LAT, LON named NAME. Entities enteri
 @item CLI: @command{emacsctl tool gnuseye add-geofence}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gnuseye add-geofence --name home --lat 41.9 --lon -87.6 --radius-km 50}
 @end itemize
 
@@ -1664,6 +1752,7 @@ Fly the globe camera to LAT, LON (degrees); optional RANGE world units.
 @item CLI: @command{emacsctl tool gnuseye fly-to}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gnuseye fly-to --lat 51.5 --lon -0.12}
 @end itemize
 
@@ -1709,6 +1798,7 @@ Open the GNU's Eye live planetary globe buffer.
 @item CLI: @command{emacsctl tool gnuseye open}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gnuseye open}
 @end itemize
 
@@ -1753,6 +1843,7 @@ Toggle a data layer on/off by NAME (e.g. satellites, aircraft, vessels, quakes, 
 @item CLI: @command{emacsctl tool gnuseye toggle-layer}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gnuseye toggle-layer --name quakes}
 @end itemize
 
@@ -1766,8 +1857,9 @@ Light the full weather picture: tropical cyclones (tracks/cones), animated preci
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool gnuseye weather-showcase}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gnuseye weather-showcase}
 @end itemize
 
@@ -1778,6 +1870,38 @@ Takes no arguments.
 @subheading gowl
 
 @table @code
+@item gowl_broadcast_add_rule
+Add, or replace by name, a broadcast rule for this session; the reply says when it cannot run.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-add-rule}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{rule} @tab object @tab no @tab @{name, team, when, keys: @{include, exclude@}, modifiers, targets, translate, mode, reset-ms, delivery, mouse, delay-ms, local@}
+@item @code{yaml} @tab string @tab no @tab The same as one line of flow YAML
+@end multitable
+
+@item gowl_broadcast_add_team
+Add, or replace by name, a broadcast team for this session.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-add-team}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{team} @tab object @tab no @tab @{name, slots: [@{name, match, focus-key, delivery@}], groups: @{NAME: [slot]@}@}; match is a filter such as app-id = eqgame.exe
+@item @code{yaml} @tab string @tab no @tab The same as one line of flow YAML
+@end multitable
+
 @item gowl_broadcast_assign
 Put a window in a broadcast team's slot by hand.
 
@@ -1979,6 +2103,23 @@ Get info about the currently focused Wayland client.
 
 Takes no arguments.
 
+@item gowl_hotkey_add
+Add a hotkey (or a section of them) for this session; refused whole, with the reason, on any problem.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-add}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{hotkey} @tab object @tab no @tab A hotkey entry @{id, key, do, context, when, mode, double, hold, ...@} -- key in AutoHotkey notation (#!t, CapsLock & j, ~LButton) or gowl's (Super+Alt+t); do is a list of actions such as @{shell: CMD@}, @{send: KEYS@}, @{action: spawn, arg: PROGRAM@} -- or a whole section @{hotkeys: [...], remaps: @{...@}, modes: @{...@}@}
+@item @code{yaml} @tab string @tab no @tab The same as one line of flow YAML
+@item @code{id} @tab string @tab no @tab Name it, so adding again replaces it and gowl_hotkey_remove takes it back
+@end multitable
+
 @item gowl_hotkey_fire
 Run a hotkey's actions as if it had been pressed.
 
@@ -2122,6 +2263,22 @@ The macro recorder (Super+Alt+r). start records the person's keys, clicks, drags
 @item @code{name} @tab string @tab no @tab With start: also write NAME.c
 @end multitable
 
+@item gowl_macro_run
+Run a gowl macro: in-process C (crispy) or an Elisp macro that drives the compositor. Runs under gowl's fault guard and time budget; a crash or runaway loop is stopped and held back. Loads the opt-in macro module on first use.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-run}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab A macro name (a file on the macro path, a registered or an Elisp macro), or a path to a .c file
+@item @code{args} @tab array of string @tab no @tab Arguments handed to the macro, in order
+@end multitable
+
 @item gowl_macro_status
 Running macros, held-back ones and why, the fault count, the time budget, triggers -- the macro module's status JSON.
 
@@ -2197,6 +2354,18 @@ Whether an input recording is running, its token, limits and counters, without c
 @item CLI: @command{emacsctl tool gowl recording-status}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_reload_config
+Reload the gowl compositor configuration from YAML.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl reload-config}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
 @end itemize
 
 Takes no arguments.
@@ -2356,6 +2525,7 @@ Navigate a gsurf buffer back.
 @item CLI: @command{emacsctl tool gsurf back}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf back}
 @end itemize
 
@@ -2371,6 +2541,7 @@ Click at x,y (CSS pixels from the page's top-left, as getBoundingClientRect repo
 @item CLI: @command{emacsctl tool gsurf click}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf click --x 120 --y 48}
 @end itemize
 
@@ -2389,6 +2560,7 @@ Click the first element matching a CSS selector in a gsurf page: it is scrolled 
 @item CLI: @command{emacsctl tool gsurf click-element}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf click-element --selector 'input[name=q]'}
 @end itemize
 
@@ -2417,6 +2589,7 @@ Cancel an in-flight gsurf download by id.
 @item CLI: @command{emacsctl tool gsurf download-cancel}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf download-cancel --id 3}
 @end itemize
 
@@ -2475,6 +2648,7 @@ Navigate a gsurf buffer forward.
 @item CLI: @command{emacsctl tool gsurf forward}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf forward}
 @end itemize
 
@@ -2556,6 +2730,7 @@ Open a URL as eww-style text: gsurf renders it offscreen (JavaScript runs, login
 @item CLI: @command{emacsctl tool gsurf lite-open}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf lite-open --url https://www.gnu.org/}
 @end itemize
 
@@ -2583,6 +2758,7 @@ Navigate a gsurf buffer to a URL (or search query).
 @item CLI: @command{emacsctl tool gsurf navigate}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf navigate --url https://www.gnu.org/}
 @end itemize
 
@@ -2599,6 +2775,7 @@ Open a URL (or search query) in a new gsurf browser buffer; returns the buffer n
 @item CLI: @command{emacsctl tool gsurf open}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf open --url https://www.gnu.org/}
 @end itemize
 
@@ -2664,6 +2841,7 @@ Reload a gsurf buffer.
 @item CLI: @command{emacsctl tool gsurf reload}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf reload}
 @end itemize
 
@@ -2679,6 +2857,7 @@ Run a gsurf action by name on a gsurf buffer (see gsurf_list_actions): core ones
 @item CLI: @command{emacsctl tool gsurf run-action}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf run-action --action dark-mode-toggle}
 @end itemize
 
@@ -2717,6 +2896,7 @@ Set the zoom level (1.0 = 100%) of a gsurf buffer.
 @item CLI: @command{emacsctl tool gsurf set-zoom}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf set-zoom --level 1.25}
 @end itemize
 
@@ -2750,6 +2930,7 @@ Stop loading in a gsurf buffer.
 @item CLI: @command{emacsctl tool gsurf stop}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf stop}
 @end itemize
 
@@ -2765,6 +2946,7 @@ Enable or disable a loaded gsurf module by name (adblock, dark_mode, hardening, 
 @item CLI: @command{emacsctl tool gsurf toggle-module}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool gsurf toggle-module --name adblock --enabled true}
 @end itemize
 
@@ -2800,8 +2982,9 @@ Append a transparent layer (becomes active); returns its index.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit add-layer}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit add-layer --handle 1 --name Notes}
 @end itemize
 
@@ -2816,8 +2999,9 @@ Adjust the active layer. KIND: brightness|contrast|saturation|threshold|posteriz
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit adjust}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit adjust --handle 1 --kind contrast --amount 1.2}
 @end itemize
 
@@ -2844,8 +3028,9 @@ Draw on the active layer (one undo step). SHAPE: line|arrow (x1,y1 -> x2,y2), re
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit draw-shape}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit draw-shape --handle 1 --shape rect --x1 10 --y1 10 --x2 90 --y2 60 --filled true}
 @end itemize
 
@@ -2866,8 +3051,9 @@ Draw TEXT at X,Y in the current colour (SIZE px; one undo step).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit draw-text}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit draw-text --handle 1 --x 8 --y 8 --text Hello}
 @end itemize
 
@@ -2885,8 +3071,9 @@ Filter the active layer. KIND: blur|pixelate (RADIUS) or sharpen|edge|emboss|blo
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit filter}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit filter --handle 1 --kind blur --radius 4}
 @end itemize
 
@@ -2963,8 +3150,9 @@ Flatten and save the document (format by extension).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit save}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit save --handle 1 --path /tmp/out.png}
 @end itemize
 
@@ -2979,8 +3167,9 @@ Set the draw colour (RGBA 0..255) used by the shape/text tools.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit set-color}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit set-color --handle 1 --r 255 --g 0 --b 0}
 @end itemize
 
@@ -2998,8 +3187,9 @@ Transform the whole document. KIND: flip-h|flip-v|rotate-cw|rotate-ccw.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit transform}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit transform --handle 1 --kind rotate-cw}
 @end itemize
 
@@ -3014,8 +3204,9 @@ Undo the last edit on the document.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool imgedit undo}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool imgedit undo --handle 1}
 @end itemize
 
@@ -3036,6 +3227,7 @@ Run an lrgeditor action by id (e.g. file.save, edit.undo, play.start, view.top) 
 @item CLI: @command{emacsctl tool lrgeditor action}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgeditor action --id edit.undo}
 @end itemize
 
@@ -3063,6 +3255,7 @@ Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,4 ico-sphere,5 c
 @item CLI: @command{emacsctl tool lrgeditor add-primitive}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_add_primitive}
 @item Example: @code{emacsctl tool lrgeditor add-primitive --primitive 1 --name Crate}
 @end itemize
@@ -3080,6 +3273,7 @@ Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,5 light,6 camera
 @item CLI: @command{emacsctl tool lrgeditor add-visual}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_add_visual}
 @item Example: @code{emacsctl tool lrgeditor add-visual --kind 5 --name Sun}
 @end itemize
@@ -3098,6 +3292,7 @@ Delete node ID from the level.
 @item CLI: @command{emacsctl tool lrgeditor delete}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_delete}
 @item Example: @code{emacsctl tool lrgeditor delete --id 3}
 @end itemize
@@ -3114,6 +3309,7 @@ Set node ID's position to (X Y Z) as one undoable edit.
 @item CLI: @command{emacsctl tool lrgeditor move}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_move}
 @item Example: @code{emacsctl tool lrgeditor move --id 3 --x 0 --y 1.5 --z 0}
 @end itemize
@@ -3146,6 +3342,7 @@ Open libregnum's editor (the lrgeditor shell) on PATH: a project directory or pr
 @item CLI: @command{emacsctl tool lrgeditor open}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_open}
 @item Example: @code{emacsctl tool lrgeditor open --path ~/game/project.ryaml}
 @end itemize
@@ -3162,6 +3359,7 @@ Play-in-editor: instantiate the level into a runtime world and run it.
 @item CLI: @command{emacsctl tool lrgeditor play}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_play}
 @item Example: @code{emacsctl tool lrgeditor play}
 @end itemize
@@ -3175,6 +3373,7 @@ Save the level to a .rlevel PATH.
 @item CLI: @command{emacsctl tool lrgeditor save}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_save}
 @item Example: @code{emacsctl tool lrgeditor save --path ~/game/levels/one.rlevel}
 @end itemize
@@ -3191,6 +3390,7 @@ Select node ID in the editor.
 @item CLI: @command{emacsctl tool lrgeditor select}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_select}
 @item Example: @code{emacsctl tool lrgeditor select --id 3}
 @end itemize
@@ -3219,6 +3419,7 @@ Stop play-in-editor.
 @item CLI: @command{emacsctl tool lrgeditor stop}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Aliases: @code{lrg_editor_stop}
 @item Example: @code{emacsctl tool lrgeditor stop}
 @end itemize
@@ -3235,8 +3436,9 @@ Orbit the 3D camera around the panels (use lrgterm_dump_screen to see it).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-camera-orbit}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-camera-orbit}
 @end itemize
 
@@ -3247,8 +3449,9 @@ Cycle the 3D panel arrangement (single-panel -> per-window -> free).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-cycle-arrangement}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-cycle-arrangement}
 @end itemize
 
@@ -3259,8 +3462,9 @@ Cycle the 3D ambient environment (void -> workshop -> cockpit).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-cycle-environment}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-cycle-environment}
 @end itemize
 
@@ -3271,8 +3475,9 @@ Bring the selected window's 3D panel front-and-centre (fly the camera to it and 
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-focus-selected}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-focus-selected}
 @end itemize
 
@@ -3283,8 +3488,9 @@ Pin the selected window's 3D panel in place so the arrangement no longer moves i
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-pin-selected}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-pin-selected}
 @end itemize
 
@@ -3307,8 +3513,9 @@ Release all manually-placed 3D panels back to automatic layout.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool lrgterm 3d-unpin-all}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool lrgterm 3d-unpin-all}
 @end itemize
 
@@ -3610,6 +3817,121 @@ Replace the text of one block in a document, and save. INDEX comes from office_o
 
 @end table
 
+@subheading podomation
+
+@table @code
+@item podomation_control
+Control the podomation engine. action is one of "start", "stop", "status", or "run" -- run pod's rules now, as if its source had fired event (default: the pod's only bound event).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation control}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{action} @tab string @tab yes @tab Lifecycle action, or run a pod One of: start, stop, status, run.
+@item @code{pod} @tab string @tab no @tab Pod name, for action run
+@item @code{event} @tab string @tab no @tab Event to fire, for action run (optional)
+@end multitable
+
+@item podomation_emit_event
+Emit an event into the podomation automation engine, optionally with a data object of string values.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation emit-event}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{event} @tab string @tab yes @tab Event name, e.g. on_buffer_save
+@item @code{data} @tab object @tab no @tab Event payload (string values)
+@end multitable
+
+@item podomation_list_modules
+List the loaded podomation modules (available event sources and actions).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation list-modules}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item podomation_list_pods
+List active podomation pods and their health status.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation list-pods}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool podomation list-pods}
+@end itemize
+
+Takes no arguments.
+
+@item podomation_load_file
+Load and parse a .pod DSL file into the automation engine.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation load-file}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{file} @tab string @tab yes @tab Path to a .pod DSL file
+@end multitable
+
+@item podomation_reload
+Hot-reload the podomation engine configuration.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation reload}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@item podomation_set_context
+Set the engine context variables (an object of string values) exposed to the DSL as @{context->key@} bindings.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation set-context}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{context} @tab object @tab yes @tab Context key/value pairs (string values)
+@end multitable
+
+@item podomation_stats
+Return podomation engine statistics: events dispatched, handlers called/failed, pipe-chains executed, and start time.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool podomation stats}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool podomation stats}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
 @subheading process
 
 @table @code
@@ -3804,6 +4126,115 @@ Enable or disable an existing schedule without deleting it.
 
 @end table
 
+@subheading screensaver
+
+@table @code
+@item screensaver_list_configs
+List the available screensaver config names (one per line).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver list-configs}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool screensaver list-configs}
+@end itemize
+
+Takes no arguments.
+
+@item screensaver_pause
+Pause the animated wallpaper/lock rendering (the render child stops drawing; the GPU goes idle).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver pause}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@item screensaver_restart
+Kill and respawn the screensaver render child, re-applying the active wallpaper/lock sessions (recovery).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver restart}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@item screensaver_resume
+Resume the animated wallpaper/lock rendering after a pause.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver resume}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@item screensaver_set_fps
+Set the animated wallpaper/lock target frame rate (1-240).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver set-fps}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@item Example: @code{emacsctl tool screensaver set-fps --fps 30}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{fps} @tab integer @tab yes @tab Target frames per second
+@end multitable
+
+@item screensaver_set_wallpaper
+Set the animated libregnum screensaver wallpaper to a named config from cmacs-screensaver-configs (omit `config' for the default).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver set-wallpaper}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@item Example: @code{emacsctl tool screensaver set-wallpaper --config blackhole-cool}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{config} @tab string @tab no @tab Config name from cmacs-screensaver-configs (e.g. blackhole-cool)
+@end multitable
+
+@item screensaver_status
+Get the out-of-process screensaver renderer status as a plist (:running :pid :fps :paused :gave-up :targets :wallpaper :lock :last-error).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool screensaver status}
+@end itemize
+
+Takes no arguments.
+
+@item screensaver_stop_wallpaper
+Stop the animated screensaver wallpaper, restoring the static one.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool screensaver stop-wallpaper}
+@item Surfaces: mcp, dbus, cli, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@end table
+
 @subheading secondbrain
 
 @table @code
@@ -3826,6 +4257,7 @@ Expand or collapse a department. With 'id', acts on that node; without one, acts
 @item CLI: @command{emacsctl tool secondbrain expand}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool secondbrain expand --id memory/areas}
 @end itemize
 
@@ -3836,12 +4268,13 @@ Expand or collapse a department. With 'id', acts on that node; without one, acts
 @end multitable
 
 @item secondbrain_find
-Search the second brain for notes about a query: semantic when the memory index exists, text search otherwise. Returns paths, titles and snippets.
+Search the notes for a query: semantic (embeddings + lexical fusion) when the memory index exists, text search otherwise. Returns path, title, score and snippet per hit.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool secondbrain find}
 @item Surfaces: mcp, dbus, cli, menu, agents
-@item Returns: string
+@item Returns: json
+@item Example: @code{emacsctl tool secondbrain find --query "wayland protocols"}
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -3851,25 +4284,40 @@ Search the second brain for notes about a query: semantic when the memory index 
 @end multitable
 
 @item secondbrain_ingest
-File a URL, a file (any format: PDF, Office, EPUB, mail, audio, video, YouTube, HTML, Markdown, data) or literal text into the user's second brain as an Org note: summarised, tagged, placed in the PARA tree, linked to related notes and registered in its index. Returns the job's final status as JSON, including note_file. Slow for media (transcription) and long documents (summary); expect tens of seconds.
+File a URL, a file (PDF, Office, EPUB, mail, audio, video, YouTube, HTML, Markdown, data...) or literal text into the user's second brain as an Org note: summarised, tagged, placed in the PARA tree, linked to related notes and registered in its index. Returns the QUEUED jobs with ids; the work runs asynchronously -- poll secondbrain_ingest_status until 'done' is true and read 'note_file'. Set 'dry_run' to see the plan without doing anything. Paths must be absolute.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool secondbrain ingest}
-@item Surfaces: mcp, dbus, cli, menu, agents
-@item Returns: string
-@item Flags: async (timeout 900s)
+@item Surfaces: mcp, menu, agents
+@item Returns: json
+@item Flags: destructive
+@item Example: @code{emacsctl tool secondbrain ingest --input https://example.org/a --para resources}
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
 @headitem Argument @tab Type @tab Required @tab Description
-@item @code{input} @tab string @tab yes @tab A URL, an absolute path, or empty when text is given
-@item @code{text} @tab string @tab no @tab Literal text to ingest instead of a file or URL
-@item @code{para} @tab string @tab no @tab inbox, projects, areas, resources or detect (default: configured placement)
-@item @code{category} @tab string @tab no @tab Sub path under the PARA category, e.g. technical/linux
-@item @code{tags} @tab string @tab no @tab Comma-separated tags to add
-@item @code{summary_type} @tab string @tab no @tab Summary template: general, meeting, book, youtube, ... or auto
+@item @code{input} @tab string @tab no @tab URL or absolute path; omit when text is given
+@item @code{text} @tab string @tab no @tab Literal text to ingest
+@item @code{para} @tab string @tab no @tab inbox, projects, areas, resources or detect One of: inbox, projects, areas, resources, detect.
+@item @code{category} @tab string @tab no @tab Sub path under the category, e.g. technical/linux
+@item @code{directory} @tab string @tab no @tab Exact root-relative directory, overriding para/category
+@item @code{tags} @tab string @tab no @tab Comma-separated tags
+@item @code{type} @tab string @tab no @tab Summary template: auto, general, meeting, book, youtube, ...
+@item @code{prompt} @tab string @tab no @tab Extra summary instructions
+@item @code{principle} @tab boolean @tab no @tab File it as a principle
+@item @code{no_summary} @tab boolean @tab no @tab Skip the summary
+@item @code{no_ai} @tab boolean @tab no @tab Use no model at all
+@item @code{sanitize} @tab string @tab no @tab 't' for the default redaction rules, or a comma list of rule names
 @item @code{title} @tab string @tab no @tab Title to use instead of the material's own
-@item @code{no_summary} @tab boolean @tab no @tab Skip the AI summary
+@item @code{name} @tab string @tab no @tab File name seed
+@item @code{format} @tab string @tab no @tab Format of text: org, markdown, text, json, csv, html
+@item @code{crawl} @tab boolean @tab no @tab Follow the links of a web page
+@item @code{depth} @tab integer @tab no @tab How many links deep to crawl
+@item @code{max_pages} @tab integer @tab no @tab Most pages a crawl may fetch
+@item @code{append} @tab boolean @tab no @tab Append to an existing note of the same name
+@item @code{link} @tab boolean @tab no @tab false to skip related notes Default: t.
+@item @code{keep_source} @tab boolean @tab no @tab Copy the original beside the note
+@item @code{dry_run} @tab boolean @tab no @tab Plan only; write nothing
 @end multitable
 
 @item secondbrain_ingest_cancel
@@ -3879,6 +4327,7 @@ Cancel an ingest job by id.
 @item CLI: @command{emacsctl tool secondbrain ingest-cancel}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: json
+@item Flags: destructive
 @item Example: @code{emacsctl tool secondbrain ingest-cancel --id sbi-3}
 @end itemize
 
@@ -3888,17 +4337,18 @@ Cancel an ingest job by id.
 @end multitable
 
 @item secondbrain_ingest_status
-Status of an ingest job by id, as JSON.
+Status of an ingest job by 'id' (stage, progress, note_file, warnings, error, done); without an id, every job.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool secondbrain ingest-status}
 @item Surfaces: mcp, dbus, cli, menu, agents
-@item Returns: string
+@item Returns: json
+@item Example: @code{emacsctl tool secondbrain ingest-status --id sbi-3}
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
 @headitem Argument @tab Type @tab Required @tab Description
-@item @code{id} @tab string @tab yes @tab Job id, e.g. sbi-3
+@item @code{id} @tab string @tab no @tab Job id, e.g. sbi-3; omit for every job
 @end multitable
 
 @item secondbrain_migrate
@@ -3942,6 +4392,7 @@ Open the ARMS second-brain visualiser: the user's agentic workspace as four conc
 @item CLI: @command{emacsctl tool secondbrain open}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool secondbrain open --three-d}
 @end itemize
 
@@ -3962,6 +4413,23 @@ Re-read every enabled source and rebuild the graph.
 
 Takes no arguments.
 
+@item secondbrain_search
+Highlight nodes matching QUERY, dimming the rest. By default a substring match over names and paths, which is instant. Set 'semantic' to embed the query and rank against the notes index instead -- slower, and worth it only when you do not know the name.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain search}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 120s)
+@item Example: @code{emacsctl tool secondbrain search --query wayland}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{query} @tab string @tab yes @tab What to look for
+@item @code{semantic} @tab boolean @tab no @tab Rank by meaning against the notes index
+@end multitable
+
 @item secondbrain_set_layout
 Switch the layout. 'rings' is the ARMS layout (concentric bands), 'circle' one circle per department, 'hex' a hex lattice, 'force' a force-directed graph. The change animates.
 
@@ -3969,6 +4437,7 @@ Switch the layout. 'rings' is the ARMS layout (concentric bands), 'circle' one c
 @item CLI: @command{emacsctl tool secondbrain set-layout}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool secondbrain set-layout --kind hex}
 @end itemize
 
@@ -4002,12 +4471,13 @@ Counts for the open view: total nodes, how many are visible (the rest are inside
 Takes no arguments.
 
 @item secondbrain_tree
-List the PARA notes tree as root-relative paths. Use this to see where a note could be filed before choosing a category.
+List the PARA notes tree as root-relative paths, optionally narrowed to one category and sub path, optionally with .org files. Use it to see where a note could be filed.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool secondbrain tree}
 @item Surfaces: mcp, dbus, cli, menu, agents
-@item Returns: string
+@item Returns: json
+@item Example: @code{emacsctl tool secondbrain tree --para resources}
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58
@@ -4068,6 +4538,23 @@ Who spoke when in an audio or video file: a speaker-labelled transcript.
 
 @end table
 
+@subheading video
+
+@table @code
+@item video_list
+List all live cmacs-video stream handles.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool video list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool video list}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
 @subheading vidstudio
 
 @table @code
@@ -4091,8 +4578,9 @@ Add an audio file to the lane at FROM_FRAME with VOLUME.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio add-audio}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio add-audio --handle 1 --path ~/Music/bed.flac --volume 0.6}
 @end itemize
 
@@ -4109,8 +4597,9 @@ Append a clip to TRACK. KIND: video|image (PATH), solid (R G B), text (TEXT). DU
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio add-clip}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio add-clip --handle 1 --track 0 --kind video --path ~/Videos/take1.mp4}
 @end itemize
 
@@ -4132,8 +4621,9 @@ Append an effect to CLIP. TYPE: 0 blur,1 bloom,2 color-grade,3 vignette,4 grain.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio add-effect}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio add-effect --handle 1 --clip 2 --type 3}
 @end itemize
 
@@ -4149,8 +4639,9 @@ Add a keyframe on CLIP_ID: PARAM (0 opacity,1 x,2 y,3 scale,4 rotation) at FRAME
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio add-keyframe}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio add-keyframe --handle 1 --clip-id 2 --param 0 --frame 0 --value 0}
 @end itemize
 
@@ -4169,8 +4660,9 @@ Append a track (composites above lower tracks); returns its index.
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio add-track}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio add-track --handle 1}
 @end itemize
 
@@ -4184,9 +4676,9 @@ Export the timeline. FORMAT mp4 (H.264) or gif. Waits for any in-flight clip dec
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio export}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
-@item Flags: async (timeout 3600s)
+@item Flags: destructive, async (timeout 3600s)
 @item Example: @code{emacsctl tool vidstudio export --handle 1 --path ~/Videos/out.mp4}
 @end itemize
 
@@ -4234,8 +4726,9 @@ Composite FRAME and write it to PATH as PNG (agent-viewable preview).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio render-frame}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio render-frame --handle 1 --frame 30 --path /tmp/frame.png}
 @end itemize
 
@@ -4251,8 +4744,9 @@ Set CLIP's leading transition. TYPE: 0 fade,1 dissolve,2 wipe,3 slide,4 zoom,5 i
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio set-transition}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio set-transition --handle 1 --clip 2 --type 1}
 @end itemize
 
@@ -4269,8 +4763,9 @@ Split CLIP at AT_FRAME (relative to the clip start).
 
 @itemize @bullet
 @item CLI: @command{emacsctl tool vidstudio split}
-@item Surfaces: mcp, dbus, cli, menu, agents
+@item Surfaces: mcp, menu, agents
 @item Returns: string
+@item Flags: destructive
 @item Example: @code{emacsctl tool vidstudio split --handle 1 --clip 2 --at-frame 45}
 @end itemize
 
@@ -4393,6 +4888,7 @@ Select another window by direction (up/down/left/right) or cycle.
 @item CLI: @command{emacsctl tool window select-window}
 @item Surfaces: mcp, dbus, cli, menu, agents
 @item Returns: string
+@item Flags: destructive
 @end itemize
 
 @multitable @columnfractions .2 .12 .1 .58

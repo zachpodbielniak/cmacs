@@ -1,0 +1,1 @@
+./../cmacs/core/cmacs-tool-registry.c

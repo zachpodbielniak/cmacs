@@ -16,7 +16,6 @@
  * registration entry point stays private to the fan-out below; the
  * local decl also avoids -Wredundant-decls against the definition. */
 extern void syms_of_cmacs_ai_brigade_defuns    (void);
-extern void syms_of_cmacs_ai_brigade_registry  (void);
 extern void syms_of_cmacs_ai_brigade_allowlist (void);
 extern void syms_of_cmacs_ai_brigade_memory    (void);
 extern void syms_of_cmacs_ai_brigade_state     (void);
@@ -29,7 +28,10 @@ void
 syms_of_cmacs_ai_brigade (void)
 {
   syms_of_cmacs_ai_brigade_defuns ();
-  syms_of_cmacs_ai_brigade_registry ();
+  /* The mirror moved to cmacs/core; its entry point is declared in
+     cmacs-tool-registry.h (through cmacs-brigade.h) and is a no-op when
+     the MCP server already ran it.  */
+  syms_of_cmacs_tool_registry ();
   syms_of_cmacs_ai_brigade_allowlist ();
   syms_of_cmacs_ai_brigade_memory ();
   syms_of_cmacs_ai_brigade_state ();

@@ -5,11 +5,13 @@
 
 ;;; Commentary:
 
-;; lisp/cmacs/cmacs-audio-tools.el replaces the handlers of
-;; cmacs/mcp/cmacs-mcp-tools-audio.c while that file stays as the
-;; fallback, so the first thing tested is that the two have not drifted:
-;; every migrated tool has the C tool's name, its parameters in its
-;; order, their types and the same required set.
+;; lisp/cmacs/cmacs-audio-tools.el is the audio and speech MCP tool family.
+;; The C handlers these tools replaced were deleted once the registry
+;; was published by every build with an MCP server.  What they promised
+;; a client -- frozen from a real tools/list beforehand, in
+;; test/cmacs/data/mcp-wire-schema.json -- is what the first test holds
+;; the family to, through cmacs-wire-schema.el: each tool's name, its
+;; parameters in order, their types and the required set.
 ;;
 ;; The rest is behaviour with the speech engines stubbed: transcription,
 ;; diarisation and synthesis answer from the engine's callback and never
@@ -28,6 +30,17 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
 (require 'cmacs-capability)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 
 (defconst cmacs-audio-tools-tests--migrated
   '("record_audio" "transcribe" "synthesize_speech" "speech_components"
@@ -53,36 +66,6 @@
               (or load-file-name buffer-file-name default-directory)
               "lisp/cmacs/cmacs-audio-tools.el")))
     (and dir (file-name-as-directory (expand-file-name dir)))))
-
-(defun cmacs-audio-tools-tests--c-tools (file)
-  "Parse the MCP tool registrations in the C FILE.
-Return a list of (NAME PARAMS REQUIRED): PARAMS is a list of
-\(PARAM . TYPE) in schema order, REQUIRED the list of required names."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((starts nil) (out nil))
-      (while (re-search-forward "mcp_tool_new (\"\\([a-z_]+\\)\"" nil t)
-        (push (cons (match-string 1) (match-beginning 0)) starts))
-      (setq starts (nreverse starts))
-      (while starts
-        (let ((name (car (car starts)))
-              (beg (cdr (car starts)))
-              (end (if (cdr starts) (cdr (cadr starts)) (point-max)))
-              (params nil) (required nil))
-          (goto-char beg)
-          (while (re-search-forward
-                  "\\\\\"\\([a-z_]+\\)\\\\\":{\\\\\"type\\\\\":\\\\\"\\([a-z]+\\)\\\\\""
-                  end t)
-            (push (cons (match-string 1) (match-string 2)) params))
-          (goto-char beg)
-          (when (re-search-forward "\\\\\"required\\\\\":\\[\\([^]]*\\)\\]" end t)
-            (let ((list (match-string 1)) (at 0))
-              (while (string-match "\\\\\"\\([a-z_]+\\)\\\\\"" list at)
-                (push (match-string 1 list) required)
-                (setq at (match-end 0)))))
-          (push (list name (nreverse params) (nreverse required)) out))
-        (setq starts (cdr starts)))
-      (nreverse out))))
 
 (defmacro cmacs-audio-tools-tests--with-family (&rest body)
   "Run BODY with a private registry holding only the audio family."
@@ -114,44 +97,28 @@ The cell's car becomes (STATUS TEXT) when the tool settles."
 
 ;;;; The family is the C family
 
-(defun cmacs-audio-tools-tests--check-against-c (c names)
-  "Assert each tool in NAMES matches its entry in C, the parsed C tools."
+(defun cmacs-audio-tools-tests--check-against-c (names)
+  "Assert each tool in NAMES matches its frozen wire schema."
   (dolist (name names)
-    (pcase-let* ((`(,_ ,params ,required) (assoc name c))
-                 (entry (cmacs-capability-describe-tool name)))
-      (ert-info ((format "tool %s" name))
-        (should entry)
-        (should (equal (mapcar (lambda (p)
-                                 (cons (plist-get p :name)
-                                       (plist-get p :type)))
-                               (plist-get entry :params))
-                       params))
-        (should (equal (cl-loop for p in (plist-get entry :params)
-                                when (plist-get p :required)
-                                collect (plist-get p :name))
-                       required))))))
+    (cmacs-wire-schema-should-match name)))
 
 (ert-deftest cmacs-audio-tools-test-family-matches-c ()
-  "Every migrated tool has its C twin's name, parameters, types and required set."
-  (let* ((root (cmacs-audio-tools-tests--root))
-         (file (and root (expand-file-name
-                          "cmacs/mcp/cmacs-mcp-tools-audio.c" root))))
-    (skip-unless (and file (file-readable-p file)))
-    (cmacs-audio-tools-tests--with-family
-      (let ((c (cmacs-audio-tools-tests--c-tools file))
-            (expected (cmacs-audio-tools-tests--expected)))
-        ;; Every C tool is accounted for; one added to the C file fails
-        ;; this until it is migrated or named.
-        (should (equal (sort (mapcar #'car c) #'string<)
-                       (sort (append cmacs-audio-tools-tests--migrated
-                                     (mapcar #'car
-                                             cmacs-audio-tools-tests--conditional))
-                             #'string<)))
-        (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
-                                     (cmacs-capability-describe))
-                             #'string<)
-                       (sort (copy-sequence expected) #'string<)))
-        (cmacs-audio-tools-tests--check-against-c c expected)))))
+  "Every migrated tool keeps its frozen name, parameters, types and required set."
+  (skip-unless (cmacs-audio-tools-tests--root))
+  (cmacs-audio-tools-tests--with-family
+    (let ((c (cmacs-wire-schema-names "cmacs-mcp-tools-audio.c"))
+          (expected (cmacs-audio-tools-tests--expected)))
+      ;; Every tool the C file had is accounted for.
+      (should (equal (sort (copy-sequence c) #'string<)
+                     (sort (append cmacs-audio-tools-tests--migrated
+                                   (mapcar #'car
+                                           cmacs-audio-tools-tests--conditional))
+                           #'string<)))
+      (should (equal (sort (mapcar (lambda (e) (plist-get e :name))
+                                   (cmacs-capability-describe))
+                           #'string<)
+                     (sort (copy-sequence expected) #'string<)))
+      (cmacs-audio-tools-tests--check-against-c expected))))
 
 (ert-deftest cmacs-audio-tools-test-async-and-surfaces ()
   "The engine-running tools are asynchronous; the microphone is not an agent tool."

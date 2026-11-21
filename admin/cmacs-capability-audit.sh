@@ -10,15 +10,22 @@
 # and the generated reference all read it.  What predates it is three
 # hand-written tables that say the same things again:
 #
-#   cmacs/mcp/cmacs-mcp-tools-*.c       one C handler per MCP tool
+#   cmacs/mcp/cmacs-mcp-tools-*.c       one C handler per MCP tool (only
+#                                       the deliberate remainder is left:
+#                                       the handlers the registry replaced
+#                                       were deleted, and what they
+#                                       published is frozen in
+#                                       test/cmacs/data/mcp-wire-schema.json)
 #   cmacs/dbus/cmacs-dbus-iface-*.c     one D-Bus method per capability
 #   cmacs/emacsctl/ctl-cmd-*.c          one row per CLI verb
 #
 # This script lists every entry in those three and marks each one
 # `registry' (a registered tool already provides it, so the hand-written
-# copy is a fallback or a duplicate) or `hand-written' (nothing in the
-# registry provides it yet).  The second set is the migration that is
-# left, as a list instead of a feeling.
+# copy is a fallback or a duplicate), `kept' (an MCP tool that stays in
+# C on purpose -- KEPT below says why, tool by tool) or `hand-written'
+# (nothing in the registry provides it yet, and nothing says it should
+# stay).  The last set is the migration that is left, as a list instead
+# of a feeling; `--remainder' prints the middle one with its reasons.
 #
 # It reads source text only.  It starts no editor, makes no D-Bus call
 # and needs no build -- except `--write-docs' and `--check-docs', which
@@ -43,7 +50,51 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" > /dev/null && pwd)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." > /dev/null && pwd)"
-REFERENCE="${ROOT}/doc_org/cmacs/cmacs-capability-reference.org"
+REFERENCE="${CMACS_CAPABILITY_REFERENCE:-${ROOT}/doc_org/cmacs/cmacs-capability-reference.org}"
+
+# MCP tools that are hand-written C on purpose, each with its reason.
+# This is the whole deliberate remainder: an MCP tool that is neither in
+# the registry nor here is unfinished migration, and shows as such.
+# Since the migrated handlers were deleted, every tool the C files
+# register should be here: the summary's mcp TOTAL and KEPT are equal,
+# and a HAND-WRITTEN count above zero is a C tool someone added without
+# deciding.  (`capability_doctor' in cmacs-mcp-tools-brigade.c is not
+# one: it is the stand-in for the registry's own tool of that name,
+# registered only when the registry failed to load.)
+#
+# Three reasons recur, so they are written once:
+PRIVILEGED="privileged: runs caller-supplied code or types caller-supplied input"
+IMAGE="returns image content; a registry tool returns text"
+NATIVE="C introspection of the running binary; the handler is the feature"
+declare -A KEPT=(
+    [eval]="${PRIVILEGED}"
+    [execute_command]="${PRIVILEGED}"
+    [send_keys]="${PRIVILEGED}"
+    [send_to_process]="${PRIVILEGED}"
+    [gi_call]="${PRIVILEGED}"
+    [bacon_eval]="${PRIVILEGED}"
+    [crispy_eval]="${PRIVILEGED}"
+    [podomation_eval_dsl]="${PRIVILEGED}"
+    [podomation_repl_eval]="${PRIVILEGED}"
+    [gowl_hotkey_send]="${PRIVILEGED}"
+    [cmacs.c.compile_snippet]="${PRIVILEGED}"
+    [cmacs.c.call_handle]="${PRIVILEGED}"
+    [cmacs.c.patch_defun]="${PRIVILEGED}"
+    [cmacs.c.unpatch_defun]="${PRIVILEGED}"
+    [cmacs.c.unpatch_all]="${PRIVILEGED}"
+    [cmacs.c.list]="${NATIVE}"
+    [cmacs.c.symbol_info]="${NATIVE}"
+    [cmacs.c.type_info]="${NATIVE}"
+    [cmacs.c.function_source]="${NATIVE}"
+    [cmacs.c.addr_to_source]="${NATIVE}"
+    [cmacs.c.defun_info]="${NATIVE}"
+    [cmacs.c.stack_trace]="${NATIVE}"
+    [cmacs.c.patch_log]="${NATIVE}"
+    [gowl_screenshot]="${IMAGE}"
+    [cad_snapshot]="${IMAGE}"
+    [lrgterm_dump_screen]="${IMAGE}"
+    [video_snapshot]="${IMAGE}"
+)
 
 # D-Bus interface (last word) -> the prefix its tools carry in the
 # registry, where that is not simply the interface name in snake_case.
@@ -90,6 +141,8 @@ Options:
                        tab-separated  SURFACE NAME STATUS SOURCE
                        SURFACE is mcp, dbus, cli or all
       --hand-written   Like --list all, but only what is left to migrate
+      --remainder      The MCP tools that stay in C on purpose, as
+                       tab-separated  NAME REASON SOURCE
       --families       Hand-written MCP tools counted per C file: the
                        migration queue, smallest family first
       --write-docs     Regenerate the capability reference (org + texi)
@@ -101,12 +154,20 @@ Options:
 Environment:
   EMACS   The Emacs to run for --write-docs/--check-docs
           (default: src/emacs in this tree)
+  CMACS_CAPABILITY_REFERENCE
+          Read the registry's names from this file instead of the
+          checked-in reference (to audit a tree before regenerating)
 
 Statuses:
   registry      a registered tool provides it; the hand-written copy is
                 a fallback or a duplicate and can go
+  kept          an MCP tool hand-written on purpose (see --remainder)
   hand-written  nothing in the registry provides it yet
   generic       part of org.cmacs.Editor1.Tools itself
+  forwarded     a D-Bus method that is a row of
+                cmacs/dbus/cmacs-dbus-forward-table.h: served by a tool
+                (or a redacting Lisp method function), with no
+                hand-written body left
 
 Examples:
   # How far along is the migration?
@@ -120,6 +181,9 @@ Examples:
 
   # After adding or changing a cmacs-brigade-deftool
   admin/cmacs-capability-audit.sh --write-docs
+
+  # What will never be a registry tool, and why
+  admin/cmacs-capability-audit.sh --remainder
 EOF
 }
 
@@ -202,9 +266,10 @@ mcp_entries () {
         base="$(basename -- "${file}")"
         [[ "${base}" == "cmacs-mcp-tools-brigade.c" ]] && continue
         {
-            sed -n -E 's/.*mcp_tool_new \("([a-z0-9_]+)".*/\1/p' "${file}"
-            sed -n -E 's/^[[:space:]]*[a-z_]+ \(server,[[:space:]]*"([a-z0-9_]+)".*/\1/p' "${file}"
-            sed -n -E 's/^[[:space:]]*\{ "([a-z0-9_]+)", (TRUE|FALSE).*/\1/p' "${file}"
+            # `.' as well: the introspection tools are cmacs.c.list etc.
+            sed -n -E 's/.*mcp_tool_new \("([a-z0-9_.]+)".*/\1/p' "${file}"
+            sed -n -E 's/^[[:space:]]*[a-z_]+ \(server,[[:space:]]*"([a-z0-9_.]+)".*/\1/p' "${file}"
+            sed -n -E 's/^[[:space:]]*\{ "([a-z0-9_.]+)", (TRUE|FALSE).*/\1/p' "${file}"
         } | sort -u | sed "s/\$/\t${base}/"
     done
 }
@@ -281,6 +346,27 @@ cli_entries () {
     done
 }
 
+# The D-Bus forwarding table, cmacs/dbus/cmacs-dbus-forward-table.h:
+# "Iface.Method" -> the tool or @method-function that serves it.  Read
+# as text, one FWD (...) row per line, which is the format that file
+# promises.
+declare -A FORWARD=()
+FORWARD_LOADED=0
+
+load_forward () {
+    local table="${ROOT}/cmacs/dbus/cmacs-dbus-forward-table.h"
+    local iface method target
+
+    FORWARD_LOADED=1
+    [[ -r "${table}" ]] || return 0
+    while IFS=$'\t' read -r iface method target
+    do
+        FORWARD["${iface}.${method}"]="${target}"
+    done < <(sed -n \
+        's/^FWD ("\([^"]*\)", "\([^"]*\)", "\([^"]*\)",.*$/\1\t\2\t\3/p' \
+        "${table}")
+}
+
 # Print the status of the D-Bus method ${1} ("Iface.Method").
 dbus_status () {
     local entry="${1}"
@@ -292,6 +378,15 @@ dbus_status () {
     if [[ "${iface}" == "${GENERIC_IFACE}" ]]
     then
         echo "generic"
+        return
+    fi
+
+    # A row of the forwarding table: the method has no body of its own
+    # any more, whatever its name would have matched.
+    [[ "${FORWARD_LOADED}" -eq 1 ]] || load_forward
+    if [[ -n "${FORWARD[${entry}]:-}" ]]
+    then
+        echo "forwarded"
         return
     fi
 
@@ -321,9 +416,14 @@ list_surface () {
         mcp)
             while IFS=$'\t' read -r name source
             do
+                # The registry wins over KEPT: a tool that has been
+                # migrated after all must not keep reading as kept.
                 if [[ -n "${REGISTRY[${name}]:-}" ]]
                 then
                     printf 'mcp\t%s\tregistry\t%s\n' "${name}" "${source}"
+                elif [[ -n "${KEPT[${name}]:-}" ]]
+                then
+                    printf 'mcp\t%s\tkept\t%s\n' "${name}" "${source}"
                 else
                     printf 'mcp\t%s\thand-written\t%s\n' "${name}" "${source}"
                 fi
@@ -365,34 +465,70 @@ summary () {
     listing="$(list_surface all)"
 
     printf 'registry tools (wire names + aliases): %d\n\n' "${#REGISTRY[@]}"
-    printf '%-10s %8s %10s %14s %9s\n' \
-           "SURFACE" "TOTAL" "REGISTRY" "HAND-WRITTEN" "GENERIC"
+    printf '%-10s %8s %10s %6s %14s %9s %10s\n' \
+           "SURFACE" "TOTAL" "REGISTRY" "KEPT" "HAND-WRITTEN" "GENERIC" \
+           "FORWARDED"
     awk -F'\t' '
         { total[$1]++; count[$1, $3]++ }
         END {
             n = split("mcp dbus cli", order, " ")
             for (i = 1; i <= n; i++) {
                 s = order[i]
-                printf "%-10s %8d %10d %14d %9d\n", s, total[s],
-                       count[s, "registry"], count[s, "hand-written"],
-                       count[s, "generic"]
+                printf "%-10s %8d %10d %6d %14d %9d %10d\n", s, total[s],
+                       count[s, "registry"], count[s, "kept"],
+                       count[s, "hand-written"], count[s, "generic"],
+                       count[s, "forwarded"]
             }
         }' <<< "${listing}"
     printf '\nmcp = tools registered by cmacs/mcp/cmacs-mcp-tools-*.c'
     printf ' (the registry'"'"'s own publisher excluded).\n'
+    printf 'kept = MCP tools hand-written on purpose; --remainder says why.\n'
     printf 'dbus = methods of org.cmacs.Editor1[.X] in cmacs/dbus + cmacs/glib.\n'
+    printf 'forwarded = D-Bus methods served from the capability table'
+    printf ' (cmacs-dbus-forward-table.h).\n'
     printf 'cli = emacsctl verbs outside `emacsctl tool'"'"'.\n'
 }
 
 families () {
-    printf '%-36s %6s %10s %14s\n' "MCP FILE" "TOOLS" "REGISTRY" "HAND-WRITTEN"
+    printf '%-36s %6s %10s %6s %14s\n' \
+           "MCP FILE" "TOOLS" "REGISTRY" "KEPT" "HAND-WRITTEN"
     list_surface mcp | awk -F'\t' '
         { total[$4]++; count[$4, $3]++ }
         END {
             for (f in total)
-                printf "%-36s %6d %10d %14d\n", f, total[f],
-                       count[f, "registry"], count[f, "hand-written"]
-        }' | sort -k4,4n -k1,1
+                printf "%-36s %6d %10d %6d %14d\n", f, total[f],
+                       count[f, "registry"], count[f, "kept"],
+                       count[f, "hand-written"]
+        }' | sort -k5,5n -k1,1
+}
+
+# Print "NAME<TAB>REASON<TAB>SOURCE" for every MCP tool that is kept in
+# C on purpose, and warn about KEPT entries that name no tool any more:
+# a reason for a tool that was deleted or renamed is a stale table.
+remainder () {
+    local name
+    local source
+    local -A seen=()
+
+    while IFS=$'\t' read -r name source
+    do
+        seen["${name}"]=1
+        if [[ -z "${REGISTRY[${name}]:-}" && -n "${KEPT[${name}]:-}" ]]
+        then
+            printf '%s\t%s\t%s\n' "${name}" "${KEPT[${name}]}" "${source}"
+        fi
+    done < <(mcp_entries)
+
+    for name in "${!KEPT[@]}"
+    do
+        if [[ -z "${seen[${name}]:-}" ]]
+        then
+            echo "cmacs-capability-audit: KEPT lists '${name}', which no C file registers" >&2
+        elif [[ -n "${REGISTRY[${name}]:-}" ]]
+        then
+            echo "cmacs-capability-audit: KEPT lists '${name}', which the registry now provides" >&2
+        fi
+    done
 }
 
 # Run the batch generator with ${1} = "" (write) or "--check".
@@ -457,6 +593,10 @@ main () {
         --families)
             load_registry
             families
+            ;;
+        --remainder)
+            load_registry
+            remainder
             ;;
         --write-docs)
             run_generator ""

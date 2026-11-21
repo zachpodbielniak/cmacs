@@ -8,8 +8,8 @@
 ;; The tools of cmacs/mcp/cmacs-mcp-tools-audio.c, moved onto the
 ;; capability table (doc_org/cmacs/cmacs-capability.org has the recipe).
 ;; Wire names, parameter names and the required/optional split are the C
-;; ones; the C handlers stay as the fallback for a build without the
-;; brigade.
+;; ones.  That C file is deleted; the schema these tools must keep is
+;; what it published, frozen in test/cmacs/data/mcp-wire-schema.json.
 ;;
 ;; What changed, on purpose:
 ;;
@@ -193,6 +193,7 @@ Returns the output path on success."
   ;; only, and the microphone is not something an in-process agent
   ;; holding a wildcard allowlist should acquire by a migration.
   :group 'audio :surfaces '(mcp dbus cli) :cli "audio record"
+  :destructive t
   :example "emacsctl tool audio record --seconds 5"
   (require 'cmacs-audio)
   (unless (and (numberp seconds) (> seconds 0))
@@ -247,6 +248,7 @@ a WAV file.  VOICE picks an installed voice (see speech_models)."
      (voice string "Installed voice id" :optional t)
      (backend string "sherpa or piper" :optional t))
   :group 'audio :async t :timeout 300 :cli "audio synthesize"
+  :destructive t
   :example "emacsctl tool audio synthesize --text 'Build finished'"
   (require 'cmacs-speech)
   (let ((text (cmacs-audio-tools--required text "text"))
@@ -300,6 +302,10 @@ speaker-id, punctuate, lang-id, audio-tag, denoise, separate")
      (feature string "Limit to one feature (dictate, voice-loop, ...)"
               :optional t))
   :group 'audio :cli "audio set"
+  ;; Changes this session's engine choice, so it is not read-only; but
+  ;; `emacsctl speech set' has always reached it, and a destructive
+  ;; tool is off dbus/cli unless it says otherwise.
+  :destructive t :surfaces '(agents mcp dbus cli menu)
   :example "emacsctl tool audio set --component tts --backend piper"
   (require 'cmacs-speech)
   (unless (and (cmacs-audio-tools--text component)

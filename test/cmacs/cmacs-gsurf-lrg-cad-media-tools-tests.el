@@ -11,11 +11,10 @@
 ;; Two kinds of test:
 ;;
 ;;   - A wire-compatibility guard per family.  The hand-written C tools
-;;     in cmacs/mcp/ stay as the fallback for a build without the
-;;     brigade, so both definitions exist and must not drift.  The guard
-;;     parses the C file's registration table and compares every tool's
-;;     name, description, parameter names, order, types and
-;;     required-ness with the registry entry.
+;;     these replaced are deleted; what they published was frozen first,
+;;     in test/cmacs/data/mcp-wire-schema.json.  The guard compares every
+;;     tool's name, description, parameter names, order, types and
+;;     required-ness with that file, through cmacs-wire-schema.el.
 ;;
 ;;   - Behaviour tests, with the subsystem's functions stubbed so no
 ;;     browser, globe, editor or slicer is needed: they check what each
@@ -36,6 +35,17 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
 (require 'cmacs-capability)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 
 (declare-function cmacs-gnuseye--make-layer "cmacs-gnuseye" (&rest slots))
 
@@ -115,94 +125,13 @@ Returns the result string; a failure is a string starting \"Error: \"."
     cell))
 
 
-;;;; Reading a C registration table
+;;;; The frozen wire schema
 ;;
-;; The seven C files all register from a table: one call per tool to a
-;; local helper -- `add_tool (server, "name", "description", ...)' or
-;; `xx_add (server, "name", "description", ...)' -- with the input schema
-;; as a JSON string literal.  The literals are split across lines and two
-;; files build schemas from a macro, so the text is normalised first:
-;; macros expanded, adjacent literals joined.
-
-(defun cmacs-ftools-tests--c-tools (file)
-  "Return ((NAME DESCRIPTION PARAMS FLAGS)...) from the C tool FILE.
-PARAMS is a list of (NAME TYPE REQUIRED DESCRIPTION); FLAGS the list of
-TRUE/FALSE arguments of the registration call, in order."
-  (with-temp-buffer
-    (insert-file-contents file)
-    ;; 1. Expand the schema macros (BUF_PROP, PATH_SCHEMA).
-    (goto-char (point-min))
-    (let (macros)
-      (while (re-search-forward "^#define \\([A-Z_]+\\) \\\\\n" nil t)
-        (let ((name (match-string 1)) (start (match-beginning 0)) (body ""))
-          (while (looking-at "\\(.*?\\)\\(\\\\\\)?\n")
-            (let ((cont (match-beginning 2))
-                  (text (match-string 1))
-                  (after (match-end 0)))
-              (setq body (concat body " " (string-trim text)))
-              (goto-char (if cont after (point-max)))))
-          (push (cons name (string-trim body)) macros)
-          (goto-char start)
-          (forward-line 1)))
-      (pcase-dolist (`(,name . ,body) macros)
-        (goto-char (point-min))
-        (while (re-search-forward
-                (concat "^#define " name " \\\\\n\\(?:.*\\\\\n\\)*.*\n") nil t)
-          (replace-match ""))
-        (goto-char (point-min))
-        (let ((case-fold-search nil))
-          (while (re-search-forward (concat "\\_<" name "\\_>") nil t)
-            (replace-match body t t)))))
-    ;; 2. Join adjacent string literals.
-    (goto-char (point-min))
-    (while (re-search-forward "\"[ \t\n]+\"" nil t)
-      (replace-match "")
-      (goto-char (match-beginning 0)))
-    ;; 3. The registration calls.
-    (goto-char (point-min))
-    (let ((re (concat "\\_<\\(?:[a-z]+_add\\|add_tool\\) (server, "
-                      "\"\\([a-z0-9_]+\\)\",[ \t\n]*"
-                      "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\""))
-          hits out)
-      (while (re-search-forward re nil t)
-        (push (list (match-string 1) (match-string 2) (match-end 0)) hits))
-      (setq hits (nreverse hits))
-      (cl-loop
-       for (h next) on hits
-       do (let* ((name (nth 0 h))
-                 (desc (replace-regexp-in-string "\\\\\\(.\\)" "\\1"
-                                                 (nth 1 h)))
-                 (beg (nth 2 h))
-                 (end (if next (- (nth 2 next) 1) (point-max)))
-                 (region (buffer-substring beg end))
-                 ;; This call ends at its handler argument.
-                 (call (substring region 0
-                                  (string-match "handle_[a-z0-9_]+)" region)))
-                 (required nil) (params nil) (flags nil))
-            (when (string-match "\\\\\"required\\\\\":\\[\\([^]]*\\)\\]" call)
-              (let ((r (match-string 1 call)) (i 0))
-                (while (string-match "\\\\\"\\([a-z0-9_]+\\)\\\\\"" r i)
-                  (push (match-string 1 r) required)
-                  (setq i (match-end 0)))))
-            (let ((i 0))
-              (while (string-match
-                      (concat "\\\\\"\\([a-z0-9_]+\\)\\\\\":{\\\\\"type\\\\\":"
-                              "\\\\\"\\([a-z]+\\)\\\\\""
-                              "\\(?:,\\\\\"description\\\\\":"
-                              "\\\\\"\\([^\\\\]*\\)\\\\\"\\)?}")
-                      call i)
-                (push (list (match-string 1 call)
-                            (match-string 2 call)
-                            (and (member (match-string 1 call) required) t)
-                            (match-string 3 call))
-                      params)
-                (setq i (match-end 0))))
-            (let ((i 0) (case-fold-search nil))
-              (while (string-match "\\_<\\(TRUE\\|FALSE\\)\\_>" call i)
-                (push (equal (match-string 1 call) "TRUE") flags)
-                (setq i (match-end 0))))
-            (push (list name desc (nreverse params) (nreverse flags)) out)))
-      (nreverse out))))
+;; The seven C files these families replaced are gone.  What each one
+;; published -- names, descriptions, schemas, the read-only hint -- is in
+;; test/cmacs/data/mcp-wire-schema.json, frozen from a real tools/list
+;; before the handlers were deleted, and read through
+;; cmacs-wire-schema.el.
 
 (defconst cmacs-ftools-tests--families
   ;; FAMILY  C-FILE  COUNT-IN-C  NOT-MIGRATED  READ-ONLY-FLAG-INDEX
@@ -216,53 +145,47 @@ TRUE/FALSE arguments of the registration call, in order."
   "The migrated families and what the guard expects of each.
 NOT-MIGRATED are the image-returning tools that keep their C handler.")
 
+(defun cmacs-ftools-tests--frozen-names (c-file)
+  "Return the tools C-FILE registered under their own names.
+The `lrg_editor_*' names are left out: C registered those from a loop,
+as second names of the `lrgeditor_*' tools, and here they are aliases."
+  (cl-remove-if (lambda (name) (string-prefix-p "lrg_editor_" name))
+                (cmacs-wire-schema-names c-file)))
+
 (defun cmacs-ftools-tests--check-family (family)
-  "Assert that FAMILY's registry tools are its C tools."
-  (pcase-let* ((`(,_ ,c-file ,count ,skipped ,ro-index)
-                (assoc family cmacs-ftools-tests--families))
-               (root (cmacs-ftools-tests--root))
-               (path (and root (expand-file-name
-                                (concat "cmacs/mcp/" c-file) root))))
+  "Assert that FAMILY's registry tools are the tools its C file published."
+  (pcase-let* ((`(,_ ,c-file ,count ,skipped ,_ro-index)
+                (assoc family cmacs-ftools-tests--families)))
     ;; `skip-unless' only exists inside an `ert-deftest' body.
-    (unless (and path (file-readable-p path))
-      (ert-skip "The C tool file is not in this tree"))
+    (unless (cmacs-ftools-tests--root)
+      (ert-skip "The source tree is not here"))
     (cmacs-ftools-tests--with-registry
       (unless (cmacs-ftools-tests--load family)
         (ert-skip "The tool file is not in this tree"))
-      (let* ((c (cmacs-ftools-tests--c-tools path))
-             (migrated (cl-remove-if (lambda (tool)
-                                       (member (car tool) skipped))
+      (let* ((c (cmacs-ftools-tests--frozen-names c-file))
+             (migrated (cl-remove-if (lambda (name) (member name skipped))
                                      c)))
-        ;; The parser found the whole table: a C tool it missed would
+        ;; The whole table is frozen: a tool missing from the file would
         ;; otherwise pass by not being compared.
         (should (= (length c) count))
         (dolist (name skipped)
-          (should (assoc name c))
+          (should (member name c))
           (should-not (cmacs-capability-describe-tool name)))
         ;; Same set of names: nothing missing, nothing invented.
-        (should (equal (sort (mapcar #'car migrated) #'string<)
+        (should (equal (sort (copy-sequence migrated) #'string<)
                        (mapcar (lambda (e) (plist-get e :name))
                                (cmacs-capability-describe))))
-        (pcase-dolist (`(,name ,desc ,params ,flags) migrated)
-          (let ((entry (cmacs-capability-describe-tool name)))
+        (dolist (name migrated)
+          ;; Name, description, each parameter's name, position, type
+          ;; and required-ness; and where C documented a parameter, the
+          ;; words are C's.
+          (cmacs-wire-schema-should-match name :description t
+                                          :param-descriptions t)
+          ;; What C called read-only must not have become destructive.
+          (when (cmacs-wire-schema-read-only-p name)
             (ert-info (name :prefix "tool: ")
-              (should entry)
-              (should (equal (plist-get entry :description) desc))
-              (should (equal (mapcar (lambda (p) (plist-get p :name))
-                                     (plist-get entry :params))
-                             (mapcar #'car params)))
-              (cl-loop
-               for ours in (plist-get entry :params)
-               for (pname type required pdesc) in params
-               do (ert-info (pname :prefix "param: ")
-                    (should (equal (plist-get ours :type) type))
-                    (should (eq (and (plist-get ours :required) t) required))
-                    ;; Where C documents a parameter, the words are C's.
-                    (when pdesc
-                      (should (equal (plist-get ours :description) pdesc)))))
-              ;; What C calls read-only must not have become destructive.
-              (when (nth ro-index flags)
-                (should-not (plist-get entry :destructive))))))))))
+              (should-not (plist-get (cmacs-capability-describe-tool name)
+                                     :destructive)))))))))
 
 (ert-deftest cmacs-ftools-test-gsurf-family-matches-c ()
   "The registry gsurf tools are the C ones."
@@ -293,22 +216,24 @@ NOT-MIGRATED are the image-returning tools that keep their C handler.")
 C registers a tool twice when its `legacy_too' argument is TRUE; here
 that is one tool with the `lrg_editor_*' name as an alias."
   (cmacs-ftools-tests--check-family "libregnum")
-  (let* ((root (cmacs-ftools-tests--root))
-         (path (expand-file-name
-                "cmacs/mcp/cmacs-mcp-tools-libregnum.c" root))
-         (legacy 0))
+  (let ((legacy 0))
     (cmacs-ftools-tests--with-registry
       (skip-unless (cmacs-ftools-tests--load "libregnum"))
-      (pcase-dolist (`(,name ,_ ,_ ,flags)
-                     (cmacs-ftools-tests--c-tools path))
+      (dolist (name (cmacs-ftools-tests--frozen-names
+                     "cmacs-mcp-tools-libregnum.c"))
         (let ((entry (cmacs-capability-describe-tool name))
               (old (concat "lrg_editor_"
                            (string-remove-prefix "lrgeditor_" name))))
           (ert-info (name :prefix "tool: ")
-            ;; lrg_add (server, name, desc, schema, read_only, legacy_too, ..)
-            (if (nth 1 flags)
+            ;; C published the old name as a tool of its own, with the
+            ;; new one's schema.
+            (if (cmacs-wire-schema-tool old)
                 (progn
                   (setq legacy (1+ legacy))
+                  (should (equal (alist-get 'inputSchema
+                                            (cmacs-wire-schema-tool old))
+                                 (alist-get 'inputSchema
+                                            (cmacs-wire-schema-tool name))))
                   (should (equal (plist-get entry :aliases) (list old)))
                   ;; The alias reaches the same tool, not a second one.
                   (should (equal (plist-get

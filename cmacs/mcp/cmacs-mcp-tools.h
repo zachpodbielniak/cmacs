@@ -15,19 +15,20 @@
 #include <mcp.h>
 #include <json-glib/json-glib.h>
 
-/* Master registration: calls all category functions below. */
+/* Master registration: the hand-written C tools, then the registry. */
 void cmacs_mcp_register_all_tools (McpServer *server);
 
-/* Per-category tool registration. */
+/* Only the hand-written C tools.  For a server set up before Lisp files
+ * can be loaded, which then gets the registry from
+ * cmacs_mcp_tools_brigade_sync. */
+void cmacs_mcp_register_c_tools (McpServer *server);
+
+/* The tools that are still hand-written C; see the comment in
+ * cmacs_mcp_register_all_tools.  */
 void cmacs_mcp_tools_eval_register    (McpServer *server);
-void cmacs_mcp_tools_buffer_register  (McpServer *server);
-void cmacs_mcp_tools_window_register  (McpServer *server);
 void cmacs_mcp_tools_input_register   (McpServer *server);
 void cmacs_mcp_tools_process_register (McpServer *server);
-void cmacs_mcp_tools_debug_register   (McpServer *server);
-void cmacs_mcp_tools_edit_register    (McpServer *server);
 void cmacs_mcp_tools_shell_register   (McpServer *server);
-void cmacs_mcp_tools_project_register (McpServer *server);
 
 #ifdef HAVE_CMACS_GI
 void cmacs_mcp_tools_gi_register      (McpServer *server);
@@ -41,30 +42,6 @@ void cmacs_mcp_tools_gowl_register    (McpServer *server);
 void cmacs_mcp_tools_cintrospect_register (McpServer *server);
 #endif
 
-#ifdef HAVE_CMACS_AUDIO
-void cmacs_mcp_tools_audio_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_AI
-void cmacs_mcp_tools_ai_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_GSURF
-void cmacs_mcp_tools_gsurf_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_LIBREGNUM
-void cmacs_mcp_tools_libregnum_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_GNUSEYE
-void cmacs_mcp_tools_gnuseye_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_SECONDBRAIN
-void cmacs_mcp_tools_secondbrain_register (McpServer *server);
-#endif
-
 #ifdef HAVE_CMACS_CAD
 void cmacs_mcp_tools_cad_register (McpServer *server);
 #endif
@@ -73,32 +50,24 @@ void cmacs_mcp_tools_cad_register (McpServer *server);
 void cmacs_mcp_tools_lrgterm_register (McpServer *server);
 #endif
 
-#ifdef HAVE_CMACS_IMGEDIT
-void cmacs_mcp_tools_imgedit_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_CALCULATOR
-void cmacs_mcp_tools_calculator_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_VIDSTUDIO
-void cmacs_mcp_tools_vidstudio_register (McpServer *server);
-#endif
-
-#ifdef HAVE_CMACS_DBEXPLORER
-void cmacs_mcp_tools_dbexplorer_register (McpServer *server);
-#endif
-
-/* Resource and prompt registration. */
-#ifdef HAVE_CMACS_AI_BRIGADE
 /* Publishes every capability registered through `cmacs-brigade-deftool'.
  * Walks the live registry rather than a static table, because a tool can
- * be registered at any point after startup. */
+ * be registered at any point after startup.  In every build with an MCP
+ * server: the registry does not need the brigade.  Also makes sure a
+ * `capability_doctor' tool is listed, and appends a notice to SERVER's
+ * instructions when the registry or one of its tool families failed to
+ * load. */
 void cmacs_mcp_tools_brigade_register (McpServer *server);
-/* DEFUNs for per-agent scoped sockets (`cmacs-brigade-scope-open' and
- * friends).  Called from syms_of_cmacs_mcp. */
+/* Bring SERVER up to date with the registry: the same as the function
+ * above, skipped when nothing was registered or removed since SERVER
+ * was last published.  For a server that outlives one session. */
+void cmacs_mcp_tools_brigade_sync (McpServer *server);
+/* DEFUNs of the registry mirror and, in a brigade build, of the
+ * per-agent scoped sockets (`cmacs-brigade-scope-open' and friends).
+ * Called from syms_of_cmacs_mcp. */
 void syms_of_cmacs_mcp_tools_brigade (void);
-#endif
+
+/* Resource and prompt registration. */
 
 void cmacs_mcp_register_resources (McpServer *server);
 void cmacs_mcp_register_prompts   (McpServer *server);

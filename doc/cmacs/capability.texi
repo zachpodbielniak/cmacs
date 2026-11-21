@@ -34,10 +34,12 @@ section of the reference.
 
 @menu
 * Capability Keys::             What a tool can say about itself.
+* Capability Structured Parameters::  Arrays and objects.
 * Capability Surfaces::         Where a tool is published, and the
                                   rule for destructive tools.
 * Capability CLI Rule::         How a tool becomes GROUP VERB.
 * Capability D-Bus::            org.cmacs.Editor1.Tools.
+* Capability D-Bus Legacy::     The per-subsystem interfaces, as rows.
 * Capability emacsctl::         emacsctl tool.
 * Capability Documentation::    The generated, drift-guarded reference.
 * Capability Migration::        Moving a hand-written family over.
@@ -83,18 +85,149 @@ Extra wire names that answer to this tool, for a capability that used
 to be published under another name.
 @end table
 
-Parameter types are @code{string}, @code{integer}, @code{number} and
-@code{boolean}.  They are flat on purpose: the providers'
-function-calling schemas cannot express more.  Structured data is
-passed as JSON text in a @code{string} parameter.
+Parameter types are @code{string}, @code{integer}, @code{number},
+@code{boolean}, @code{array} and @code{object}.  The last two are
+described in @ref{Capability Structured Parameters}.
 
 @code{(cmacs-capability-describe &optional SURFACE)} returns the table
 as a list of plists with @code{:name :description :group :params
 :destructive :confirm :async :timeout :surfaces :cli :returns :example
-:aliases}; @code{(cmacs-capability-json &optional SURFACE)} returns the
-same as @code{@{"version": 1, "tools": [...]@}}.  In the JSON form
-absent values are @code{null} or @code{[]}, never missing, and
-@code{version} changes only when a member is renamed or removed.
+:aliases}, each parameter a plist of @code{:name :type :description
+:required} and, where they apply, @code{:default :enum :items
+:properties}.  @code{(cmacs-capability-json &optional SURFACE)} returns
+the same as @code{@{"version": 1, "tools": [...]@}}, except that a
+structured parameter's @code{:items} / @code{:properties} appear as one
+@code{schema} member holding its JSON Schema.  In the JSON form absent
+values are @code{null} or @code{[]}, never missing, and @code{version}
+changes only when a member is renamed or removed, so adding
+@code{schema} did not change it.
+
+@node Capability Structured Parameters
+@section Structured Parameters
+
+A parameter may be an array or an object.  @code{:items} says what one
+element of an array is; @code{:properties} lists the members of an
+object, as parameter specs.  Both are optional: without them the value
+is free-form.
+
+@lisp
+(cmacs-brigade-deftool team-add
+    "Define a team of windows."
+    ((name string "Team name")
+     (members array "Window ids" :items integer)
+     (rule object "Who joins" :optional t
+           :properties ((app string "App id")
+                        (title string "Title regexp" :optional t)))
+     (extra object "Anything else" :optional t)        ; free-form
+     (steps array "Steps" :optional t                  ; nested
+            :items (object :properties ((key string "Key")))))
+  :group 'team
+  (my/team-add name members (alist-get 'app rule)))
+@end lisp
+
+@table @code
+@item (@var{name} array @var{doc})
+A JSON array of anything.
+@item (@var{name} array @var{doc} :items @var{type})
+An array whose elements are @var{type}, one of the six type names.
+@item (@var{name} array @var{doc} :items (@var{type} @var{key}@dots{}))
+An array of arrays or objects; the keys are @code{:items} /
+@code{:properties}.
+@item (@var{name} object @var{doc})
+A JSON object with any members.
+@item (@var{name} object @var{doc} :properties (@var{spec}@dots{}))
+An object with those members, each required unless @code{:optional}.
+@end table
+
+@subheading What a handler receives
+
+Lisp data, in the shape the registry's own @code{json-parse-string}
+calls have always used (@code{:object-type 'alist :array-type 'list}):
+
+@itemize @bullet
+@item
+an array is a @emph{list} of its elements;
+@item
+an object is an @emph{alist} with @emph{symbol} keys, in the order the
+caller wrote them;
+@item
+@code{nil} is both the empty array and the empty object, and what an
+optional argument that was not given is.
+@end itemize
+
+So a body reads an object with @code{alist-get} and walks an array with
+@code{dolist}.  Where the tool declared @code{:items} or
+@code{:properties} the contents are converted and checked as well: a
+declared scalar is a string, an integer, a number or
+@code{t}/@code{nil}; a required member that is missing is an error; an
+@code{:enum} is enforced.  Members an object's @code{:properties} do
+not list are kept.  Free-form contents are passed through as parsed,
+which means JSON @code{false} is @code{:false} and JSON @code{null} is
+@code{nil} there.
+
+The conversion is done by the tool's handler, not by one surface's
+dispatch (@code{cmacs-brigade--structured-handler} wraps it at
+registration; @code{cmacs-brigade-structured-value} is the function).
+So every way of reaching a tool hands the body the same data, and
+accepts the same spellings of it:
+
+@table @asis
+@item a list or an alist
+A provider's or MCP client's arguments, already parsed by the
+dispatcher.
+@item a vector or a hash table
+@code{json-parse-string} with its default types.
+@item JSON text
+A model that stringified the argument, @command{emacsctl tool
+--@var{name} '@var{json}'}, the menu.
+@end table
+
+A value that does not fit is refused with a message naming the argument
+and the path inside it --- @samp{argument `rule.keys[2]' must be a
+string} --- as a failed call a model can read, and as
+@code{BadArguments} on D-Bus before anything runs.
+
+@subheading Handing the argument on
+
+A tool that forwards its argument instead of taking it apart (to a
+module's command line, a subprocess, a file) turns it back into JSON
+with @code{(cmacs-brigade-structured-json @var{value} @var{param})}.
+One thing is lost on the way and cannot be recovered: an @emph{empty}
+array or object nested inside free-form data has become @code{nil} by
+the time a body sees it, and is written back as @code{null}.  A tool
+that needs the distinction declares the member, and its type then
+settles it.
+
+@subheading How each surface shows it
+
+@table @asis
+@item MCP
+Its full JSON Schema in the tool's input schema: @code{items},
+@code{properties}, @code{required}, nested as deep as declared.
+@item in-process agents
+An array with its @code{items} schema (ai-glib's
+@code{ai_tool_add_array_parameter}); an object as the bare type with
+its members named in the description, because ai-glib's parameter model
+has no nested properties.
+@item D-Bus
+A JSON array or object inside @code{json_args}, validated against the
+same description.
+@item @command{emacsctl tool}
+@xref{Capability emacsctl}.
+@item the capability table
+@code{type} stays @code{"array"} or @code{"object"}, and one more
+member, @code{schema}, carries the JSON Schema.
+@item the reference
+@samp{array of integer}, @samp{object @{app, title@}}, @samp{array of
+object @{key@}}.
+@item the menu
+Asked for as JSON at the prompt, with its shape in the prompt, and
+parsed there (@code{cmacs-brigade-read-param}).
+@end table
+
+A @code{:menu} tool's @emph{first} parameter cannot be structured: it
+receives the clicked thing as text.  Such a registration is refused, so
+the menu never offers a tool it cannot run.
 
 @node Capability Surfaces
 @section Surfaces
@@ -237,6 +370,12 @@ asked for.
 A required parameter with no default must be present.  JSON
 @code{null} counts as absent.
 @item
+@code{array} accepts a JSON array, @code{object} a JSON object, and
+either accepts JSON text of one.  The contents are checked against
+@code{:items} / @code{:properties} by the same function a handler's
+arguments go through, so D-Bus refuses exactly what the tool would have
+refused, only earlier.
+@item
 @code{integer} accepts an integer, a float with no fraction, or a
 string of digits.  @code{number} accepts a number or a numeric string.
 @code{boolean} accepts @code{true}/@code{false} (and the strings).
@@ -305,6 +444,262 @@ gdbus call --session --dest org.cmacs.Editor \
       calc_eval '@{"expression": "2/3*4"@}'
 @end example
 
+@node Capability D-Bus Legacy
+@section D-Bus: The Legacy Interfaces
+
+Before @code{Tools} there was a method per capability on a
+per-subsystem interface:
+@code{org.cmacs.Editor1.Compositor.ListClients},
+@code{.Gsurf.Navigate}, @code{.BufferManager.List}, 313 of them.
+Scripts and @command{emacsctl} call them, so every interface name,
+method name and signature is exactly what it was.  What changed is
+behind them.  Each method used to carry its own body --- a Lisp form
+built with @code{printf} in C --- which was a second copy of what a tool
+now does, and had drifted from it: no redaction (a window the rules
+exclude was hidden from @code{gowl_list_clients} and listed by
+@code{Compositor.ListClients}), no argument validation, a main thread
+held for as long as a model or @command{grep} took, and several that
+called functions nobody had loaded.
+
+@subheading One table
+
+@file{cmacs/dbus/cmacs-dbus-forward-table.h} has a row for each method
+that is served from the capability table:
+
+@example
+FWD ("Compositor", "FocusClient", "gowl_focus_client", "pattern,by?", "raw", LEGACY)
+FWD ("BufferManager", "List", "@@buffer-list", "", "text", 0)
+@end example
+
+@multitable @columnfractions .2 .8
+@headitem Field @tab Meaning
+@item interface
+@tab What follows @code{org.cmacs.Editor1.}
+@item method
+@tab The D-Bus method.  Its signature stays in the introspection XML of
+the @file{cmacs-dbus-iface-*.c} that registers it.
+@item target
+@tab A tool's wire name, or @code{@@NAME} for the function
+@code{cmacs-dbus-method-NAME} in
+@file{lisp/cmacs/cmacs-dbus-forward.el}.
+@item argument map
+@tab One item per D-Bus input argument, in order: the tool parameter it
+becomes.
+@item reply
+@tab How the result becomes the method's declared reply.
+@item flags
+@tab @code{0}, @code{LEGACY}, @code{APPROVE}.
+@end multitable
+
+Every interface's method handler begins with a call to
+@code{cmacs_dbus_forward}.  For a method with a row,
+@file{cmacs-dbus-forward.c} builds one JSON object from the typed
+arguments, parks the invocation under an integer token, and evaluates
+@code{(cmacs-dbus-forward-call TOKEN TARGET JSON REPLY SIGNATURE
+FLAGS)}.  A tool target goes through the gates of @code{Tools.Call} ---
+existence, surface, argument validation, the before-call hooks, the
+confirmation policy --- and the same
+@code{cmacs-brigade-call-tool-async}, so an @code{:async} tool is
+answered when it calls @code{done} and nothing waits on the main
+thread.  The per-method C is gone: 188 methods are rows, and the
+interfaces' files lost about three thousand lines.
+
+Argument map items:
+
+@table @code
+@item name
+Pass the argument as member @var{name}.
+@item name?
+Leave it out when it is ``not given'': an empty string, array or dict,
+or a number <= 0.  D-Bus has no optional arguments, and these methods
+have always spelt ``the default'' that way.
+@item name?:VALUE
+Send @var{VALUE} instead of leaving it out: the method's own historical
+default, where the tool has none.
+@item -
+Ignore the argument.
+@item name=VALUE
+A constant; consumes no argument (@code{WindowManager.SplitRight} is
+@code{split_window} with @code{direction=horizontal}).
+@end table
+
+The types carried are @code{s}, @code{b}, the integers, @code{d},
+@code{as} (a JSON array) and @code{a@{ss@}} (a JSON object).  A method
+with any other input type cannot be a row.
+
+The tool's text, or the method function's value, is turned into the
+method's own out signature, so the wire type is what it always was:
+
+@table @code
+@item text
+As it is.
+@item raw
+A printed Lisp string is un-printed.  Many migrated tools answer in
+their MCP handler's shape (@code{"focused"} with its quotes); the D-Bus
+method always sent the text.
+@item prin1
+The value printed, for the methods that always sent it printed.
+@item lines
+The non-empty lines, for a reply of type @code{as}.
+@item ok
+For a reply of one boolean: true when the call succeeded, @emph{false}
+when the tool failed --- a missing buffer, an excluded one, a refused
+confirmation.  Bad arguments and a timeout are still errors.
+@end table
+
+A reply that is one string is sent verbatim.  Any other type is written
+as GVariant text and parsed by the C side against the method's declared
+signature, so a value of the wrong shape is a failed call and never a
+reply of the wrong type.
+
+@subheading What a forwarded method inherits
+
+@itemize
+@item
+@strong{Redaction.}  The tool's, which is the point:
+@code{Compositor.ListClients}, @code{.FocusedClient} and
+@code{.FindClient}, @code{BufferManager.List},
+@code{WindowManager.Other}, the @code{Gsurf} methods and
+@code{Edit.GetContent} show what the MCP tool of the same capability
+shows.  A D-Bus caller is always treated as model-facing
+(@pxref{CMacs Redact}).
+@item
+@strong{Validation.}  Strict, as for @code{Tools.Call}:
+@code{Compositor.SetLayout "spiral"} is @code{BadArguments}, where it
+used to answer @code{"layout set"}.
+@item
+@strong{The confirmation policy.}  A @code{:confirm} tool runs when
+@code{cmacs-brigade-auto-approve} covers it (the default does).  Turn
+that off and @code{Gsurf.EvalJs} is refused over D-Bus exactly as it is
+over MCP.
+@item
+@strong{Errors.}  A failure is the D-Bus error
+@code{org.cmacs.Editor1.Error.KIND} with the kinds of @code{Tools.Call}.
+The old bodies used the bare name @code{org.cmacs.Editor1.Error}, and
+several returned failure as an ordinary result beginning @code{error:}
+(@code{Calc.Eval}, @code{Brigade.*}, @code{DbExplorer.*}); those are
+errors now.
+@item
+@strong{Async.}  @code{Ai.Prompt}, @code{Ai.Call}, @code{Ai.Research},
+@code{Project.Grep}, @code{DbExplorer.Query} and the other methods
+whose tool is @code{:async} no longer hold the main thread.  The
+caller's method timeout has to cover the work.
+@end itemize
+
+@subheading The legacy-reach grant
+
+A @code{:destructive} tool is not on the @code{dbus} surface unless it
+says so (@pxref{Capability Surfaces}).  A legacy method that has always
+performed such an action keeps doing it: its row carries
+@code{LEGACY}, which lets @emph{that one named method} reach the tool.
+Nothing new is opened --- the method existed and did this before --- and
+@code{Tools.Call} and @command{emacsctl tool} are not affected:
+@code{Tools.Call gowl_set_layout} is still @code{NotOnSurface} while
+@code{Compositor.SetLayout} works.  A row may carry the flag only when
+its tool really is off @code{dbus};
+@code{cmacs-dbus-forward-test-legacy-reach-is-exact} fails otherwise, so
+this table is complete and cannot grow by accident:
+
+@multitable @columnfractions .2 .8
+@headitem Interface @tab Methods with the grant (and their tool)
+@item @code{Compositor}
+@tab @code{Spawn} (@code{gowl_spawn}), @code{FocusClient} (@code{gowl_focus_client}), @code{CloseClient} (@code{gowl_close_client}), @code{SetClientGeometry} (@code{gowl_set_client_geometry}), @code{SetLayout} (@code{gowl_set_layout}), @code{WorkspaceSwitch} (@code{gowl_workspace_switch})
+@item @code{Monitor}
+@tab @code{SetTransform} (@code{gowl_set_monitor_transform})
+@item @code{BufferManager}
+@tab @code{Kill} (@code{kill_buffer}), @code{Create} (@code{create_buffer}), @code{Save} (@code{save_buffer})
+@item @code{WindowManager}
+@tab @code{SplitBelow} (@code{split_window}), @code{SplitRight} (@code{split_window}), @code{Delete} (@code{delete_window})
+@item @code{Edit}
+@tab @code{EditExact} (@code{edit_buffer}), @code{Replace} (@code{replace_in_buffer})
+@item @code{Gsurf}
+@tab @code{EvalJs} (@code{gsurf_eval_js}), @code{Snapshot} (@code{gsurf_snapshot}), @code{PrintPdf} (@code{gsurf_print_pdf}), @code{PermissionPolicy} (@code{gsurf_permission_policy}), @code{TypeText} (@code{gsurf_type_text}), @code{PressKey} (@code{gsurf_press_key}), @code{SetCookie} (@code{gsurf_set_cookie})
+@item @code{Podomation}
+@tab @code{Control} (@code{podomation_control}), @code{RunPod} (@code{podomation_control}), @code{EmitEvent} (@code{podomation_emit_event}), @code{LoadFile} (@code{podomation_load_file}), @code{Reload} (@code{podomation_reload}), @code{SetContext} (@code{podomation_set_context})
+@item @code{Brigade}
+@tab @code{Spawn} (@code{agent_spawn}, approves), @code{Send} (@code{agent_send}, approves), @code{Cancel} (@code{agent_cancel}), @code{Close} (@code{agent_close}), @code{Drop} (@code{agent_drop})
+@item @code{DbExplorer}
+@tab @code{Execute} (@code{db_execute}), @code{Export} (@code{db_export})
+@end multitable
+
+@code{APPROVE} is narrower still.  @code{org.cmacs.Editor1.Brigade} has
+always answered the confirmation policy itself, on the reasoning that a
+D-Bus caller is the session's owner.  @code{Brigade.Spawn} and
+@code{Brigade.Send} keep that; no other interface may carry the flag.
+
+@subheading Methods with no tool
+
+Thirty rows name a Lisp function instead of a tool
+(@code{@@buffer-list}, @code{@@clipboard-get},
+@code{@@project-read-file}, @dots{}), defined with
+@code{cmacs-dbus-forward-defmethod} in @file{cmacs-dbus-forward.el}.
+They are the methods whose typed reply a tool's text cannot reproduce
+(@code{BufferManager.List} is @code{as}, @code{.Find} is @code{b},
+@code{.PointFor} is @code{x}) or that have no tool at all, and that show
+something of the screen: buffer names, file names, clipboard text, a
+line of a buffer.  Their arguments arrive as values, never spliced into
+a form, and each asks the redaction contract.
+
+Some also fix a method that had never worked:
+@code{FrameManager.List} formatted a frame's name with @code{%d}, and
+@code{Package.List} read @code{package-alist} without loading
+@file{package.el}.  (@code{Debug.ProfilerReport} and
+@code{Gsurf.Current}, @code{.List}, @code{.ListActions} and
+@code{.ListContainers} failed on functions that were not loaded; their
+tools load them.)
+
+@subheading What stays hand-written
+
+125 methods keep their body.
+@command{admin/cmacs-capability-audit.sh --list dbus} prints each with
+its status, and
+@code{cmacs-dbus-forward-test-every-method-is-accounted-for} fails for a
+method that is neither a row nor on the reviewed list in that test
+file.
+
+@multitable @columnfractions .18 .42 .4
+@headitem Kind @tab Methods @tab Why
+@item Privileged
+@tab @code{Editor1.Eval} and the rest of the root interface,
+@code{Bacon.*}, @code{Crispy.*}, @code{Eshell.Eval}, @code{Input.*},
+@code{Podomation.EvalDsl} and @code{.ReplEval},
+@code{Compositor.RunMacro}, @code{.RunKeybind} and @code{.Hotkey},
+@code{Cpatch.*}, @code{Cintrospect.*}
+@tab They run code or type input the caller supplied.  The same set
+stays in C on MCP.
+@item Compositor state
+@tab The other @code{Compositor} methods, @code{Monitor.Info},
+@code{.Modes}, @code{.Set*}
+@tab Configuration, layout numbers, modes, outputs --- not a window's
+title --- and most go straight to gowl in C under the compositor lock.
+@code{RunMacro} also records its trigger as @code{dbus}, which the tool
+does not.
+@item Reply cannot be reproduced
+@tab @code{Edit.SetContent}, @code{Edit.InsertOrg},
+@code{SecondBrain.Ingest} and @code{.Migrate}, @code{Lql.*},
+@code{Project.WriteFile}, @code{Speech.*}, @code{Audio.Record},
+@code{Video.Snapshot}
+@tab The tool's arguments or text are not the method's.  @code{Lql.*}
+is redacted where every query is, at the snapshot;
+@code{Video.Snapshot} asks the capture rule in its form.
+@item Acts, answers @code{ok}
+@tab @code{Bookmark.Set}, @code{.Jump}, @code{.Delete}; the
+@code{Clipboard} writes; @code{Config.Set}, @code{.Theme}, @code{.Font},
+@code{.Mode}; @code{File.Open}, @code{.Save}, @code{.Close};
+@code{Nav.*}; @code{Package.Install}, @code{.Remove}, @code{.Refresh};
+@code{Project.Compile}, @code{.NextError}, @code{.PrevError};
+@code{Search.Search}, @code{.Replace}; @code{Text.Insert},
+@code{.Append}; @code{ProcessManager.*}; @code{Watch.*};
+@code{Instance.*}; @code{Events.Categories}, @code{.EventTypes};
+@code{Brigade.Agents}; @code{SecondBrain.Watch}
+@tab Nothing of the screen is in the reply, and no tool has the
+method's exact behaviour.
+@item Not redacted
+@tab @code{VC.Status}, @code{.Diff}, @code{.Log}, @code{.Blame};
+@code{Events.Recent}
+@tab Known gaps (@pxref{CMacs Redact}).
+@end multitable
+
 @node Capability emacsctl
 @section emacsctl tool
 
@@ -336,9 +731,33 @@ if it is digits.
 made.
 @item @code{boolean}
 @option{--name} (true), @option{--name false}, @option{--no-name}.
-@item arrays and objects
-As JSON text in a string parameter, or inside @option{--json}.
+@item @code{object}
+@option{--name '@{"key": 1@}'}: a JSON object, and nothing else.
+@item @code{array}
+One element per use of the flag, or the whole array once as JSON.
 @end table
+
+An array flag is repeated, once per element: @option{--members 3
+--members 4} is @code{[3, 4]}.  The element is typed by the array's
+item type when that is a scalar (so @option{--tags 42} is the string
+@code{"42"} for an array of strings, and @option{--members three} is a
+usage error for an array of integers); for an array of objects, or one
+that does not say, each element is JSON.  A value that is itself a JSON
+array is taken as the whole array --- @option{--members '[3, 4]'} ---
+and the two forms can be mixed.  The first use of an array flag
+replaces whatever @option{--json} gave for it; later uses append.
+
+@example
+emacsctl tool team add --name raid --members 3 --members 4 \
+         --rule '@{"app": "foot"@}' \
+         --steps '@{"key": "a"@}' --steps '@{"key": "b"@}'
+@end example
+
+The one ambiguity: an element of an array of strings that is itself the
+text of a JSON array (@option{--tags '["a"]'}) is read as the whole
+array.  Pass such an element inside @option{--json}.  @option{--help}
+shows @samp{--members INT@dots{}}, @samp{--rule JSON} and, for an
+object that declares its members, their names.
 
 A hyphen in a flag stands for an underscore in the parameter name
 (@option{--max-rows} is @code{max_rows}).  @option{--json '@{...@}'}
@@ -354,6 +773,113 @@ the editor; 3 when the editor has no @code{Tools} interface; 4 when no
 instance is found; 1 for any other tool failure.  A tool with
 @code{:returns json} is rendered as a document, so @option{-o yaml} and
 @option{-o json} work on it.
+
+@subheading The verbs that predate the table
+
+@cindex emacsctl, verb aliases
+@command{emacsctl} had about two hundred verbs before it had
+@code{tool}: table rows in @file{cmacs/emacsctl/ctl-cmd-*.c}, each
+naming one hand-written D-Bus method.  The 110 of them whose capability
+is a tool on the @code{cli} surface are now @emph{aliases} of the
+generic path.  @samp{emacsctl calc eval '2+2'} is spelt as it always was
+and prints what it always printed, and what it does is @samp{Tools.Call
+"calc_eval" '@{"expression": "2+2"@}'}.
+
+An alias is one row of @code{alias_specs} in
+@file{cmacs/emacsctl/ctl-cmd-alias.c}:
+
+@example
+@{ "calc_convert_units", "expression units", NULL, CTL_ALIAS_TEXT, 0,
+  @{ "calc units", "Convert to UNITS, or reduce to base SI when omitted",
+    CTL_IFACE_CALC, "ConvertUnits", "s:expression s?:units",
+    CTL_REPLY_STRING @} @},
+@end example
+
+@multitable @columnfractions .22 .78
+@headitem Field @tab Meaning
+@item tool @tab The wire name to call.
+@item parameters @tab The tool parameter each positional argument is, in
+order.
+@item defaults @tab @samp{name=value} pairs sent for a positional that
+was left out, where the old method supplied a value the tool does not.
+@item format @tab How to print the tool's text so the output is the old
+verb's (below).
+@item seconds @tab The tool's own @code{:timeout} when it is
+@code{:async}, so the client's method timeout covers it; 0 otherwise.
+@item the old row @tab Verb, built-in summary, D-Bus interface and
+method, argspec, reply kind --- unchanged from the table it came from.
+@end multitable
+
+The old row is not history.  Its argspec types the positionals, which is
+why @emph{running an alias costs no round trip beyond the call}: nothing
+about the tool has to be asked for.  @code{Tools.List} is fetched only
+for @option{--help}.  And its D-Bus method is the fallback.
+
+@multitable @columnfractions .30 .32 .38
+@headitem Format @tab The tool returns @tab Printed as
+@item @code{CTL_ALIAS_TEXT} @tab text @tab the text
+@item @code{CTL_ALIAS_JSON} @tab JSON text @tab a document (@option{-o
+json} / @option{yaml} / @option{table} work); the text if it does not
+parse
+@item @code{CTL_ALIAS_PRINTED} @tab text printed by @code{prin1}, as its
+MCP ancestor did @tab the text with the quoting undone
+@item @code{CTL_ALIAS_PRINTED_LINES} @tab the same, one item per line
+@tab a list, one row per line
+@end multitable
+
+@code{CTL_ALIAS_PRINTED} exists because a migrated family kept its MCP
+wire format, and the C handlers behind several of them returned
+@code{cmacs_dispatch_eval}'s @code{prin1} of a string ---
+@samp{"Profiler started"} with the quotes --- while the D-Bus methods of
+the same name returned the bare text.
+
+@emph{Fallback.}  A failed @code{Tools.Call} is retried through the old
+D-Bus method exactly when the error proves the tool never started:
+@code{UnknownInterface} / @code{UnknownMethod} (no
+@code{org.cmacs.Editor1.Tools}: an older cmacs, or a build without the
+registry), @code{NoSuchTool}, @code{NotOnSurface}, @code{BadArguments}.
+The last three are the gates of the gate order (@pxref{Capability
+D-Bus}) that come before the tool runs.  @code{ToolFailed},
+@code{Timeout} and everything else are reported: retrying could do the
+work twice.  @code{ctl_alias_decide} is the whole rule, a pure function
+with a unit test.
+
+@emph{Help.}  @samp{emacsctl calc units --help} is the tool's
+description and the tool's text for each argument, from the running
+editor's table, with @samp{Same as: emacsctl tool calc convert-units
+...} under it.  @samp{emacsctl calc --help} uses the first sentence of
+each tool's description and marks the verb @samp{[= tool calc
+convert-units]}.  With no editor to ask, the built-in summary is shown
+and the page says so.
+
+@emph{What keeps the table honest.}
+@file{cmacs/emacsctl/tests/test-ctl.c} checks every row without an
+editor: a well-formed tool name, positionals that pair one to one with
+distinct parameters, the argument mapping for verbs of every group and
+type, the fallback decision, where help text comes from, and that every
+verb which is @emph{not} an alias has a recorded reason
+(@code{kept_verbs}, beside the table).
+@file{test/cmacs/cmacs-emacsctl-alias-tests.el} does what C cannot: it
+reads the rows out of the C source and holds each against the generated
+reference --- the tool exists, is on @code{cli}, has those parameters
+with compatible types, and every parameter it requires is one the alias
+always sends.
+
+@emph{What did not become an alias}, and why, is the content of
+@code{kept_verbs}: no tool does the same thing; the tool is destructive
+and so not on the @code{cli} surface, where @code{Tools.Call} would
+refuse it; the tool's answer cannot be turned back into what the verb
+printed (@code{get buffers} prints bare names and @code{list_buffers} a
+five-column listing; @code{lql query} renders at 200 columns and
+@code{lql_query} at 160); or the verb composes its request in the client
+(@code{ai prompt} reads stdin and @option{-f} files).
+
+Three things differ from the old verbs, all of them the registry's rules
+rather than accidents: a tool that fails makes the verb exit 1 with the
+message on stderr, where @code{calc}, @code{db} and @code{brigade}
+methods printed @samp{error: ...} and exited 0; results pass through the
+redaction table; and an optional number that was left out takes the
+tool's default instead of the zero the old wire sent.
 
 @node Capability Documentation
 @section Documentation from the Table
@@ -384,23 +910,36 @@ reference with a family silently missing.
 @node Capability Migration
 @section Migrating a Hand-Written Family
 
-Most of cmacs's RPC surface predates the table and exists three times:
-a C handler per MCP tool in @file{cmacs/mcp/}, a D-Bus method per
-capability in @file{cmacs/dbus/}, a row per verb in
-@file{cmacs/emacsctl/}.  @file{admin/cmacs-capability-audit.sh}
-measures what is left:
+Most of cmacs's RPC surface predates the table and used to exist three
+times: a C handler per MCP tool in @file{cmacs/mcp/}, a D-Bus method
+per capability in @file{cmacs/dbus/}, a row per verb in
+@file{cmacs/emacsctl/}.  The MCP copy is gone --- the handlers the
+registry replaced were deleted, see ``What was deleted, and what holds
+the wire'' below --- and @file{admin/cmacs-capability-audit.sh}
+measures what is left of the other two:
 
 @example
 admin/cmacs-capability-audit.sh               # counts per surface
 admin/cmacs-capability-audit.sh --families    # MCP C files, cheapest first
 admin/cmacs-capability-audit.sh --hand-written
+admin/cmacs-capability-audit.sh --remainder   # what stays in C, and why
 @end example
 
-As of this writing: 271 MCP tools in C (15 also in the registry), 316
-D-Bus methods (32), 306 emacsctl verbs (28).  For D-Bus and the CLI,
-``in the registry'' means a registered tool of the corresponding name
-exists; a destructive one still needs @code{:surfaces} to be callable
-through @code{Tools.Call}.
+As of this writing: 27 MCP tools in C, every one kept there on purpose
+(see ``What stays in C'' below), where there were 284 before 257 of
+them became registry tools and their handlers were deleted; 316 D-Bus
+methods (132 in the registry); 306 emacsctl verbs (117).  For D-Bus and the CLI, ``in the registry'' means a registered
+tool of the corresponding name exists; a destructive one still needs
+@code{:surfaces} to be callable through @code{Tools.Call}.
+
+The audit has three statuses for an MCP tool: @code{registry} (a C
+handler whose tool the registry also provides: a leftover twin, which
+must not exist any more), @code{kept} (hand-written on purpose;
+@option{--remainder} prints each with its reason) and
+@code{hand-written} (in C, not in the registry, and with no reason
+recorded).  The first and last counts are zero, so the MCP row's total
+equals its @code{kept} column.  A tool added to a C file without a
+decision shows up as @code{hand-written}.
 
 @subheading The worked example: the calculator
 
@@ -434,55 +973,312 @@ one behaviour change: the old calculator tools returned failures as
 ordinary results.
 @item
 @emph{Name the file} in @code{cmacs-capability-migrated-families} with
-its @code{IS-CMACS-*} flag, so it is loaded with the brigade --- before
+its @code{IS-CMACS-*} flag, so it is loaded with the registry --- before
 the first MCP session lists its tools.
 @item
-@emph{The C needs no edit.}  The registry is published last, after
-every per-subsystem C registration.  A tool registered while a family in
-@code{cmacs-capability-migrated-families} is loading is marked shipped
-(@code{cmacs-brigade-registering-shipped-family}, mirrored to C as
-@code{:replaces-builtin}), and the publisher lets a shipped tool take
-the name of the hand-written C tool; @code{mcp_server_add_tool} replaces
-on collision.  Any other registry tool that collides with a built-in
-name is refused with a warning, as before, so a tool of yours called
-@code{eval} cannot take over the real one.  Who may call the name does
-not change: the allowlist and the privileged set go by name.
+@emph{Declare what it does.}  @code{:destructive t} for anything that
+writes, deletes, closes, launches, types, clicks, navigates, records,
+spends money, or changes the compositor's or the editor's state.  It is
+what an MCP client is shown (a tool without it is published
+@code{readOnlyHint: true}), what keeps the tool from a read-only agent,
+and what keeps it off D-Bus and the CLI unless @code{:surfaces} lists
+them.  @code{cmacs-capability-test-action-tools-are-destructive} fails
+for a tool whose name contains an action verb and does not say so; the
+reviewed exceptions are in that test file, each with its reason.
 @item
-@emph{Regenerate the reference} (@option{--write-docs}) and add a guard
-like @code{cmacs-capability-test-calculator-family-matches-c} while the
-C still exists.
+@emph{Freeze its wire schema.}  Add the tool to
+@file{test/cmacs/data/mcp-wire-schema.json}
+(@code{cmacs-wire-schema-freeze-registry-tool}, in
+@file{test/cmacs/cmacs-wire-schema.el}) and hold the family to it with
+@code{cmacs-wire-schema-should-match}, as
+@code{cmacs-capability-test-calculator-family-matches-c} does.  For the
+calculator the entry was frozen from the C handlers before they were
+deleted.
+@item
+@emph{Delete the C}, if there was any: handler, schema, registration,
+and the helpers nothing else uses.  A registry tool is never published
+under a name a C tool still serves (the publisher refuses it, whoever
+registered it), so a twin left behind is not a fallback, it is the tool
+a client gets.
+@item
+@emph{Regenerate the reference} (@option{--write-docs}).
 @end enumerate
 
-@subheading Why the C was not deleted
+@subheading Asynchronous tools in a family
 
-The MCP C handlers remain as the fallback for a build with the
-calculator but without the brigade (@option{--with-cmacs-ai} off),
-where there is no registry to serve the names.  They are dead in a
-default build and marked @code{registry} by the audit.
-
-@code{org.cmacs.Editor1.Calc} and the @command{emacsctl calc ...} rows
-also remain: both are public names that scripts may call, and removing
-them is a compatibility decision rather than a cleanup.  They are
-duplicates now --- @command{emacsctl tool calc eval} and
-@code{Tools.Call calc_eval} do the same work --- and the audit lists
-them as such.
-
-@subheading What does not migrate as-is
+A tool body runs on the main thread, which under @command{emacs --gowl}
+is the compositor's.  It must not wait: no @code{sit-for}, no
+@code{sleep-for}, no synchronous subprocess or network call.  Anything
+that takes time is @code{:async} and answers from a callback.  Three
+patterns are in the tree:
 
 @itemize @bullet
 @item
-Tools that return or take something other than text (screenshots as
-image content, binary blobs).
+@emph{A callback API exists.}  Call it and hand @code{done} the result:
+@code{db_query} and its siblings
+(@file{cmacs-dbexplorer-tools.el}), @code{secondbrain_search} with
+@code{semantic} (the embedding request is asynchronous; ranking is a
+scan of an mmap'd array).
 @item
-Handlers that must run in C for a reason --- the gowl tools that take
-the compositor lock, @code{cmacs_c_*} introspection.  They can still be
-@emph{registered} (a deftool whose body calls the DEFUN), which is all
-the table needs.
+@emph{Only a blocking primitive exists.}  Run it in a child of this
+same binary with a @emph{constant} form, pass the arguments through the
+environment or a private file, and answer from the sentinel:
+@code{vidstudio_export}, and @code{ai_list_models}
+(@file{cmacs-ai-models-tools.el}), whose only primitive blocks for up
+to thirty seconds per provider.
 @item
-The privileged set (@code{eval}, @code{shell}, @code{execute_command},
-@code{send_keys}, the C-patching tools).  The allowlist treats them
-specially by name; migrating them needs that reviewed first.
+@emph{The work is a queue.}  Start it and return the job's id; the
+caller polls: @code{secondbrain_ingest}.
 @end itemize
+
+Arm a timer of your own slightly inside the tool's @code{:timeout}, so
+the answer that reports a timeout is also the one that cancels the
+work.
+
+@subheading The registry without the brigade
+
+The table is not an AI feature.  Three pieces publish it over MCP, and
+none of them needs @option{--with-cmacs-ai} or
+@option{--with-cmacs-ai-brigade}:
+
+@table @asis
+@item @file{cmacs/core/cmacs-tool-registry.c}
+Built with @option{--with-cmacs-mcp} @emph{or}
+@option{--with-cmacs-ai-brigade}.
+@item the publisher in @file{cmacs/mcp/cmacs-mcp-tools-brigade.c}
+Built with @option{--with-cmacs-mcp}.
+@item @file{cmacs-brigade-registry.el}, @file{cmacs-brigade-tools.el}, @file{cmacs-capability.el} and the family files
+Lisp; always there.
+@end table
+
+@file{cmacs-tool-registry.c} is the C mirror of the registry ---
+@code{CmacsBrigadeTool}, @code{cmacs_brigade_registry_*} and the
+@code{cmacs-brigade--mirror-*} DEFUNs.  It lives in @file{cmacs/core}
+because it has two users that are otherwise unrelated: the MCP
+publisher, and the brigade's allowlist gate.  It needs GLib and
+@file{lisp.h} and nothing from either.  Both @code{syms_of_cmacs_mcp}
+and @code{syms_of_cmacs_ai_brigade} call
+@code{syms_of_cmacs_tool_registry}; the second call does nothing.
+
+The publisher requires @file{cmacs-brigade-registry},
+@file{cmacs-brigade-tools} and @file{cmacs-capability} when a session
+is set up --- by name and without @code{noerror}, so that a file that
+is missing or signals is an error it can remember (see ``When something
+does not load'' below).  @file{cmacs-capability} loads every migrated
+family whose @code{IS-CMACS-*} flag is set --- which is the whole
+table.
+@file{cmacs-brigade.el} is loaded too, for its @code{defgroup} and
+error symbol, but its eager-load block (the runner, memory, subagents,
+schedules) is guarded by @code{cmacs-brigade-available-p} and stays
+out.  @code{cmacs-capability-test-lisp-core-needs-no-brigade} runs
+exactly this in a child with the brigade's C entry points removed.
+
+@code{org.cmacs.Editor1.Tools} is not gated on the brigade either:
+@file{cmacs-dbus-iface-tools.c} is guarded by
+@code{HAVE_CMACS_DBUS_TOOLS}, which @file{configure.ac} defines together
+with the object in the cmacs-glib block, and nothing in the file needs
+the brigade.  The forwarder for the legacy interfaces
+(@file{cmacs-dbus-forward.c}) is built with cmacs-glib too.
+
+What stays behind @code{HAVE_CMACS_AI_BRIGADE} in the publisher's file
+is the scoped sockets (@code{cmacs-brigade-scope-open} and friends).
+They exist to hold a CLI agent to its allowlist, and the allowlist gate
+is the brigade's.  A build without the brigade has one MCP socket and
+no agents to scope.
+
+@subheading What was deleted, and what holds the wire
+
+The registry is published by every build with an MCP server, so a
+migrated tool's C handler had stopped being the implementation in any
+configuration: on every session it was replaced by the registry tool of
+the same name.  All it still did was answer when the Lisp side had not
+loaded.  Those handlers are deleted --- 257 of them, with their
+schemas, registrations and the helpers nothing else used.  By C file
+(@file{cmacs/mcp/cmacs-mcp-tools-@var{name}.c}):
+
+@table @asis
+@item @file{ai}, @file{audio}, @file{buffer}, @file{calculator}, @file{dbexplorer}, @file{debug}, @file{edit}, @file{gnuseye}, @file{gsurf}, @file{imgedit}, @file{libregnum}, @file{project}, @file{secondbrain}, @file{vidstudio}, @file{window}
+Every tool (160).  Nothing is left: each is a stub, until
+@file{configure.ac} stops listing the object.
+@item @file{gowl}
+45 @code{gowl_*} tools and the 8 @code{screensaver_*} tools.  Left:
+@code{gowl_screenshot}, @code{gowl_hotkey_send}.
+@item @file{cad}
+17.  Left: @code{cad_snapshot}.
+@item @file{lrgterm}
+10.  Left: @code{lrgterm_dump_screen}.
+@item @file{shell}
+8 @code{podomation_*} tools and @code{video_list}.  Left:
+@code{bacon_eval}, @code{crispy_eval}, @code{podomation_eval_dsl},
+@code{podomation_repl_eval}, @code{video_snapshot}.
+@item @file{eval}
+4.  Left: @code{eval}.
+@item @file{gi}
+3.  Left: @code{gi_call}.
+@item @file{process}
+1.  Left: @code{send_to_process}.
+@item @file{input}, @file{cintrospect}
+None; all of it is left.
+@end table
+
+@emph{The collision rule lost its exception.}  The publisher used to
+let a shipped family's tool take the name of its C twin and refuse
+everyone else's.  With the twins gone there is nothing to take: a
+registry tool is never published under a name one of the remaining C
+tools serves, shipped or not, so a tool called @code{eval} cannot
+replace the real one whichever file defines it.
+@code{cmacs-brigade-registering-shipped-family} survives as bookkeeping
+(which wire names came with cmacs) and grants nothing.
+
+@emph{The in-process server gets the registry too.}
+@code{cmacs_mcp_get_internal_server} is a process-lifetime
+@code{McpServer} that the cmacs-ai tool bridge
+(@code{cmacs-ai-tools-register-mcp-bridge}) reads its tools from.  It
+is created from @code{main()}, before @file{startup.el} has put
+@file{lisp/cmacs} on @code{load-path}, so the table cannot be loaded at
+that point --- and for as long as every registry tool had a C twin,
+that server quietly held only the twins.  It now takes its C tools at
+startup and the registry on the first use after it, and is brought up
+to date whenever a tool has been registered or removed since (the
+mirror carries a generation counter; publication replaces and removes
+what an earlier pass published and never touches a C tool).  Without
+this, deleting the handlers would have taken most tools away from chat
+sessions without any file failing to load.
+
+@subsubheading The frozen wire schema
+
+What the deleted handlers promised a client --- each tool's name,
+description, parameter names, order, types and required set --- used to
+be held by a guard per family that parsed the family's C file.  The C
+is what those guards read, so it was frozen first:
+@file{test/cmacs/data/mcp-wire-schema.json} holds, for each of the 294
+names the C published (the 284 tools and ten @code{lrg_editor_*} second
+names), exactly what @code{tools/list} returned from a server that had
+only its C tools --- @code{description}, @code{inputSchema} and
+@code{annotations} as a client received them --- plus the C file, the
+position in it and the configure flags the registration was compiled
+under.  It was taken from a real session, not parsed out of the source;
+where the old text parsers disagreed with it (they did, over one nested
+@code{items} schema and three descriptions) the parsers were wrong.
+
+Every family guard now compares the registry with that file, through
+@file{test/cmacs/cmacs-wire-schema.el}:
+
+@example
+(cmacs-wire-schema-should-match "gowl_list_clients"
+                                :description t :enum t :hints t)
+;; gowl_list_clients: parameter 2 was `tag' (integer, optional),
+;; is now `tag' (string, optional)
+@end example
+
+The file is edited on purpose and never regenerated wholesale.
+Changing a published tool's parameters means editing its block in the
+same commit, where a reviewer sees a wire change as a wire change.  A
+new tool is added with @code{cmacs-wire-schema-freeze-registry-tool}
+when it should be held to its schema.
+
+What a registry tool publishes is not byte-identical to what the C did,
+and never was required to be: the registry sends a parameter's type and
+description and the required set, not @code{enum}, @code{minimum} or
+@code{maximum} (those are enforced by the handler), and it documents
+parameters the C left bare.  The guards say which of these each family
+holds.
+
+@subsubheading When something does not load
+
+Nothing stands in for a registry tool any more, so a tool family that
+fails to load is a set of tools missing from every surface.  That is
+never silent:
+
+@itemize @bullet
+@item
+A family that fails --- its file is missing, or loading it signals ---
+is caught on its own (@code{cmacs-capability--load-family}), recorded
+in @code{cmacs-capability-family-failures} with the error, and the
+remaining families still load.
+@item
+It is reported once as an @code{:error} warning naming the family and
+the error.
+@item
+Every MCP session is told: a @samp{NOTICE} paragraph naming each failed
+family is appended to the server's @code{instructions}, which a client
+reads in the reply to @code{initialize}, and the same text is written
+to the server's log once.
+@item
+A tool called @code{capability_doctor} is always in @code{tools/list}.
+It reports which families loaded, which failed and why, and whether the
+C mirror the server publishes from agrees with the registry.
+@kbd{M-x cmacs-capability-doctor} shows the same report.
+@item
+@kbd{M-x cmacs-capability-reload-families} loads the failed families
+again after the file is fixed.
+@end itemize
+
+If the table itself does not load (the registry, the dispatcher or
+@file{cmacs-capability.el}), the publisher remembers the error
+(@code{cmacs-mcp-registry-load-error} returns it), says so in the
+instructions, and registers a C stand-in for @code{capability_doctor}
+that answers with it; the session then has the C tools only.  The load
+is tried again for each session, so fixing the file and reconnecting is
+enough.
+
+@subsubheading What a client is told about a tool
+
+@code{readOnlyHint: true} and @code{destructiveHint: false} for a tool
+that is not @code{:destructive}; nothing for one that is.  Nothing is
+the right answer by the MCP specification --- @code{readOnlyHint}
+defaults to false and @code{destructiveHint} to true --- and it is what
+the C handlers sent too (mcp-glib writes only the hints that differ
+from the defaults), but it does mean a destructive tool carries no
+@code{annotations} member at all.  A client must read an absent hint as
+``may modify'', not as ``unknown''.
+@code{cmacs-capability-test-c-hints-are-kept} holds every migrated tool
+to what its C handler said: read-only then, not destructive now; not
+read-only then, destructive now, with a short list of reviewed
+exceptions.
+
+@code{org.cmacs.Editor1.Calc} also remains: it is a public name that
+scripts may call, and removing it is a compatibility decision rather
+than a cleanup.  It is also what @command{emacsctl calc eval} falls back
+to against a cmacs that has no @code{calc_eval} tool.  The
+@command{emacsctl calc ...} @emph{rows} are gone as rows: the verbs are
+aliases of the tools now (@pxref{Capability emacsctl}), so
+@command{emacsctl calc eval} and @command{emacsctl tool calc eval} are
+one code path with two spellings.
+
+@subheading What stays in C
+
+Twenty-seven MCP tools, each for one of three reasons.
+@command{admin/cmacs-capability-audit.sh --remainder} prints the list
+from the same table the audit counts with, so it cannot go stale
+silently: an entry for a tool that no longer exists, or that the
+registry has since taken, is reported.
+
+@table @asis
+@item Privileged: runs code or types input a caller supplied
+The allowlist names most of them, and a move changes who reviews a
+change to them.  @code{eval}, @code{execute_command}, @code{send_keys},
+@code{send_to_process}, @code{gi_call}, @code{bacon_eval},
+@code{crispy_eval}, @code{podomation_eval_dsl},
+@code{podomation_repl_eval}, @code{gowl_hotkey_send},
+@code{cmacs.c.compile_snippet}, @code{cmacs.c.call_handle},
+@code{cmacs.c.patch_defun}, @code{cmacs.c.unpatch_defun},
+@code{cmacs.c.unpatch_all}.
+@item C introspection of the running binary: the handler is the feature
+@code{cmacs.c.list}, @code{cmacs.c.symbol_info},
+@code{cmacs.c.type_info}, @code{cmacs.c.function_source},
+@code{cmacs.c.addr_to_source}, @code{cmacs.c.defun_info},
+@code{cmacs.c.stack_trace}, @code{cmacs.c.patch_log}.
+@item Image content: the result is a PNG, and a registry tool returns text
+@code{gowl_screenshot}, @code{cad_snapshot},
+@code{lrgterm_dump_screen}, @code{video_snapshot}.
+@end table
+
+@code{gowl_reload_config} was a fourth kind, waiting for a DEFUN that
+reloads from gowl's search path;
+@code{gowl-reload-config-from-search-path} exists now and the tool is a
+registry tool (@file{cmacs-gowl-tools.el}).  None of the twenty-seven
+is waiting for anything: each is in C because of what it is.
 
 @node Capability Reference
 @section Reference: Every Shipped Tool

@@ -14,13 +14,14 @@
 ;; has the recipe), reaching in-process agents, MCP clients,
 ;; org.cmacs.Editor1.Tools and `emacsctl tool cad ...' from one
 ;; definition.  Wire names, parameter names and the required/optional
-;; split are the C ones; the C file stays as the fallback for a build
-;; without the brigade, and
-;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when the
-;; two drift.
+;; split are the C ones.  Those handlers are deleted; the schema they
+;; published is frozen in test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; Not here: `cad_snapshot'.  It answers with an inline PNG, and the
-;; registry's results are text; it keeps its C handler.
+;; registry's results are text; it keeps its C handler, the one tool
+;; left in that C file.
 ;;
 ;; What differs from the C handlers, on purpose:
 ;;
@@ -323,6 +324,7 @@ re-eval); report the new instance transforms."
      (joint integer "Joint id")
      (value number "Value to drive the joint to"))
   :group 'cad
+  :destructive t
   :example "emacsctl tool cad assembly-set-joint --path ~/cad/arm.cad \
 --name arm --joint 0 --value 45"
   (unless (integerp joint)

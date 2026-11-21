@@ -12,13 +12,15 @@
 ;; `cmacs-brigade-deftool' forms (doc_org/cmacs/cmacs-capability.org has
 ;; the recipe), reaching in-process agents, MCP clients,
 ;; org.cmacs.Editor1.Tools and `emacsctl tool lrgterm ...' from one
-;; definition.  Wire names are the C ones, and the C file stays as the
-;; fallback for a build without the brigade;
-;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when the
-;; two drift.
+;; definition.  Wire names are the C ones.  Those handlers are deleted;
+;; the schema they published is frozen in
+;; test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; Not here: `lrgterm_dump_screen'.  It answers with an inline PNG, and
-;; the registry's results are text; it keeps its C handler.
+;; the registry's results are text; it keeps its C handler, the one tool
+;; left in that C file.
 ;;
 ;; What differs from the C handlers, on purpose:
 ;;
@@ -125,6 +127,7 @@ environment."
     "Cycle the 3D panel arrangement (single-panel -> per-window -> free)."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-cycle-arrangement"
   (let* ((f (cmacs-lrgterm-tools--frame))
          (next (cmacs-lrgterm-tools--next
@@ -137,6 +140,7 @@ environment."
     "Cycle the 3D ambient environment (void -> workshop -> cockpit)."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-cycle-environment"
   (let* ((f (cmacs-lrgterm-tools--frame))
          (next (cmacs-lrgterm-tools--next
@@ -150,6 +154,7 @@ environment."
 see it)."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-camera-orbit"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d (cmacs-lrg-3d-camera "orbit-left" 20 f)
@@ -161,6 +166,7 @@ camera to it and focus it; others recede). The 'command-the-room' \
 gesture."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-focus-selected"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d
@@ -172,6 +178,7 @@ gesture."
 longer moves it."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-pin-selected"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d
@@ -182,6 +189,7 @@ longer moves it."
     "Release all manually-placed 3D panels back to automatic layout."
     ()
   :group 'lrgterm
+  :destructive t
   :example "emacsctl tool lrgterm 3d-unpin-all"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d

@@ -34,6 +34,8 @@
 static McpUnixSocketServer *mcp_server;
 static gchar               *socket_path;
 static McpServer           *cmacs_mcp_internal_server;
+/* True while init_cmacs_mcp runs.  See cmacs_mcp_get_internal_server.  */
+static gboolean             cmacs_mcp_starting_up;
 
 /* ── Session lifecycle ────────────────────────────────────────────── */
 
@@ -75,10 +77,26 @@ cmacs_mcp_get_internal_server (void)
     {
       cmacs_mcp_internal_server = mcp_server_new ("cmacs-mcp-internal",
                                                   "0.1.0");
-      cmacs_mcp_register_all_tools (cmacs_mcp_internal_server);
+      /* The C tools only.  The registry's follow below.  */
+      cmacs_mcp_register_c_tools (cmacs_mcp_internal_server);
       cmacs_mcp_register_resources (cmacs_mcp_internal_server);
       cmacs_mcp_register_prompts (cmacs_mcp_internal_server);
     }
+
+  /* The registry's tools, brought up to date on every call.
+   *
+   * This server is created by init_cmacs_mcp, which runs from main()
+   * before startup.el has put lisp/cmacs on `load-path': the tool
+   * table cannot be loaded then, and for as long as each registry tool
+   * had a hand-written C twin nobody noticed that this server only ever
+   * held the twins.  The twins are deleted.  So the registry is not
+   * asked for during startup at all, and is published here on the
+   * first call after it -- and again whenever a tool has been
+   * registered or removed since, which a per-session server never
+   * needs and one that lives as long as the process does.  */
+  if (!cmacs_mcp_starting_up)
+    cmacs_mcp_tools_brigade_sync (cmacs_mcp_internal_server);
+
   return cmacs_mcp_internal_server;
 }
 
@@ -404,9 +422,10 @@ syms_of_cmacs_mcp (void)
   defsubr (&Scmacs_mcp_session_count);
   defsubr (&Scmacs_mcp_start);
   defsubr (&Scmacs_mcp_stop);
-#ifdef HAVE_CMACS_AI_BRIGADE
+  /* The registry mirror's DEFUNs, plus the scoped sockets' in a
+     brigade build.  Unconditional: the registry is published by every
+     build that has this server.  */
   syms_of_cmacs_mcp_tools_brigade ();
-#endif
 }
 
 void
@@ -414,11 +433,15 @@ init_cmacs_mcp (void)
 {
   g_autoptr (GError) error = NULL;
 
-  /* Eagerly populate the in-process tool registry (see
+  /* Eagerly create the in-process server with its C tools (see
    * `cmacs_mcp_get_internal_server' for full notes).  This is
    * cheap and ensures bacon `cmacsgi' + the cmacs-ai MCP bridge
-   * see a ready server immediately without an init-order race. */
+   * see a ready server immediately without an init-order race.  The
+   * registry's tools are added on the first use after startup: no Lisp
+   * file can be loaded from here.  */
+  cmacs_mcp_starting_up = TRUE;
   (void) cmacs_mcp_get_internal_server ();
+  cmacs_mcp_starting_up = FALSE;
 
   if (!cmacs_mcp_do_start (&error))
     g_warning ("cmacs-mcp: failed to start: %s", error->message);

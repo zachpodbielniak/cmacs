@@ -73,6 +73,7 @@
 (declare-function cmacs-brigade-registry-get "cmacs-brigade-registry" (kind name))
 ;; `cmacs-brigade-tool' is a cl-struct; these are its accessors.
 (declare-function cmacs-brigade-tool-p "cmacs-brigade-registry" (obj))
+(declare-function cmacs-brigade-read-param "cmacs-brigade-registry" (param))
 (declare-function cmacs-brigade-tool-menu "cmacs-brigade-registry" (tool))
 (declare-function cmacs-brigade-tool-menu-label "cmacs-brigade-registry" (tool))
 (declare-function cmacs-brigade-tool-description "cmacs-brigade-registry" (tool))
@@ -780,7 +781,12 @@ callback instead of the answer."
           (push (if first
                     (progn (setq first nil)
                            (cmacs-ai-target-prompt-context target))
-                  (read-string (format "%s (%s): " pname (or doc "")) nil nil ""))
+                  ;; Scalars are read as text; an array or object is
+                  ;; asked for as JSON and parsed at the prompt.
+                  (if (fboundp 'cmacs-brigade-read-param)
+                      (cmacs-brigade-read-param p)
+                    (read-string (format "%s (%s): " pname (or doc ""))
+                                 nil nil "")))
                 args)))
       (let* ((result (apply handler (nreverse args)))
              (buf (cmacs-ai-output-buffer (format "%s" name)

@@ -403,7 +403,9 @@ DEFUN ("cmacs-ai-tools-register",
        Scmacs_ai_tools_register, 4, 4, 0,
        doc: /* Register CALLBACK as a custom tool on EXECUTOR.
 NAME is the tool name (string), DESCRIPTION is its summary (string),
-PARAMS is an alist ((NAME TYPE DESCRIPTION REQUIRED-P) ...).
+PARAMS is a list ((NAME TYPE DESCRIPTION REQUIRED-P [ITEM-SCHEMA]) ...).
+ITEM-SCHEMA, only meaningful when TYPE is "array", is the JSON Schema
+of one element as a string; it is published as the array's `items'.
 CALLBACK is (lambda (NAME INPUT-JSON ID) ...) called when the model
 invokes the tool.  */)
   (Lisp_Object executor, Lisp_Object name, Lisp_Object description,
@@ -435,10 +437,18 @@ invokes the tool.  */)
       Lisp_Object ptype = Fnth (make_fixnum (1), p);
       Lisp_Object pdesc = Fnth (make_fixnum (2), p);
       Lisp_Object preq  = Fnth (make_fixnum (3), p);
+      Lisp_Object pitem = Fnth (make_fixnum (4), p);
       if (!STRINGP (pname) || !STRINGP (ptype) || !STRINGP (pdesc))
         continue;
-      ai_tool_add_parameter (tool, SSDATA (pname), SSDATA (ptype),
-                             SSDATA (pdesc), !NILP (preq));
+      /* An array that says what one element is: a bare
+         {"type":"array"} is a schema no provider can act on, and
+         Gemini refuses it outright.  */
+      if (STRINGP (pitem) && strcmp (SSDATA (ptype), "array") == 0)
+        ai_tool_add_array_parameter (tool, SSDATA (pname), SSDATA (pdesc),
+                                     SSDATA (pitem), !NILP (preq));
+      else
+        ai_tool_add_parameter (tool, SSDATA (pname), SSDATA (ptype),
+                               SSDATA (pdesc), !NILP (preq));
     }
 
   cmacs_ai_tools__cb_init ();

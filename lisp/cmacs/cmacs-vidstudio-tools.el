@@ -13,10 +13,10 @@
 ;; the recipe), reaching in-process agents, MCP clients,
 ;; org.cmacs.Editor1.Tools and `emacsctl tool vidstudio ...' from one
 ;; definition.  Wire names, parameter names and the required/optional
-;; split are the C ones; the C file stays as the fallback for a build
-;; without the brigade, and
-;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when the
-;; two drift.
+;; split are the C ones.  The C file is deleted; the schema it
+;; published is frozen in test/cmacs/data/mcp-wire-schema.json, and
+;; test/cmacs/cmacs-gsurf-lrg-cad-media-tools-tests.el fails when these
+;; tools drift from it.
 ;;
 ;; Every tool works on a project HANDLE, the integer `vidstudio_new'
 ;; returned, so the model layer is driven headlessly.
@@ -174,6 +174,7 @@ layout."
     "Append a track (composites above lower tracks); returns its index."
     ((handle integer "Project handle"))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio add-track --handle 1"
   (format "track %d"
           (cmacs-vidstudio-add-track
@@ -193,6 +194,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
      (g integer "Green 0-255, for a solid clip (default 128)" :optional t)
      (b integer "Blue 0-255, for a solid clip (default 128)" :optional t))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio add-clip --handle 1 --track 0 \
 --kind video --path ~/Videos/take1.mp4"
   (let ((h (cmacs-vidstudio-tools--int handle "handle"))
@@ -227,6 +229,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
      (overlap-frames integer "Frames the transition overlaps (default 15)"
                      :optional t))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio set-transition --handle 1 --clip 2 \
 --type 1"
   (cmacs-vidstudio-set-transition
@@ -244,6 +247,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
      (clip integer "Clip id")
      (type integer "Effect type, 0-4"))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio add-effect --handle 1 --clip 2 --type 3"
   (cmacs-vidstudio-add-effect
    (cmacs-vidstudio-tools--int handle "handle")
@@ -261,6 +265,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (value number "Value of the parameter at that frame")
      (easing integer "Easing type (default 0, linear)" :optional t))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio add-keyframe --handle 1 --clip-id 2 \
 --param 0 --frame 0 --value 0"
   (unless (cmacs-vidstudio-add-keyframe
@@ -281,6 +286,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (from-frame integer "Frame the audio starts at (default 0)" :optional t)
      (volume number "Gain, 1.0 = unchanged (default 1.0)" :optional t))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio add-audio --handle 1 \
 --path ~/Music/bed.flac --volume 0.6"
   ;; The primitive returns the new audio clip's id.
@@ -297,6 +303,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (clip integer "Clip id")
      (at-frame integer "Frame to split at, relative to the clip's start"))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio split --handle 1 --clip 2 --at-frame 45"
   (let* ((clip (cmacs-vidstudio-tools--int clip "clip"))
          (at (cmacs-vidstudio-tools--int at-frame "at_frame"))
@@ -313,6 +320,7 @@ preview)."
      (frame integer "Frame to composite")
      (path string "Destination PNG file"))
   :group 'vidstudio
+  :destructive t
   :example "emacsctl tool vidstudio render-frame --handle 1 --frame 30 \
 --path /tmp/frame.png"
   (let ((path (cmacs-vidstudio-tools--path path "path"))
@@ -402,6 +410,7 @@ in-flight clip decodes, so output always has real frames."
      (path string "Destination file")
      (format string "mp4 (the default) or gif" :optional t))
   :group 'vidstudio
+  :destructive t
   :async t
   :timeout cmacs-vidstudio-tools--export-timeout
   :example "emacsctl tool vidstudio export --handle 1 --path ~/Videos/out.mp4"

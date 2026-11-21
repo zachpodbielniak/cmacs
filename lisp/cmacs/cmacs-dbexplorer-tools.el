@@ -277,6 +277,95 @@ tool; a bad name or an unconfigured connection is signalled at once."
    (t cell)))
 
 
+;;;; Without waiting -----------------------------------------------------
+;;
+;; `cmacs-dbexplorer-tools--await' above waits in `sit-for'.  That is
+;; what the hand-written D-Bus handlers in C still call (the MCP ones
+;; that also did are deleted), and for
+;; them it is no worse than it was.  The registry's tools must not: a
+;; tool call is dispatched on the main thread, which under `emacs --gowl'
+;; is the compositor's, and `sit-for' there holds the desktop for as long
+;; as the database takes -- or signals outright, because an RPC dispatch
+;; binds `inhibit-interaction' and `sit-for' reads an event.
+;;
+;; So every tool below is :async and built from these: nothing waits,
+;; each step is a callback, and DONE is called exactly once.
+
+(defun cmacs-dbexplorer-tools--once (done timeout &optional on-timeout)
+  "Return (OK . FAIL): two functions that answer DONE at most once.
+
+OK takes a thunk producing the reply string; it runs under a handler, so
+an error while rendering is a failed call and not an escape from a
+callback (where a signal goes nowhere anyone is looking).  FAIL takes a
+message.  Failures reach DONE in the registry's \"Error: ...\" form.
+
+After TIMEOUT seconds with neither called, ON-TIMEOUT runs (to cancel
+whatever is still going) and the call fails as timed out.  The registry
+has a timeout of its own; this one is slightly earlier and is what lets
+a stream be cancelled by the answer that reports it."
+  (let* ((settled nil)
+         (timer nil)
+         (answer (lambda (text)
+                   (unless settled
+                     (setq settled t)
+                     (when (timerp timer) (cancel-timer timer))
+                     (funcall done text)))))
+    (setq timer
+          (run-at-time
+           timeout nil
+           (lambda ()
+             (unless settled
+               (when on-timeout (ignore-errors (funcall on-timeout)))
+               (funcall answer
+                        (format "Error: Timed out after %s seconds"
+                                timeout))))))
+    (cons (lambda (thunk)
+            (funcall answer
+                     (condition-case err
+                         (funcall thunk)
+                       (error (format "Error: %s"
+                                      (error-message-string err))))))
+          (lambda (message)
+            (funcall answer (format "Error: %s" message))))))
+
+(defun cmacs-dbexplorer-tools--connection-async (name then fail)
+  "Call THEN with the live connection NAME, opening it first if needed.
+
+The non-blocking form of `cmacs-dbexplorer-tools--connection'.  A bad
+name or an unconfigured connection is signalled at once, before anything
+is started; a connect that is refused calls FAIL with a message.  THEN
+runs from the connect hooks, not from here, unless the connection was
+already open."
+  (cmacs-dbexplorer-tools--ensure)
+  (unless (and (stringp name) (string-match-p "\\`[A-Za-z0-9._-]+\\'" name))
+    (error "Not a valid connection name: %S" name))
+  (let ((connection (cmacs-dbexplorer-connection name)))
+    (if (cmacs-dbexplorer-connection-open-p connection)
+        (funcall then connection)
+      (unless (cmacs-dbexplorer-connection-spec name)
+        (error "%s is not a configured connection" name))
+      (cmacs-dbexplorer-when-connected
+       name
+       (lambda (opened)
+         (if (cmacs-dbexplorer-connection-open-p opened)
+             (funcall then opened)
+           (funcall fail (format "Could not connect to %s" name))))
+       (lambda (_name)
+         (funcall fail (format "could not connect to %s" name))))
+      (cmacs-dbexplorer-connect name))))
+
+
+(defun cmacs-dbexplorer-tools--with-connection (name fail then)
+  "Call THEN with the live connection NAME; report any failure to FAIL.
+`cmacs-dbexplorer-tools--connection-async' with its signals caught: by
+the time a tool calls this it has armed a timer through
+`cmacs-dbexplorer-tools--once', and a bad name that escaped as a signal
+would leave that timer to fire at nobody thirty seconds later."
+  (condition-case err
+      (cmacs-dbexplorer-tools--connection-async name then fail)
+    (error (funcall fail (error-message-string err)))))
+
+
 ;;;; The tool functions -------------------------------------------------
 
 ;; These are the entry points the MCP, D-Bus and emacsctl surfaces call.
@@ -347,17 +436,41 @@ read-write connection."
                      :options (list :max-rows limit)
                      :on-result (lambda (r) (funcall done r nil))
                      :on-error (lambda (m) (funcall done nil m)))))))
-    (cmacs-dbexplorer-tools--json
-     (list (cons 'columns (vconcat (cmacs-dbexplorer-result-column-names result)))
-           (cons 'row_count (cmacs-dbexplorer-result-row-count result))
-           (cons 'truncated (if (cmacs-dbexplorer-result-truncated result)
-                                t json-false))
-           (cons 'rows
-                 (vconcat
-                  (mapcar (lambda (row)
-                            (vconcat (mapcar #'cmacs-dbexplorer-tools--cell-json
-                                             (append row nil))))
-                          (append (cmacs-dbexplorer-result-rows result) nil))))))))
+    (cmacs-dbexplorer-tools--query-json result)))
+
+(defun cmacs-dbexplorer-tools--query-json (result)
+  "Render the query RESULT as the JSON `db_query' answers with."
+  (cmacs-dbexplorer-tools--json
+   (list (cons 'columns (vconcat (cmacs-dbexplorer-result-column-names result)))
+         (cons 'row_count (cmacs-dbexplorer-result-row-count result))
+         (cons 'truncated (if (cmacs-dbexplorer-result-truncated result)
+                              t json-false))
+         (cons 'rows
+               (vconcat
+                (mapcar (lambda (row)
+                          (vconcat (mapcar #'cmacs-dbexplorer-tools--cell-json
+                                           (append row nil))))
+                        (append (cmacs-dbexplorer-result-rows result) nil)))))))
+
+(defun cmacs-dbexplorer-tool-query-async (done name sql &optional max-rows)
+  "Run SQL on the connection NAME; call DONE with the rows as JSON.
+`cmacs-dbexplorer-tool-query' without the wait: the same read path, the
+same cap, the same reply."
+  (pcase-let* ((limit (min (or max-rows cmacs-dbexplorer-tools-max-rows)
+                           cmacs-dbexplorer-tools-max-rows))
+               (`(,ok . ,fail)
+                (cmacs-dbexplorer-tools--once
+                 done cmacs-dbexplorer-tools-timeout)))
+    (cmacs-dbexplorer-tools--with-connection
+     name fail
+     (lambda (connection)
+       (cmacs-dbexplorer-query
+        connection sql
+        :options (list :max-rows limit)
+        :on-result (lambda (r)
+                     (funcall ok (lambda ()
+                                   (cmacs-dbexplorer-tools--query-json r))))
+        :on-error fail)))))
 
 (defun cmacs-dbexplorer-tool-execute (name sql)
   "Run a writing statement SQL on the connection called NAME.
@@ -370,9 +483,33 @@ Refused by the C layer on a read-only connection."
                     connection sql
                     :on-done (lambda (r) (funcall done (or r t) nil))
                     :on-error (lambda (m) (funcall done nil m)))))))
-    (cmacs-dbexplorer-tools--json
-     (list (cons 'rows_affected (or (alist-get :rows-affected reply) 0))
-           (cons 'last_insert_rowid (or (alist-get :last-insert-rowid reply) 0))))))
+    (cmacs-dbexplorer-tools--execute-json reply)))
+
+(defun cmacs-dbexplorer-tools--execute-json (reply)
+  "Render the execute REPLY as the JSON `db_execute' answers with."
+  (cmacs-dbexplorer-tools--json
+   (list (cons 'rows_affected
+               (or (and (listp reply) (alist-get :rows-affected reply)) 0))
+         (cons 'last_insert_rowid
+               (or (and (listp reply) (alist-get :last-insert-rowid reply))
+                   0)))))
+
+(defun cmacs-dbexplorer-tool-execute-async (done name sql)
+  "Run the writing statement SQL on connection NAME; answer through DONE.
+`cmacs-dbexplorer-tool-execute' without the wait.  Refused by the C
+layer on a read-only connection, exactly as there."
+  (pcase-let ((`(,ok . ,fail)
+               (cmacs-dbexplorer-tools--once
+                done cmacs-dbexplorer-tools-timeout)))
+    (cmacs-dbexplorer-tools--with-connection
+     name fail
+     (lambda (connection)
+       (cmacs-dbexplorer-execute
+        connection sql
+        :on-done (lambda (r)
+                   (funcall ok (lambda ()
+                                 (cmacs-dbexplorer-tools--execute-json r))))
+        :on-error fail)))))
 
 (defun cmacs-dbexplorer-tool-tables (name &optional schema)
   "Return the relations of SCHEMA on the connection called NAME."
@@ -384,13 +521,43 @@ Refused by the C layer on a read-only connection."
                          (cmacs-dbexplorer--handle connection) schema
                          (lambda (reply) (cmacs-dbexplorer-tools--settle reply done)))))
                      :relations)))
-    (cmacs-dbexplorer-tools--json
-     (vconcat
-      (mapcar (lambda (relation)
-                (list (cons 'name (plist-get relation :name))
-                      (cons 'kind (format "%s" (plist-get relation :kind)))
-                      (cons 'schema (plist-get relation :schema))))
-              relations)))))
+    (cmacs-dbexplorer-tools--tables-json relations)))
+
+(defun cmacs-dbexplorer-tools--tables-json (relations)
+  "Render RELATIONS, a list of plists, as the JSON `db_tables' answers with."
+  (cmacs-dbexplorer-tools--json
+   (vconcat
+    (mapcar (lambda (relation)
+              (list (cons 'name (plist-get relation :name))
+                    (cons 'kind (format "%s" (plist-get relation :kind)))
+                    (cons 'schema (plist-get relation :schema))))
+            relations))))
+
+(defun cmacs-dbexplorer-tools--settle-async (reply ok fail render)
+  "Hand the C layer's REPLY to OK through RENDER, or its error to FAIL.
+The non-blocking twin of `cmacs-dbexplorer-tools--settle'."
+  (let ((message (alist-get :error reply)))
+    (if message
+        (funcall fail message)
+      (funcall ok (lambda () (funcall render reply))))))
+
+(defun cmacs-dbexplorer-tool-tables-async (done name &optional schema)
+  "List the relations of SCHEMA on connection NAME; answer through DONE.
+`cmacs-dbexplorer-tool-tables' without the wait."
+  (pcase-let ((`(,ok . ,fail)
+               (cmacs-dbexplorer-tools--once
+                done cmacs-dbexplorer-tools-timeout)))
+    (cmacs-dbexplorer-tools--with-connection
+     name fail
+     (lambda (connection)
+       (cmacs-dbexplorer--tables-async
+        (cmacs-dbexplorer--handle connection) schema
+        (lambda (reply)
+          (cmacs-dbexplorer-tools--settle-async
+           reply ok fail
+           (lambda (r)
+             (cmacs-dbexplorer-tools--tables-json
+              (cmacs-dbexplorer-tools--reply-vector r :relations))))))))))
 
 (defun cmacs-dbexplorer-tool-columns (name table &optional schema)
   "Return the columns of TABLE in SCHEMA on the connection called NAME."
@@ -400,25 +567,45 @@ Refused by the C layer on a read-only connection."
                   (cmacs-dbexplorer--table-info-async
                    (cmacs-dbexplorer--handle connection) schema table
                    (lambda (reply) (cmacs-dbexplorer-tools--settle reply done)))))))
-    (cmacs-dbexplorer-tools--json
-     (list
-      (cons 'table table)
-      ;; The reply is an alist of vectors; each column inside it is a
-      ;; plist.  Mixing the two accessors up yields an empty answer
-      ;; rather than an error, which is why this is spelled out.
-      (cons 'primary_key
-            (vconcat (cmacs-dbexplorer-tools--reply-vector info :primary-key)))
-      (cons 'columns
-            (vconcat
-             (mapcar (lambda (column)
-                       (list (cons 'name (plist-get column :name))
-                             (cons 'type (plist-get column :type-name))
-                             (cons 'nullable (if (plist-get column :nullable)
-                                                 t json-false))
-                             (cons 'primary_key (if (plist-get column :primary-key)
-                                                    t json-false))
-                             (cons 'default (plist-get column :default))))
-                     (cmacs-dbexplorer-tools--reply-vector info :columns))))))))
+    (cmacs-dbexplorer-tools--columns-json table info)))
+
+(defun cmacs-dbexplorer-tools--columns-json (table info)
+  "Render INFO about TABLE as the JSON `db_columns' answers with."
+  (cmacs-dbexplorer-tools--json
+   (list
+    (cons 'table table)
+    ;; The reply is an alist of vectors; each column inside it is a
+    ;; plist.  Mixing the two accessors up yields an empty answer
+    ;; rather than an error, which is why this is spelled out.
+    (cons 'primary_key
+          (vconcat (cmacs-dbexplorer-tools--reply-vector info :primary-key)))
+    (cons 'columns
+          (vconcat
+           (mapcar (lambda (column)
+                     (list (cons 'name (plist-get column :name))
+                           (cons 'type (plist-get column :type-name))
+                           (cons 'nullable (if (plist-get column :nullable)
+                                               t json-false))
+                           (cons 'primary_key (if (plist-get column :primary-key)
+                                                  t json-false))
+                           (cons 'default (plist-get column :default))))
+                   (cmacs-dbexplorer-tools--reply-vector info :columns)))))))
+
+(defun cmacs-dbexplorer-tool-columns-async (done name table &optional schema)
+  "Describe TABLE in SCHEMA on connection NAME; answer through DONE.
+`cmacs-dbexplorer-tool-columns' without the wait."
+  (pcase-let ((`(,ok . ,fail)
+               (cmacs-dbexplorer-tools--once
+                done cmacs-dbexplorer-tools-timeout)))
+    (cmacs-dbexplorer-tools--with-connection
+     name fail
+     (lambda (connection)
+       (cmacs-dbexplorer--table-info-async
+        (cmacs-dbexplorer--handle connection) schema table
+        (lambda (reply)
+          (cmacs-dbexplorer-tools--settle-async
+           reply ok fail
+           (lambda (r) (cmacs-dbexplorer-tools--columns-json table r)))))))))
 
 (defun cmacs-dbexplorer-tool-export (name sql format path)
   "Export the results of SQL from connection NAME to PATH in FORMAT.
@@ -457,11 +644,43 @@ is a question of disk rather than memory."
              (when stream
                (ignore-errors (cmacs-dbexplorer-cancel stream)))
              (signal (car err) (cdr err))))))
-    (cmacs-dbexplorer-tools--json
-     (list (cons 'path (plist-get summary :path))
-           (cons 'format format)
-           (cons 'rows (plist-get summary :row-count))
-           (cons 'truncated (if (plist-get summary :truncated) t json-false))))))
+    (cmacs-dbexplorer-tools--export-json format summary)))
+
+(defun cmacs-dbexplorer-tools--export-json (format summary)
+  "Render the export SUMMARY in FORMAT as the JSON `db_export' answers with."
+  (cmacs-dbexplorer-tools--json
+   (list (cons 'path (plist-get summary :path))
+         (cons 'format format)
+         (cons 'rows (plist-get summary :row-count))
+         (cons 'truncated (if (plist-get summary :truncated) t json-false)))))
+
+(defun cmacs-dbexplorer-tool-export-async (done name sql format path)
+  "Export the results of SQL from connection NAME to PATH in FORMAT.
+`cmacs-dbexplorer-tool-export' without the wait: DONE is called when the
+C streamer finishes, with the same summary.  On timing out the stream is
+cancelled first, so the caller is not told it failed while the file
+keeps growing behind its back."
+  (pcase-let* ((path (expand-file-name path))
+               (stream nil)
+               (`(,ok . ,fail)
+                (cmacs-dbexplorer-tools--once
+                 done cmacs-dbexplorer-tools-export-timeout
+                 (lambda ()
+                   (when stream (cmacs-dbexplorer-cancel stream))))))
+    (cmacs-dbexplorer-tools--with-connection
+     name fail
+     (lambda (connection)
+       (setq stream
+             (cmacs-dbexplorer-run-export
+              connection sql format path
+              ;; With a header: see `cmacs-dbexplorer-tool-export'.
+              :options (list :header t)
+              :on-done (lambda (summary)
+                         (funcall ok
+                                  (lambda ()
+                                    (cmacs-dbexplorer-tools--export-json
+                                     format summary))))
+              :on-error fail))))))
 
 
 ;;;; ai-brigade ---------------------------------------------------------
@@ -487,22 +706,28 @@ permitted: SELECT, VALUES, EXPLAIN, SHOW and read-only pragmas.  Results are
 capped, and the reply says so when it was truncated."
     ((connection string "Connection name from db-connections")
      (sql string "The SELECT statement to run")
-     ;; The C tool of this name takes it, and the registry's is the one
-     ;; MCP clients reach once the C stands aside.
+     ;; The C tool of this name took it (see the frozen schema,
+     ;; test/cmacs/data/mcp-wire-schema.json), and the registry's is the
+     ;; only one MCP clients reach now that the C is deleted.
      (max_rows integer "Maximum rows to fetch; omit for the configured default"
                :optional t))
+    ;; :async, like every tool here that talks to a database: see
+    ;; "Without waiting" above.  The registry's timeout sits just past
+    ;; the tool's own, so the tool's answer is the one that arrives.
     :group 'database
-    (cmacs-dbexplorer-tool-query connection sql
-                                 (and (integerp max_rows) (> max_rows 0)
-                                      max_rows)))
+    :async t :timeout (+ cmacs-dbexplorer-tools-timeout 15)
+    (cmacs-dbexplorer-tool-query-async done connection sql
+                                       (and (integerp max_rows) (> max_rows 0)
+                                            max_rows)))
 
   (cmacs-brigade-deftool db-tables
     "List the tables and views in a database."
     ((connection string "Connection name from db-connections")
      (schema string "Schema to list; omit for the default" :optional t))
     :group 'database
-    (cmacs-dbexplorer-tool-tables
-     connection (cmacs-dbexplorer-tools--identifier schema "schema")))
+    :async t :timeout (+ cmacs-dbexplorer-tools-timeout 15)
+    (cmacs-dbexplorer-tool-tables-async
+     done connection (cmacs-dbexplorer-tools--identifier schema "schema")))
 
   (cmacs-brigade-deftool db-columns
     "Describe one table: its columns with types and nullability, and its
@@ -513,8 +738,9 @@ seen."
      (schema string "Schema containing the table; omit for the default"
              :optional t))
     :group 'database
-    (cmacs-dbexplorer-tool-columns
-     connection
+    :async t :timeout (+ cmacs-dbexplorer-tools-timeout 15)
+    (cmacs-dbexplorer-tool-columns-async
+     done connection
      (or (cmacs-dbexplorer-tools--identifier table "table")
          (error "db_columns: missing 'table'"))
      (cmacs-dbexplorer-tools--identifier schema "schema")))
@@ -527,7 +753,8 @@ DDL.  Refused outright on a connection marked read-only."
     :group 'database
     :destructive t
     :confirm 'ask
-    (cmacs-dbexplorer-tool-execute connection sql))
+    :async t :timeout (+ cmacs-dbexplorer-tools-timeout 15)
+    (cmacs-dbexplorer-tool-execute-async done connection sql))
 
   (cmacs-brigade-deftool db-export
     "Export the results of a query to a file as csv or json."
@@ -538,12 +765,13 @@ DDL.  Refused outright on a connection marked read-only."
     :group 'database
     :destructive t
     :confirm 'ask
+    :async t :timeout (+ cmacs-dbexplorer-tools-export-timeout 15)
     ;; An exporter is named by a short symbol-shaped token; anything
     ;; else is a mistake worth reporting instead of forwarding.
     (unless (and (stringp format)
                  (string-match-p "\\`[a-z][a-z0-9-]*\\'" format))
       (error "db_export: 'format' must be an exporter name ([a-z][a-z0-9-]*)"))
-    (cmacs-dbexplorer-tool-export connection sql format path))
+    (cmacs-dbexplorer-tool-export-async done connection sql format path))
 
   ;; Opening and closing a saved connection.  These two were the last of
   ;; the family still served only by cmacs-mcp-tools-dbexplorer.c.

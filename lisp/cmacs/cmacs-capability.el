@@ -150,7 +150,16 @@ share one."
             (list :default (plist-get p :default)))
           (when (plist-get p :enum)
             (list :enum (mapcar (lambda (e) (format "%s" e))
-                                (plist-get p :enum))))))
+                                (plist-get p :enum))))
+          ;; A structured parameter also says what is inside it.  Both
+          ;; are in the registry's own shape -- :items a schema plist,
+          ;; :properties a list of parsed parameters -- which is what
+          ;; `cmacs-brigade-param-type-label' and
+          ;; `cmacs-brigade-param-json-schema' read.
+          (when (plist-member p :items)
+            (list :items (plist-get p :items)))
+          (when (plist-member p :properties)
+            (list :properties (plist-get p :properties)))))
 
 (defun cmacs-capability--describe-tool (tool cli)
   "Return the table entry for TOOL, whose CLI words are the string CLI."
@@ -185,8 +194,10 @@ published there.  Each plist has
   :timeout :surfaces :cli :returns :example :aliases
 
 where :params is a list of (:name :type :description :required
-[:default] [:enum]) plists and :cli is the \"GROUP VERB\" that follows
-`emacsctl tool'.
+[:default] [:enum] [:items] [:properties]) plists and :cli is the
+\"GROUP VERB\" that follows `emacsctl tool'.  :items and :properties
+are only on an `array' or `object' parameter and are in the registry's
+shape (see `cmacs-brigade-tool-types').
 
 Pure: it reads the registry and builds a fresh list, so it may be
 called from an RPC dispatch.  This is the description every derived
@@ -239,7 +250,14 @@ nil unless the tool is published there."
                                       d
                                     (format "%s" d)))))
                (when (plist-member p :enum)
-                 (list :enum (vconcat (plist-get p :enum))))))
+                 (list :enum (vconcat (plist-get p :enum))))
+               ;; For an array or object, its JSON Schema: `items',
+               ;; `properties', `required'.  A client that only knows
+               ;; the four scalar types still reads `type' and finds
+               ;; "array" or "object"; one that wants to build a flag
+               ;; per element type (emacsctl) reads schema.items.type.
+               (when (cmacs-brigade-param-structured-p p)
+                 (list :schema (cmacs-brigade-param-json-schema p)))))
             (plist-get entry :params)))
           :destructive (funcall bool (plist-get entry :destructive))
           :confirm (funcall str (plist-get entry :confirm))
@@ -346,13 +364,27 @@ Booleans come back as t or :false, the spelling
     (_ (cmacs-capability--bad "argument `%s' has unknown type %s"
                               pname type))))
 
+(defun cmacs-capability--convert-structured (value param)
+  "Return VALUE as the list or alist the array/object PARAM takes.
+VALUE is a parsed JSON array or object, or JSON text of one (which is
+what `emacsctl tool --NAME \='[...]\=' sends when it cannot tell).  The
+checking is the registry's, so D-Bus refuses exactly what a handler
+would have refused, only earlier and as BadArguments."
+  (condition-case err
+      (cmacs-brigade-structured-value value param)
+    (cmacs-capability-error (signal (car err) (cdr err)))
+    (error
+     (cmacs-capability--bad "%s" (error-message-string err)))))
+
 (defun cmacs-capability-parse-args (tool json-args)
   "Return the validated argument alist for TOOL from the string JSON-ARGS.
 
 JSON-ARGS must be a JSON object (the empty string and \"null\" mean no
 arguments).  The result is an alist of (NAME . VALUE) holding only
 parameters TOOL declares, each converted to its declared type, ready
-for `cmacs-brigade-call-tool'.
+for `cmacs-brigade-call-tool'.  An `array' value is a list and an
+`object' value an alist with symbol keys, checked against the
+parameter's :items / :properties (`cmacs-brigade-structured-value').
 
 Signals `cmacs-capability-error' -- kind \"BadArguments\" -- for text
 that is not a JSON object, a member that is not a parameter, a value of
@@ -400,8 +432,10 @@ default the caller did not ask for."
                                    (cmacs-brigade-tool-wire-name tool)
                                    pname)))
          (t
-          (let ((value (cmacs-capability--convert
-                        raw (plist-get p :type) pname))
+          (let ((value (if (cmacs-brigade-param-structured-p p)
+                           (cmacs-capability--convert-structured raw p)
+                         (cmacs-capability--convert
+                          raw (plist-get p :type) pname)))
                 (enum (plist-get p :enum)))
             (when (and enum
                        (not (member (format "%s" value)
@@ -559,7 +593,8 @@ TITLE and PREAMBLE, both strings, replace the default heading matter."
           (dolist (p (plist-get e :params))
             (insert
              (format "| =%s= | %s | %s | %s |\n"
-                     (plist-get p :name) (plist-get p :type)
+                     (plist-get p :name)
+                     (cmacs-brigade-param-type-label p)
                      (if (plist-get p :required) "yes" "no")
                      ;; A `|' in a description would end the cell.
                      (replace-regexp-in-string
@@ -617,7 +652,7 @@ of tools, a @multitable of arguments.  It says what
             (dolist (p (plist-get e :params))
               (insert
                "@item @code{" (funcall q (plist-get p :name)) "} @tab "
-               (plist-get p :type) " @tab "
+               (funcall q (cmacs-brigade-param-type-label p)) " @tab "
                (if (plist-get p :required) "yes" "no") " @tab "
                (funcall
                 q (concat
@@ -824,30 +859,263 @@ subsystem's tools, and the next full build would then call it stale."
     (cmacs-cad-tools . IS-CMACS-CAD)
     (cmacs-imgedit-tools . IS-CMACS-IMGEDIT)
     (cmacs-vidstudio-tools . IS-CMACS-VIDSTUDIO)
-    (cmacs-lql-watch-tools . IS-CMACS-LQL))
+    (cmacs-lql-watch-tools . IS-CMACS-LQL)
+    (cmacs-context-tools . t)
+    ;; `ai_list_models' alone: it lists in a child process.
+    (cmacs-ai-models-tools . IS-CMACS-AI)
+    ;; Was registered by cmacs-mcp-tools-gowl.c under HAVE_CMACS_GOWL
+    ;; (the frozen wire schema records that flag), which is why this is
+    ;; not IS-CMACS-SCREENSAVER.
+    (cmacs-screensaver-tools . IS-CMACS-GOWL)
+    (cmacs-podomation-tools . IS-CMACS-PODOMATION)
+    (cmacs-video-tools . IS-CMACS-VIDEO)
+    ;; After cmacs-secondbrain-tools: three files, one C family.
+    (cmacs-secondbrain-ingest-tools . IS-CMACS-SECONDBRAIN)
+    (cmacs-secondbrain-search-tools . IS-CMACS-SECONDBRAIN))
   "Alist of (FEATURE . FLAG): tool files to load when FLAG is non-nil.
 FLAG is an `IS-CMACS-*' variable from cmacs/core/cmacs-features.c, so a
 family is only offered by a build that compiled its subsystem in; t
 names a family of the always-built core.")
 
+;;;; A family that does not load is loud
+;;
+;; The hand-written C handlers these families replaced are deleted, so a
+;; family file that fails to load no longer falls back to anything: its
+;; tools are simply absent, from MCP, D-Bus, the CLI and every agent.
+;; That must never be silent.  A failure is recorded here, reported once
+;; as an :error warning, shown to every MCP client (in the server's
+;; instructions, and by the `capability_doctor' tool, which is always
+;; listed), and written to the MCP server's log by the publisher
+;; (cmacs-mcp-tools-brigade.c).  The other families still load.
+
+;; Declared special HERE as well as in the registry.  The binding in
+;; `cmacs-capability--load-family' is dynamic only if this file's
+;; compilation knows the variable is special, and a build that compiles
+;; this file against a registry .elc older than the variable bakes in a
+;; lexical binding instead: every family then loads unmarked.
+(defvar cmacs-brigade-registering-shipped-family)
+
+(declare-function cmacs-mcp-registry-load-error "cmacs-mcp-tools-brigade.c")
+(declare-function cmacs-brigade--mirror-names "cmacs-tool-registry.c")
+
+(defvar cmacs-capability-family-failures nil
+  "Tool families that failed to load, most recent first.
+An alist of (FEATURE . PLIST); PLIST has :error (the message), :tools
+\(how many of the family's tools were registered before it failed) and
+:time.  A feature leaves the list when a later load of it succeeds.
+Read it through `cmacs-capability-doctor'.")
+
+(defvar cmacs-capability--reported-failures nil
+  "The features `cmacs-capability--report-failures' has warned about.")
+
+(defun cmacs-capability--family-wanted-p (flag)
+  "Return non-nil when a family guarded by FLAG belongs in this build."
+  (or (eq flag t) (and (boundp flag) (symbol-value flag))))
+
+(defun cmacs-capability--load-family (feature &optional reload)
+  "Load the tool family FEATURE; return non-nil when it loaded.
+A failure -- the file is missing, or loading it signalled -- is recorded
+in `cmacs-capability-family-failures' and does not propagate: one broken
+family must not take the others down with it.  With RELOAD the file is
+loaded again even if a previous attempt provided the feature."
+  (let ((before (hash-table-count (cmacs-brigade--registry 'tool)))
+        (problem nil))
+    (condition-case err
+        ;; Bound so the registry knows these are shipped tools, the
+        ;; rewritten forms of what used to be hand-written C.
+        (let ((cmacs-brigade-registering-shipped-family feature))
+          (unless (if (and reload (featurep feature))
+                      (load (symbol-name feature) 'noerror 'nomessage)
+                    (require feature nil 'noerror))
+            (setq problem "its file was not found on `load-path'")))
+      (error (setq problem (error-message-string err))))
+    (setq cmacs-capability-family-failures
+          (assq-delete-all feature cmacs-capability-family-failures))
+    (when problem
+      (push (list feature :error problem
+                  :tools (- (hash-table-count (cmacs-brigade--registry 'tool))
+                            before)
+                  :time (current-time))
+            cmacs-capability-family-failures))
+    (not problem)))
+
+(defun cmacs-capability-status-notice ()
+  "Return a paragraph naming the tool families that failed to load, or \"\".
+This is what the MCP publisher appends to the server's instructions, so
+it is written for a client that has never heard of a tool family."
+  (if (null cmacs-capability-family-failures)
+      ""
+    (concat
+     (format "NOTICE: %d cmacs tool famil%s failed to load, so the tools \
+%s are MISSING from this server (they are not disabled on purpose):\n"
+             (length cmacs-capability-family-failures)
+             (if (cdr cmacs-capability-family-failures) "ies" "y")
+             (if (cdr cmacs-capability-family-failures)
+                 "they define" "it defines"))
+     (mapconcat (lambda (failure)
+                  (format "  %s: %s" (car failure)
+                          (plist-get (cdr failure) :error)))
+                (reverse cmacs-capability-family-failures) "\n")
+     "\nCall the capability_doctor tool for details.\n")))
+
+(defun cmacs-capability--report-failures ()
+  "Warn, once per family, about every family that failed to load."
+  (dolist (failure (reverse cmacs-capability-family-failures))
+    (unless (memq (car failure) cmacs-capability--reported-failures)
+      (push (car failure) cmacs-capability--reported-failures)
+      (display-warning
+       'cmacs-capability
+       (format "The tool family `%s' failed to load: %s.
+Its tools are missing from MCP, D-Bus, `emacsctl tool' and every agent.
+Nothing stands in for them.  Fix the file, then run
+M-x cmacs-capability-reload-families; M-x cmacs-capability-doctor shows
+the state."
+               (car failure) (plist-get (cdr failure) :error))
+       :error))))
+
+(defun cmacs-capability-load-families (&optional retry)
+  "Load every tool family this build should have; return the failures.
+With RETRY, load again the families that failed before (after fixing
+them) instead of only the ones never tried."
+  (pcase-dolist (`(,feature . ,flag) cmacs-capability-migrated-families)
+    (when (cmacs-capability--family-wanted-p flag)
+      (cond
+       ((assq feature cmacs-capability-family-failures)
+        (when retry
+          (setq cmacs-capability--reported-failures
+                (delq feature cmacs-capability--reported-failures))
+          (cmacs-capability--load-family feature 'reload)))
+       ((not (featurep feature))
+        (cmacs-capability--load-family feature)))))
+  (when cmacs-capability-family-failures
+    ;; From a timer when there is a session to show it in: this can run
+    ;; inside an RPC dispatch, which under `emacs --gowl' is the
+    ;; compositor's thread, and a warning pops a window.  A batch Emacs
+    ;; has no later, so it warns now, on stderr.
+    (if noninteractive
+        (cmacs-capability--report-failures)
+      (run-at-time 0 nil #'cmacs-capability--report-failures)))
+  cmacs-capability-family-failures)
+
+;;;###autoload
+(defun cmacs-capability-reload-families ()
+  "Load again the tool families that failed to load.
+Run it after fixing the file a warning named.  Their tools reach MCP
+sessions opened afterwards; a client already connected is told the tool
+list changed."
+  (interactive)
+  (let ((failures (cmacs-capability-load-families 'retry)))
+    (when (called-interactively-p 'interactive)
+      (if failures
+          (cmacs-capability-doctor)
+        (message "Every tool family loaded")))
+    failures))
+
+(defun cmacs-capability-doctor-text ()
+  "Return a report on the capability table's health, as text.
+Which tool families this build should have, which loaded, which failed
+and why, and whether the C mirror the MCP server publishes from agrees
+with the Lisp registry."
+  (let* ((wanted (cl-remove-if-not
+                  (lambda (family)
+                    (cmacs-capability--family-wanted-p (cdr family)))
+                  cmacs-capability-migrated-families))
+         (loaded (cl-remove-if-not
+                  (lambda (family)
+                    (and (featurep (car family))
+                         (not (assq (car family)
+                                    cmacs-capability-family-failures))))
+                  wanted))
+         (tools (cmacs-capability--tools))
+         (wires (apply #'append
+                       (mapcar (lambda (tool)
+                                 (cons (cmacs-brigade-tool-wire-name tool)
+                                       (cmacs-brigade-tool-aliases tool)))
+                               tools)))
+         (mirror (and (fboundp 'cmacs-brigade--mirror-names)
+                      (funcall 'cmacs-brigade--mirror-names)))
+         (unmirrored (and mirror
+                          (cl-set-difference wires mirror :test #'equal)))
+         (lines nil))
+    (push (format "Capability table: %d tools registered, %d of %d tool \
+families loaded."
+                  (length tools) (length loaded) (length wanted))
+          lines)
+    (if (null cmacs-capability-family-failures)
+        (push "No tool family failed to load." lines)
+      (push (format "%d FAILED to load; their tools are missing from every \
+surface:" (length cmacs-capability-family-failures))
+            lines)
+      (dolist (failure (reverse cmacs-capability-family-failures))
+        (push (format "  %s: %s  (%d of its tools were registered before \
+the failure; loaded from %s)"
+                      (car failure) (plist-get (cdr failure) :error)
+                      (or (plist-get (cdr failure) :tools) 0)
+                      (or (locate-library (symbol-name (car failure)))
+                          "nowhere: no such file on load-path"))
+              lines))
+      (push "Fix the file, then M-x cmacs-capability-reload-families."
+            lines))
+    (pcase-dolist (`(,feature . ,flag) cmacs-capability-migrated-families)
+      (unless (cmacs-capability--family-wanted-p flag)
+        (push (format "  not in this build: %s (%s is nil)" feature flag)
+              lines)))
+    ;; The server's own view: set when it could not load this table at
+    ;; all.  Seeing it here means a later load worked.
+    (when-let* (((fboundp 'cmacs-mcp-registry-load-error))
+                (problem (funcall 'cmacs-mcp-registry-load-error)))
+      (push (format "MCP: the server could not load the tool table when it \
+last set up a session: %s" problem)
+            lines))
+    (cond
+     ((not (fboundp 'cmacs-brigade--mirror-names))
+      (push "This build has no MCP server or brigade: nothing publishes \
+the table over MCP." lines))
+     (unmirrored
+      (push (format "MCP: %d registered tools are NOT in the C mirror the \
+server publishes from: %s"
+                    (length unmirrored)
+                    (mapconcat #'identity (sort unmirrored #'string<) " "))
+            lines))
+     (t (push (format "MCP: the C mirror holds all %d wire names."
+                      (length wires))
+              lines)))
+    (mapconcat #'identity (nreverse lines) "\n")))
+
+;;;###autoload
+(defun cmacs-capability-doctor ()
+  "Show whether every tool family loaded, and what is wrong if not.
+A family that fails to load takes its tools off every surface -- MCP,
+D-Bus, `emacsctl tool', agents -- and nothing stands in for them, so
+this is the first place to look when a tool is unexpectedly missing.
+The same report is the `capability_doctor' tool."
+  (interactive)
+  (let ((text (cmacs-capability-doctor-text)))
+    (if (called-interactively-p 'interactive)
+        (with-help-window "*cmacs-capability-doctor*"
+          (princ text)
+          (terpri))
+      text)))
+
+
 (provide 'cmacs-capability)
 
 ;; After `provide': a family file requires the registry, which may be
 ;; what is loading us.
-;; Declared special HERE as well as in the registry.  The binding below
-;; is dynamic only if this file's compilation knows the variable is
-;; special, and a build that compiles this file against a registry .elc
-;; older than the variable bakes in a lexical binding instead: every
-;; family then loads unmarked, and every migrated tool is refused by the
-;; MCP publisher in favour of its C twin, silently.
-(defvar cmacs-brigade-registering-shipped-family)
+;; The doctor is a tool as well as a command, and is registered before
+;; the families so that it is listed whichever of them fail.  Read-only;
+;; on every surface.
+(cmacs-brigade-deftool capability-doctor
+    "Report the health of this cmacs's tool table: which tool families \
+loaded, which FAILED to load (their tools are then missing from this \
+server, not disabled) and why, and whether the MCP server's copy of the \
+table agrees with the editor's.  Call it when a tool you expected is not \
+listed."
+    ()
+  :group 'capability
+  :example "emacsctl tool capability doctor"
+  (cmacs-capability-doctor-text))
 
-(pcase-dolist (`(,feature . ,flag) cmacs-capability-migrated-families)
-  (when (or (eq flag t) (and (boundp flag) (symbol-value flag)))
-    ;; Bound so the registry knows these tools are the shipped
-    ;; replacements of hand-written C tools: the MCP publisher lets only
-    ;; those take a built-in's name.
-    (let ((cmacs-brigade-registering-shipped-family feature))
-      (require feature nil 'noerror))))
+(cmacs-capability-load-families)
 
 ;;; cmacs-capability.el ends here

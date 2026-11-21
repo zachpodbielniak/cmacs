@@ -143,6 +143,7 @@ otherwise replaces entire buffer content."
   "Switch the current window to display a buffer."
     ((buffer string "Buffer name"))
   :group 'buffer
+  :destructive t
   (require 'cmacs-core-tools)
   ;; Like the command it wraps, this creates a buffer that does not
   ;; exist, so only exclusion is an error here.

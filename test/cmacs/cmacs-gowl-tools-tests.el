@@ -7,12 +7,13 @@
 
 ;; lisp/cmacs/cmacs-gowl-tools.el against two things.
 ;;
-;; The C it stands in for: every migrated tool is compared with the text
-;; of cmacs/mcp/cmacs-mcp-tools-gowl.c -- name, description, parameter
-;; names in order, types, required-ness, enums, and whether the C called
-;; it read-only.  The C stays as the fallback, so the two must not drift;
-;; and a `gowl_' tool added to the C without a decision here (migrated,
-;; or skipped with a reason) fails the suite.
+;; The C it replaced: every migrated tool is compared with what
+;; cmacs/mcp/cmacs-mcp-tools-gowl.c published -- name, description,
+;; parameter names in order, types, required-ness, enums, and whether
+;; the C called it read-only -- as frozen in
+;; test/cmacs/data/mcp-wire-schema.json (cmacs-wire-schema.el) before
+;; the handlers were deleted.  A frozen `gowl_' tool without a decision
+;; here (migrated, or kept in C with a reason) fails the suite.
 ;;
 ;; Its own behaviour, with every `gowl-*' primitive and the redaction
 ;; contract stubbed: no compositor is needed and none is touched.  The
@@ -28,6 +29,17 @@
 (require 'cmacs-brigade-registry)
 (require 'cmacs-brigade-tools)
 (require 'cmacs-capability)
+;; Beside this file, and named by its place: `make check' compiles
+;; and runs the tests with test/cmacs off `load-path', where a bare
+;; `require' of a helper fails the whole file -- silently for the count
+;; of failed tests, which then covers every file but this one.
+(require 'cmacs-wire-schema
+         (expand-file-name
+          "cmacs-wire-schema"
+          (file-name-directory
+           (or load-file-name
+               (bound-and-true-p byte-compile-current-file)
+               buffer-file-name))))
 (require 'cmacs-gowl-tools)
 ;; The redaction contract is another file's.  Loaded now when it exists:
 ;; a first load from inside a test would redefine the functions the test
@@ -44,145 +56,161 @@
   (or load-file-name buffer-file-name)
   "This file, captured at load time.")
 
-(defun cmacs-gowl-tools-tests--c-file ()
-  "Return the gowl MCP C file's name, or nil when the tree is not here."
-  (let ((root (locate-dominating-file
-               (or cmacs-gowl-tools-tests--this-file default-directory)
-               "cmacs/mcp/cmacs-mcp-tools-gowl.c")))
-    (and root (expand-file-name "cmacs/mcp/cmacs-mcp-tools-gowl.c" root))))
-
-
-;;;; The C file, read as text
-
-(defun cmacs-gowl-tools-tests--literals (text)
-  "Return the C string literals in TEXT, concatenated and unescaped."
-  (let ((pos 0) (parts nil))
-    (while (string-match "\"\\(\\(?:[^\"\\\\\n]\\|\\\\.\\)*\\)\"" text pos)
-      (push (match-string 1 text) parts)
-      (setq pos (match-end 0)))
-    (replace-regexp-in-string
-     "\\\\\\(.\\)" "\\1" (apply #'concat (nreverse parts)))))
-
-(defun cmacs-gowl-tools-tests--schema (text)
-  "Return the JSON schema among the C literals of TEXT, as an alist, or nil."
-  (let ((joined (cmacs-gowl-tools-tests--literals text)))
-    (when (string-match "{\"type\":\"object\"" joined)
-      (with-temp-buffer
-        (insert (substring joined (match-beginning 0)))
-        (goto-char (point-min))
-        (json-parse-buffer :object-type 'alist :array-type 'list)))))
-
-(defun cmacs-gowl-tools-tests--c-tools ()
-  "Return the `gowl_' tools the C file registers.
-A list of plists (:name :description :read-only :params), :params being
-\(NAME TYPE REQUIRED ENUM) lists in schema order.  The file registers
-tools two ways -- a `mcp_tool_new' block each, and a table -- and both
-are read."
-  (with-temp-buffer
-    (insert-file-contents (cmacs-gowl-tools-tests--c-file))
-    (goto-char (point-min))
-    (search-forward "cmacs_mcp_tools_gowl_register (McpServer")
-    (let ((starts nil) (out nil))
-      (while (re-search-forward
-              "\\(mcp_tool_new (\\|{ \\)\"\\([a-z_]+\\)\"\\(, \\(TRUE\\|FALSE\\),\\)?"
-              nil t)
-        ;; A table row is `{ "name", TRUE,'; anything else beginning
-        ;; `{ "' is not a tool.
-        (when (or (string-prefix-p "mcp_tool_new" (match-string 1))
-                  (match-string 3))
-          (push (list (match-beginning 0) (match-end 2) (match-string 2)
-                      (and (match-string 3) (match-string 4)))
-                starts)))
-      (setq starts (nreverse starts))
-      (cl-loop
-       for (start) on starts
-       for next = (cadr (memq start starts))
-       do
-       (pcase-let* ((`(,_beg ,after-name ,name ,flag) start)
-                    (end (if next (car next) (point-max)))
-                    (block (buffer-substring-no-properties after-name end))
-                    (table (and flag t))
-                    (schema (cmacs-gowl-tools-tests--schema block))
-                    (required (alist-get 'required schema))
-                    (description
-                     (cmacs-gowl-tools-tests--literals
-                      (if table
-                          ;; { NAME, FLAG, SCHEMA, HANDLER, DESCRIPTION }
-                          (and (string-match
-                                "handle_[a-z_]+,\\([^}]*?\\)}[,\n ]" block)
-                               (match-string 1 block))
-                        ;; mcp_tool_new (NAME, DESCRIPTION);
-                        (substring block 0 (string-match ");" block))))))
-         (when (string-prefix-p "gowl_" name)
-           (push
-            (list :name name
-                  :description description
-                  :read-only
-                  (if table
-                      (equal flag "TRUE")
-                    (and (string-match-p
-                          "mcp_tool_set_read_only_hint (tool, TRUE)" block)
-                         t))
-                  :params
-                  (mapcar (lambda (prop)
-                            (list (symbol-name (car prop))
-                                  (alist-get 'type (cdr prop))
-                                  (and (member (symbol-name (car prop))
-                                               required)
-                                       t)
-                                  (alist-get 'enum (cdr prop))))
-                          (alist-get 'properties schema)))
-            out))))
-      (nreverse out))))
+(defun cmacs-gowl-tools-tests--frozen ()
+  "Return the `gowl_' tools the gowl MCP C file published, in its order.
+Wire names from the frozen schema (cmacs-wire-schema.el): the C file
+also registered the screensaver tools, which another family owns."
+  (cl-remove-if-not (lambda (name) (string-prefix-p "gowl_" name))
+                    (cmacs-wire-schema-names "cmacs-mcp-tools-gowl.c")))
 
 (defconst cmacs-gowl-tools-tests--skipped
   '(("gowl_screenshot" . "returns an image")
-    ("gowl_reload_config" . "no DEFUN reloads from gowl's search path")
-    ("gowl_macro_run" . "array parameter; runs arbitrary C")
-    ("gowl_broadcast_add_team" . "object parameter")
-    ("gowl_broadcast_add_rule" . "object parameter")
-    ("gowl_hotkey_add" . "object parameter")
     ("gowl_hotkey_send" . "types into the focused window: privileged"))
   "The C `gowl_' tools deliberately left in C, each with its reason.")
 
+(defconst cmacs-gowl-tools-tests--conditional
+  '(("gowl_reload_config" . gowl-reload-config-from-search-path))
+  "C tools registered here only when the DEFUN they need exists.
+An alist of (TOOL . DEFUN).  Without the DEFUN the C serves the name and
+nothing may be registered under it; with it, the tool must be here.")
+
 (ert-deftest cmacs-gowl-tools-test-family-matches-c ()
-  "Every migrated tool is the C one: name, schema, description, hint."
-  (skip-unless (cmacs-gowl-tools-tests--c-file))
-  (let* ((c (cmacs-gowl-tools-tests--c-tools))
-         (names (mapcar (lambda (tool) (plist-get tool :name)) c))
+  "Every migrated tool is the C one: name, schema, description, hint.
+Against the frozen wire schema; the C handlers themselves are gone."
+  (let* ((names (cmacs-gowl-tools-tests--frozen))
          (migrated 0))
-    ;; The parser found the family, not a fragment of it.
-    (should (= (length c) 47))
-    (should (equal (length names) (length (delete-dups (copy-sequence names)))))
-    (dolist (tool c)
-      (let* ((name (plist-get tool :name))
-             (entry (cmacs-capability-describe-tool name)))
+    ;; The whole family is frozen, not a fragment of it.
+    (should (= (length names) 47))
+    (dolist (name names)
+      (let ((entry (cmacs-capability-describe-tool name)))
         (ert-info ((format "tool %s" name))
-          (if (assoc name cmacs-gowl-tools-tests--skipped)
-              ;; Left in C on purpose, and so not half-migrated.
-              (should-not entry)
-            ;; Anything else in the C must be here: a new C tool needs a
-            ;; decision, not a silent gap.
+          (cond
+           ((assoc name cmacs-gowl-tools-tests--skipped)
+            ;; Left in C on purpose, and so not half-migrated.
+            (should-not entry))
+           ((and (assoc name cmacs-gowl-tools-tests--conditional)
+                 (not (fboundp
+                       (cdr (assoc name
+                                   cmacs-gowl-tools-tests--conditional)))))
+            ;; Its DEFUN is not in this build: nothing may take the name.
+            (should-not entry))
+           (t
+            ;; Anything else the C published must be here.
             (should entry)
             (cl-incf migrated)
-            (should (equal (plist-get entry :description)
-                           (plist-get tool :description)))
-            (should (equal (mapcar (lambda (p)
-                                     (list (plist-get p :name)
-                                           (plist-get p :type)
-                                           (and (plist-get p :required) t)
-                                           (plist-get p :enum)))
-                                   (plist-get entry :params))
-                           (plist-get tool :params)))
-            ;; Read-only in C is exactly not-destructive here.
-            (should (eq (and (plist-get entry :destructive) t)
-                        (not (plist-get tool :read-only))))
-            (should (memq 'mcp (plist-get entry :surfaces)))))))
-    (should (= migrated 40))
+            ;; Description, each parameter's name, position, type,
+            ;; required-ness and enum; and read-only in C is exactly
+            ;; not-destructive here.
+            (cmacs-wire-schema-should-match name :description t :enum t
+                                            :hints t)
+            (should (memq 'mcp (plist-get entry :surfaces))))))))
+    ;; 44 always, and `gowl_reload_config' once its DEFUN exists.
+    (should (= migrated
+               (+ 44 (cl-count-if (lambda (c) (fboundp (cdr c)))
+                                  cmacs-gowl-tools-tests--conditional))))
     ;; And nothing is registered here that the C never had.
     (dolist (entry (cmacs-capability-describe))
       (when (string-prefix-p "gowl_" (plist-get entry :name))
         (should (member (plist-get entry :name) names))))))
+
+
+;;;; Array and object parameters
+
+(ert-deftest cmacs-gowl-tools-test-macro-run ()
+  "`gowl_macro_run' quotes its name and every element of `args'."
+  (skip-unless (featurep 'cmacs-gowl-macro))
+  (let ((lines nil))
+    (cl-letf (((symbol-function 'cmacs-gowl-macro-command)
+               (lambda (line &rest _) (push line lines) "ran")))
+      (should (equal (cmacs-brigade-call-tool
+                      "gowl_macro_run" "{\"name\":\"pip-corner\"}")
+                     "ran"))
+      (cmacs-brigade-call-tool
+       "gowl_macro_run"
+       "{\"name\":\"it's\",\"args\":[\"25\",\"a b\",\"; rm -rf ~\",7]}")
+      (should (equal (reverse lines)
+                     '("macro-run --trigger=api -- 'pip-corner'"
+                       ;; One word each, whatever is in them; the number
+                       ;; is the string the C would have read.
+                       "macro-run --trigger=api -- 'it'\\''s' '25' 'a b' '; rm -rf ~' '7'")))
+      (setq lines nil)
+      ;; Refused before anything is sent.
+      (should (string-prefix-p "Error: Missing required argument: name"
+                               (cmacs-brigade-call-tool
+                                "gowl_macro_run" "{\"name\":\"\"}")))
+      (should (string-prefix-p "Error: argument `args' must be an array"
+                               (cmacs-brigade-call-tool
+                                "gowl_macro_run"
+                                "{\"name\":\"m\",\"args\":{\"a\":1}}")))
+      (should-not lines))
+    ;; Destructive like the C (not read-only), so off D-Bus by default.
+    (let ((entry (cmacs-capability-describe-tool "gowl_macro_run")))
+      (should (plist-get entry :destructive))
+      (should-not (memq 'dbus (plist-get entry :surfaces))))))
+
+(ert-deftest cmacs-gowl-tools-test-definitions-from-objects ()
+  "The add-team, add-rule and hotkey-add tools send their object as JSON."
+  (skip-unless (and (featurep 'cmacs-gowl-broadcast)
+                    (featurep 'cmacs-gowl-hotkey)))
+  (cl-progv '(features) (list (cons 'cmacs-redact features))
+    (let ((lines nil) (reply "ok"))
+      (cl-letf (((symbol-function 'cmacs-gowl-broadcast-command)
+                 (lambda (line &rest _) (push line lines) reply))
+                ((symbol-function 'cmacs-gowl-hotkey-command)
+                 (lambda (line &rest _) (push line lines) reply))
+                ((symbol-function 'cmacs-redact-window)
+                 (lambda (app title &rest _) (cons app title)))
+                ((symbol-function 'cmacs-redact-text)
+                 (lambda (text &rest _) text)))
+        ;; The object, member for member and in the caller's order.
+        (cmacs-brigade-call-tool
+         "gowl_broadcast_add_team"
+         "{\"team\":{\"name\":\"raid\",\"slots\":[{\"name\":\"tank\",\"match\":\"app-id = eqgame.exe\"}],\"groups\":{\"all\":[\"tank\"]}}}")
+        (cmacs-brigade-call-tool
+         "gowl_broadcast_add_rule"
+         "{\"rule\":{\"name\":\"heal\",\"team\":\"raid\",\"keys\":{\"include\":[\"F1\",\"F2\"]},\"local\":false,\"delay-ms\":20}}")
+        (cmacs-brigade-call-tool
+         "gowl_hotkey_add"
+         "{\"id\":\"term\",\"hotkey\":{\"key\":\"#!t\",\"do\":[{\"action\":\"spawn\",\"arg\":\"foot\"}]}}")
+        ;; Or one line of flow YAML, as the C also took.
+        (cmacs-brigade-call-tool
+         "gowl_broadcast_add_team" "{\"yaml\":\"{name: solo, slots: []}\"}")
+        (cmacs-brigade-call-tool
+         "gowl_hotkey_add" "{\"yaml\":\"{key: '#!e', do: [{shell: thunar}]}\"}")
+        (should (equal (reverse lines)
+                       '("broadcast-add-team {\"name\":\"raid\",\"slots\":[{\"name\":\"tank\",\"match\":\"app-id = eqgame.exe\"}],\"groups\":{\"all\":[\"tank\"]}}"
+                         "broadcast-add-rule {\"name\":\"heal\",\"team\":\"raid\",\"keys\":{\"include\":[\"F1\",\"F2\"]},\"local\":false,\"delay-ms\":20}"
+                         "hotkey-add --id=term {\"key\":\"#!t\",\"do\":[{\"action\":\"spawn\",\"arg\":\"foot\"}]}"
+                         "broadcast-add-team {name: solo, slots: []}"
+                         "hotkey-add {key: '#!e', do: [{shell: thunar}]}")))
+        (setq lines nil)
+        ;; Neither an object nor a usable line: the C's refusals.
+        (should (equal (cmacs-brigade-call-tool "gowl_broadcast_add_team" "{}")
+                       "Error: Missing required argument: an object, or yaml (one line of flow YAML)"))
+        (should (string-prefix-p
+                 "Error: Missing required argument: an object, or yaml"
+                 (cmacs-brigade-call-tool
+                  "gowl_broadcast_add_rule" "{\"yaml\":\"a\\nb\"}")))
+        (should (string-prefix-p
+                 "Error: Missing required argument: a hotkey object, or yaml"
+                 (cmacs-brigade-call-tool "gowl_hotkey_add" "{}")))
+        ;; An array where the object goes is refused by the registry.
+        (should (string-prefix-p
+                 "Error: argument `team' must be an object"
+                 (cmacs-brigade-call-tool
+                  "gowl_broadcast_add_team" "{\"team\":[1]}")))
+        ;; An id is one word, because it is spliced into the line.
+        (should (equal (cmacs-brigade-call-tool
+                        "gowl_hotkey_add"
+                        "{\"id\":\"a b\",\"yaml\":\"{key: x}\"}")
+                       "Error: Missing required argument: id (one word)"))
+        (should-not lines)
+        ;; The module's ERROR is an error.
+        (setq reply "ERROR no such team")
+        (should (equal (cmacs-brigade-call-tool
+                        "gowl_broadcast_add_rule"
+                        "{\"rule\":{\"name\":\"x\",\"team\":\"nope\"}}")
+                       "Error: no such team"))))))
 
 
 ;;;; A stubbed compositor

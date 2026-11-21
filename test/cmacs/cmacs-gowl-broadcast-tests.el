@@ -336,25 +336,27 @@ ModuleEvent relays the compositor's module-event signal."
       (should (search-forward "\"module-event\"" nil t)))))
 
 (ert-deftest cmacs-gowl-broadcast-test-mcp-source ()
-  "The cmacs MCP server registers the broadcast tools, and escapes the
-lines it splices into Lisp."
+  "The broadcast tools are registry tools, and keep their wire names.
+They were handlers in cmacs/mcp/cmacs-mcp-tools-gowl.c that spliced
+escaped lines into Lisp; as `cmacs-brigade-deftool' forms they receive
+values and splice nothing.  The names are in the frozen wire schema."
   (let ((tools (cmacs-gowl-broadcast-tests--source-file
-                "cmacs/mcp/cmacs-mcp-tools-gowl.c")))
-    (skip-unless tools)
-    (with-temp-buffer
-      (insert-file-contents tools)
-      (dolist (name '("gowl_broadcast_status" "gowl_broadcast_list"
-                      "gowl_broadcast_set" "gowl_broadcast_add_team"
-                      "gowl_broadcast_add_rule" "gowl_broadcast_remove"
-                      "gowl_broadcast_assign" "gowl_broadcast_focus_slot"))
-        (goto-char (point-min))
-        (should (search-forward (format "\"%s\"" name) nil t)))
-      (goto-char (point-min))
-      (should (re-search-forward "^gowl_broadcast_line " nil t))
-      (let ((body (buffer-substring (point)
-                                    (progn (re-search-forward "^}" nil t)
-                                           (point)))))
-        (should (string-match-p "cmacs_dispatch_lisp_escape (line)" body))))))
+                "lisp/cmacs/cmacs-gowl-tools.el"))
+        (schema (cmacs-gowl-broadcast-tests--source-file
+                 "test/cmacs/data/mcp-wire-schema.json")))
+    (skip-unless (and tools schema))
+    (dolist (name '("status" "list" "set" "add_team" "add_rule" "remove"
+                    "assign" "focus_slot"))
+      (with-temp-buffer
+        (insert-file-contents schema)
+        (should (search-forward (format "\"gowl_broadcast_%s\"" name)
+                                nil t)))
+      (with-temp-buffer
+        (insert-file-contents tools)
+        (should (re-search-forward
+                 (format "^(cmacs-brigade-deftool gowl-broadcast-%s$"
+                         (string-replace "_" "-" name))
+                 nil t))))))
 
 ;;;; Through the real module, in a second cmacs
 

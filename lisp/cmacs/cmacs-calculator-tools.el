@@ -21,6 +21,11 @@
 ;; The wire names are the old MCP names, so nothing that called
 ;; `calc_eval' has to change.
 ;;
+;; Of the three copies, the MCP one is gone: the C file is deleted, and
+;; what it published is frozen in test/cmacs/data/mcp-wire-schema.json,
+;; which test/cmacs/cmacs-capability-tests.el holds these tools to.  The
+;; D-Bus interface remains as a public name.
+;;
 ;; Two things differ from the C handlers, both on purpose:
 ;;
 ;;   - No argument is ever spliced into Lisp source, so there is nothing

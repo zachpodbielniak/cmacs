@@ -1,4 +1,4 @@
-/* cmacs-brigade-registry.c --- C mirror of the brigade tool registry.
+/* cmacs-tool-registry.c --- C mirror of the tool registry.
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -16,16 +16,21 @@
  *      must not itself be Lisp, or any agent that reaches `eval' can
  *      rewrite the decision.  See cmacs-brigade-allowlist.c.
  *
+ * The first is wanted by every build with an MCP server and the second
+ * by every build with the brigade, so this unit is compiled when either
+ * is configured (see cmacs-tool-registry.h) and depends on neither: it
+ * needs GLib and lisp.h and nothing from cmacs/mcp or cmacs/ai-brigade.
+ *
  * The mirror holds no Lisp_Object: handlers are invoked by name through
  * the eval dispatcher, so nothing here needs GC protection and the
  * registry can be read from a worker thread under its own mutex. */
 
 #include <config.h>
 
-#ifdef HAVE_CMACS_AI_BRIGADE
-
 #include "lisp.h"
-#include "cmacs-brigade.h"
+#include "cmacs-tool-registry.h"
+
+#if defined HAVE_CMACS_MCP || defined HAVE_CMACS_AI_BRIGADE
 
 #include <glib.h>
 #include <string.h>
@@ -35,6 +40,7 @@
 static GHashTable *cmacs_brigade__tools;   /* gchar* -> CmacsBrigadeTool* */
 static GMutex      cmacs_brigade__tool_mutex;
 static gboolean    cmacs_brigade__tools_init_done;
+static guint       cmacs_brigade__generation;   /* under the mutex */
 
 static void
 cmacs_brigade_tool_free (gpointer data)
@@ -105,7 +111,6 @@ cmacs_brigade_registry_lookup (const gchar *name)
       copy->async       = found->async;
       copy->timeout_ms  = found->timeout_ms;
       copy->no_mcp      = found->no_mcp;
-      copy->replaces_builtin = found->replaces_builtin;
     }
   g_mutex_unlock (&cmacs_brigade__tool_mutex);
   return copy;
@@ -129,6 +134,18 @@ cmacs_brigade_registry_size (void)
   return n;
 }
 
+guint
+cmacs_brigade_registry_generation (void)
+{
+  guint n;
+
+  cmacs_brigade_registry_init ();
+  g_mutex_lock (&cmacs_brigade__tool_mutex);
+  n = cmacs_brigade__generation;
+  g_mutex_unlock (&cmacs_brigade__tool_mutex);
+  return n;
+}
+
 /* ── DEFUNs ───────────────────────────────────────────────────────── */
 
 static enum cmacs_brigade_confirm
@@ -145,13 +162,13 @@ DEFUN ("cmacs-brigade--mirror-put", Fcmacs_brigade__mirror_put,
 
 NAME is the wire name (a string such as "call_for_me").  DESCRIPTION is
 the summary shown to a model.  PARAMS-JSON is a JSON array of parameter
-objects, each with name/type/description/required members.  PROPS is a
-plist accepting :group, :destructive, :confirm, :timeout, :no-mcp
-\(non-nil keeps the tool off the MCP surface; it is still mirrored,
-because the allowlist gate resolves groups from here) and
-:replaces-builtin (non-nil lets the MCP publisher put this tool in place
-of the hand-written C tool of the same name; set only for the families
-`cmacs-capability-migrated-families' loads).
+objects, each with name/type/description/required members and, for an
+array or object parameter, a "schema" member holding its JSON Schema
+\(see `cmacs-brigade--params-json').  PROPS is a
+plist accepting :group, :destructive, :confirm, :async, :timeout and
+:no-mcp (non-nil keeps the tool off the MCP surface; it is still
+mirrored, because the allowlist gate resolves groups from here).  Any
+other key is ignored.
 
 Internal.  Elisp code calls `cmacs-brigade-register-tool', which owns the
 authoritative registry and mirrors here for MCP publication and the
@@ -186,12 +203,11 @@ allowlist gate.  */)
   timeout = Fplist_get (props, intern (":timeout"), Qnil);
   tool->timeout_ms = FIXNUMP (timeout) ? (gint) (XFIXNUM (timeout) * 1000) : 0;
   tool->no_mcp = !NILP (Fplist_get (props, intern (":no-mcp"), Qnil));
-  tool->replaces_builtin
-    = !NILP (Fplist_get (props, intern (":replaces-builtin"), Qnil));
 
   g_mutex_lock (&cmacs_brigade__tool_mutex);
   /* replace: re-registering a name is how a user reloads their config */
   g_hash_table_replace (cmacs_brigade__tools, g_strdup (tool->name), tool);
+  cmacs_brigade__generation++;
   g_mutex_unlock (&cmacs_brigade__tool_mutex);
 
   return Qt;
@@ -208,6 +224,8 @@ DEFUN ("cmacs-brigade--mirror-remove", Fcmacs_brigade__mirror_remove,
   cmacs_brigade_registry_init ();
   g_mutex_lock (&cmacs_brigade__tool_mutex);
   removed = g_hash_table_remove (cmacs_brigade__tools, SSDATA (name));
+  if (removed)
+    cmacs_brigade__generation++;
   g_mutex_unlock (&cmacs_brigade__tool_mutex);
   return removed ? Qt : Qnil;
 }
@@ -234,13 +252,19 @@ tool sets.  */)
   return out;
 }
 
-void syms_of_cmacs_ai_brigade_registry (void);
 void
-syms_of_cmacs_ai_brigade_registry (void)
+syms_of_cmacs_tool_registry (void)
 {
+  /* Called by syms_of_cmacs_mcp and by syms_of_cmacs_ai_brigade; a
+     second defsubr of the same subr would intern it twice.  */
+  static bool done;
+
+  if (done)
+    return;
+  done = true;
   defsubr (&Scmacs_brigade__mirror_put);
   defsubr (&Scmacs_brigade__mirror_remove);
   defsubr (&Scmacs_brigade__mirror_names);
 }
 
-#endif /* HAVE_CMACS_AI_BRIGADE */
+#endif /* HAVE_CMACS_MCP || HAVE_CMACS_AI_BRIGADE */
