@@ -1,0 +1,222 @@
+#+TITLE: cmacs-journal-restore — Put Me Back Where I Was
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+=cmacs-journal-restore= rebuilds the working context of a past moment from the activity journal ([[file:cmacs-journal.org][cmacs-journal]]). You name the moment -- "an hour ago", "Tuesday 3pm", "before lunch", or a line picked in the journal -- and it shows a *plan*: the files, pages, applications and layout of that moment. Nothing changes until you confirm the plan.
+
+#+begin_src emacs-lisp
+(cmacs-journal-mode 1)             ; the journal: what had the focus
+(cmacs-journal-checkpoint-mode 1)  ; checkpoints: what was open, and where
+#+end_src
+
+Then =M-x cmacs-journal-restore RET an hour ago RET=.
+
+Four things about it, stated plainly:
+
+- *Applications are started again, not resumed.* A restore can start a program on the tag it was on and put its window back. What was open inside the program -- documents, tabs, scroll positions, unsaved work -- is that program's business and is not restored. A page is loaded again, not resumed. The plan says this on every item it applies to.
+- *Nothing happens before you confirm.* Building and showing a plan reads the journal and looks at what is running. It visits no file, starts no program and moves no window.
+- *It is human-only.* A restore launches programs, so there is no brigade tool, no MCP tool and no D-Bus method for it, and the command refuses to run for an agent or a remote caller.
+- *It can only put back what the journal was allowed to keep.* Checkpoints go through the same privacy filters as everything else in the journal. A window a rule excludes is not in any checkpoint, so it is not in any plan.
+
+Part of the journal: built with ~--with-cmacs-journal~, pure Elisp. Placing and starting windows needs gowl; files, pages and the Emacs window layout work on any cmacs.
+
+* Checkpoints
+
+The journal's spans say what had the *focus*. They do not say what else was open or how it was laid out. A *checkpoint* is that missing half: a journal event of kind =checkpoint=, written from a timer, whose =detail= field is a JSON document.
+
+| Member     | What it holds                                                                                                    |
+|------------+------------------------------------------------------------------------------------------------------------------|
+| =frames=   | Per Emacs frame, the window tree as data: splits, their proportions, and each window's buffer, file, mode, line  |
+| =buffers=  | The open file-visiting buffers, shown or not (at most ~cmacs-journal-checkpoint-max-buffers~)                    |
+| =urls=     | The pages open in gsurf buffers                                                                                  |
+| =clients=  | gowl's windows: app id, title, tags, monitor, floating and geometry, pid, command line                           |
+| =monitors= | Per output: the tags in view, the layout symbol, which one was focused                                           |
+
+The window tree is plain data -- never a window-configuration object -- so it survives a restart and can be read with =jq=.
+
+** When one is written
+
+~cmacs-journal-checkpoint-mode~ starts a timer and nothing else. Every ~cmacs-journal-checkpoint-interval~ seconds it looks at the arrangement, and writes a checkpoint only when all of these hold:
+
+- the journal is recording (~cmacs-journal-mode~ on, not paused, session not locked, filters usable);
+- the arrangement differs from the last one written, or the last one is older than ~cmacs-journal-checkpoint-max-age~;
+- something is left after filtering.
+
+Point moving and a window retitling itself are not changes: they are in a checkpoint but do not cause one. Otherwise a terminal that puts the running command in its title would produce a checkpoint every interval.
+
+=M-x cmacs-journal-checkpoint-take= writes one now.
+
+** Filters
+
+A checkpoint is many events' worth of names, so *every entry is filtered on its own*. Each buffer, page, window and monitor is turned into the event the journal would have recorded for it, handed to the filter engine, and the entry is built from what comes back:
+
+- an =exclude= rule removes the entry. An excluded window is not blanked in the tree, it is *absent*: its sibling takes its place, and nothing counts it or records that a rule matched;
+- =drop=, =replace= and =hash= do to the entry's fields what they do to a span's. A hashed file name is in the checkpoint as its hash, and a restore lists it as withheld;
+- a window's command line is filtered as the entry's =detail= field. Separately, a command line naming a URL that a =url= rule would not record (=firefox https://bank.example/=) is withheld whole, since no =url= rule would otherwise look there;
+- the finished event goes through the filters once more as a whole, so a rule on =kind: checkpoint= turns checkpoints off.
+
+It *fails closed* exactly as the journal does: with an unusable rule set the journal is not recording, so no checkpoint is taken, and the filter engine refuses every entry in that state anyway.
+
+** Storage, retention, forgetting, LQL
+
+Checkpoints live in the journal's own day files, written through the journal's own queue, so everything the journal does to an event it does to a checkpoint:
+
+- same directory and modes (=0700= / =0600=);
+- ~cmacs-journal-retention-days~ prunes them with their day;
+- ~cmacs-journal-forget~ deletes them: by time range like any event, and by regexp when the regexp matches anything in the document (a buffer name, a title, a command);
+- the LQL =activity= source has them as rows whose =kind= is =checkpoint=, with the focused monitor in =monitor=, its tags in =tags= and the document in =detail=, under the same agent gate. A query over attention that should not see them filters on =kind=.
+
+Reports ignore them: they have no duration, and =checkpoint= is not in ~cmacs-journal-report-kinds~.
+
+** The command line
+
+On Linux the command line comes from =/proc/PID/cmdline=, read once per process, shell-quoted so ~gowl-spawn~ reads back the same argument list. A Flatpak's process sees its own =/app=, which is no command on the host, so for those the recorded command is =flatpak run APP-ID= when the app id looks like one. ~cmacs-journal-restore-app-commands~ overrides what was recorded, per app id. Set ~cmacs-journal-checkpoint-command-lines~ to nil to record none; a restore can then only move windows that are already running.
+
+* Naming the moment
+
+~cmacs-journal-restore-parse-time~ reads a phrase. Every ambiguity resolves to the *most recent past moment*.
+
+| Phrase                                               | Means                                                         |
+|------------------------------------------------------+---------------------------------------------------------------|
+| =now=                                                | Now                                                           |
+| =10 minutes ago=, =an hour ago=, =half an hour ago=  | That long ago                                                 |
+| =an hour and a half ago=, =a couple of hours ago=    | 90 minutes, two hours                                         |
+| =2 days ago=, =2 days ago at 3pm=                    | The same clock time two days ago; or that day at 15:00        |
+| =3pm=, =3:30pm=, =15:00=                             | Today's if it has passed, otherwise yesterday's               |
+| =3=, =9:15=                                          | No am/pm: whichever of the two happened last                  |
+| =noon=, =this morning=, =before lunch=, =last night= | A named part of the day (~cmacs-journal-restore-day-parts~)   |
+| =today=, =yesterday=, =the day before yesterday=     | A day with no time: how that day ended                        |
+| =Tuesday=, =Tuesday 3pm=, =3pm on Tuesday=           | The most recent Tuesday                                       |
+| =last Friday 9am=                                    | A Friday before today                                         |
+| =2026-11-18=, =2026-11-18 15:00=, with =Z= or offset | ISO 8601; a date alone is the end of that day                 |
+| =18 nov 15:00=                                       | Whatever ~parse-time-string~ reads as a date                  |
+
+The rules behind the table:
+
+- A time with no day is today's if it has happened, and yesterday's if not.
+- A weekday is the most recent one. Today counts when the time named has passed; a weekday *alone*, on that weekday, is last week's.
+- A day with no time is the last second of that day (capped at now), so "yesterday" restores the last arrangement of yesterday.
+- "before lunch" is the moment lunch started. A restore takes the arrangement recorded at or before its moment, so that is what was open going into lunch.
+- A moment still in the future is not a moment to restore: the parser returns nil and the command says so.
+- Number words work (=three thirty p.m.=), for speech.
+
+* The plan
+
+=M-x cmacs-journal-restore= asks for the moment and shows the plan in =*cmacs-journal-restore*=. The plan is built from the *nearest checkpoint at or before the moment* (looking back up to ~cmacs-journal-restore-lookback~) plus the focus spans recorded between that checkpoint and the moment -- things opened after the arrangement was last written down. The header says when the checkpoint is from.
+
+| Section                | Items                                                                                          |
+|------------------------+------------------------------------------------------------------------------------------------|
+| Emacs buffers and files | Each file to visit. Remote files are listed but off                                           |
+| Pages                  | Each URL to open again                                                                         |
+| Applications           | Per window: already in place, move to its tag, or start it on its tag                          |
+| Layout and focus       | The Emacs window tree; per monitor the tags to view and the layout; what to focus              |
+| Cannot be restored     | Everything that will not be put back, each with its reason                                     |
+
+| Key                  | Does                                              |
+|----------------------+---------------------------------------------------|
+| =RET=, =SPC=, =t=    | Tick or untick the item at point                  |
+| =a= / =u=            | Tick / untick every item in the section at point  |
+| =TAB=                | Fold or unfold the section                        |
+| =c=, =C-c C-c=       | Restore what is ticked (asks once)                |
+| =g=                  | Build the plan again                              |
+| =T=                  | Another moment                                    |
+| =q=                  | Leave; nothing was changed                        |
+
+** What cannot be restored, and why
+
+The last section is not a footnote; it is half of what the plan is for.
+
+| Listed as                         | Reason                                                                                     |
+|-----------------------------------+--------------------------------------------------------------------------------------------|
+| A file                            | It no longer exists                                                                        |
+| "a file", "a page", "a window"    | Its name was withheld by a journal filter (hashed or dropped)                              |
+| A buffer                          | It visited no file and is gone (=*compilation*=, a REPL)                                   |
+| An application                    | It is not running and no command line was recorded                                         |
+| An application                    | It was embedded in an Emacs window, or on no tag (a scratchpad)                            |
+| An application                    | gowl is not running here                                                                   |
+| Other Emacs frames                | Frames are not recreated; their files are still reopened                                   |
+| A monitor                         | It is not connected now                                                                    |
+| A layout                          | Its symbol has no name in ~cmacs-journal-restore-layout-names~                             |
+| Windows, without a checkpoint     | The journal has a title, not a command or a place                                          |
+
+Remote files are a special case: they are in the files section, *unticked*, and are not touched unless you tick them. Building the plan never asks Tramp anything.
+
+Without any checkpoint (the mode was off) the plan is built from focus spans alone: files and pages that had the focus near the moment, and a note saying to turn on ~cmacs-journal-checkpoint-mode~.
+
+* What a restore does
+
+In this order; a step that fails is written to the plan's log and the rest go on.
+
+1. *Files.* Each ticked file is visited. A file this restore opened is moved to its recorded line; one that was already open is left where you have it. A file that vanished since the plan was drawn is skipped.
+2. *Pages.* Opened in gsurf buffers when gsurf is built (~IS-CMACS-GSURF~), otherwise handed to ~browse-url~. A page recorded in a gsurf container opens in the default container, and the plan says so.
+3. *The Emacs window tree.* The selected frame's windows are replaced by the recorded tree, split in the recorded proportions, each window at its line. If the frame is too small for all of it, what fits is built and the log says so.
+4. *Applications.* A running window that matches a recorded one (same app id, the same title preferred, each window claimed once) is moved to its recorded tags. One that is not running is started with ~gowl-spawn~ and registered with ~gowl-pretag-pid~, so its window maps directly on its tag and monitor instead of flashing on the one in view. A window that floated floats again at its recorded geometry.
+5. *Views.* Each monitor views its recorded tags and gets its recorded layout, the focused monitor last.
+6. *Focus.* The window or buffer that had the focus at the moment -- from the span around it, else from the checkpoint -- is focused.
+
+*Nothing waits.* A started program's window is looked for from a timer every ~cmacs-journal-restore-poll-interval~ seconds; when it appears it is placed (and focused, if it was the focused one), and after ~cmacs-journal-restore-app-timeout~ seconds without one the log says it did not appear. Under =emacs --gowl= Emacs is the compositor, and waiting for a window would be waiting for itself.
+
+Tags are bitmasks in gowl (tag 1 is bit 0). A checkpoint stores tag *numbers*; the restore converts.
+
+Layouts are best effort: the compositor reports a monitor's layout *symbol* (=[]==), two layouts can share one, and ~cmacs-journal-restore-layout-names~ maps symbols to the layout to ask for.
+
+Running windows are matched by app id and are moved between tags, not between monitors.
+
+* Other ways in
+
+- *From the journal.* In ~cmacs-journal-at~ output, =R= on a line shows the plan for the last moment that span had the focus. In a ~cmacs-journal-report~ by day, =C-c C-r= on a row shows the plan for the end of that day. Both are ~cmacs-journal-restore-at-point~, and both only show the plan.
+- *By voice.* "put me back where I was an hour ago", "put me back where I was Tuesday 3pm", "restore my desktop from yesterday". The plan buffer comes up first, always; then the question is asked the voice way (say yes or no, or press y/n). Only a yes runs it. With voice confirmations turned off (~cmacs-voice-confirm-destructive~ nil) nothing is run from speech at all: the plan stays up for you to confirm by hand.
+- *Not by agents.* There is deliberately no tool for this. ~cmacs-journal-restore~ and ~cmacs-journal-restore-execute~ signal an error inside a brigade tool call or over MCP, D-Bus, emacsctl and bacon, and a plan built there is empty because the journal returns no events to those callers.
+
+* Commands
+
+| Command                              | Does                                                        |
+|--------------------------------------+-------------------------------------------------------------|
+| ~cmacs-journal-checkpoint-mode~      | Global minor mode: record arrangements. Off by default      |
+| ~cmacs-journal-checkpoint-take~      | Write a checkpoint now                                      |
+| ~cmacs-journal-restore~              | Show the plan for a moment                                  |
+| ~cmacs-journal-restore-at-point~     | Show the plan for the journal line at point                 |
+| ~cmacs-journal-restore-confirm~      | In the plan buffer: do it                                   |
+
+From Lisp: ~(cmacs-journal-restore-parse-time TEXT &optional NOW)~ returns seconds or nil; ~(cmacs-journal-restore-plan TIME)~ returns the plan as a plist (=:time=, =:checkpoint=, =:items=, =:notes=, =:log=) without changing anything; ~(cmacs-journal-restore-execute PLAN)~ carries it out and fills =:log=; ~(cmacs-journal-checkpoint-decode EVENT)~ turns a checkpoint event into its document.
+
+* Options
+
+| Option                                    | Default      | Meaning                                                         |
+|-------------------------------------------+--------------+-----------------------------------------------------------------|
+| ~cmacs-journal-checkpoint-interval~       | 120          | Seconds between looks at the arrangement                        |
+| ~cmacs-journal-checkpoint-max-age~        | 3600         | Write an unchanged arrangement again after this long            |
+| ~cmacs-journal-checkpoint-max-buffers~    | 100          | File buffers listed per checkpoint                              |
+| ~cmacs-journal-checkpoint-line-limit~     | 2000000      | Larger buffers get no line number                               |
+| ~cmacs-journal-checkpoint-command-lines~  | t            | Record command lines from =/proc=                               |
+| ~cmacs-journal-restore-day-parts~         | (see above)  | "morning", "lunch", ... and their clock times                   |
+| ~cmacs-journal-restore-lookback~          | 7 days       | How far before a moment to look for its checkpoint              |
+| ~cmacs-journal-restore-app-timeout~       | 30           | Seconds to wait for a started program's window                  |
+| ~cmacs-journal-restore-poll-interval~     | 0.5          | Seconds between looks for those windows                         |
+| ~cmacs-journal-restore-app-commands~      | nil          | =(APP-ID-REGEXP . COMMAND)=; a nil command means never start it |
+| ~cmacs-journal-restore-layout-names~      | (shipped)    | Layout symbol to layout name                                    |
+
+* Internals
+
+** Why a journal event
+
+A checkpoint could have been a sibling file. It is a journal event because ~cmacs-journal-forget~, retention, the file modes, the atomic rewrite, the agent gate and the LQL source all operate on the day files. A second file would need a second copy of each, and the copy that lags is the one that keeps what you asked to have deleted.
+
+** The three rules, here
+
+- *Nothing runs on a hook.* A checkpoint is taken from a timer, which may read =/proc= and count lines (never in a buffer over ~cmacs-journal-checkpoint-line-limit~). The gowl DEFUNs it calls are the list and info ones (~gowl-list-clients~, ~gowl-client-info~, ~gowl-client-pid~, ~gowl-list-monitors~, ~gowl-monitor-info~, ~gowl-focused-client~), which take the gowl lock themselves and return. The timer function is wrapped in ~condition-case~ and never signals.
+- *Filters before the queue.* Entries are filtered one at a time before the document exists, and the document once more before it is queued.
+- *Fail closed.* No usable rule set, no checkpoint.
+
+A restore's own compositor calls -- ~gowl-spawn~, ~gowl-pretag-pid~, ~gowl-set-tags~, ~gowl-view-tags~, ~gowl-set-layout~, ~gowl-focus-client~, ~gowl-set-client-floating~, ~gowl-client-set-geometry~ -- are made from a command or from the poll timer, on the main thread, each inside its own ~condition-case~.
+
+** Files
+
+| File                                          | What                                                        |
+|-----------------------------------------------+-------------------------------------------------------------|
+| =lisp/cmacs/cmacs-journal-checkpoint.el=      | Snapshots, per-entry filtering, the document, the timer     |
+| =lisp/cmacs/cmacs-journal-restore.el=         | The time parser, plans, the plan buffer, execution, voice   |
+| =lisp/cmacs/cmacs-journal-report.el=          | The "restore to here" keys in the journal's own buffers     |
+| =test/cmacs/cmacs-journal-restore-tests.el=   | ERT; the compositor and the browser are stubs               |

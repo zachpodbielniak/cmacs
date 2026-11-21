@@ -1,0 +1,460 @@
+@c journal-restore.texi --- the CMacs Journal Restore chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+
+@node CMacs Journal Restore
+@chapter CMacs Journal Restore: Put Me Back Where I Was
+
+@cindex journal restore
+@cindex checkpoints
+@cindex restoring a working context
+@cindex put me back where I was
+
+@code{cmacs-journal-restore} rebuilds the working context of a past
+moment from the activity journal (@pxref{CMacs Journal}).  You name the
+moment---``an hour ago'', ``Tuesday 3pm'', ``before lunch'', or a line
+picked in the journal---and it shows a @dfn{plan}: the files, pages,
+applications and layout of that moment.  Nothing changes until you
+confirm the plan.
+
+@lisp
+(cmacs-journal-mode 1)             ; the journal: what had the focus
+(cmacs-journal-checkpoint-mode 1)  ; checkpoints: what was open, where
+@end lisp
+
+Then @kbd{M-x cmacs-journal-restore @key{RET} an hour ago @key{RET}}.
+
+Four things about it, stated plainly:
+
+@itemize @bullet
+@item
+@strong{Applications are started again, not resumed.}  A restore can
+start a program on the tag it was on and put its window back.  What was
+open inside the program---documents, tabs, scroll positions, unsaved
+work---is that program's business and is not restored.  A page is
+loaded again, not resumed.  The plan says this on every item it applies
+to.
+@item
+@strong{Nothing happens before you confirm.}  Building and showing a
+plan reads the journal and looks at what is running.  It visits no
+file, starts no program and moves no window.
+@item
+@strong{It is human-only.}  A restore launches programs, so there is no
+brigade tool, no MCP tool and no D-Bus method for it, and the command
+refuses to run for an agent or a remote caller.
+@item
+@strong{It can only put back what the journal was allowed to keep.}
+Checkpoints go through the same privacy filters as everything else in
+the journal.  A window a rule excludes is not in any checkpoint, so it
+is not in any plan.
+@end itemize
+
+It is part of the journal: built with @option{--with-cmacs-journal},
+pure Elisp.  Placing and starting windows needs gowl; files, pages and
+the Emacs window layout work on any cmacs.
+
+@menu
+* Journal Checkpoints::       What was open, and where.
+* Journal Restore Times::     Naming the moment.
+* Journal Restore Plan::      What would be done, before it is.
+* Journal Restore Execution:: What a restore does.
+* Journal Restore Doors::     From the journal, by voice, not by agents.
+* Journal Restore Options::   Commands and options.
+* Journal Restore Internals:: Why it is built this way.
+@end menu
+
+@node Journal Checkpoints
+@section Checkpoints
+
+The journal's spans say what had the @emph{focus}.  They do not say
+what else was open or how it was laid out.  A @dfn{checkpoint} is that
+missing half: a journal event of kind @code{checkpoint}, written from a
+timer, whose @code{detail} field is a JSON document.
+
+@multitable @columnfractions .2 .8
+@headitem Member @tab What it holds
+@item @code{frames} @tab Per Emacs frame, the window tree as data: splits, their proportions, and each window's buffer, file, mode and line
+@item @code{buffers} @tab The open file-visiting buffers, shown or not (at most @code{cmacs-journal-checkpoint-max-buffers})
+@item @code{urls} @tab The pages open in gsurf buffers
+@item @code{clients} @tab gowl's windows: app id, title, tags, monitor, floating and geometry, pid, command line
+@item @code{monitors} @tab Per output: the tags in view, the layout symbol, which one was focused
+@end multitable
+
+The window tree is plain data---never a window-configuration
+object---so it survives a restart and can be read with @command{jq}.
+
+@subheading When one is written
+
+@code{cmacs-journal-checkpoint-mode} starts a timer and nothing else.
+Every @code{cmacs-journal-checkpoint-interval} seconds it looks at the
+arrangement, and writes a checkpoint only when all of these hold:
+
+@itemize @bullet
+@item
+the journal is recording (@code{cmacs-journal-mode} on, not paused,
+session not locked, filters usable);
+@item
+the arrangement differs from the last one written, or the last one is
+older than @code{cmacs-journal-checkpoint-max-age};
+@item
+something is left after filtering.
+@end itemize
+
+Point moving and a window retitling itself are not changes: they are in
+a checkpoint but do not cause one.  Otherwise a terminal that puts the
+running command in its title would produce a checkpoint every interval.
+
+@kbd{M-x cmacs-journal-checkpoint-take} writes one now.
+
+@subheading Filters
+
+A checkpoint is many events' worth of names, so @strong{every entry is
+filtered on its own}.  Each buffer, page, window and monitor is turned
+into the event the journal would have recorded for it, handed to the
+filter engine, and the entry is built from what comes back:
+
+@itemize @bullet
+@item
+An @code{exclude} rule removes the entry.  An excluded window is not
+blanked in the tree, it is @emph{absent}: its sibling takes its place,
+and nothing counts it or records that a rule matched.
+@item
+@code{drop}, @code{replace} and @code{hash} do to the entry's fields
+what they do to a span's.  A hashed file name is in the checkpoint as
+its hash, and a restore lists it as withheld.
+@item
+A window's command line is filtered as the entry's @code{detail} field.
+Separately, a command line naming a URL that a @code{url} rule would not
+record (@samp{firefox https://bank.example/}) is withheld whole, since
+no @code{url} rule would otherwise look there.
+@item
+The finished event goes through the filters once more as a whole, so a
+rule on @samp{kind: checkpoint} turns checkpoints off.
+@end itemize
+
+It @strong{fails closed} exactly as the journal does: with an unusable
+rule set the journal is not recording, so no checkpoint is taken, and
+the filter engine refuses every entry in that state anyway.
+
+@subheading Storage, retention, forgetting, LQL
+
+Checkpoints live in the journal's own day files, written through the
+journal's own queue, so everything the journal does to an event it does
+to a checkpoint:
+
+@itemize @bullet
+@item
+same directory and modes (0700 / 0600);
+@item
+@code{cmacs-journal-retention-days} prunes them with their day;
+@item
+@code{cmacs-journal-forget} deletes them: by time range like any event,
+and by regexp when the regexp matches anything in the document (a
+buffer name, a title, a command);
+@item
+the LQL @code{activity} source has them as rows whose @code{kind} is
+@code{checkpoint}, with the focused monitor in @code{monitor}, its tags
+in @code{tags} and the document in @code{detail}, under the same agent
+gate.  A query over attention that should not see them filters on
+@code{kind}.
+@end itemize
+
+Reports ignore them: they have no duration, and @code{checkpoint} is
+not in @code{cmacs-journal-report-kinds}.
+
+@subheading The command line
+
+On Linux the command line comes from @file{/proc/@var{pid}/cmdline},
+read once per process, shell-quoted so @code{gowl-spawn} reads back the
+same argument list.  A Flatpak's process sees its own @file{/app}, which
+is no command on the host, so for those the recorded command is
+@samp{flatpak run @var{app-id}} when the app id looks like one.
+@code{cmacs-journal-restore-app-commands} overrides what was recorded,
+per app id.  Set @code{cmacs-journal-checkpoint-command-lines} to
+@code{nil} to record none; a restore can then only move windows that
+are already running.
+
+@node Journal Restore Times
+@section Naming the Moment
+
+@code{cmacs-journal-restore-parse-time} reads a phrase.  Every
+ambiguity resolves to the @strong{most recent past moment}.
+
+@multitable @columnfractions .45 .55
+@headitem Phrase @tab Means
+@item @samp{now} @tab Now
+@item @samp{10 minutes ago}, @samp{an hour ago}, @samp{half an hour ago} @tab That long ago
+@item @samp{an hour and a half ago}, @samp{a couple of hours ago} @tab 90 minutes, two hours
+@item @samp{2 days ago}, @samp{2 days ago at 3pm} @tab The same clock time two days ago; or that day at 15:00
+@item @samp{3pm}, @samp{3:30pm}, @samp{15:00} @tab Today's if it has passed, otherwise yesterday's
+@item @samp{3}, @samp{9:15} @tab No am/pm: whichever of the two happened last
+@item @samp{noon}, @samp{this morning}, @samp{before lunch}, @samp{last night} @tab A named part of the day (@code{cmacs-journal-restore-day-parts})
+@item @samp{today}, @samp{yesterday}, @samp{the day before yesterday} @tab A day with no time: how that day ended
+@item @samp{Tuesday}, @samp{Tuesday 3pm}, @samp{3pm on Tuesday} @tab The most recent Tuesday
+@item @samp{last Friday 9am} @tab A Friday before today
+@item @samp{2026-11-18}, @samp{2026-11-18 15:00}, with @samp{Z} or an offset @tab ISO 8601; a date alone is the end of that day
+@item @samp{18 nov 15:00} @tab Whatever @code{parse-time-string} reads as a date
+@end multitable
+
+The rules behind the table:
+
+@itemize @bullet
+@item
+A time with no day is today's if it has happened, and yesterday's if
+not.
+@item
+A weekday is the most recent one.  Today counts when the time named has
+passed; a weekday @emph{alone}, on that weekday, is last week's.
+@item
+A day with no time is the last second of that day (capped at now), so
+``yesterday'' restores the last arrangement of yesterday.
+@item
+``before lunch'' is the moment lunch started.  A restore takes the
+arrangement recorded at or before its moment, so that is what was open
+going into lunch.
+@item
+A moment still in the future is not a moment to restore: the parser
+returns @code{nil} and the command says so.
+@item
+Number words work (@samp{three thirty p.m.}), for speech.
+@end itemize
+
+@node Journal Restore Plan
+@section The Plan
+
+@kbd{M-x cmacs-journal-restore} asks for the moment and shows the plan
+in @file{*cmacs-journal-restore*}.  The plan is built from the
+@strong{nearest checkpoint at or before the moment} (looking back up to
+@code{cmacs-journal-restore-lookback}) plus the focus spans recorded
+between that checkpoint and the moment---things opened after the
+arrangement was last written down.  The header says when the checkpoint
+is from.
+
+@multitable @columnfractions .3 .7
+@headitem Section @tab Items
+@item Emacs buffers and files @tab Each file to visit.  Remote files are listed but off
+@item Pages @tab Each URL to open again
+@item Applications @tab Per window: already in place, move to its tag, or start it on its tag
+@item Layout and focus @tab The Emacs window tree; per monitor the tags to view and the layout; what to focus
+@item Cannot be restored @tab Everything that will not be put back, each with its reason
+@end multitable
+
+@table @kbd
+@item @key{RET}
+@itemx @key{SPC}
+@itemx t
+Tick or untick the item at point.
+@item a
+@itemx u
+Tick, or untick, every item in the section at point.
+@item @key{TAB}
+Fold or unfold the section.
+@item c
+@itemx C-c C-c
+Restore what is ticked (asks once).
+@item g
+Build the plan again.
+@item T
+Another moment.
+@item q
+Leave; nothing was changed.
+@end table
+
+@subheading What cannot be restored, and why
+
+The last section is not a footnote; it is half of what the plan is for.
+
+@multitable @columnfractions .35 .65
+@headitem Listed as @tab Reason
+@item A file @tab It no longer exists
+@item ``a file'', ``a page'', ``a window'' @tab Its name was withheld by a journal filter (hashed or dropped)
+@item A buffer @tab It visited no file and is gone (@file{*compilation*}, a REPL)
+@item An application @tab It is not running and no command line was recorded
+@item An application @tab It was embedded in an Emacs window, or on no tag (a scratchpad)
+@item An application @tab gowl is not running here
+@item Other Emacs frames @tab Frames are not recreated; their files are still reopened
+@item A monitor @tab It is not connected now
+@item A layout @tab Its symbol has no name in @code{cmacs-journal-restore-layout-names}
+@item Windows, without a checkpoint @tab The journal has a title, not a command or a place
+@end multitable
+
+Remote files are a special case: they are in the files section,
+@emph{unticked}, and are not touched unless you tick them.  Building
+the plan never asks Tramp anything.
+
+Without any checkpoint (the mode was off) the plan is built from focus
+spans alone: files and pages that had the focus near the moment, and a
+note saying to turn on @code{cmacs-journal-checkpoint-mode}.
+
+@node Journal Restore Execution
+@section What a Restore Does
+
+In this order; a step that fails is written to the plan's log and the
+rest go on.
+
+@enumerate
+@item
+@strong{Files.}  Each ticked file is visited.  A file this restore
+opened is moved to its recorded line; one that was already open is left
+where you have it.  A file that vanished since the plan was drawn is
+skipped.
+@item
+@strong{Pages.}  Opened in gsurf buffers when gsurf is built
+(@code{IS-CMACS-GSURF}), otherwise handed to @code{browse-url}.  A page
+recorded in a gsurf container opens in the default container, and the
+plan says so.
+@item
+@strong{The Emacs window tree.}  The selected frame's windows are
+replaced by the recorded tree, split in the recorded proportions, each
+window at its line.  If the frame is too small for all of it, what fits
+is built and the log says so.
+@item
+@strong{Applications.}  A running window that matches a recorded one
+(same app id, the same title preferred, each window claimed once) is
+moved to its recorded tags.  One that is not running is started with
+@code{gowl-spawn} and registered with @code{gowl-pretag-pid}, so its
+window maps directly on its tag and monitor instead of flashing on the
+one in view.  A window that floated floats again at its recorded
+geometry.
+@item
+@strong{Views.}  Each monitor views its recorded tags and gets its
+recorded layout, the focused monitor last.
+@item
+@strong{Focus.}  The window or buffer that had the focus at the
+moment---from the span around it, else from the checkpoint---is
+focused.
+@end enumerate
+
+@strong{Nothing waits.}  A started program's window is looked for from
+a timer every @code{cmacs-journal-restore-poll-interval} seconds; when
+it appears it is placed (and focused, if it was the focused one), and
+after @code{cmacs-journal-restore-app-timeout} seconds without one the
+log says it did not appear.  Under @command{emacs --gowl} Emacs is the
+compositor, and waiting for a window would be waiting for itself.
+
+Tags are bitmasks in gowl (tag 1 is bit 0).  A checkpoint stores tag
+@emph{numbers}; the restore converts.
+
+Layouts are best effort: the compositor reports a monitor's layout
+@emph{symbol} (@samp{[]=}), two layouts can share one, and
+@code{cmacs-journal-restore-layout-names} maps symbols to the layout to
+ask for.
+
+Running windows are matched by app id and are moved between tags, not
+between monitors.
+
+@node Journal Restore Doors
+@section Other Ways In
+
+@itemize @bullet
+@item
+@strong{From the journal.}  In @code{cmacs-journal-at} output, @kbd{R}
+on a line shows the plan for the last moment that span had the focus.
+In a @code{cmacs-journal-report} by day, @kbd{C-c C-r} on a row shows
+the plan for the end of that day.  Both are
+@code{cmacs-journal-restore-at-point}, and both only show the plan.
+@item
+@strong{By voice.}  ``put me back where I was an hour ago'', ``put me
+back where I was Tuesday 3pm'', ``restore my desktop from yesterday''.
+The plan buffer comes up first, always; then the question is asked the
+voice way (say yes or no, or press @kbd{y}/@kbd{n}).  Only a yes runs
+it.  With voice confirmations turned off
+(@code{cmacs-voice-confirm-destructive} @code{nil}) nothing is run from
+speech at all: the plan stays up for you to confirm by hand.
+@item
+@strong{Not by agents.}  There is deliberately no tool for this.
+@code{cmacs-journal-restore} and @code{cmacs-journal-restore-execute}
+signal an error inside a brigade tool call or over MCP, D-Bus, emacsctl
+and bacon, and a plan built there is empty because the journal returns
+no events to those callers.
+@end itemize
+
+@node Journal Restore Options
+@section Commands and Options
+
+@table @code
+@item cmacs-journal-checkpoint-mode
+Global minor mode: record arrangements.  Off by default.
+@item cmacs-journal-checkpoint-take
+Write a checkpoint now.
+@item cmacs-journal-restore
+Show the plan for a moment.
+@item cmacs-journal-restore-at-point
+Show the plan for the journal line at point.
+@item cmacs-journal-restore-confirm
+In the plan buffer: do it.
+@end table
+
+From Lisp: @code{(cmacs-journal-restore-parse-time @var{text} &optional
+@var{now})} returns seconds or @code{nil};
+@code{(cmacs-journal-restore-plan @var{time})} returns the plan as a
+plist (@code{:time}, @code{:checkpoint}, @code{:items}, @code{:notes},
+@code{:log}) without changing anything;
+@code{(cmacs-journal-restore-execute @var{plan})} carries it out and
+fills @code{:log}; @code{(cmacs-journal-checkpoint-decode @var{event})}
+turns a checkpoint event into its document.
+
+@multitable @columnfractions .45 .15 .4
+@headitem Option @tab Default @tab Meaning
+@item @code{cmacs-journal-checkpoint-interval} @tab 120 @tab Seconds between looks at the arrangement
+@item @code{cmacs-journal-checkpoint-max-age} @tab 3600 @tab Write an unchanged arrangement again after this long
+@item @code{cmacs-journal-checkpoint-max-buffers} @tab 100 @tab File buffers listed per checkpoint
+@item @code{cmacs-journal-checkpoint-line-limit} @tab 2000000 @tab Larger buffers get no line number
+@item @code{cmacs-journal-checkpoint-command-lines} @tab @code{t} @tab Record command lines from @file{/proc}
+@item @code{cmacs-journal-restore-day-parts} @tab (see above) @tab ``morning'', ``lunch'', @dots{} and their clock times
+@item @code{cmacs-journal-restore-lookback} @tab 7 days @tab How far before a moment to look for its checkpoint
+@item @code{cmacs-journal-restore-app-timeout} @tab 30 @tab Seconds to wait for a started program's window
+@item @code{cmacs-journal-restore-poll-interval} @tab 0.5 @tab Seconds between looks for those windows
+@item @code{cmacs-journal-restore-app-commands} @tab @code{nil} @tab @code{(@var{app-id-regexp} . @var{command})}; a @code{nil} command means never start it
+@item @code{cmacs-journal-restore-layout-names} @tab (shipped) @tab Layout symbol to layout name
+@end multitable
+
+@node Journal Restore Internals
+@section Internals
+
+@subheading Why a journal event
+
+A checkpoint could have been a sibling file.  It is a journal event
+because @code{cmacs-journal-forget}, retention, the file modes, the
+atomic rewrite, the agent gate and the LQL source all operate on the
+day files.  A second file would need a second copy of each, and the
+copy that lags is the one that keeps what you asked to have deleted.
+
+@subheading The three rules, here
+
+@itemize @bullet
+@item
+@strong{Nothing runs on a hook.}  A checkpoint is taken from a timer,
+which may read @file{/proc} and count lines (never in a buffer over
+@code{cmacs-journal-checkpoint-line-limit}).  The gowl DEFUNs it calls
+are the list and info ones (@code{gowl-list-clients},
+@code{gowl-client-info}, @code{gowl-client-pid},
+@code{gowl-list-monitors}, @code{gowl-monitor-info},
+@code{gowl-focused-client}), which take the gowl lock themselves and
+return.  The timer function is wrapped in @code{condition-case} and
+never signals.
+@item
+@strong{Filters before the queue.}  Entries are filtered one at a time
+before the document exists, and the document once more before it is
+queued.
+@item
+@strong{Fail closed.}  No usable rule set, no checkpoint.
+@end itemize
+
+A restore's own compositor calls---@code{gowl-spawn},
+@code{gowl-pretag-pid}, @code{gowl-set-tags}, @code{gowl-view-tags},
+@code{gowl-set-layout}, @code{gowl-focus-client},
+@code{gowl-set-client-floating},
+@code{gowl-client-set-geometry}---are made from a command or from the
+poll timer, on the main thread, each inside its own
+@code{condition-case}.
+
+@subheading Files
+
+@multitable @columnfractions .5 .5
+@headitem File @tab What
+@item @file{lisp/cmacs/cmacs-journal-checkpoint.el} @tab Snapshots, per-entry filtering, the document, the timer
+@item @file{lisp/cmacs/cmacs-journal-restore.el} @tab The time parser, plans, the plan buffer, execution, voice
+@item @file{lisp/cmacs/cmacs-journal-report.el} @tab The ``restore to here'' keys in the journal's own buffers
+@item @file{test/cmacs/cmacs-journal-restore-tests.el} @tab ERT; the compositor and the browser are stubs
+@end multitable

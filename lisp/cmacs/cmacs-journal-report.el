@@ -34,6 +34,16 @@
 (declare-function org-end-of-meta-data "org" (&optional full))
 (declare-function org-table-align "org-table" ())
 (declare-function org-mode "org" ())
+(declare-function cmacs-journal-restore-at-point "cmacs-journal-restore" ())
+
+(defvar cmacs-journal-moment-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "R" #'cmacs-journal-restore-at-point)
+    map)
+  "Keymap on a journal line that stands for a moment.
+\\`R' there shows the plan for restoring that moment
+\(`cmacs-journal-restore-at-point'); nothing is changed until the plan
+is confirmed.")
 
 (defcustom cmacs-journal-at-window 600
   "Seconds either side of a moment `cmacs-journal-at' also shows."
@@ -180,6 +190,13 @@ YYYY-MM-DD date; BY is `project', `app', `day' or `kind'."
                         (format-time-string "%Y-%m-%d %H:%M" (car range))
                         (format-time-string "%Y-%m-%d %H:%M" (cdr range))))
         (cmacs-journal--insert-table range by))
+      ;; "Restore to here": on a row of a report by day, the plan for
+      ;; the end of that day.  A map of this buffer's own, so Org's is
+      ;; left as it was.
+      (let ((map (make-sparse-keymap)))
+        (set-keymap-parent map (current-local-map))
+        (define-key map (kbd "C-c C-r") #'cmacs-journal-restore-at-point)
+        (use-local-map map))
       (goto-char (point-min))
       (set-buffer-modified-p nil))
     (pop-to-buffer buffer)))
@@ -244,11 +261,22 @@ TIME is in seconds; interactively, a date and time read the Org way."
       (if (null events)
           (princ "Nothing recorded: the journal was off, paused, locked, or a filter excluded it.\n")
         (dolist (event events)
-          (princ (if (and (<= (plist-get event :time) time)
-                          (>= (or (plist-get event :end) 0) time))
-                     "> " "  "))
-          (princ (cmacs-journal--describe event))
-          (princ "\n"))))
+          (let ((start (with-current-buffer standard-output (point))))
+            (princ (if (and (<= (plist-get event :time) time)
+                            (>= (or (plist-get event :end) 0) time))
+                       "> " "  "))
+            (princ (cmacs-journal--describe event))
+            (princ "\n")
+            ;; Each line is a moment `R' can restore to: the last one
+            ;; at which this span had the focus.
+            (with-current-buffer standard-output
+              (let ((inhibit-read-only t))
+                (add-text-properties
+                 start (point)
+                 (list 'cmacs-journal-time (or (plist-get event :end)
+                                               (plist-get event :time))
+                       'keymap cmacs-journal-moment-map))))))
+        (princ "\nR on a line shows the plan for restoring that moment.\n")))
     events))
 
 ;;;###autoload
