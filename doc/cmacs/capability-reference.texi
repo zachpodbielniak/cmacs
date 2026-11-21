@@ -2,7 +2,7 @@
 @c   admin/cmacs-capability-audit.sh --write-docs
 @c test/cmacs/cmacs-capability-tests.el fails when this is stale.
 
-63 tools.  Each is reachable by its wire name over MCP and
+284 tools.  Each is reachable by its wire name over MCP and
 @code{org.cmacs.Editor1.Tools.Call}, and by the CLI words shown, on the
 surfaces listed.
 
@@ -105,6 +105,751 @@ Check on a subagent you spawned. States are draft, queued, starting, running, wa
 @multitable @columnfractions .2 .12 .1 .58
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{id} @tab string @tab yes @tab Task id returned by agent_spawn
+@end multitable
+
+@end table
+
+@subheading ai
+
+@table @code
+@item ai_call
+Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but with 'tools':true the model is given the built-in agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a multi-turn tool loop on a worker thread. Optional 'provider' / 'system' / 'model' behave as for ai_prompt.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai call}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 1800s)
+@item Example: @code{emacsctl tool ai call --prompt 'What is in ./README.org?' --tools}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{prompt} @tab string @tab yes @tab User prompt
+@item @code{provider} @tab string @tab no @tab Provider name
+@item @code{system} @tab string @tab no @tab System prompt
+@item @code{model} @tab string @tab no @tab Model name
+@item @code{tools} @tab boolean @tab no @tab Give the model the built-in agent tools
+@end multitable
+
+@item ai_embed_similarity
+Cosine similarity of two texts' embeddings, in [-1, 1]: 1 is the same direction, 0 unrelated, -1 opposite. Use it to judge whether two passages mean the same thing -- near-duplicate detection, or checking an answer against a source. Needs a local embedding provider (ollama). Optional 'model' overrides the default embedding model. To SEARCH the notes corpus use memory_search instead; this compares two specific strings.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai embed-similarity}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 120s)
+@item Example: @code{emacsctl tool ai embed-similarity --a 'a cat' --b 'a kitten'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{a} @tab string @tab yes @tab First text
+@item @code{b} @tab string @tab yes @tab Second text
+@item @code{model} @tab string @tab no @tab Embedding model
+@end multitable
+
+@item ai_list_providers
+Return the list of supported cmacs-ai provider symbols.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai list-providers}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Example: @code{emacsctl tool ai list-providers}
+@end itemize
+
+Takes no arguments.
+
+@item ai_lql
+Run an LQL query on the libresearch server and return its rows (at most 100 shown). LQL pipes search results: search "glib", category: CODE | filter extra.stars > 100 | fields title, url -- or the shorthand gtk docs | filter site("docs.gtk.org"). 'explain' returns the plan without running it. An invalid query reports the server's position and caret excerpt.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai lql}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 120s)
+@item Example: @code{emacsctl tool ai lql --query 'gtk docs | filter site("docs.gtk.org")'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{query} @tab string @tab yes @tab LQL query
+@item @code{explain} @tab boolean @tab no @tab Plan without running
+@end multitable
+
+@item ai_open_chat
+Open a cmacs-ai chat buffer. If PROMPT is given, the prompt is sent as the first user turn and streamed. Optional 'model' overrides the provider's default model. Returns the buffer name.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai open-chat}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Example: @code{emacsctl tool ai open-chat --provider claude}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{prompt} @tab string @tab no @tab Optional initial prompt
+@item @code{provider} @tab string @tab no @tab Provider name
+@item @code{model} @tab string @tab no @tab Model name
+@end multitable
+
+@item ai_prompt
+Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'provider' (claude / openai / gemini / grok / ollama / claude-code / opencode / claude-tmux / grok-build / antigravity / cursor) overrides the default; optional 'system' is a system prompt; optional 'model' overrides the provider's default model.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai prompt}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 600s)
+@item Example: @code{emacsctl tool ai prompt --prompt 'Name three GLib main-loop sources'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{prompt} @tab string @tab yes @tab User prompt
+@item @code{provider} @tab string @tab no @tab Provider name
+@item @code{system} @tab string @tab no @tab System prompt
+@item @code{model} @tab string @tab no @tab Model name
+@end multitable
+
+@item ai_research
+Research a question on the web with libresearch and return a cited answer: the answer with numbered citations [n], then the sources (title, URL). Needs a libresearch server (cmacs-ai-libresearch-url). 'deep' lets the server run follow-up searches; 'pages' (1-20) is how many pages it reads. A run takes minutes.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai research}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 960s)
+@item Example: @code{emacsctl tool ai research --question 'What changed in wlroots 0.20?'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{question} @tab string @tab yes @tab The question
+@item @code{deep} @tab boolean @tab no @tab Run follow-up searches
+@item @code{pages} @tab integer @tab no @tab Pages to read, 1-20
+@end multitable
+
+@item ai_web_fetch
+Read a web page's text through libresearch (the server applies its own SSRF guard). 'archive' is never (default), fallback (use the Wayback Machine when the live page fails) or only; 'max_chars' (100-1000000) caps the text. Returns title, URL, the archived copy if one stood in, then the text.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai web-fetch}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Flags: async (timeout 120s)
+@item Example: @code{emacsctl tool ai web-fetch --url https://docs.gtk.org/glib/}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{url} @tab string @tab yes @tab Page URL
+@item @code{archive} @tab string @tab no @tab Wayback Machine policy One of: never, fallback, only.
+@item @code{max_chars} @tab integer @tab no @tab Longest text
+@end multitable
+
+@item generate_image
+Generate an image from a text prompt and insert it into a cmacs buffer. In an Org buffer the image is attached to the current node and previewed inline; elsewhere it is saved under cmacs-ai-image-dir. Optional 'references' is a comma-separated list of input images to condition on, each PATH or PATH::ROLE (e.g. "logo.png::style,cat.jpg::subject") -- roles tell the model what each reference is for. Optional 'provider' (gemini / openai / grok), 'model', 'aspect' (e.g. 16:9), 'size' (e.g. 1024x1024) and 'quality'. Optional 'buffer' names the target buffer; the current one is used otherwise. Generation takes tens of seconds.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool ai generate-image}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 300s)
+@item Example: @code{emacsctl tool ai generate-image --prompt 'a brass orrery' --aspect 16:9}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{prompt} @tab string @tab yes @tab What to depict
+@item @code{references} @tab string @tab no @tab Comma-separated PATH or PATH::ROLE reference images
+@item @code{provider} @tab string @tab no @tab gemini/openai/grok
+@item @code{model} @tab string @tab no @tab Model id
+@item @code{aspect} @tab string @tab no @tab Aspect ratio
+@item @code{size} @tab string @tab no @tab Pixel size
+@item @code{quality} @tab string @tab no @tab Quality level
+@item @code{buffer} @tab string @tab no @tab Target buffer name
+@end multitable
+
+@end table
+
+@subheading audio
+
+@table @code
+@item list_voices
+List Piper voice .onnx files in cmacs-piper-voices-directory.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio voices}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool audio voices}
+@end itemize
+
+Takes no arguments.
+
+@item list_whisper_models
+List whisper.cpp models available in cmacs-whisper-models-directory.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio whisper-models}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool audio whisper-models}
+@end itemize
+
+Takes no arguments.
+
+@item record_audio
+Capture microphone audio for SECONDS into OUTPUT_PATH (WAV). Returns the output path on success.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio record}
+@item Surfaces: mcp, dbus, cli
+@item Returns: string
+@item Example: @code{emacsctl tool audio record --seconds 5}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{seconds} @tab number @tab yes @tab Duration in seconds
+@item @code{output_path} @tab string @tab no @tab Optional WAV path
+@end multitable
+
+@item speech_components
+Which engine and model serve each speech component and feature, and why (tab-separated: component[/feature], backend, model, source).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio components}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool audio components}
+@end itemize
+
+Takes no arguments.
+
+@item speech_diarize
+Who spoke when in an audio or video file: a speaker-labelled transcript.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio diarize}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 1200s)
+@item Example: @code{emacsctl tool audio diarize --audio-path ~/meeting.m4a}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{audio_path} @tab string @tab yes @tab Audio or video file
+@end multitable
+
+@item speech_identify_speaker
+Which enrolled speaker an audio file sounds like, best matches first.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio identify-speaker}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 600s)
+@item Example: @code{emacsctl tool audio identify-speaker --audio-path ~/clip.wav}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{audio_path} @tab string @tab yes @tab Audio or video file
+@end multitable
+
+@item speech_models
+Installed and downloadable speech models (tab-separated: state, backend, id, components, description). Downloads are started by the user in M-x cmacs-speech.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio models}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool audio models --component tts}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{component} @tab string @tab no @tab Only models serving this component
+@end multitable
+
+@item speech_set
+Choose the engine (and model) for a speech component, for this session only -- the user's saved choices are never changed.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio set}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool audio set --component tts --backend piper}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{component} @tab string @tab yes @tab stt, stt-live, stt-stream, wake, vad, tts, diarize, speaker-id, punctuate, lang-id, audio-tag, denoise, separate
+@item @code{backend} @tab string @tab yes @tab whisper, sherpa, piper, or auto
+@item @code{model} @tab string @tab no @tab Installed model id
+@item @code{feature} @tab string @tab no @tab Limit to one feature (dictate, voice-loop, ...)
+@end multitable
+
+@item speech_tag_audio
+What sounds are in an audio file (speech, music, laughter, ...), with probabilities.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio tag}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 600s)
+@item Example: @code{emacsctl tool audio tag --audio-path ~/clip.wav}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{audio_path} @tab string @tab yes @tab Audio or video file
+@end multitable
+
+@item synthesize_speech
+Speak TEXT with the configured voice, or write it to OUTPUT_PATH as a WAV file. VOICE picks an installed voice (see speech_models).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio synthesize}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 300s)
+@item Example: @code{emacsctl tool audio synthesize --text 'Build finished'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{text} @tab string @tab yes @tab Text to speak
+@item @code{output_path} @tab string @tab no @tab Optional WAV path
+@item @code{voice} @tab string @tab no @tab Installed voice id
+@item @code{backend} @tab string @tab no @tab sherpa or piper
+@end multitable
+
+@item transcribe
+Transcribe an audio or video file with the engine M-x cmacs-speech chose (whisper.cpp or sherpa-onnx). Returns the transcript; with diarize, a speaker-labelled one.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool audio transcribe}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 1200s)
+@item Example: @code{emacsctl tool audio transcribe --audio-path ~/meeting.m4a}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{audio_path} @tab string @tab yes @tab Audio or video file (any format ffmpeg reads)
+@item @code{language} @tab string @tab no @tab ISO 2-letter code hint
+@item @code{backend} @tab string @tab no @tab whisper or sherpa (default: as configured)
+@item @code{model} @tab string @tab no @tab Installed model id (see speech_models)
+@item @code{diarize} @tab boolean @tab no @tab Label who spoke when
+@end multitable
+
+@end table
+
+@subheading buffer
+
+@table @code
+@item create_buffer
+Create a new buffer with an optional initial content.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer create-buffer}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab Buffer name
+@item @code{content} @tab string @tab no @tab Initial content
+@end multitable
+
+@item find_file
+Open a file in Emacs (equivalent to C-x C-f / find-file).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer find-file}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab File path to open
+@end multitable
+
+@item get_buffer_content
+Read the text content of a buffer. Optionally specify start/end positions.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer get-buffer-content}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool buffer get-buffer-content --buffer '*scratch*'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{start} @tab integer @tab no @tab Start position (1-based)
+@item @code{end} @tab integer @tab no @tab End position (1-based)
+@end multitable
+
+@item kill_buffer
+Kill (close) a buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer kill-buffer}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@end multitable
+
+@item list_buffers
+List all buffers with name, file, modified status, major-mode, and size. Returns pipe-separated fields, one buffer per line.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer list-buffers}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool buffer list-buffers}
+@end itemize
+
+Takes no arguments.
+
+@item save_buffer
+Save a buffer to its associated file.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer save-buffer}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@end multitable
+
+@item set_buffer_content
+Replace text in a buffer. If start/end given, replaces that range; otherwise replaces entire buffer content.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer set-buffer-content}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{content} @tab string @tab yes @tab New text content
+@item @code{start} @tab integer @tab no @tab Start position (1-based)
+@item @code{end} @tab integer @tab no @tab End position (1-based)
+@end multitable
+
+@item switch_to_buffer
+Switch the current window to display a buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool buffer switch-to-buffer}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@end multitable
+
+@end table
+
+@subheading cad
+
+@table @code
+@item cad_assembly_bom
+Assembly NAME's bill of materials (part, quantity, volume, mass).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad assembly-bom}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad assembly-bom --path ~/cad/arm.cad --name arm}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{name} @tab string @tab yes @tab Assembly name
+@end multitable
+
+@item cad_assembly_info
+Assembly NAME's solved state, DOF, and per-instance transforms.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad assembly-info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad assembly-info --path ~/cad/arm.cad --name arm}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{name} @tab string @tab yes @tab Assembly name
+@end multitable
+
+@item cad_assembly_interference
+Interferences (overlapping instance pairs + volume) in assembly NAME.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad assembly-interference}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad assembly-interference --path ~/cad/arm.cad --name arm}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{name} @tab string @tab yes @tab Assembly name
+@end multitable
+
+@item cad_assembly_set_joint
+Drive JOINT (id) of assembly NAME to VALUE and re-solve (no source re-eval); report the new instance transforms.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad assembly-set-joint}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad assembly-set-joint --path ~/cad/arm.cad --name arm --joint 0 --value 45}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{name} @tab string @tab yes @tab Assembly name
+@item @code{joint} @tab integer @tab yes @tab Joint id
+@item @code{value} @tab number @tab yes @tab Value to drive the joint to
+@end multitable
+
+@item cad_eval
+Re-evaluate a part; report ok+parts/error.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad eval}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad eval --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_export
+Export the part to OUT in FORMAT (stl/stl-ascii/obj/step/iges).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad export}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{out} @tab string @tab yes @tab Destination file
+@item @code{format} @tab string @tab no @tab stl (the default), stl-ascii, obj, step or iges
+@end multitable
+
+@item cad_feature_tree
+The part's feature (CSG) tree as indented text.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad feature-tree}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad feature-tree --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_get_source
+Return a part's source text.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad get-source}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad get-source --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_inspect
+Mass properties: volume, area, triangles, watertight, COM, bbox.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad inspect}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad inspect --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_open
+Open a .cad/.ccad part; returns its language + capabilities.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad open --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_params
+List a part's parameters and ranges.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad params}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad params --path ~/cad/bracket.cad}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@end multitable
+
+@item cad_patch_source
+Replace the single occurrence of OLD with NEW in a part, then re-evaluate. Token-economical edits; errors if OLD is absent/ambiguous.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad patch-source}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{old} @tab string @tab yes @tab Text to replace; must occur exactly once
+@item @code{new} @tab string @tab yes @tab Replacement text
+@end multitable
+
+@item cad_print
+Upload GCODE to PRINTER. A print only STARTS when BOTH start and confirm are true; otherwise it only uploads (the safe default).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad print}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{printer} @tab string @tab yes @tab Printer name, as cad_printers lists it
+@item @code{gcode} @tab string @tab yes @tab G-code file to upload
+@item @code{start} @tab boolean @tab no @tab Start the print after uploading
+@item @code{confirm} @tab boolean @tab no @tab Must also be true for START to take effect
+@end multitable
+
+@item cad_printers
+List configured printers.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad printers}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad printers}
+@end itemize
+
+Takes no arguments.
+
+@item cad_section
+Section the part by an X/Y/Z plane at OFFSET; report segments + perimeter.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad section}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool cad section --path ~/cad/bracket.cad --axis z --offset 2.5}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{axis} @tab string @tab no @tab x, y or z (default z)
+@item @code{offset} @tab number @tab no @tab Plane offset along the axis (default 0)
+@end multitable
+
+@item cad_set_source
+Replace a part's whole SOURCE, write it, re-evaluate, and report ok+parts or the error with its source location. The edit-eval loop.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad set-source}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{source} @tab string @tab yes @tab The whole new source
+@end multitable
+
+@item cad_slice
+Export the part to STL and slice it to G-code (waits, default 300s).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool cad slice}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask, async (timeout 3600s)
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab The part file
+@item @code{timeout} @tab number @tab no @tab Seconds to wait for the slicer (default 300)
 @end multitable
 
 @end table
@@ -219,6 +964,48 @@ List every LQL source lql_query can fetch from, including the editor-state sourc
 
 Takes no arguments.
 
+@item lql_unwatch
+Remove one of your standing LQL queries, by the NAME you gave lql_watch.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool data lql-unwatch}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab The watch's name
+@end multitable
+
+@item lql_watch
+Register a standing LQL query and be told when its result changes: "tell me when X". The query (same language and sources as lql_query) is re-run every EVERY seconds; the first result is the baseline, and after that you receive a message, with a diff, only when the result differs from the last one. Prefer this to calling lql_query in a loop. Give KEY, the column(s) identifying a row, to have changed rows told apart from removed-and-added ones. Write a query whose result is small and stable -- filter, summarize, sort -- because any difference fires. A watch is yours alone, you may hold only a few, and all of them are removed when your run ends. Registering under a NAME you already use replaces that watch.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool data lql-watch}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab A short name for the watch: letters, digits, - or _
+@item @code{query} @tab string @tab yes @tab The LQL query to watch
+@item @code{every} @tab integer @tab no @tab Seconds between runs (default 120, minimum 30)
+@item @code{key} @tab string @tab no @tab Column, or comma-separated columns, identifying a row
+@end multitable
+
+@item lql_watches
+List your standing LQL queries: state, interval, row count, when each last ran and last changed, its last error, and any change you have not yet been told about.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool data lql-watches}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
 @end table
 
 @subheading database
@@ -240,6 +1027,21 @@ Describe one table: its columns with types and nullability, and its primary key.
 @item @code{schema} @tab string @tab no @tab Schema containing the table; omit for the default
 @end multitable
 
+@item db_connect
+Open the saved connection named CONNECTION, so queries can run against it. Names come from db_connections; a connection URL is not accepted. Already-open connections are left alone.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool database db-connect}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 60s)
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{connection} @tab string @tab yes @tab Saved connection name from db_connections
+@end multitable
+
 @item db_connections
 List the databases this Emacs can reach, with their dialect and whether they are read-only. Call this first: every other database tool addresses a connection by the names this returns.
 
@@ -250,6 +1052,20 @@ List the databases this Emacs can reach, with their dialect and whether they are
 @end itemize
 
 Takes no arguments.
+
+@item db_disconnect
+Close the connection named CONNECTION, releasing its database handle and dropping its cached schema. The saved definition survives, so db_connect brings it back.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool database db-disconnect}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{connection} @tab string @tab yes @tab Saved connection name from db_connections
+@end multitable
 
 @item db_execute
 Run a statement that CHANGES the database -- INSERT, UPDATE, DELETE or DDL. Refused outright on a connection marked read-only.
@@ -298,6 +1114,7 @@ Run a read-only SQL query and return the rows as JSON. Only reads are permitted:
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{connection} @tab string @tab yes @tab Connection name from db-connections
 @item @code{sql} @tab string @tab yes @tab The SELECT statement to run
+@item @code{max_rows} @tab integer @tab no @tab Maximum rows to fetch; omit for the configured default
 @end multitable
 
 @item db_tables
@@ -313,6 +1130,114 @@ List the tables and views in a database.
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{connection} @tab string @tab yes @tab Connection name from db-connections
 @item @code{schema} @tab string @tab no @tab Schema to list; omit for the default
+@end multitable
+
+@end table
+
+@subheading debug
+
+@table @code
+@item backtrace
+Get the current Lisp backtrace.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug backtrace}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item describe_mode
+Get the current major mode and active minor modes.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug describe-mode}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item list_hooks
+List all non-nil hook variables and their values.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug list-hooks}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item memory_info
+Get GC statistics and memory usage counts.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug memory-info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item process_status
+Get Emacs process info: PID, uptime, version, system type.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug process-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool debug process-status}
+@end itemize
+
+Takes no arguments.
+
+@item profiler_report
+Get the CPU profiler report.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug profiler-report}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item profiler_start
+Start the Emacs CPU profiler.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug profiler-start}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item profiler_stop
+Stop the Emacs CPU profiler.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug profiler-stop}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item recent_messages
+Get recent entries from the *Messages* buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool debug recent-messages}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{lines} @tab integer @tab no @tab Number of lines to retrieve (default: 50) Default: 50.
 @end multitable
 
 @end table
@@ -465,9 +1390,1444 @@ Takes no arguments.
 
 @end table
 
+@subheading edit
+
+@table @code
+@item edit_buffer
+Replace an exact substring in a buffer. old_string must occur exactly once unless replace_all is true. Errors if not found.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit buffer}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{old_string} @tab string @tab yes @tab Exact text to replace
+@item @code{new_string} @tab string @tab yes @tab Replacement text
+@item @code{replace_all} @tab boolean @tab no @tab Replace every occurrence (default false)
+@end multitable
+
+@item get_org_content
+Parse an org-mode buffer into a structured JSON document: buffer keywords (#+TITLE etc.) plus a nested headline tree with title, level, todo, priority, tags, scheduled/deadline/closed, property drawers, and body text. match filters entries with org's agenda match syntax (e.g. "work+urgent/TODO").
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit get-org-content}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{match} @tab string @tab no @tab org agenda match string (tags/todo/property query); empty for all entries
+@item @code{max_depth} @tab integer @tab no @tab Limit headline depth (0 = unlimited)
+@item @code{include_body} @tab boolean @tab no @tab Include entry body text (default true) Default: t.
+@item @code{include_properties} @tab boolean @tab no @tab Include property drawers (default true) Default: t.
+@end multitable
+
+@item goto_line
+Move point to a 1-based line number in a buffer, updating its window if one is showing.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit goto-line}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{line} @tab integer @tab yes @tab 1-based line
+@end multitable
+
+@item insert_org
+Insert text into an org buffer, org-aware: target a headline by exact title or slash outline path (creating missing components with create), position at the entry's body top/bottom or subtree-end, wrap in an org block (src with lang, quote, example, verse, center, or a custom name) or a drawer, or file it as a new child headline with optional todo keyword and tags. timestamp prepends an inactive org timestamp.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit insert-org}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{text} @tab string @tab yes @tab Text to insert
+@item @code{heading} @tab string @tab no @tab Target headline: exact title, or slash-separated outline path like Projects/cmacs/Log
+@item @code{position} @tab string @tab no @tab Where in the entry (default bottom: end of the entry's own body, before child headings) One of: top, bottom, subtree-end, point.
+@item @code{wrap} @tab string @tab no @tab Org block: src, quote, example, verse, center, or any custom #+begin_ name
+@item @code{lang} @tab string @tab no @tab Language for wrap=src
+@item @code{drawer} @tab string @tab no @tab Wrap in a :NAME: drawer (e.g. LOGBOOK)
+@item @code{child} @tab string @tab no @tab Create a child headline with this title; the text becomes its body
+@item @code{todo} @tab string @tab no @tab TODO keyword for the child headline
+@item @code{tags} @tab string @tab no @tab Colon-separated tags for the child
+@item @code{create} @tab boolean @tab no @tab Create missing heading path components
+@item @code{timestamp} @tab boolean @tab no @tab Prepend an inactive org timestamp
+@end multitable
+
+@item replace_in_buffer
+Regexp search-and-replace across a whole buffer. Returns the number of matches replaced.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit replace-in-buffer}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{regexp} @tab string @tab yes @tab Emacs regexp to match
+@item @code{replacement} @tab string @tab yes @tab Replacement string (\N backrefs allowed)
+@end multitable
+
+@item search_buffer
+Search a buffer for a regexp. Returns up to 200 matches as 'LINE: TEXT' lines.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool edit search-buffer}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab yes @tab Buffer name
+@item @code{regexp} @tab string @tab yes @tab Emacs regexp to match
+@end multitable
+
+@end table
+
+@subheading elisp
+
+@table @code
+@item apropos
+Search for Emacs symbols matching a pattern. Returns one symbol per line.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool elisp apropos}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Regexp pattern to match against symbol names
+@end multitable
+
+@item completions
+Get completion candidates for a symbol name prefix. Returns up to 100 matches.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool elisp completions}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{prefix} @tab string @tab yes @tab Symbol name prefix to complete
+@end multitable
+
+@item describe_function
+Describe an Emacs Lisp function: arglist, docstring, and source location.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool elisp describe-function}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool elisp describe-function --symbol car}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{symbol} @tab string @tab yes @tab Function symbol name
+@end multitable
+
+@item describe_variable
+Describe an Emacs Lisp variable: current value and docstring.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool elisp describe-variable}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{symbol} @tab string @tab yes @tab Variable symbol name
+@end multitable
+
+@end table
+
+@subheading gi
+
+@table @code
+@item gi_describe
+Describe a type or function in a GI namespace.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gi describe}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{namespace} @tab string @tab yes @tab GI namespace
+@item @code{symbol} @tab string @tab yes @tab Type or function name
+@end multitable
+
+@item gi_list_functions
+List all functions in a GI namespace.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gi list-functions}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gi list-functions --namespace GLib}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{namespace} @tab string @tab yes @tab GI namespace
+@end multitable
+
+@item gi_list_namespaces
+List loaded GObject Introspection namespaces.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gi list-namespaces}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@end table
+
+@subheading gnuseye
+
+@table @code
+@item gnuseye_add_geofence
+Add a geofence: a circle of RADIUS_KM about LAT, LON named NAME. Entities entering/leaving emit podomation events.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye add-geofence}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye add-geofence --name home --lat 41.9 --lon -87.6 --radius-km 50}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab Name for the fence
+@item @code{lat} @tab number @tab yes @tab Centre latitude, degrees
+@item @code{lon} @tab number @tab yes @tab Centre longitude, degrees
+@item @code{radius_km} @tab number @tab yes @tab Radius in kilometres
+@end multitable
+
+@item gnuseye_brief
+Summarise the entities currently indexed on the globe (counts by kind).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye brief}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye brief}
+@end itemize
+
+Takes no arguments.
+
+@item gnuseye_cii
+Compute the country-instability index from active signals; returns the ranked ISO-A3 -> score JSON.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye cii}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gnuseye cii}
+@end itemize
+
+Takes no arguments.
+
+@item gnuseye_fly_to
+Fly the globe camera to LAT, LON (degrees); optional RANGE world units.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye fly-to}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye fly-to --lat 51.5 --lon -0.12}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{lat} @tab number @tab yes @tab Latitude, degrees
+@item @code{lon} @tab number @tab yes @tab Longitude, degrees
+@item @code{range} @tab number @tab no @tab Camera range in world units (default 14)
+@end multitable
+
+@item gnuseye_forecast
+Open the 7-day point-forecast panel (Open-Meteo) for LAT, LON.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye forecast}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye forecast --lat 41.9 --lon -87.6}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{lat} @tab number @tab yes @tab Latitude, degrees
+@item @code{lon} @tab number @tab yes @tab Longitude, degrees
+@end multitable
+
+@item gnuseye_list_layers
+List GNU's Eye data layers with their on/off state and group.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye list-layers}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye list-layers}
+@end itemize
+
+Takes no arguments.
+
+@item gnuseye_open
+Open the GNU's Eye live planetary globe buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye open}
+@end itemize
+
+Takes no arguments.
+
+@item gnuseye_query_entities
+Query indexed entities by KIND and/or a bounding box (WEST/SOUTH/EAST/NORTH degrees); returns JSON (capped by LIMIT).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye query-entities}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gnuseye query-entities --kind aircraft --limit 20}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{kind} @tab string @tab no @tab Entity kind to keep; omit for every kind
+@item @code{west} @tab number @tab no @tab Western bound, degrees (default -180)
+@item @code{south} @tab number @tab no @tab Southern bound, degrees (default -90)
+@item @code{east} @tab number @tab no @tab Eastern bound, degrees (default 180)
+@item @code{north} @tab number @tab no @tab Northern bound, degrees (default 90)
+@item @code{limit} @tab integer @tab no @tab Most rows to return (default 200)
+@end multitable
+
+@item gnuseye_refresh
+Refresh every enabled GNU's Eye layer now.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye refresh}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye refresh}
+@end itemize
+
+Takes no arguments.
+
+@item gnuseye_toggle_layer
+Toggle a data layer on/off by NAME (e.g. satellites, aircraft, vessels, quakes, launches, fires).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye toggle-layer}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye toggle-layer --name quakes}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab Layer name, as gnuseye_list_layers reports it
+@end multitable
+
+@item gnuseye_weather_showcase
+Light the full weather picture: tropical cyclones (tracks/cones), animated precipitation radar, cloud imagery, wind particles, METARs, and US alert zones; flies to the strongest active storm.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gnuseye weather-showcase}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gnuseye weather-showcase}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
+@subheading gowl
+
+@table @code
+@item gowl_broadcast_assign
+Put a window in a broadcast team's slot by hand.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-assign}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{team} @tab string @tab yes @tab The team
+@item @code{slot} @tab string @tab yes @tab The slot
+@item @code{client_id} @tab integer @tab no @tab The window (default: the focused one); 0 hands the slot back to its match
+@end multitable
+
+@item gowl_broadcast_focus_slot
+Focus the window in a broadcast team's slot, viewing its tag.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-focus-slot}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{team} @tab string @tab no @tab The team (default: the only one)
+@item @code{slot} @tab string @tab yes @tab The slot
+@end multitable
+
+@item gowl_broadcast_list
+The broadcast teams and rules in force, each as YAML (JSON).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_broadcast_remove
+Remove a broadcast team or rule.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-remove}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{kind} @tab string @tab yes @tab team or rule One of: team, rule.
+@item @code{name} @tab string @tab yes @tab The team's or rule's name
+@end multitable
+
+@item gowl_broadcast_set
+Switch input broadcasting on, off or toggle it (a toast shows the result), or panic: off, and every key held in any window released. Or set strict one-press-one-window mode instead.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-set}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{state} @tab string @tab no @tab on, off, toggle or panic One of: on, off, toggle, panic.
+@item @code{strict} @tab string @tab no @tab on, off or toggle One of: on, off, toggle.
+@end multitable
+
+@item gowl_broadcast_status
+Input broadcasting (multiboxing): whether it is on, strict mode, the toggle and panic keys, every team with the window in each slot, every rule with the reason it cannot run if any, and delivery counters (JSON). The module is opt-in.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl broadcast-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_clipboard_copy
+Put a history entry back on the clipboard: the next paste in any window produces it. Replaces what the person has copied.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl clipboard-copy}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab The entry's id, from gowl_clipboard_list
+@end multitable
+
+@item gowl_clipboard_entry
+The path of one history entry's stored bytes (exactly what was copied, in its MIME type).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl clipboard-entry}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab The entry's id, from gowl_clipboard_list
+@end multitable
+
+@item gowl_clipboard_list
+The clipboard history, newest first: one line per entry, ID<TAB>MIME<TAB>BYTES<TAB>PREVIEW. This is everything the person copied -- passwords included -- so read it when the task needs it, not by habit. The Super+space menu keeps it private for the same reason.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl clipboard-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_close_client
+Close the Wayland client matching a pattern.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl close-client}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Match pattern
+@item @code{by} @tab string @tab no @tab Match field (default: app-id) One of: app-id, title.
+@end multitable
+
+@item gowl_drain_recording
+Take everything recorded since the last drain and leave the recording running. The reply carries dropped (since the last drain) and dropped_total, so a demonstration that overflowed the ring is reported rather than passed off as complete, plus active and stop_reason.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl drain-recording}
+@item Surfaces: mcp, menu, agents
+@item Returns: json
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{token} @tab string @tab yes @tab Token from gowl_start_recording
+@end multitable
+
+@item gowl_find_client
+Find a Wayland client by app-id or title pattern.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl find-client}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gowl find-client --pattern 'librewolf*'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Search pattern
+@item @code{by} @tab string @tab no @tab Search field (default: app-id) One of: app-id, title.
+@end multitable
+
+@item gowl_focus_client
+Give keyboard focus to the Wayland client matching a pattern.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl focus-client}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Match pattern
+@item @code{by} @tab string @tab no @tab Match field (default: app-id) One of: app-id, title.
+@end multitable
+
+@item gowl_focused_client
+Get info about the currently focused Wayland client.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl focused-client}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_hotkey_fire
+Run a hotkey's actions as if it had been pressed.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-fire}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab yes @tab The hotkey's id
+@end multitable
+
+@item gowl_hotkey_history
+The last 64 inputs the hotkey module saw (JSON): keycode, keysym, pressed, injected, swallowed and the hotkey each fired. The first thing to look at when a hotkey does not fire.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-history}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_hotkey_list
+Every hotkey and remap in force (JSON): id, key as written and canonical, context, mode, enabled, origin, description.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_hotkey_remove
+Remove a hotkey added at run time (one from the configuration is disabled instead).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-remove}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab yes @tab The hotkey's id
+@end multitable
+
+@item gowl_hotkey_set
+Switch one hotkey on or off (id + enabled), suspend every hotkey, or enter a key mode.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-set}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab no @tab The hotkey, with enabled
+@item @code{enabled} @tab string @tab no @tab on, off or toggle One of: on, off, toggle.
+@item @code{suspended} @tab string @tab no @tab on, off or toggle One of: on, off, toggle.
+@item @code{mode} @tab string @tab no @tab A key mode; default leaves every mode
+@end multitable
+
+@item gowl_hotkey_status
+Hotkeys (AutoHotkey for gowl): whether they are suspended, the key mode, counts of hotkeys, remaps, timers and hotstrings, the lock keys, the last hotkey fired and the last error (JSON). The module is opt-in; this loads it.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl hotkey-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_list_clients
+List all Wayland clients (JSON array with id, title, app-id, tags, geometry).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl list-clients}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gowl list-clients}
+@end itemize
+
+Takes no arguments.
+
+@item gowl_list_keybinds
+List all compositor keybinds.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl list-keybinds}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_list_monitors
+List monitors (JSON array with name, geometry, mode, scale, layout).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl list-monitors}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gowl list-monitors}
+@end itemize
+
+Takes no arguments.
+
+@item gowl_macro_list
+Every macro runnable by name, as JSON: name, kind (file, registered, custom = Elisp, ...), path, held-back.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_macro_record
+The macro recorder (Super+Alt+r). start records the person's keys, clicks, drags and scrolls; stop writes last-recording.c (and NAME.c) and replies `recorded NAME STEPS PATH'; cancel discards; status reports. Starting from here needs gowl's `input-recording' consent, because it watches the person's input; the screen is framed while it runs and password prompts are not recorded.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-record}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{action} @tab string @tab yes @tab start, stop, cancel or status One of: start, stop, cancel, status.
+@item @code{name} @tab string @tab no @tab With start: also write NAME.c
+@end multitable
+
+@item gowl_macro_status
+Running macros, held-back ones and why, the fault count, the time budget, triggers -- the macro module's status JSON.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_macro_stop
+Stop running macros.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-stop}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{which} @tab string @tab no @tab A macro name, a run id or all (the default)
+@end multitable
+
+@item gowl_macro_voice_match
+Run the macro a sentence names, as Super+Alt+m does with what was said: a configured phrase, a macro's name said as words ("pip corner 25" runs pip-corner 25), or every word of a name. dry_run reports what it would run (heard, normalised, macro, args) and runs nothing.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-voice-match}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{text} @tab string @tab yes @tab The sentence
+@item @code{dry_run} @tab boolean @tab no @tab Report what would run, and run nothing
+@end multitable
+
+@item gowl_macro_voice_status
+The voice listener's state: listening, command, time limit, last sentence heard, last error. There is no tool to start listening: the microphone is the person's to turn on.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl macro-voice-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_pick_color
+The colour of the screen at layout x, y, as "#rrggbb". The clipboard is left alone.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl pick-color}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{x} @tab integer @tab yes @tab Layout x
+@item @code{y} @tab integer @tab yes @tab Layout y
+@end multitable
+
+@item gowl_recording_status
+Whether an input recording is running, its token, limits and counters, without consuming anything. Poll this to notice that a recording started, stopped, or was stopped from the keyboard.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl recording-status}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@end itemize
+
+Takes no arguments.
+
+@item gowl_screen_text
+Read the text in a region of the screen (OCR via tesseract, the screenshot module's ocr-command), in layout coordinates as gowl_list_monitors and gowl_list_clients report them. Returns the text, "" when there is none. The clipboard is left alone unless copy is true.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl screen-text}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, async (timeout 90s)
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{x} @tab integer @tab yes @tab Left edge, layout coordinates
+@item @code{y} @tab integer @tab yes @tab Top edge, layout coordinates
+@item @code{width} @tab integer @tab yes @tab Width of the region
+@item @code{height} @tab integer @tab yes @tab Height of the region
+@item @code{language} @tab string @tab no @tab tesseract languages, e.g. eng+deu (default: the screenshot module's)
+@item @code{copy} @tab boolean @tab no @tab Also put the text on the clipboard (default false)
+@end multitable
+
+@item gowl_set_client_geometry
+Move and resize the Wayland client matching a pattern in one call.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl set-client-geometry}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Match pattern
+@item @code{by} @tab string @tab no @tab Match field (default: app-id) One of: app-id, title.
+@item @code{x} @tab integer @tab yes @tab Left edge, layout coordinates
+@item @code{y} @tab integer @tab yes @tab Top edge, layout coordinates
+@item @code{width} @tab integer @tab yes @tab Width in pixels
+@item @code{height} @tab integer @tab yes @tab Height in pixels
+@end multitable
+
+@item gowl_set_layout
+Set the tiling layout: "tile", "monocle", or "float".
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl set-layout}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{layout} @tab string @tab yes @tab Layout name One of: tile, monocle, float.
+@end multitable
+
+@item gowl_set_monitor_transform
+Set the wl_output transform for a monitor (rotation/flip). transform is an integer 0-7: 0=normal, 1=90, 2=180, 3=270, 4=flipped, 5=flipped-90, 6=flipped-180, 7=flipped-270. To persist across sessions, add `transform:` under the matching output name in the YAML `monitors:` block.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl set-monitor-transform}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab Output name (e.g. eDP-1)
+@item @code{transform} @tab integer @tab yes @tab Transform code 0-7
+@end multitable
+
+@item gowl_spawn
+Spawn a command in the Wayland compositor.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl spawn}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{command} @tab string @tab yes @tab Shell command to spawn
+@end multitable
+
+@item gowl_start_recording
+Record real keyboard and pointer input so a human demonstration can be turned into a procedure. Returns a token for gowl_drain_recording and gowl_stop_recording. Bounded: the ring holds at most max_events (older events are dropped and counted) and the recording stops itself after max_seconds. Requires gowl's `input-recording' config key, which is separate from send_keys and off by default. While it runs the screen is framed in red and Super+Shift+Escape stops it. Capture is suppressed on the lock screen and for windows on the deny list, but gowl CANNOT see a password field inside an ordinary window -- review a trace before storing or sharing it.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl start-recording}
+@item Surfaces: mcp, menu, agents
+@item Returns: json
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{max_seconds} @tab integer @tab no @tab Stop automatically after this many seconds (default 120, maximum 3600)
+@item @code{max_events} @tab integer @tab no @tab Ring size in events (default 4096, maximum 100000)
+@end multitable
+
+@item gowl_stop_recording
+Stop the recording and take the tail, in the same shape gowl_drain_recording returns. Stopping a recording that already stopped itself still returns its remaining events exactly once.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl stop-recording}
+@item Surfaces: mcp, menu, agents
+@item Returns: json
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{token} @tab string @tab yes @tab Token from gowl_start_recording
+@end multitable
+
+@item gowl_workspace_list
+List workspaces as plists (:id :name :tag-mask).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl workspace-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item gowl_workspace_switch
+Switch to the workspace with the given id.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gowl workspace-switch}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab Workspace id
+@end multitable
+
+@end table
+
+@subheading gsurf
+
+@table @code
+@item gsurf_back
+Navigate a gsurf buffer back.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf back}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf back}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_click
+Click at x,y (CSS pixels from the page's top-left, as getBoundingClientRect reports) in a gsurf page with a trusted click.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf click}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf click --x 120 --y 48}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{x} @tab number @tab yes @tab CSS px from the left
+@item @code{y} @tab number @tab yes @tab CSS px from the top
+@item @code{button} @tab integer @tab no @tab 1 left (default), 2 middle, 3 right
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_click_element
+Click the first element matching a CSS selector in a gsurf page: it is scrolled into view, focused and clicked at its centre. Asynchronous: returns at once; the outcome goes to the echo area.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf click-element}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf click-element --selector 'input[name=q]'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{selector} @tab string @tab yes @tab CSS selector
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_current
+Return JSON for the current gsurf buffer (buffer/uri/title/progress).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf current}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf current}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_download_cancel
+Cancel an in-flight gsurf download by id.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf download-cancel}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf download-cancel --id 3}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab download id
+@end multitable
+
+@item gsurf_download_list
+Return a JSON array of known gsurf downloads (id/uri/dest/received/total/state).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf download-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf download-list}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_eval_js
+Run JavaScript in a gsurf buffer's page (fire-and-forget).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf eval-js}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{script} @tab string @tab yes @tab JavaScript source
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_extract_text
+Return the rendered plain text of a gsurf-lite buffer (newest, or the named one). Reads a JS-rendered or logged-in page as clean text after gsurf_lite_open.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf extract-text}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf extract-text}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_forward
+Navigate a gsurf buffer forward.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf forward}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf forward}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_get_title
+Return a gsurf buffer's page title.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf get-title}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf get-title}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_get_uri
+Return a gsurf buffer's current URI.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf get-uri}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf get-uri}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_list
+Return a JSON array of all open gsurf buffers.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf list}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_list_actions
+Return a JSON array of every gsurf action: name, description and handler (cmacs or module).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf list-actions}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf list-actions}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_list_containers
+Return a JSON array of gsurf browsing containers (id, name, color, temporary, views, proxy).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf list-containers}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf list-containers}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_lite_open
+Open a URL as eww-style text: gsurf renders it offscreen (JavaScript runs, logins persist) and the post-JS page is dumped to a real Emacs text buffer. Returns the buffer name; read it with gsurf_extract_text once loaded.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf lite-open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf lite-open --url https://www.gnu.org/}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{url} @tab string @tab yes @tab URL or search query
+@end multitable
+
+@item gsurf_modules_list
+Return JSON describing the loaded gsurf modules.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf modules-list}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool gsurf modules-list}
+@end itemize
+
+Takes no arguments.
+
+@item gsurf_navigate
+Navigate a gsurf buffer to a URL (or search query).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf navigate}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf navigate --url https://www.gnu.org/}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{url} @tab string @tab yes @tab URL or search query
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_open
+Open a URL (or search query) in a new gsurf browser buffer; returns the buffer name.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf open --url https://www.gnu.org/}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{url} @tab string @tab yes @tab URL or search query
+@end multitable
+
+@item gsurf_permission_policy
+Set a permission policy for an origin and type (verdict "allow" or "deny").
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf permission-policy}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{origin} @tab string @tab yes @tab scheme://host:port
+@item @code{type} @tab string @tab yes @tab geolocation/notification/media/...
+@item @code{verdict} @tab string @tab yes @tab allow or deny
+@end multitable
+
+@item gsurf_press_key
+Press and release one key in a gsurf page (trusted). key is a DOM or X name (Enter, Tab, Escape, ArrowDown, PageDown, a, ...).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf press-key}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{key} @tab string @tab yes @tab key name or one character
+@item @code{modifiers} @tab string @tab no @tab e.g. ctrl+shift (ctrl, shift, alt/meta, super)
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_print_pdf
+Print a gsurf buffer to a PDF at FILE (async); returns the path.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf print-pdf}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask, async (timeout 120s)
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{file} @tab string @tab yes @tab output PDF path
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_reload
+Reload a gsurf buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf reload}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf reload}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_run_action
+Run a gsurf action by name on a gsurf buffer (see gsurf_list_actions): core ones map to editor commands, the rest go to the modules (dark-mode-toggle, dark-mode-toggle-site, form-autofill, ...).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf run-action}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf run-action --action dark-mode-toggle}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{action} @tab string @tab yes @tab action name
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_set_cookie
+Add a cookie to a gsurf view's session (its container's cookie jar for a view in a container).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf set-cookie}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab Cookie name
+@item @code{value} @tab string @tab yes @tab Cookie value
+@item @code{domain} @tab string @tab yes @tab example.com, or .example.com for subdomains too
+@item @code{path} @tab string @tab no @tab default /
+@item @code{secure} @tab boolean @tab no @tab Send over HTTPS only
+@item @code{http_only} @tab boolean @tab no @tab Hide from page scripts
+@item @code{expires} @tab integer @tab no @tab Unix seconds; 0 = session cookie
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_set_zoom
+Set the zoom level (1.0 = 100%) of a gsurf buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf set-zoom}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf set-zoom --level 1.25}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{level} @tab number @tab yes @tab zoom level
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_snapshot
+Save a PNG snapshot of a gsurf buffer to FILE (async); returns the path. Set full_page for the whole document.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf snapshot}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask, async (timeout 120s)
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{file} @tab string @tab yes @tab output PNG path
+@item @code{full_page} @tab boolean @tab no @tab capture full document
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_stop
+Stop loading in a gsurf buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf stop}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf stop}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@item gsurf_toggle_module
+Enable or disable a loaded gsurf module by name (adblock, dark_mode, hardening, containers, form_autofill, modal, ...).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf toggle-module}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool gsurf toggle-module --name adblock --enabled true}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{name} @tab string @tab yes @tab module name
+@item @code{enabled} @tab boolean @tab yes @tab true to enable, false to disable
+@end multitable
+
+@item gsurf_type_text
+Type text into whatever has focus in a gsurf page, one trusted key press per character (newline = Enter). Focus a field first with gsurf_click_element.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool gsurf type-text}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{text} @tab string @tab yes @tab UTF-8 text
+@item @code{buffer} @tab string @tab no @tab gsurf buffer name; defaults to the most recent
+@end multitable
+
+@end table
+
 @subheading imgedit
 
 @table @code
+@item imgedit_add_layer
+Append a transparent layer (becomes active); returns its index.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit add-layer}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit add-layer --handle 1 --name Notes}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{name} @tab string @tab no @tab Name for the layer
+@end multitable
+
+@item imgedit_adjust
+Adjust the active layer. KIND: brightness|contrast|saturation|threshold|posterize (with AMOUNT) or invert|grayscale.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit adjust}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit adjust --handle 1 --kind contrast --amount 1.2}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{kind} @tab string @tab yes @tab Which adjustment
+@item @code{amount} @tab number @tab no @tab Strength, for the kinds that take one (default 0)
+@end multitable
+
 @item imgedit_describe
 Describe the image the user currently has open.
 
@@ -478,6 +2838,110 @@ Describe the image the user currently has open.
 @end itemize
 
 Takes no arguments.
+
+@item imgedit_draw_shape
+Draw on the active layer (one undo step). SHAPE: line|arrow (x1,y1 -> x2,y2), rect (corners x1,y1 / x2,y2), circle (centre x1,y1, radius x2), ellipse (centre x1,y1, radii x2,y2). FILLED for rect/circle/ellipse.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit draw-shape}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit draw-shape --handle 1 --shape rect --x1 10 --y1 10 --x2 90 --y2 60 --filled true}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{shape} @tab string @tab yes @tab line, arrow, rect, circle or ellipse
+@item @code{x1} @tab integer @tab yes @tab First x
+@item @code{y1} @tab integer @tab yes @tab First y
+@item @code{x2} @tab integer @tab no @tab Second x, or the radius (default 0)
+@item @code{y2} @tab integer @tab no @tab Second y, or the y radius (default 0)
+@item @code{filled} @tab boolean @tab no @tab Fill a rect, circle or ellipse
+@item @code{thickness} @tab integer @tab no @tab Stroke width in pixels (default 1)
+@end multitable
+
+@item imgedit_draw_text
+Draw TEXT at X,Y in the current colour (SIZE px; one undo step).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit draw-text}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit draw-text --handle 1 --x 8 --y 8 --text Hello}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{x} @tab integer @tab yes @tab Left edge of the text
+@item @code{y} @tab integer @tab yes @tab Top edge of the text
+@item @code{text} @tab string @tab yes @tab Text to draw
+@item @code{size} @tab integer @tab no @tab Font size in pixels (default 16)
+@end multitable
+
+@item imgedit_filter
+Filter the active layer. KIND: blur|pixelate (RADIUS) or sharpen|edge|emboss|bloom.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit filter}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit filter --handle 1 --kind blur --radius 4}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{kind} @tab string @tab yes @tab Which filter
+@item @code{radius} @tab integer @tab no @tab Radius for blur and pixelate (default 2)
+@end multitable
+
+@item imgedit_info
+Describe the document: size, active layer, layer stack.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit info --handle 1}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@end multitable
+
+@item imgedit_new
+Create a WIDTHxHEIGHT image document; returns its handle.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit new}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit new --width 256 --height 256}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{width} @tab integer @tab yes @tab Width in pixels
+@item @code{height} @tab integer @tab yes @tab Height in pixels
+@end multitable
+
+@item imgedit_open
+Open an image file (png/jpg/bmp/...); returns handle and size.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit open --path ~/Pictures/shot.png}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab Image file to open
+@end multitable
 
 @item imgedit_prompt
 Edit the image the user currently has open, by instruction. For example: "crop to the subject and increase contrast slightly".
@@ -493,6 +2957,398 @@ Edit the image the user currently has open, by instruction. For example: "crop t
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{instruction} @tab string @tab yes @tab What to do to the image
 @end multitable
+
+@item imgedit_save
+Flatten and save the document (format by extension).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit save}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit save --handle 1 --path /tmp/out.png}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{path} @tab string @tab yes @tab Destination file; the extension picks the format
+@end multitable
+
+@item imgedit_set_color
+Set the draw colour (RGBA 0..255) used by the shape/text tools.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit set-color}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit set-color --handle 1 --r 255 --g 0 --b 0}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{r} @tab integer @tab yes @tab Red, 0-255
+@item @code{g} @tab integer @tab yes @tab Green, 0-255
+@item @code{b} @tab integer @tab yes @tab Blue, 0-255
+@item @code{a} @tab integer @tab no @tab Alpha, 0-255 (default 255)
+@end multitable
+
+@item imgedit_transform
+Transform the whole document. KIND: flip-h|flip-v|rotate-cw|rotate-ccw.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit transform}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit transform --handle 1 --kind rotate-cw}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@item @code{kind} @tab string @tab yes @tab Which transform
+@end multitable
+
+@item imgedit_undo
+Undo the last edit on the document.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool imgedit undo}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool imgedit undo --handle 1}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Document handle
+@end multitable
+
+@end table
+
+@subheading lrgeditor
+
+@table @code
+@item lrgeditor_action
+Run an lrgeditor action by id (e.g. file.save, edit.undo, play.start, view.top) in the embedded shell. lrgeditor_actions lists them.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor action}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgeditor action --id edit.undo}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab yes @tab Action id, as lrgeditor_actions lists it
+@end multitable
+
+@item lrgeditor_actions
+List the action ids the embedded lrgeditor shell registers.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor actions}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgeditor actions}
+@end itemize
+
+Takes no arguments.
+
+@item lrgeditor_add_primitive
+Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,4 ico-sphere,5 cylinder,6 cone,7 torus,8 grid.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor add-primitive}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_add_primitive}
+@item Example: @code{emacsctl tool lrgeditor add-primitive --primitive 1 --name Crate}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{primitive} @tab integer @tab yes @tab Primitive type, 0-8
+@item @code{name} @tab string @tab no @tab Name for the node (default Object)
+@end multitable
+
+@item lrgeditor_add_visual
+Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,5 light,6 camera,7 audio. ASSET is the model/image/tileset file.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor add-visual}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_add_visual}
+@item Example: @code{emacsctl tool lrgeditor add-visual --kind 5 --name Sun}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{kind} @tab integer @tab yes @tab Visual kind, 2-7
+@item @code{asset} @tab string @tab no @tab Model, image or tileset file
+@item @code{name} @tab string @tab no @tab Name for the node (default Object)
+@end multitable
+
+@item lrgeditor_delete
+Delete node ID from the level.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor delete}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_delete}
+@item Example: @code{emacsctl tool lrgeditor delete --id 3}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab Node id
+@end multitable
+
+@item lrgeditor_move
+Set node ID's position to (X Y Z) as one undoable edit.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor move}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_move}
+@item Example: @code{emacsctl tool lrgeditor move --id 3 --x 0 --y 1.5 --z 0}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab Node id
+@item @code{x} @tab number @tab yes @tab X
+@item @code{y} @tab number @tab yes @tab Y
+@item @code{z} @tab number @tab yes @tab Z
+@end multitable
+
+@item lrgeditor_object_tree
+List the libregnum editor's node tree (name/kind/depth/id).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor object-tree}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_object_tree}
+@item Example: @code{emacsctl tool lrgeditor object-tree}
+@end itemize
+
+Takes no arguments.
+
+@item lrgeditor_open
+Open libregnum's editor (the lrgeditor shell) on PATH: a project directory or project.ryaml, a .rlevel/.rprefab, a .rseq, or any asset one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, ...); no PATH opens its welcome screen.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_open}
+@item Example: @code{emacsctl tool lrgeditor open --path ~/game/project.ryaml}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab no @tab Project, level or asset to open
+@end multitable
+
+@item lrgeditor_play
+Play-in-editor: instantiate the level into a runtime world and run it.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor play}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_play}
+@item Example: @code{emacsctl tool lrgeditor play}
+@end itemize
+
+Takes no arguments.
+
+@item lrgeditor_save
+Save the level to a .rlevel PATH.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor save}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_save}
+@item Example: @code{emacsctl tool lrgeditor save --path ~/game/levels/one.rlevel}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab Destination .rlevel file
+@end multitable
+
+@item lrgeditor_select
+Select node ID in the editor.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor select}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_select}
+@item Example: @code{emacsctl tool lrgeditor select --id 3}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab integer @tab yes @tab Node id
+@end multitable
+
+@item lrgeditor_socket
+Socket the embedded lrgeditor serves libregnum's editor protocol on (for lrgeditorctl --socket, its MCP verbs, or libregnum.el).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor socket}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgeditor socket}
+@end itemize
+
+Takes no arguments.
+
+@item lrgeditor_stop
+Stop play-in-editor.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgeditor stop}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Aliases: @code{lrg_editor_stop}
+@item Example: @code{emacsctl tool lrgeditor stop}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
+@subheading lrgterm
+
+@table @code
+@item lrgterm_3d_camera_orbit
+Orbit the 3D camera around the panels (use lrgterm_dump_screen to see it).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-camera-orbit}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-camera-orbit}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_cycle_arrangement
+Cycle the 3D panel arrangement (single-panel -> per-window -> free).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-cycle-arrangement}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-cycle-arrangement}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_cycle_environment
+Cycle the 3D ambient environment (void -> workshop -> cockpit).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-cycle-environment}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-cycle-environment}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_focus_selected
+Bring the selected window's 3D panel front-and-centre (fly the camera to it and focus it; others recede). The 'command-the-room' gesture.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-focus-selected}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-focus-selected}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_pin_selected
+Pin the selected window's 3D panel in place so the arrangement no longer moves it.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-pin-selected}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-pin-selected}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_state
+Report the lrg 3D render mode, panel arrangement and ambient environment.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-state}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-state}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_3d_unpin_all
+Release all manually-placed 3D panels back to automatic layout.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm 3d-unpin-all}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm 3d-unpin-all}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_force_redraw
+Force a full redraw + present of the lrg frame.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm force-redraw}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm force-redraw}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_frame_info
+Report the output_lrg frame's pixel/char size, font and monitor.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm frame-info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm frame-info}
+@end itemize
+
+Takes no arguments.
+
+@item lrgterm_render_stats
+Report lrg display stats (frame count, visibility, focus, colour depth).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool lrgterm render-stats}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool lrgterm render-stats}
+@end itemize
+
+Takes no arguments.
 
 @end table
 
@@ -754,6 +3610,117 @@ Replace the text of one block in a document, and save. INDEX comes from office_o
 
 @end table
 
+@subheading process
+
+@table @code
+@item list_processes
+List all Emacs subprocesses with name, status, buffer, and command.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool process list-processes}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool process list-processes}
+@end itemize
+
+Takes no arguments.
+
+@end table
+
+@subheading project
+
+@table @code
+@item project_find_files
+Recursively find files in the workspace whose name matches an Emacs regexp (e.g. "\\.c\\'" for C files). The .git directory is skipped; up to 500 paths are returned relative to the workspace root.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project find-files}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{pattern} @tab string @tab yes @tab Emacs regexp matched against file names
+@end multitable
+
+@item project_grep
+Recursively grep for a pattern under a directory (defaults to the current default-directory; .git is excluded). Returns up to 200 'file:line:text' hits.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project grep}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 90s)
+@item Example: @code{emacsctl tool project grep --regexp TODO --file-glob '*.el'}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{regexp} @tab string @tab yes @tab Basic grep regexp
+@item @code{directory} @tab string @tab no @tab Root directory to search (optional)
+@item @code{file_glob} @tab string @tab no @tab Restrict to files matching this glob (optional)
+@end multitable
+
+@item project_list_files
+List the immediate entries of a workspace directory (defaults to the workspace root). Directories are suffixed with '/'; files are followed by a tab and their size in bytes.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project list-files}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{directory} @tab string @tab no @tab Directory relative to the workspace root (optional)
+@end multitable
+
+@item project_read_file
+Read a file from the workspace. The path is relative to the workspace root (absolute paths must still resolve inside it). Returns the raw file contents.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project read-file}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool project read-file --path README.org}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab File path relative to the workspace root
+@end multitable
+
+@item project_root
+Return the absolute path of the workspace root (the open project directory) that the other project_* tools resolve paths against.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project root}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool project root}
+@end itemize
+
+Takes no arguments.
+
+@item project_write_file
+Write a file in the workspace, creating parent directories as needed. The path is resolved against the workspace root and cannot escape it. Overwrites any existing file.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool project write-file}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{path} @tab string @tab yes @tab File path relative to the workspace root
+@item @code{content} @tab string @tab yes @tab Full new file contents
+@end multitable
+
+@end table
+
 @subheading schedule
 
 @table @code
@@ -840,6 +3807,34 @@ Enable or disable an existing schedule without deleting it.
 @subheading secondbrain
 
 @table @code
+@item secondbrain_doctor
+Which external programs (pandoc, pdftotext, yt-dlp, ffmpeg, ...) and cmacs features (office, whisper, ai) the ingester can use on this host.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain doctor}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool secondbrain doctor}
+@end itemize
+
+Takes no arguments.
+
+@item secondbrain_expand
+Expand or collapse a department. With 'id', acts on that node; without one, acts on every department at once. Departments start collapsed, so this is how you see what is inside one.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain expand}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain expand --id memory/areas}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab no @tab Node id; omit for all
+@item @code{collapse} @tab boolean @tab no @tab Collapse instead
+@end multitable
+
 @item secondbrain_find
 Search the second brain for notes about a query: semantic when the memory index exists, text search otherwise. Returns paths, titles and snippets.
 
@@ -877,6 +3872,21 @@ File a URL, a file (any format: PDF, Office, EPUB, mail, audio, video, YouTube, 
 @item @code{no_summary} @tab boolean @tab no @tab Skip the AI summary
 @end multitable
 
+@item secondbrain_ingest_cancel
+Cancel an ingest job by id.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain ingest-cancel}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: json
+@item Example: @code{emacsctl tool secondbrain ingest-cancel --id sbi-3}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab yes @tab Job id, e.g. sbi-3
+@end multitable
+
 @item secondbrain_ingest_status
 Status of an ingest job by id, as JSON.
 
@@ -890,6 +3900,106 @@ Status of an ingest job by id, as JSON.
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{id} @tab string @tab yes @tab Job id, e.g. sbi-3
 @end multitable
+
+@item secondbrain_migrate
+Plan -- or with 'apply', perform -- the bulk migration of the Markdown notes under 'dir' (default: the whole tree) into Org nodes in place: same directory, same base name, front matter mapped onto the header, links rewritten to ids. Without 'apply' nothing is written and the plan lists every file and every link that would not resolve. 'remove' = 'trash' moves the originals to the trash afterwards.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain migrate}
+@item Surfaces: mcp, menu, agents
+@item Returns: json
+@item Flags: destructive, confirm=ask
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{dir} @tab string @tab no @tab Directory to migrate; omit for the whole tree
+@item @code{apply} @tab boolean @tab no @tab Perform the migration instead of planning it
+@item @code{include_archives} @tab boolean @tab no @tab Also migrate 04_archives
+@item @code{ai} @tab boolean @tab no @tab Summarise and tag with the model
+@item @code{remove} @tab string @tab no @tab 'trash' moves the originals to the trash One of: trash.
+@end multitable
+
+@item secondbrain_node_info
+Return the full record for a node id: title, role, ARMS ring, department and file.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain node-info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain node-info --id memory/areas}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{id} @tab string @tab yes @tab Node id
+@end multitable
+
+@item secondbrain_open
+Open the ARMS second-brain visualiser: the user's agentic workspace as four concentric rings (Applications, Routines, Memory, Skills). Set 'three_d' for the free 3D view rather than the flat one.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain open}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain open --three-d}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{three_d} @tab boolean @tab no @tab Free 3D view
+@end multitable
+
+@item secondbrain_refresh
+Re-read every enabled source and rebuild the graph.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain refresh}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain refresh}
+@end itemize
+
+Takes no arguments.
+
+@item secondbrain_set_layout
+Switch the layout. 'rings' is the ARMS layout (concentric bands), 'circle' one circle per department, 'hex' a hex lattice, 'force' a force-directed graph. The change animates.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain set-layout}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain set-layout --kind hex}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{kind} @tab string @tab yes @tab rings, circle, hex or force One of: rings, circle, hex, force.
+@end multitable
+
+@item secondbrain_sources
+List the registered ARMS data sources -- where each ring's contents come from.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain sources}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain sources}
+@end itemize
+
+Takes no arguments.
+
+@item secondbrain_stats
+Counts for the open view: total nodes, how many are visible (the rest are inside collapsed departments), edges, and the layout.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool secondbrain stats}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool secondbrain stats}
+@end itemize
+
+Takes no arguments.
 
 @item secondbrain_tree
 List the PARA notes tree as root-relative paths. Use this to see where a note could be filed before choosing a category.
@@ -976,6 +4086,201 @@ Given a recording that has already been transcribed, propose which spans are wor
 @item @code{brief} @tab string @tab no @tab Extra direction, e.g. 'only the parts about X'
 @end multitable
 
+@item vidstudio_add_audio
+Add an audio file to the lane at FROM_FRAME with VOLUME.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio add-audio}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio add-audio --handle 1 --path ~/Music/bed.flac --volume 0.6}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{path} @tab string @tab yes @tab Audio file
+@item @code{from_frame} @tab integer @tab no @tab Frame the audio starts at (default 0)
+@item @code{volume} @tab number @tab no @tab Gain, 1.0 = unchanged (default 1.0)
+@end multitable
+
+@item vidstudio_add_clip
+Append a clip to TRACK. KIND: video|image (PATH), solid (R G B), text (TEXT). DURATION_FRAMES at project fps. Video clips decode on a worker thread (see vidstudio_info's 'decoding' marker).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio add-clip}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio add-clip --handle 1 --track 0 --kind video --path ~/Videos/take1.mp4}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{track} @tab integer @tab yes @tab Track index
+@item @code{kind} @tab string @tab yes @tab video, image, solid or text
+@item @code{path} @tab string @tab no @tab Media file, for a video or image clip
+@item @code{text} @tab string @tab no @tab The text, for a text clip
+@item @code{duration_frames} @tab integer @tab no @tab Length in frames (default 90)
+@item @code{r} @tab integer @tab no @tab Red 0-255, for a solid clip (default 128)
+@item @code{g} @tab integer @tab no @tab Green 0-255, for a solid clip (default 128)
+@item @code{b} @tab integer @tab no @tab Blue 0-255, for a solid clip (default 128)
+@end multitable
+
+@item vidstudio_add_effect
+Append an effect to CLIP. TYPE: 0 blur,1 bloom,2 color-grade,3 vignette,4 grain.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio add-effect}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio add-effect --handle 1 --clip 2 --type 3}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{clip} @tab integer @tab yes @tab Clip id
+@item @code{type} @tab integer @tab yes @tab Effect type, 0-4
+@end multitable
+
+@item vidstudio_add_keyframe
+Add a keyframe on CLIP_ID: PARAM (0 opacity,1 x,2 y,3 scale,4 rotation) at FRAME (clip-relative) = VALUE, optional EASING.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio add-keyframe}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio add-keyframe --handle 1 --clip-id 2 --param 0 --frame 0 --value 0}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{clip_id} @tab integer @tab yes @tab Clip id
+@item @code{param} @tab integer @tab yes @tab Which parameter, 0-4
+@item @code{frame} @tab number @tab yes @tab Frame, relative to the clip's start
+@item @code{value} @tab number @tab yes @tab Value of the parameter at that frame
+@item @code{easing} @tab integer @tab no @tab Easing type (default 0, linear)
+@end multitable
+
+@item vidstudio_add_track
+Append a track (composites above lower tracks); returns its index.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio add-track}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio add-track --handle 1}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@end multitable
+
+@item vidstudio_export
+Export the timeline. FORMAT mp4 (H.264) or gif. Waits for any in-flight clip decodes, so output always has real frames.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio export}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Flags: async (timeout 3600s)
+@item Example: @code{emacsctl tool vidstudio export --handle 1 --path ~/Videos/out.mp4}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{path} @tab string @tab yes @tab Destination file
+@item @code{format} @tab string @tab no @tab mp4 (the default) or gif
+@end multitable
+
+@item vidstudio_info
+Describe the project: size, fps, total frames, per-track clip layout.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio info}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio info --handle 1}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@end multitable
+
+@item vidstudio_new
+Create a WIDTHxHEIGHT video project at FPS; returns its handle.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio new}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio new --width 1920 --height 1080 --fps 30}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{width} @tab integer @tab yes @tab Frame width in pixels
+@item @code{height} @tab integer @tab yes @tab Frame height in pixels
+@item @code{fps} @tab number @tab no @tab Frames per second (default 30)
+@end multitable
+
+@item vidstudio_render_frame
+Composite FRAME and write it to PATH as PNG (agent-viewable preview).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio render-frame}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio render-frame --handle 1 --frame 30 --path /tmp/frame.png}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{frame} @tab integer @tab yes @tab Frame to composite
+@item @code{path} @tab string @tab yes @tab Destination PNG file
+@end multitable
+
+@item vidstudio_set_transition
+Set CLIP's leading transition. TYPE: 0 fade,1 dissolve,2 wipe,3 slide,4 zoom,5 iris,6 flip,7 push,8 clock-wipe; -1 removes.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio set-transition}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio set-transition --handle 1 --clip 2 --type 1}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{clip} @tab integer @tab yes @tab Clip id
+@item @code{type} @tab integer @tab yes @tab Transition type, -1 to 8
+@item @code{overlap_frames} @tab integer @tab no @tab Frames the transition overlaps (default 15)
+@end multitable
+
+@item vidstudio_split
+Split CLIP at AT_FRAME (relative to the clip start).
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool vidstudio split}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool vidstudio split --handle 1 --clip 2 --at-frame 45}
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{handle} @tab integer @tab yes @tab Project handle
+@item @code{clip} @tab integer @tab yes @tab Clip id
+@item @code{at_frame} @tab integer @tab yes @tab Frame to split at, relative to the clip's start
+@end multitable
+
 @end table
 
 @subheading web
@@ -1025,6 +4330,89 @@ Open a libresearch web search in a results grid in the user's editor, for the US
 @headitem Argument @tab Type @tab Required @tab Description
 @item @code{query} @tab string @tab yes @tab What to search for
 @item @code{category} @tab string @tab no @tab A category: general, news, code, science, it, ...
+@end multitable
+
+@end table
+
+@subheading window
+
+@table @code
+@item current_view
+What the user is looking at right now: the visible buffers, most recently selected first, with the AI chat surfaces excluded. Call this when the user refers to "here", "this" or "the above" without naming a buffer.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window current-view}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{include_content} @tab boolean @tab no @tab Also return the buffers' text (default false: the listing alone is usually enough, and get_buffer_content fetches just the one you want)
+@end multitable
+
+@item delete_window
+Delete (close) the currently selected window.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window delete-window}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+Takes no arguments.
+
+@item list_frames
+List all frames with name, dimensions, and selection status.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window list-frames}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+Takes no arguments.
+
+@item list_windows
+List all windows with buffer, point, dimensions, and position.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window list-windows}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@item Example: @code{emacsctl tool window list-windows}
+@end itemize
+
+Takes no arguments.
+
+@item select_window
+Select another window by direction (up/down/left/right) or cycle.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window select-window}
+@item Surfaces: mcp, dbus, cli, menu, agents
+@item Returns: string
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{direction} @tab string @tab no @tab Direction to move (omit to cycle) One of: up, down, left, right.
+@end multitable
+
+@item split_window
+Split the current window vertically or horizontally.
+
+@itemize @bullet
+@item CLI: @command{emacsctl tool window split-window}
+@item Surfaces: mcp, menu, agents
+@item Returns: string
+@item Flags: destructive
+@end itemize
+
+@multitable @columnfractions .2 .12 .1 .58
+@headitem Argument @tab Type @tab Required @tab Description
+@item @code{direction} @tab string @tab no @tab Split direction (default: vertical) One of: vertical, horizontal.
 @end multitable
 
 @end table

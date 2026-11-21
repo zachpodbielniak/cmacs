@@ -69,9 +69,19 @@ handle_brigade_tool (McpServer *server, const gchar *name,
    * already has a JSON parser and a coercion table, and duplicating
    * either here would give MCP callers subtly different type handling
    * from in-process agents. */
-  node = json_node_new (JSON_NODE_OBJECT);
-  json_node_set_object (node, arguments);
-  args_json = json_to_string (node, FALSE);
+  /* A client may leave "arguments" out altogether -- the MCP schema
+   * makes it optional, and a tool with no parameters is usually called
+   * that way -- and ARGUMENTS is then NULL.  A node holding a NULL
+   * object does not serialise as {}; json-glib walks it and crashes, so
+   * `tools/call list_buffers' with no arguments took the editor down.  */
+  if (arguments != NULL)
+    {
+      node = json_node_new (JSON_NODE_OBJECT);
+      json_node_set_object (node, arguments);
+      args_json = json_to_string (node, FALSE);
+    }
+  else
+    args_json = g_strdup ("{}");
 
   /* Every string here is untrusted input from an external agent;
    * cmacs_dispatch_lisp_escape is the boundary that keeps it data
@@ -224,7 +234,25 @@ publish_one (const CmacsBrigadeTool *tool, gpointer user_data)
   if (tool->no_mcp)
     return;
 
-  if (server_has_tool (server, tool->name))
+  /* A name the server already serves belongs to a hand-written C tool
+   * (this runs after every per-subsystem registration).  Two cases:
+   *
+   *  - The tool comes from a migrated family, one of the files
+   *    `cmacs-capability-migrated-families' loads.  It IS that tool,
+   *    rewritten, and takes the name: mcp_server_add_tool replaces on
+   *    collision.  The C handler stays behind as the fallback for a
+   *    build without the brigade or a session whose Lisp side did not
+   *    load, which is why no family C file had to change.
+   *
+   *  - Anything else is a user's tool that happens to share a built-in
+   *    name, and is refused: silently taking over a built-in for every
+   *    MCP client is a privilege escalation dressed as a naming
+   *    accident.
+   *
+   * Replacing a tool does not change who may call it: the allowlist and
+   * the privileged set go by NAME (cmacs-brigade-allowlist.c), and the
+   * name is the same.  */
+  if (server_has_tool (server, tool->name) && !tool->replaces_builtin)
     {
       g_warning ("cmacs-brigade: tool `%s' shadows a built-in MCP tool "
                  "and was not published; rename it", tool->name);

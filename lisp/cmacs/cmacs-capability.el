@@ -802,17 +802,52 @@ subsystem's tools, and the next full build would then call it stale."
 ;; doc_org/cmacs/cmacs-capability.org.
 
 (defconst cmacs-capability-migrated-families
-  '((cmacs-calculator-tools . IS-CMACS-CALCULATOR))
+  '((cmacs-calculator-tools . IS-CMACS-CALCULATOR)
+    ;; The editor core: built into every cmacs.
+    (cmacs-buffer-tools . t)
+    (cmacs-window-tools . t)
+    (cmacs-edit-tools . t)
+    (cmacs-process-tools . t)
+    (cmacs-debug-tools . t)
+    (cmacs-project-tools . t)
+    (cmacs-describe-tools . t)
+    (cmacs-gi-tools . IS-CMACS-GI)
+    (cmacs-gowl-tools . IS-CMACS-GOWL)
+    (cmacs-ai-tools . IS-CMACS-AI)
+    (cmacs-audio-tools . IS-CMACS-AUDIO)
+    (cmacs-secondbrain-tools . IS-CMACS-SECONDBRAIN)
+    (cmacs-dbexplorer-tools . IS-CMACS-DBEXPLORER)
+    (cmacs-gsurf-tools . IS-CMACS-GSURF)
+    (cmacs-gnuseye-tools . IS-CMACS-GNUSEYE)
+    (cmacs-libregnum-tools . IS-CMACS-LIBREGNUM)
+    (cmacs-lrgterm-tools . IS-CMACS-LRGTERM)
+    (cmacs-cad-tools . IS-CMACS-CAD)
+    (cmacs-imgedit-tools . IS-CMACS-IMGEDIT)
+    (cmacs-vidstudio-tools . IS-CMACS-VIDSTUDIO)
+    (cmacs-lql-watch-tools . IS-CMACS-LQL))
   "Alist of (FEATURE . FLAG): tool files to load when FLAG is non-nil.
 FLAG is an `IS-CMACS-*' variable from cmacs/core/cmacs-features.c, so a
-family is only offered by a build that compiled its subsystem in.")
+family is only offered by a build that compiled its subsystem in; t
+names a family of the always-built core.")
 
 (provide 'cmacs-capability)
 
 ;; After `provide': a family file requires the registry, which may be
 ;; what is loading us.
+;; Declared special HERE as well as in the registry.  The binding below
+;; is dynamic only if this file's compilation knows the variable is
+;; special, and a build that compiles this file against a registry .elc
+;; older than the variable bakes in a lexical binding instead: every
+;; family then loads unmarked, and every migrated tool is refused by the
+;; MCP publisher in favour of its C twin, silently.
+(defvar cmacs-brigade-registering-shipped-family)
+
 (pcase-dolist (`(,feature . ,flag) cmacs-capability-migrated-families)
-  (when (and (boundp flag) (symbol-value flag))
-    (require feature nil 'noerror)))
+  (when (or (eq flag t) (and (boundp flag) (symbol-value flag)))
+    ;; Bound so the registry knows these tools are the shipped
+    ;; replacements of hand-written C tools: the MCP publisher lets only
+    ;; those take a built-in's name.
+    (let ((cmacs-brigade-registering-shipped-family feature))
+      (require feature nil 'noerror))))
 
 ;;; cmacs-capability.el ends here

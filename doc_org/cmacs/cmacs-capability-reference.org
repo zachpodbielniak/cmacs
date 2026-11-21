@@ -5,7 +5,7 @@
 #   admin/cmacs-capability-audit.sh --write-docs
 # test/cmacs/cmacs-capability-tests.el fails when this is stale.
 
-63 tools.  Each is reachable by its wire name over MCP and =org.cmacs.Editor1.Tools.Call=, and by the CLI words shown, on the surfaces listed.  See [[file:cmacs-capability.org][cmacs-capability.org]] for how the table works.
+284 tools.  Each is reachable by its wire name over MCP and =org.cmacs.Editor1.Tools.Call=, and by the CLI words shown, on the surfaces listed.  See [[file:cmacs-capability.org][cmacs-capability.org]] for how the table works.
 
 * agent
 
@@ -94,6 +94,655 @@ Check on a subagent you spawned. States are draft, queued, starting, running, wa
 | Argument | Type | Required | Description |
 |----------+------+----------+-------------|
 | =id= | string | yes | Task id returned by agent_spawn |
+
+* ai
+
+** ai_call
+
+Send PROMPT to an AI provider and return the final answer. Like ai_prompt, but with 'tools':true the model is given the built-in agent tools (bash/read/write/edit/glob/grep/ls/web_fetch) and runs a multi-turn tool loop on a worker thread. Optional 'provider' / 'system' / 'model' behave as for ai_prompt.
+
+- CLI :: =emacsctl tool ai call=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 1800s)
+- Example :: =emacsctl tool ai call --prompt 'What is in ./README.org?' --tools=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =prompt= | string | yes | User prompt |
+| =provider= | string | no | Provider name |
+| =system= | string | no | System prompt |
+| =model= | string | no | Model name |
+| =tools= | boolean | no | Give the model the built-in agent tools |
+
+** ai_embed_similarity
+
+Cosine similarity of two texts' embeddings, in [-1, 1]: 1 is the same direction, 0 unrelated, -1 opposite. Use it to judge whether two passages mean the same thing -- near-duplicate detection, or checking an answer against a source. Needs a local embedding provider (ollama). Optional 'model' overrides the default embedding model. To SEARCH the notes corpus use memory_search instead; this compares two specific strings.
+
+- CLI :: =emacsctl tool ai embed-similarity=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 120s)
+- Example :: =emacsctl tool ai embed-similarity --a 'a cat' --b 'a kitten'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =a= | string | yes | First text |
+| =b= | string | yes | Second text |
+| =model= | string | no | Embedding model |
+
+** ai_list_providers
+
+Return the list of supported cmacs-ai provider symbols.
+
+- CLI :: =emacsctl tool ai list-providers=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Example :: =emacsctl tool ai list-providers=
+
+Takes no arguments.
+
+** ai_lql
+
+Run an LQL query on the libresearch server and return its rows (at most 100 shown). LQL pipes search results: search "glib", category: CODE | filter extra.stars > 100 | fields title, url -- or the shorthand gtk docs | filter site("docs.gtk.org"). 'explain' returns the plan without running it. An invalid query reports the server's position and caret excerpt.
+
+- CLI :: =emacsctl tool ai lql=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 120s)
+- Example :: =emacsctl tool ai lql --query 'gtk docs | filter site("docs.gtk.org")'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =query= | string | yes | LQL query |
+| =explain= | boolean | no | Plan without running |
+
+** ai_open_chat
+
+Open a cmacs-ai chat buffer. If PROMPT is given, the prompt is sent as the first user turn and streamed. Optional 'model' overrides the provider's default model. Returns the buffer name.
+
+- CLI :: =emacsctl tool ai open-chat=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Example :: =emacsctl tool ai open-chat --provider claude=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =prompt= | string | no | Optional initial prompt |
+| =provider= | string | no | Provider name |
+| =model= | string | no | Model name |
+
+** ai_prompt
+
+Send PROMPT to an AI provider via cmacs-ai and return its answer. Optional 'provider' (claude / openai / gemini / grok / ollama / claude-code / opencode / claude-tmux / grok-build / antigravity / cursor) overrides the default; optional 'system' is a system prompt; optional 'model' overrides the provider's default model.
+
+- CLI :: =emacsctl tool ai prompt=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 600s)
+- Example :: =emacsctl tool ai prompt --prompt 'Name three GLib main-loop sources'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =prompt= | string | yes | User prompt |
+| =provider= | string | no | Provider name |
+| =system= | string | no | System prompt |
+| =model= | string | no | Model name |
+
+** ai_research
+
+Research a question on the web with libresearch and return a cited answer: the answer with numbered citations [n], then the sources (title, URL). Needs a libresearch server (cmacs-ai-libresearch-url). 'deep' lets the server run follow-up searches; 'pages' (1-20) is how many pages it reads. A run takes minutes.
+
+- CLI :: =emacsctl tool ai research=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 960s)
+- Example :: =emacsctl tool ai research --question 'What changed in wlroots 0.20?'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =question= | string | yes | The question |
+| =deep= | boolean | no | Run follow-up searches |
+| =pages= | integer | no | Pages to read, 1-20 |
+
+** ai_web_fetch
+
+Read a web page's text through libresearch (the server applies its own SSRF guard). 'archive' is never (default), fallback (use the Wayback Machine when the live page fails) or only; 'max_chars' (100-1000000) caps the text. Returns title, URL, the archived copy if one stood in, then the text.
+
+- CLI :: =emacsctl tool ai web-fetch=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Flags :: async (timeout 120s)
+- Example :: =emacsctl tool ai web-fetch --url https://docs.gtk.org/glib/=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =url= | string | yes | Page URL |
+| =archive= | string | no | Wayback Machine policy One of: never, fallback, only. |
+| =max_chars= | integer | no | Longest text |
+
+** generate_image
+
+Generate an image from a text prompt and insert it into a cmacs buffer. In an Org buffer the image is attached to the current node and previewed inline; elsewhere it is saved under cmacs-ai-image-dir. Optional 'references' is a comma-separated list of input images to condition on, each PATH or PATH::ROLE (e.g. "logo.png::style,cat.jpg::subject") -- roles tell the model what each reference is for. Optional 'provider' (gemini / openai / grok), 'model', 'aspect' (e.g. 16:9), 'size' (e.g. 1024x1024) and 'quality'. Optional 'buffer' names the target buffer; the current one is used otherwise. Generation takes tens of seconds.
+
+- CLI :: =emacsctl tool ai generate-image=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 300s)
+- Example :: =emacsctl tool ai generate-image --prompt 'a brass orrery' --aspect 16:9=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =prompt= | string | yes | What to depict |
+| =references= | string | no | Comma-separated PATH or PATH::ROLE reference images |
+| =provider= | string | no | gemini/openai/grok |
+| =model= | string | no | Model id |
+| =aspect= | string | no | Aspect ratio |
+| =size= | string | no | Pixel size |
+| =quality= | string | no | Quality level |
+| =buffer= | string | no | Target buffer name |
+
+* audio
+
+** list_voices
+
+List Piper voice .onnx files in cmacs-piper-voices-directory.
+
+- CLI :: =emacsctl tool audio voices=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool audio voices=
+
+Takes no arguments.
+
+** list_whisper_models
+
+List whisper.cpp models available in cmacs-whisper-models-directory.
+
+- CLI :: =emacsctl tool audio whisper-models=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool audio whisper-models=
+
+Takes no arguments.
+
+** record_audio
+
+Capture microphone audio for SECONDS into OUTPUT_PATH (WAV). Returns the output path on success.
+
+- CLI :: =emacsctl tool audio record=
+- Surfaces :: mcp, dbus, cli
+- Returns :: string
+- Example :: =emacsctl tool audio record --seconds 5=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =seconds= | number | yes | Duration in seconds |
+| =output_path= | string | no | Optional WAV path |
+
+** speech_components
+
+Which engine and model serve each speech component and feature, and why (tab-separated: component[/feature], backend, model, source).
+
+- CLI :: =emacsctl tool audio components=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool audio components=
+
+Takes no arguments.
+
+** speech_diarize
+
+Who spoke when in an audio or video file: a speaker-labelled transcript.
+
+- CLI :: =emacsctl tool audio diarize=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 1200s)
+- Example :: =emacsctl tool audio diarize --audio-path ~/meeting.m4a=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =audio_path= | string | yes | Audio or video file |
+
+** speech_identify_speaker
+
+Which enrolled speaker an audio file sounds like, best matches first.
+
+- CLI :: =emacsctl tool audio identify-speaker=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 600s)
+- Example :: =emacsctl tool audio identify-speaker --audio-path ~/clip.wav=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =audio_path= | string | yes | Audio or video file |
+
+** speech_models
+
+Installed and downloadable speech models (tab-separated: state, backend, id, components, description). Downloads are started by the user in M-x cmacs-speech.
+
+- CLI :: =emacsctl tool audio models=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool audio models --component tts=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =component= | string | no | Only models serving this component |
+
+** speech_set
+
+Choose the engine (and model) for a speech component, for this session only -- the user's saved choices are never changed.
+
+- CLI :: =emacsctl tool audio set=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool audio set --component tts --backend piper=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =component= | string | yes | stt, stt-live, stt-stream, wake, vad, tts, diarize, speaker-id, punctuate, lang-id, audio-tag, denoise, separate |
+| =backend= | string | yes | whisper, sherpa, piper, or auto |
+| =model= | string | no | Installed model id |
+| =feature= | string | no | Limit to one feature (dictate, voice-loop, ...) |
+
+** speech_tag_audio
+
+What sounds are in an audio file (speech, music, laughter, ...), with probabilities.
+
+- CLI :: =emacsctl tool audio tag=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 600s)
+- Example :: =emacsctl tool audio tag --audio-path ~/clip.wav=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =audio_path= | string | yes | Audio or video file |
+
+** synthesize_speech
+
+Speak TEXT with the configured voice, or write it to OUTPUT_PATH as a WAV file. VOICE picks an installed voice (see speech_models).
+
+- CLI :: =emacsctl tool audio synthesize=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 300s)
+- Example :: =emacsctl tool audio synthesize --text 'Build finished'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =text= | string | yes | Text to speak |
+| =output_path= | string | no | Optional WAV path |
+| =voice= | string | no | Installed voice id |
+| =backend= | string | no | sherpa or piper |
+
+** transcribe
+
+Transcribe an audio or video file with the engine M-x cmacs-speech chose (whisper.cpp or sherpa-onnx). Returns the transcript; with diarize, a speaker-labelled one.
+
+- CLI :: =emacsctl tool audio transcribe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 1200s)
+- Example :: =emacsctl tool audio transcribe --audio-path ~/meeting.m4a=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =audio_path= | string | yes | Audio or video file (any format ffmpeg reads) |
+| =language= | string | no | ISO 2-letter code hint |
+| =backend= | string | no | whisper or sherpa (default: as configured) |
+| =model= | string | no | Installed model id (see speech_models) |
+| =diarize= | boolean | no | Label who spoke when |
+
+* buffer
+
+** create_buffer
+
+Create a new buffer with an optional initial content.
+
+- CLI :: =emacsctl tool buffer create-buffer=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Buffer name |
+| =content= | string | no | Initial content |
+
+** find_file
+
+Open a file in Emacs (equivalent to C-x C-f / find-file).
+
+- CLI :: =emacsctl tool buffer find-file=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | File path to open |
+
+** get_buffer_content
+
+Read the text content of a buffer. Optionally specify start/end positions.
+
+- CLI :: =emacsctl tool buffer get-buffer-content=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool buffer get-buffer-content --buffer '*scratch*'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =start= | integer | no | Start position (1-based) |
+| =end= | integer | no | End position (1-based) |
+
+** kill_buffer
+
+Kill (close) a buffer.
+
+- CLI :: =emacsctl tool buffer kill-buffer=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+
+** list_buffers
+
+List all buffers with name, file, modified status, major-mode, and size. Returns pipe-separated fields, one buffer per line.
+
+- CLI :: =emacsctl tool buffer list-buffers=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool buffer list-buffers=
+
+Takes no arguments.
+
+** save_buffer
+
+Save a buffer to its associated file.
+
+- CLI :: =emacsctl tool buffer save-buffer=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+
+** set_buffer_content
+
+Replace text in a buffer. If start/end given, replaces that range; otherwise replaces entire buffer content.
+
+- CLI :: =emacsctl tool buffer set-buffer-content=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =content= | string | yes | New text content |
+| =start= | integer | no | Start position (1-based) |
+| =end= | integer | no | End position (1-based) |
+
+** switch_to_buffer
+
+Switch the current window to display a buffer.
+
+- CLI :: =emacsctl tool buffer switch-to-buffer=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+
+* cad
+
+** cad_assembly_bom
+
+Assembly NAME's bill of materials (part, quantity, volume, mass).
+
+- CLI :: =emacsctl tool cad assembly-bom=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad assembly-bom --path ~/cad/arm.cad --name arm=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =name= | string | yes | Assembly name |
+
+** cad_assembly_info
+
+Assembly NAME's solved state, DOF, and per-instance transforms.
+
+- CLI :: =emacsctl tool cad assembly-info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad assembly-info --path ~/cad/arm.cad --name arm=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =name= | string | yes | Assembly name |
+
+** cad_assembly_interference
+
+Interferences (overlapping instance pairs + volume) in assembly NAME.
+
+- CLI :: =emacsctl tool cad assembly-interference=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad assembly-interference --path ~/cad/arm.cad --name arm=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =name= | string | yes | Assembly name |
+
+** cad_assembly_set_joint
+
+Drive JOINT (id) of assembly NAME to VALUE and re-solve (no source re-eval); report the new instance transforms.
+
+- CLI :: =emacsctl tool cad assembly-set-joint=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad assembly-set-joint --path ~/cad/arm.cad --name arm --joint 0 --value 45=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =name= | string | yes | Assembly name |
+| =joint= | integer | yes | Joint id |
+| =value= | number | yes | Value to drive the joint to |
+
+** cad_eval
+
+Re-evaluate a part; report ok+parts/error.
+
+- CLI :: =emacsctl tool cad eval=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad eval --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_export
+
+Export the part to OUT in FORMAT (stl/stl-ascii/obj/step/iges).
+
+- CLI :: =emacsctl tool cad export=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =out= | string | yes | Destination file |
+| =format= | string | no | stl (the default), stl-ascii, obj, step or iges |
+
+** cad_feature_tree
+
+The part's feature (CSG) tree as indented text.
+
+- CLI :: =emacsctl tool cad feature-tree=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad feature-tree --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_get_source
+
+Return a part's source text.
+
+- CLI :: =emacsctl tool cad get-source=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad get-source --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_inspect
+
+Mass properties: volume, area, triangles, watertight, COM, bbox.
+
+- CLI :: =emacsctl tool cad inspect=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad inspect --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_open
+
+Open a .cad/.ccad part; returns its language + capabilities.
+
+- CLI :: =emacsctl tool cad open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad open --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_params
+
+List a part's parameters and ranges.
+
+- CLI :: =emacsctl tool cad params=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad params --path ~/cad/bracket.cad=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+
+** cad_patch_source
+
+Replace the single occurrence of OLD with NEW in a part, then re-evaluate. Token-economical edits; errors if OLD is absent/ambiguous.
+
+- CLI :: =emacsctl tool cad patch-source=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =old= | string | yes | Text to replace; must occur exactly once |
+| =new= | string | yes | Replacement text |
+
+** cad_print
+
+Upload GCODE to PRINTER. A print only STARTS when BOTH start and confirm are true; otherwise it only uploads (the safe default).
+
+- CLI :: =emacsctl tool cad print=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =printer= | string | yes | Printer name, as cad_printers lists it |
+| =gcode= | string | yes | G-code file to upload |
+| =start= | boolean | no | Start the print after uploading |
+| =confirm= | boolean | no | Must also be true for START to take effect |
+
+** cad_printers
+
+List configured printers.
+
+- CLI :: =emacsctl tool cad printers=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad printers=
+
+Takes no arguments.
+
+** cad_section
+
+Section the part by an X/Y/Z plane at OFFSET; report segments + perimeter.
+
+- CLI :: =emacsctl tool cad section=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool cad section --path ~/cad/bracket.cad --axis z --offset 2.5=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =axis= | string | no | x, y or z (default z) |
+| =offset= | number | no | Plane offset along the axis (default 0) |
+
+** cad_set_source
+
+Replace a part's whole SOURCE, write it, re-evaluate, and report ok+parts or the error with its source location. The edit-eval loop.
+
+- CLI :: =emacsctl tool cad set-source=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =source= | string | yes | The whole new source |
+
+** cad_slice
+
+Export the part to STL and slice it to G-code (waits, default 300s).
+
+- CLI :: =emacsctl tool cad slice=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask, async (timeout 3600s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | The part file |
+| =timeout= | number | no | Seconds to wait for the slicer (default 300) |
 
 * calc
 
@@ -188,6 +837,43 @@ List every LQL source lql_query can fetch from, including the editor-state sourc
 
 Takes no arguments.
 
+** lql_unwatch
+
+Remove one of your standing LQL queries, by the NAME you gave lql_watch.
+
+- CLI :: =emacsctl tool data lql-unwatch=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | The watch's name |
+
+** lql_watch
+
+Register a standing LQL query and be told when its result changes: "tell me when X". The query (same language and sources as lql_query) is re-run every EVERY seconds; the first result is the baseline, and after that you receive a message, with a diff, only when the result differs from the last one. Prefer this to calling lql_query in a loop. Give KEY, the column(s) identifying a row, to have changed rows told apart from removed-and-added ones. Write a query whose result is small and stable -- filter, summarize, sort -- because any difference fires. A watch is yours alone, you may hold only a few, and all of them are removed when your run ends. Registering under a NAME you already use replaces that watch.
+
+- CLI :: =emacsctl tool data lql-watch=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | A short name for the watch: letters, digits, - or _ |
+| =query= | string | yes | The LQL query to watch |
+| =every= | integer | no | Seconds between runs (default 120, minimum 30) |
+| =key= | string | no | Column, or comma-separated columns, identifying a row |
+
+** lql_watches
+
+List your standing LQL queries: state, interval, row count, when each last ran and last changed, its last error, and any change you have not yet been told about.
+
+- CLI :: =emacsctl tool data lql-watches=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
 * database
 
 ** db_columns
@@ -204,6 +890,19 @@ Describe one table: its columns with types and nullability, and its primary key.
 | =table= | string | yes | Table name |
 | =schema= | string | no | Schema containing the table; omit for the default |
 
+** db_connect
+
+Open the saved connection named CONNECTION, so queries can run against it. Names come from db_connections; a connection URL is not accepted. Already-open connections are left alone.
+
+- CLI :: =emacsctl tool database db-connect=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 60s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Saved connection name from db_connections |
+
 ** db_connections
 
 List the databases this Emacs can reach, with their dialect and whether they are read-only. Call this first: every other database tool addresses a connection by the names this returns.
@@ -213,6 +912,18 @@ List the databases this Emacs can reach, with their dialect and whether they are
 - Returns :: string
 
 Takes no arguments.
+
+** db_disconnect
+
+Close the connection named CONNECTION, releasing its database handle and dropping its cached schema. The saved definition survives, so db_connect brings it back.
+
+- CLI :: =emacsctl tool database db-disconnect=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =connection= | string | yes | Saved connection name from db_connections |
 
 ** db_execute
 
@@ -256,6 +967,7 @@ Run a read-only SQL query and return the rows as JSON. Only reads are permitted:
 |----------+------+----------+-------------|
 | =connection= | string | yes | Connection name from db-connections |
 | =sql= | string | yes | The SELECT statement to run |
+| =max_rows= | integer | no | Maximum rows to fetch; omit for the configured default |
 
 ** db_tables
 
@@ -269,6 +981,101 @@ List the tables and views in a database.
 |----------+------+----------+-------------|
 | =connection= | string | yes | Connection name from db-connections |
 | =schema= | string | no | Schema to list; omit for the default |
+
+* debug
+
+** backtrace
+
+Get the current Lisp backtrace.
+
+- CLI :: =emacsctl tool debug backtrace=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** describe_mode
+
+Get the current major mode and active minor modes.
+
+- CLI :: =emacsctl tool debug describe-mode=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** list_hooks
+
+List all non-nil hook variables and their values.
+
+- CLI :: =emacsctl tool debug list-hooks=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** memory_info
+
+Get GC statistics and memory usage counts.
+
+- CLI :: =emacsctl tool debug memory-info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** process_status
+
+Get Emacs process info: PID, uptime, version, system type.
+
+- CLI :: =emacsctl tool debug process-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool debug process-status=
+
+Takes no arguments.
+
+** profiler_report
+
+Get the CPU profiler report.
+
+- CLI :: =emacsctl tool debug profiler-report=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** profiler_start
+
+Start the Emacs CPU profiler.
+
+- CLI :: =emacsctl tool debug profiler-start=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** profiler_stop
+
+Stop the Emacs CPU profiler.
+
+- CLI :: =emacsctl tool debug profiler-stop=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** recent_messages
+
+Get recent entries from the *Messages* buffer.
+
+- CLI :: =emacsctl tool debug recent-messages=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =lines= | integer | no | Number of lines to retrieve (default: 50) Default: 50. |
 
 * deliver
 
@@ -396,7 +1203,1262 @@ List the windows open on your own desktop, with their ids, titles, programs and 
 
 Takes no arguments.
 
+* edit
+
+** edit_buffer
+
+Replace an exact substring in a buffer. old_string must occur exactly once unless replace_all is true. Errors if not found.
+
+- CLI :: =emacsctl tool edit buffer=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =old_string= | string | yes | Exact text to replace |
+| =new_string= | string | yes | Replacement text |
+| =replace_all= | boolean | no | Replace every occurrence (default false) |
+
+** get_org_content
+
+Parse an org-mode buffer into a structured JSON document: buffer keywords (#+TITLE etc.) plus a nested headline tree with title, level, todo, priority, tags, scheduled/deadline/closed, property drawers, and body text. match filters entries with org's agenda match syntax (e.g. "work+urgent/TODO").
+
+- CLI :: =emacsctl tool edit get-org-content=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =match= | string | no | org agenda match string (tags/todo/property query); empty for all entries |
+| =max_depth= | integer | no | Limit headline depth (0 = unlimited) |
+| =include_body= | boolean | no | Include entry body text (default true) Default: t. |
+| =include_properties= | boolean | no | Include property drawers (default true) Default: t. |
+
+** goto_line
+
+Move point to a 1-based line number in a buffer, updating its window if one is showing.
+
+- CLI :: =emacsctl tool edit goto-line=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =line= | integer | yes | 1-based line |
+
+** insert_org
+
+Insert text into an org buffer, org-aware: target a headline by exact title or slash outline path (creating missing components with create), position at the entry's body top/bottom or subtree-end, wrap in an org block (src with lang, quote, example, verse, center, or a custom name) or a drawer, or file it as a new child headline with optional todo keyword and tags. timestamp prepends an inactive org timestamp.
+
+- CLI :: =emacsctl tool edit insert-org=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =text= | string | yes | Text to insert |
+| =heading= | string | no | Target headline: exact title, or slash-separated outline path like Projects/cmacs/Log |
+| =position= | string | no | Where in the entry (default bottom: end of the entry's own body, before child headings) One of: top, bottom, subtree-end, point. |
+| =wrap= | string | no | Org block: src, quote, example, verse, center, or any custom #+begin_ name |
+| =lang= | string | no | Language for wrap=src |
+| =drawer= | string | no | Wrap in a :NAME: drawer (e.g. LOGBOOK) |
+| =child= | string | no | Create a child headline with this title; the text becomes its body |
+| =todo= | string | no | TODO keyword for the child headline |
+| =tags= | string | no | Colon-separated tags for the child |
+| =create= | boolean | no | Create missing heading path components |
+| =timestamp= | boolean | no | Prepend an inactive org timestamp |
+
+** replace_in_buffer
+
+Regexp search-and-replace across a whole buffer. Returns the number of matches replaced.
+
+- CLI :: =emacsctl tool edit replace-in-buffer=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =regexp= | string | yes | Emacs regexp to match |
+| =replacement= | string | yes | Replacement string (\N backrefs allowed) |
+
+** search_buffer
+
+Search a buffer for a regexp. Returns up to 200 matches as 'LINE: TEXT' lines.
+
+- CLI :: =emacsctl tool edit search-buffer=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | yes | Buffer name |
+| =regexp= | string | yes | Emacs regexp to match |
+
+* elisp
+
+** apropos
+
+Search for Emacs symbols matching a pattern. Returns one symbol per line.
+
+- CLI :: =emacsctl tool elisp apropos=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Regexp pattern to match against symbol names |
+
+** completions
+
+Get completion candidates for a symbol name prefix. Returns up to 100 matches.
+
+- CLI :: =emacsctl tool elisp completions=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =prefix= | string | yes | Symbol name prefix to complete |
+
+** describe_function
+
+Describe an Emacs Lisp function: arglist, docstring, and source location.
+
+- CLI :: =emacsctl tool elisp describe-function=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool elisp describe-function --symbol car=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =symbol= | string | yes | Function symbol name |
+
+** describe_variable
+
+Describe an Emacs Lisp variable: current value and docstring.
+
+- CLI :: =emacsctl tool elisp describe-variable=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =symbol= | string | yes | Variable symbol name |
+
+* gi
+
+** gi_describe
+
+Describe a type or function in a GI namespace.
+
+- CLI :: =emacsctl tool gi describe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =namespace= | string | yes | GI namespace |
+| =symbol= | string | yes | Type or function name |
+
+** gi_list_functions
+
+List all functions in a GI namespace.
+
+- CLI :: =emacsctl tool gi list-functions=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gi list-functions --namespace GLib=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =namespace= | string | yes | GI namespace |
+
+** gi_list_namespaces
+
+List loaded GObject Introspection namespaces.
+
+- CLI :: =emacsctl tool gi list-namespaces=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+* gnuseye
+
+** gnuseye_add_geofence
+
+Add a geofence: a circle of RADIUS_KM about LAT, LON named NAME. Entities entering/leaving emit podomation events.
+
+- CLI :: =emacsctl tool gnuseye add-geofence=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye add-geofence --name home --lat 41.9 --lon -87.6 --radius-km 50=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Name for the fence |
+| =lat= | number | yes | Centre latitude, degrees |
+| =lon= | number | yes | Centre longitude, degrees |
+| =radius_km= | number | yes | Radius in kilometres |
+
+** gnuseye_brief
+
+Summarise the entities currently indexed on the globe (counts by kind).
+
+- CLI :: =emacsctl tool gnuseye brief=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye brief=
+
+Takes no arguments.
+
+** gnuseye_cii
+
+Compute the country-instability index from active signals; returns the ranked ISO-A3 -> score JSON.
+
+- CLI :: =emacsctl tool gnuseye cii=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gnuseye cii=
+
+Takes no arguments.
+
+** gnuseye_fly_to
+
+Fly the globe camera to LAT, LON (degrees); optional RANGE world units.
+
+- CLI :: =emacsctl tool gnuseye fly-to=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye fly-to --lat 51.5 --lon -0.12=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =lat= | number | yes | Latitude, degrees |
+| =lon= | number | yes | Longitude, degrees |
+| =range= | number | no | Camera range in world units (default 14) |
+
+** gnuseye_forecast
+
+Open the 7-day point-forecast panel (Open-Meteo) for LAT, LON.
+
+- CLI :: =emacsctl tool gnuseye forecast=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye forecast --lat 41.9 --lon -87.6=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =lat= | number | yes | Latitude, degrees |
+| =lon= | number | yes | Longitude, degrees |
+
+** gnuseye_list_layers
+
+List GNU's Eye data layers with their on/off state and group.
+
+- CLI :: =emacsctl tool gnuseye list-layers=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye list-layers=
+
+Takes no arguments.
+
+** gnuseye_open
+
+Open the GNU's Eye live planetary globe buffer.
+
+- CLI :: =emacsctl tool gnuseye open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye open=
+
+Takes no arguments.
+
+** gnuseye_query_entities
+
+Query indexed entities by KIND and/or a bounding box (WEST/SOUTH/EAST/NORTH degrees); returns JSON (capped by LIMIT).
+
+- CLI :: =emacsctl tool gnuseye query-entities=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gnuseye query-entities --kind aircraft --limit 20=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =kind= | string | no | Entity kind to keep; omit for every kind |
+| =west= | number | no | Western bound, degrees (default -180) |
+| =south= | number | no | Southern bound, degrees (default -90) |
+| =east= | number | no | Eastern bound, degrees (default 180) |
+| =north= | number | no | Northern bound, degrees (default 90) |
+| =limit= | integer | no | Most rows to return (default 200) |
+
+** gnuseye_refresh
+
+Refresh every enabled GNU's Eye layer now.
+
+- CLI :: =emacsctl tool gnuseye refresh=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye refresh=
+
+Takes no arguments.
+
+** gnuseye_toggle_layer
+
+Toggle a data layer on/off by NAME (e.g. satellites, aircraft, vessels, quakes, launches, fires).
+
+- CLI :: =emacsctl tool gnuseye toggle-layer=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye toggle-layer --name quakes=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Layer name, as gnuseye_list_layers reports it |
+
+** gnuseye_weather_showcase
+
+Light the full weather picture: tropical cyclones (tracks/cones), animated precipitation radar, cloud imagery, wind particles, METARs, and US alert zones; flies to the strongest active storm.
+
+- CLI :: =emacsctl tool gnuseye weather-showcase=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gnuseye weather-showcase=
+
+Takes no arguments.
+
+* gowl
+
+** gowl_broadcast_assign
+
+Put a window in a broadcast team's slot by hand.
+
+- CLI :: =emacsctl tool gowl broadcast-assign=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =team= | string | yes | The team |
+| =slot= | string | yes | The slot |
+| =client_id= | integer | no | The window (default: the focused one); 0 hands the slot back to its match |
+
+** gowl_broadcast_focus_slot
+
+Focus the window in a broadcast team's slot, viewing its tag.
+
+- CLI :: =emacsctl tool gowl broadcast-focus-slot=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =team= | string | no | The team (default: the only one) |
+| =slot= | string | yes | The slot |
+
+** gowl_broadcast_list
+
+The broadcast teams and rules in force, each as YAML (JSON).
+
+- CLI :: =emacsctl tool gowl broadcast-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_broadcast_remove
+
+Remove a broadcast team or rule.
+
+- CLI :: =emacsctl tool gowl broadcast-remove=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =kind= | string | yes | team or rule One of: team, rule. |
+| =name= | string | yes | The team's or rule's name |
+
+** gowl_broadcast_set
+
+Switch input broadcasting on, off or toggle it (a toast shows the result), or panic: off, and every key held in any window released. Or set strict one-press-one-window mode instead.
+
+- CLI :: =emacsctl tool gowl broadcast-set=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =state= | string | no | on, off, toggle or panic One of: on, off, toggle, panic. |
+| =strict= | string | no | on, off or toggle One of: on, off, toggle. |
+
+** gowl_broadcast_status
+
+Input broadcasting (multiboxing): whether it is on, strict mode, the toggle and panic keys, every team with the window in each slot, every rule with the reason it cannot run if any, and delivery counters (JSON). The module is opt-in.
+
+- CLI :: =emacsctl tool gowl broadcast-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_clipboard_copy
+
+Put a history entry back on the clipboard: the next paste in any window produces it. Replaces what the person has copied.
+
+- CLI :: =emacsctl tool gowl clipboard-copy=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | The entry's id, from gowl_clipboard_list |
+
+** gowl_clipboard_entry
+
+The path of one history entry's stored bytes (exactly what was copied, in its MIME type).
+
+- CLI :: =emacsctl tool gowl clipboard-entry=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | The entry's id, from gowl_clipboard_list |
+
+** gowl_clipboard_list
+
+The clipboard history, newest first: one line per entry, ID<TAB>MIME<TAB>BYTES<TAB>PREVIEW. This is everything the person copied -- passwords included -- so read it when the task needs it, not by habit. The Super+space menu keeps it private for the same reason.
+
+- CLI :: =emacsctl tool gowl clipboard-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_close_client
+
+Close the Wayland client matching a pattern.
+
+- CLI :: =emacsctl tool gowl close-client=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Match pattern |
+| =by= | string | no | Match field (default: app-id) One of: app-id, title. |
+
+** gowl_drain_recording
+
+Take everything recorded since the last drain and leave the recording running. The reply carries dropped (since the last drain) and dropped_total, so a demonstration that overflowed the ring is reported rather than passed off as complete, plus active and stop_reason.
+
+- CLI :: =emacsctl tool gowl drain-recording=
+- Surfaces :: mcp, menu, agents
+- Returns :: json
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =token= | string | yes | Token from gowl_start_recording |
+
+** gowl_find_client
+
+Find a Wayland client by app-id or title pattern.
+
+- CLI :: =emacsctl tool gowl find-client=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gowl find-client --pattern 'librewolf*'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Search pattern |
+| =by= | string | no | Search field (default: app-id) One of: app-id, title. |
+
+** gowl_focus_client
+
+Give keyboard focus to the Wayland client matching a pattern.
+
+- CLI :: =emacsctl tool gowl focus-client=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Match pattern |
+| =by= | string | no | Match field (default: app-id) One of: app-id, title. |
+
+** gowl_focused_client
+
+Get info about the currently focused Wayland client.
+
+- CLI :: =emacsctl tool gowl focused-client=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_hotkey_fire
+
+Run a hotkey's actions as if it had been pressed.
+
+- CLI :: =emacsctl tool gowl hotkey-fire=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | The hotkey's id |
+
+** gowl_hotkey_history
+
+The last 64 inputs the hotkey module saw (JSON): keycode, keysym, pressed, injected, swallowed and the hotkey each fired. The first thing to look at when a hotkey does not fire.
+
+- CLI :: =emacsctl tool gowl hotkey-history=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_hotkey_list
+
+Every hotkey and remap in force (JSON): id, key as written and canonical, context, mode, enabled, origin, description.
+
+- CLI :: =emacsctl tool gowl hotkey-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_hotkey_remove
+
+Remove a hotkey added at run time (one from the configuration is disabled instead).
+
+- CLI :: =emacsctl tool gowl hotkey-remove=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | The hotkey's id |
+
+** gowl_hotkey_set
+
+Switch one hotkey on or off (id + enabled), suspend every hotkey, or enter a key mode.
+
+- CLI :: =emacsctl tool gowl hotkey-set=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | no | The hotkey, with enabled |
+| =enabled= | string | no | on, off or toggle One of: on, off, toggle. |
+| =suspended= | string | no | on, off or toggle One of: on, off, toggle. |
+| =mode= | string | no | A key mode; default leaves every mode |
+
+** gowl_hotkey_status
+
+Hotkeys (AutoHotkey for gowl): whether they are suspended, the key mode, counts of hotkeys, remaps, timers and hotstrings, the lock keys, the last hotkey fired and the last error (JSON). The module is opt-in; this loads it.
+
+- CLI :: =emacsctl tool gowl hotkey-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_list_clients
+
+List all Wayland clients (JSON array with id, title, app-id, tags, geometry).
+
+- CLI :: =emacsctl tool gowl list-clients=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gowl list-clients=
+
+Takes no arguments.
+
+** gowl_list_keybinds
+
+List all compositor keybinds.
+
+- CLI :: =emacsctl tool gowl list-keybinds=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_list_monitors
+
+List monitors (JSON array with name, geometry, mode, scale, layout).
+
+- CLI :: =emacsctl tool gowl list-monitors=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gowl list-monitors=
+
+Takes no arguments.
+
+** gowl_macro_list
+
+Every macro runnable by name, as JSON: name, kind (file, registered, custom = Elisp, ...), path, held-back.
+
+- CLI :: =emacsctl tool gowl macro-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_macro_record
+
+The macro recorder (Super+Alt+r). start records the person's keys, clicks, drags and scrolls; stop writes last-recording.c (and NAME.c) and replies `recorded NAME STEPS PATH'; cancel discards; status reports. Starting from here needs gowl's `input-recording' consent, because it watches the person's input; the screen is framed while it runs and password prompts are not recorded.
+
+- CLI :: =emacsctl tool gowl macro-record=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =action= | string | yes | start, stop, cancel or status One of: start, stop, cancel, status. |
+| =name= | string | no | With start: also write NAME.c |
+
+** gowl_macro_status
+
+Running macros, held-back ones and why, the fault count, the time budget, triggers -- the macro module's status JSON.
+
+- CLI :: =emacsctl tool gowl macro-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_macro_stop
+
+Stop running macros.
+
+- CLI :: =emacsctl tool gowl macro-stop=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =which= | string | no | A macro name, a run id or all (the default) |
+
+** gowl_macro_voice_match
+
+Run the macro a sentence names, as Super+Alt+m does with what was said: a configured phrase, a macro's name said as words ("pip corner 25" runs pip-corner 25), or every word of a name. dry_run reports what it would run (heard, normalised, macro, args) and runs nothing.
+
+- CLI :: =emacsctl tool gowl macro-voice-match=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =text= | string | yes | The sentence |
+| =dry_run= | boolean | no | Report what would run, and run nothing |
+
+** gowl_macro_voice_status
+
+The voice listener's state: listening, command, time limit, last sentence heard, last error. There is no tool to start listening: the microphone is the person's to turn on.
+
+- CLI :: =emacsctl tool gowl macro-voice-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_pick_color
+
+The colour of the screen at layout x, y, as "#rrggbb". The clipboard is left alone.
+
+- CLI :: =emacsctl tool gowl pick-color=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | integer | yes | Layout x |
+| =y= | integer | yes | Layout y |
+
+** gowl_recording_status
+
+Whether an input recording is running, its token, limits and counters, without consuming anything. Poll this to notice that a recording started, stopped, or was stopped from the keyboard.
+
+- CLI :: =emacsctl tool gowl recording-status=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+
+Takes no arguments.
+
+** gowl_screen_text
+
+Read the text in a region of the screen (OCR via tesseract, the screenshot module's ocr-command), in layout coordinates as gowl_list_monitors and gowl_list_clients report them. Returns the text, "" when there is none. The clipboard is left alone unless copy is true.
+
+- CLI :: =emacsctl tool gowl screen-text=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, async (timeout 90s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | integer | yes | Left edge, layout coordinates |
+| =y= | integer | yes | Top edge, layout coordinates |
+| =width= | integer | yes | Width of the region |
+| =height= | integer | yes | Height of the region |
+| =language= | string | no | tesseract languages, e.g. eng+deu (default: the screenshot module's) |
+| =copy= | boolean | no | Also put the text on the clipboard (default false) |
+
+** gowl_set_client_geometry
+
+Move and resize the Wayland client matching a pattern in one call.
+
+- CLI :: =emacsctl tool gowl set-client-geometry=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Match pattern |
+| =by= | string | no | Match field (default: app-id) One of: app-id, title. |
+| =x= | integer | yes | Left edge, layout coordinates |
+| =y= | integer | yes | Top edge, layout coordinates |
+| =width= | integer | yes | Width in pixels |
+| =height= | integer | yes | Height in pixels |
+
+** gowl_set_layout
+
+Set the tiling layout: "tile", "monocle", or "float".
+
+- CLI :: =emacsctl tool gowl set-layout=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =layout= | string | yes | Layout name One of: tile, monocle, float. |
+
+** gowl_set_monitor_transform
+
+Set the wl_output transform for a monitor (rotation/flip). transform is an integer 0-7: 0=normal, 1=90, 2=180, 3=270, 4=flipped, 5=flipped-90, 6=flipped-180, 7=flipped-270. To persist across sessions, add `transform:` under the matching output name in the YAML `monitors:` block.
+
+- CLI :: =emacsctl tool gowl set-monitor-transform=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Output name (e.g. eDP-1) |
+| =transform= | integer | yes | Transform code 0-7 |
+
+** gowl_spawn
+
+Spawn a command in the Wayland compositor.
+
+- CLI :: =emacsctl tool gowl spawn=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =command= | string | yes | Shell command to spawn |
+
+** gowl_start_recording
+
+Record real keyboard and pointer input so a human demonstration can be turned into a procedure. Returns a token for gowl_drain_recording and gowl_stop_recording. Bounded: the ring holds at most max_events (older events are dropped and counted) and the recording stops itself after max_seconds. Requires gowl's `input-recording' config key, which is separate from send_keys and off by default. While it runs the screen is framed in red and Super+Shift+Escape stops it. Capture is suppressed on the lock screen and for windows on the deny list, but gowl CANNOT see a password field inside an ordinary window -- review a trace before storing or sharing it.
+
+- CLI :: =emacsctl tool gowl start-recording=
+- Surfaces :: mcp, menu, agents
+- Returns :: json
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =max_seconds= | integer | no | Stop automatically after this many seconds (default 120, maximum 3600) |
+| =max_events= | integer | no | Ring size in events (default 4096, maximum 100000) |
+
+** gowl_stop_recording
+
+Stop the recording and take the tail, in the same shape gowl_drain_recording returns. Stopping a recording that already stopped itself still returns its remaining events exactly once.
+
+- CLI :: =emacsctl tool gowl stop-recording=
+- Surfaces :: mcp, menu, agents
+- Returns :: json
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =token= | string | yes | Token from gowl_start_recording |
+
+** gowl_workspace_list
+
+List workspaces as plists (:id :name :tag-mask).
+
+- CLI :: =emacsctl tool gowl workspace-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** gowl_workspace_switch
+
+Switch to the workspace with the given id.
+
+- CLI :: =emacsctl tool gowl workspace-switch=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | Workspace id |
+
+* gsurf
+
+** gsurf_back
+
+Navigate a gsurf buffer back.
+
+- CLI :: =emacsctl tool gsurf back=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf back=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_click
+
+Click at x,y (CSS pixels from the page's top-left, as getBoundingClientRect reports) in a gsurf page with a trusted click.
+
+- CLI :: =emacsctl tool gsurf click=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf click --x 120 --y 48=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =x= | number | yes | CSS px from the left |
+| =y= | number | yes | CSS px from the top |
+| =button= | integer | no | 1 left (default), 2 middle, 3 right |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_click_element
+
+Click the first element matching a CSS selector in a gsurf page: it is scrolled into view, focused and clicked at its centre. Asynchronous: returns at once; the outcome goes to the echo area.
+
+- CLI :: =emacsctl tool gsurf click-element=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf click-element --selector 'input[name=q]'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =selector= | string | yes | CSS selector |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_current
+
+Return JSON for the current gsurf buffer (buffer/uri/title/progress).
+
+- CLI :: =emacsctl tool gsurf current=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf current=
+
+Takes no arguments.
+
+** gsurf_download_cancel
+
+Cancel an in-flight gsurf download by id.
+
+- CLI :: =emacsctl tool gsurf download-cancel=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf download-cancel --id 3=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | download id |
+
+** gsurf_download_list
+
+Return a JSON array of known gsurf downloads (id/uri/dest/received/total/state).
+
+- CLI :: =emacsctl tool gsurf download-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf download-list=
+
+Takes no arguments.
+
+** gsurf_eval_js
+
+Run JavaScript in a gsurf buffer's page (fire-and-forget).
+
+- CLI :: =emacsctl tool gsurf eval-js=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =script= | string | yes | JavaScript source |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_extract_text
+
+Return the rendered plain text of a gsurf-lite buffer (newest, or the named one). Reads a JS-rendered or logged-in page as clean text after gsurf_lite_open.
+
+- CLI :: =emacsctl tool gsurf extract-text=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf extract-text=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_forward
+
+Navigate a gsurf buffer forward.
+
+- CLI :: =emacsctl tool gsurf forward=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf forward=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_get_title
+
+Return a gsurf buffer's page title.
+
+- CLI :: =emacsctl tool gsurf get-title=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf get-title=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_get_uri
+
+Return a gsurf buffer's current URI.
+
+- CLI :: =emacsctl tool gsurf get-uri=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf get-uri=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_list
+
+Return a JSON array of all open gsurf buffers.
+
+- CLI :: =emacsctl tool gsurf list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf list=
+
+Takes no arguments.
+
+** gsurf_list_actions
+
+Return a JSON array of every gsurf action: name, description and handler (cmacs or module).
+
+- CLI :: =emacsctl tool gsurf list-actions=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf list-actions=
+
+Takes no arguments.
+
+** gsurf_list_containers
+
+Return a JSON array of gsurf browsing containers (id, name, color, temporary, views, proxy).
+
+- CLI :: =emacsctl tool gsurf list-containers=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf list-containers=
+
+Takes no arguments.
+
+** gsurf_lite_open
+
+Open a URL as eww-style text: gsurf renders it offscreen (JavaScript runs, logins persist) and the post-JS page is dumped to a real Emacs text buffer. Returns the buffer name; read it with gsurf_extract_text once loaded.
+
+- CLI :: =emacsctl tool gsurf lite-open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf lite-open --url https://www.gnu.org/=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =url= | string | yes | URL or search query |
+
+** gsurf_modules_list
+
+Return JSON describing the loaded gsurf modules.
+
+- CLI :: =emacsctl tool gsurf modules-list=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool gsurf modules-list=
+
+Takes no arguments.
+
+** gsurf_navigate
+
+Navigate a gsurf buffer to a URL (or search query).
+
+- CLI :: =emacsctl tool gsurf navigate=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf navigate --url https://www.gnu.org/=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =url= | string | yes | URL or search query |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_open
+
+Open a URL (or search query) in a new gsurf browser buffer; returns the buffer name.
+
+- CLI :: =emacsctl tool gsurf open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf open --url https://www.gnu.org/=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =url= | string | yes | URL or search query |
+
+** gsurf_permission_policy
+
+Set a permission policy for an origin and type (verdict "allow" or "deny").
+
+- CLI :: =emacsctl tool gsurf permission-policy=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =origin= | string | yes | scheme://host:port |
+| =type= | string | yes | geolocation/notification/media/... |
+| =verdict= | string | yes | allow or deny |
+
+** gsurf_press_key
+
+Press and release one key in a gsurf page (trusted). key is a DOM or X name (Enter, Tab, Escape, ArrowDown, PageDown, a, ...).
+
+- CLI :: =emacsctl tool gsurf press-key=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =key= | string | yes | key name or one character |
+| =modifiers= | string | no | e.g. ctrl+shift (ctrl, shift, alt/meta, super) |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_print_pdf
+
+Print a gsurf buffer to a PDF at FILE (async); returns the path.
+
+- CLI :: =emacsctl tool gsurf print-pdf=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =file= | string | yes | output PDF path |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_reload
+
+Reload a gsurf buffer.
+
+- CLI :: =emacsctl tool gsurf reload=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf reload=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_run_action
+
+Run a gsurf action by name on a gsurf buffer (see gsurf_list_actions): core ones map to editor commands, the rest go to the modules (dark-mode-toggle, dark-mode-toggle-site, form-autofill, ...).
+
+- CLI :: =emacsctl tool gsurf run-action=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf run-action --action dark-mode-toggle=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =action= | string | yes | action name |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_set_cookie
+
+Add a cookie to a gsurf view's session (its container's cookie jar for a view in a container).
+
+- CLI :: =emacsctl tool gsurf set-cookie=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | Cookie name |
+| =value= | string | yes | Cookie value |
+| =domain= | string | yes | example.com, or .example.com for subdomains too |
+| =path= | string | no | default / |
+| =secure= | boolean | no | Send over HTTPS only |
+| =http_only= | boolean | no | Hide from page scripts |
+| =expires= | integer | no | Unix seconds; 0 = session cookie |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_set_zoom
+
+Set the zoom level (1.0 = 100%) of a gsurf buffer.
+
+- CLI :: =emacsctl tool gsurf set-zoom=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf set-zoom --level 1.25=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =level= | number | yes | zoom level |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_snapshot
+
+Save a PNG snapshot of a gsurf buffer to FILE (async); returns the path. Set full_page for the whole document.
+
+- CLI :: =emacsctl tool gsurf snapshot=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask, async (timeout 120s)
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =file= | string | yes | output PNG path |
+| =full_page= | boolean | no | capture full document |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_stop
+
+Stop loading in a gsurf buffer.
+
+- CLI :: =emacsctl tool gsurf stop=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf stop=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
+** gsurf_toggle_module
+
+Enable or disable a loaded gsurf module by name (adblock, dark_mode, hardening, containers, form_autofill, modal, ...).
+
+- CLI :: =emacsctl tool gsurf toggle-module=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool gsurf toggle-module --name adblock --enabled true=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =name= | string | yes | module name |
+| =enabled= | boolean | yes | true to enable, false to disable |
+
+** gsurf_type_text
+
+Type text into whatever has focus in a gsurf page, one trusted key press per character (newline = Enter). Focus a field first with gsurf_click_element.
+
+- CLI :: =emacsctl tool gsurf type-text=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =text= | string | yes | UTF-8 text |
+| =buffer= | string | no | gsurf buffer name; defaults to the most recent |
+
 * imgedit
+
+** imgedit_add_layer
+
+Append a transparent layer (becomes active); returns its index.
+
+- CLI :: =emacsctl tool imgedit add-layer=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit add-layer --handle 1 --name Notes=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =name= | string | no | Name for the layer |
+
+** imgedit_adjust
+
+Adjust the active layer. KIND: brightness|contrast|saturation|threshold|posterize (with AMOUNT) or invert|grayscale.
+
+- CLI :: =emacsctl tool imgedit adjust=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit adjust --handle 1 --kind contrast --amount 1.2=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =kind= | string | yes | Which adjustment |
+| =amount= | number | no | Strength, for the kinds that take one (default 0) |
 
 ** imgedit_describe
 
@@ -407,6 +2469,98 @@ Describe the image the user currently has open.
 - Returns :: string
 
 Takes no arguments.
+
+** imgedit_draw_shape
+
+Draw on the active layer (one undo step). SHAPE: line|arrow (x1,y1 -> x2,y2), rect (corners x1,y1 / x2,y2), circle (centre x1,y1, radius x2), ellipse (centre x1,y1, radii x2,y2). FILLED for rect/circle/ellipse.
+
+- CLI :: =emacsctl tool imgedit draw-shape=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit draw-shape --handle 1 --shape rect --x1 10 --y1 10 --x2 90 --y2 60 --filled true=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =shape= | string | yes | line, arrow, rect, circle or ellipse |
+| =x1= | integer | yes | First x |
+| =y1= | integer | yes | First y |
+| =x2= | integer | no | Second x, or the radius (default 0) |
+| =y2= | integer | no | Second y, or the y radius (default 0) |
+| =filled= | boolean | no | Fill a rect, circle or ellipse |
+| =thickness= | integer | no | Stroke width in pixels (default 1) |
+
+** imgedit_draw_text
+
+Draw TEXT at X,Y in the current colour (SIZE px; one undo step).
+
+- CLI :: =emacsctl tool imgedit draw-text=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit draw-text --handle 1 --x 8 --y 8 --text Hello=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =x= | integer | yes | Left edge of the text |
+| =y= | integer | yes | Top edge of the text |
+| =text= | string | yes | Text to draw |
+| =size= | integer | no | Font size in pixels (default 16) |
+
+** imgedit_filter
+
+Filter the active layer. KIND: blur|pixelate (RADIUS) or sharpen|edge|emboss|bloom.
+
+- CLI :: =emacsctl tool imgedit filter=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit filter --handle 1 --kind blur --radius 4=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =kind= | string | yes | Which filter |
+| =radius= | integer | no | Radius for blur and pixelate (default 2) |
+
+** imgedit_info
+
+Describe the document: size, active layer, layer stack.
+
+- CLI :: =emacsctl tool imgedit info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit info --handle 1=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+
+** imgedit_new
+
+Create a WIDTHxHEIGHT image document; returns its handle.
+
+- CLI :: =emacsctl tool imgedit new=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit new --width 256 --height 256=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =width= | integer | yes | Width in pixels |
+| =height= | integer | yes | Height in pixels |
+
+** imgedit_open
+
+Open an image file (png/jpg/bmp/...); returns handle and size.
+
+- CLI :: =emacsctl tool imgedit open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit open --path ~/Pictures/shot.png=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Image file to open |
 
 ** imgedit_prompt
 
@@ -420,6 +2574,353 @@ Edit the image the user currently has open, by instruction. For example: "crop t
 | Argument | Type | Required | Description |
 |----------+------+----------+-------------|
 | =instruction= | string | yes | What to do to the image |
+
+** imgedit_save
+
+Flatten and save the document (format by extension).
+
+- CLI :: =emacsctl tool imgedit save=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit save --handle 1 --path /tmp/out.png=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =path= | string | yes | Destination file; the extension picks the format |
+
+** imgedit_set_color
+
+Set the draw colour (RGBA 0..255) used by the shape/text tools.
+
+- CLI :: =emacsctl tool imgedit set-color=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit set-color --handle 1 --r 255 --g 0 --b 0=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =r= | integer | yes | Red, 0-255 |
+| =g= | integer | yes | Green, 0-255 |
+| =b= | integer | yes | Blue, 0-255 |
+| =a= | integer | no | Alpha, 0-255 (default 255) |
+
+** imgedit_transform
+
+Transform the whole document. KIND: flip-h|flip-v|rotate-cw|rotate-ccw.
+
+- CLI :: =emacsctl tool imgedit transform=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit transform --handle 1 --kind rotate-cw=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+| =kind= | string | yes | Which transform |
+
+** imgedit_undo
+
+Undo the last edit on the document.
+
+- CLI :: =emacsctl tool imgedit undo=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool imgedit undo --handle 1=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Document handle |
+
+* lrgeditor
+
+** lrgeditor_action
+
+Run an lrgeditor action by id (e.g. file.save, edit.undo, play.start, view.top) in the embedded shell. lrgeditor_actions lists them.
+
+- CLI :: =emacsctl tool lrgeditor action=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgeditor action --id edit.undo=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Action id, as lrgeditor_actions lists it |
+
+** lrgeditor_actions
+
+List the action ids the embedded lrgeditor shell registers.
+
+- CLI :: =emacsctl tool lrgeditor actions=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgeditor actions=
+
+Takes no arguments.
+
+** lrgeditor_add_primitive
+
+Add a primitive. PRIMITIVE: 0 plane,1 cube,2 circle,3 uv-sphere,4 ico-sphere,5 cylinder,6 cone,7 torus,8 grid.
+
+- CLI :: =emacsctl tool lrgeditor add-primitive=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_add_primitive
+- Example :: =emacsctl tool lrgeditor add-primitive --primitive 1 --name Crate=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =primitive= | integer | yes | Primitive type, 0-8 |
+| =name= | string | no | Name for the node (default Object) |
+
+** lrgeditor_add_visual
+
+Add a non-primitive node. KIND: 2 mesh-asset,3 sprite,4 tilemap,5 light,6 camera,7 audio. ASSET is the model/image/tileset file.
+
+- CLI :: =emacsctl tool lrgeditor add-visual=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_add_visual
+- Example :: =emacsctl tool lrgeditor add-visual --kind 5 --name Sun=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =kind= | integer | yes | Visual kind, 2-7 |
+| =asset= | string | no | Model, image or tileset file |
+| =name= | string | no | Name for the node (default Object) |
+
+** lrgeditor_delete
+
+Delete node ID from the level.
+
+- CLI :: =emacsctl tool lrgeditor delete=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_delete
+- Example :: =emacsctl tool lrgeditor delete --id 3=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | Node id |
+
+** lrgeditor_move
+
+Set node ID's position to (X Y Z) as one undoable edit.
+
+- CLI :: =emacsctl tool lrgeditor move=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_move
+- Example :: =emacsctl tool lrgeditor move --id 3 --x 0 --y 1.5 --z 0=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | Node id |
+| =x= | number | yes | X |
+| =y= | number | yes | Y |
+| =z= | number | yes | Z |
+
+** lrgeditor_object_tree
+
+List the libregnum editor's node tree (name/kind/depth/id).
+
+- CLI :: =emacsctl tool lrgeditor object-tree=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_object_tree
+- Example :: =emacsctl tool lrgeditor object-tree=
+
+Takes no arguments.
+
+** lrgeditor_open
+
+Open libregnum's editor (the lrgeditor shell) on PATH: a project directory or project.ryaml, a .rlevel/.rprefab, a .rseq, or any asset one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, ...); no PATH opens its welcome screen.
+
+- CLI :: =emacsctl tool lrgeditor open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_open
+- Example :: =emacsctl tool lrgeditor open --path ~/game/project.ryaml=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | no | Project, level or asset to open |
+
+** lrgeditor_play
+
+Play-in-editor: instantiate the level into a runtime world and run it.
+
+- CLI :: =emacsctl tool lrgeditor play=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_play
+- Example :: =emacsctl tool lrgeditor play=
+
+Takes no arguments.
+
+** lrgeditor_save
+
+Save the level to a .rlevel PATH.
+
+- CLI :: =emacsctl tool lrgeditor save=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_save
+- Example :: =emacsctl tool lrgeditor save --path ~/game/levels/one.rlevel=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | Destination .rlevel file |
+
+** lrgeditor_select
+
+Select node ID in the editor.
+
+- CLI :: =emacsctl tool lrgeditor select=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_select
+- Example :: =emacsctl tool lrgeditor select --id 3=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | integer | yes | Node id |
+
+** lrgeditor_socket
+
+Socket the embedded lrgeditor serves libregnum's editor protocol on (for lrgeditorctl --socket, its MCP verbs, or libregnum.el).
+
+- CLI :: =emacsctl tool lrgeditor socket=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgeditor socket=
+
+Takes no arguments.
+
+** lrgeditor_stop
+
+Stop play-in-editor.
+
+- CLI :: =emacsctl tool lrgeditor stop=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Aliases :: lrg_editor_stop
+- Example :: =emacsctl tool lrgeditor stop=
+
+Takes no arguments.
+
+* lrgterm
+
+** lrgterm_3d_camera_orbit
+
+Orbit the 3D camera around the panels (use lrgterm_dump_screen to see it).
+
+- CLI :: =emacsctl tool lrgterm 3d-camera-orbit=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-camera-orbit=
+
+Takes no arguments.
+
+** lrgterm_3d_cycle_arrangement
+
+Cycle the 3D panel arrangement (single-panel -> per-window -> free).
+
+- CLI :: =emacsctl tool lrgterm 3d-cycle-arrangement=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-cycle-arrangement=
+
+Takes no arguments.
+
+** lrgterm_3d_cycle_environment
+
+Cycle the 3D ambient environment (void -> workshop -> cockpit).
+
+- CLI :: =emacsctl tool lrgterm 3d-cycle-environment=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-cycle-environment=
+
+Takes no arguments.
+
+** lrgterm_3d_focus_selected
+
+Bring the selected window's 3D panel front-and-centre (fly the camera to it and focus it; others recede). The 'command-the-room' gesture.
+
+- CLI :: =emacsctl tool lrgterm 3d-focus-selected=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-focus-selected=
+
+Takes no arguments.
+
+** lrgterm_3d_pin_selected
+
+Pin the selected window's 3D panel in place so the arrangement no longer moves it.
+
+- CLI :: =emacsctl tool lrgterm 3d-pin-selected=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-pin-selected=
+
+Takes no arguments.
+
+** lrgterm_3d_state
+
+Report the lrg 3D render mode, panel arrangement and ambient environment.
+
+- CLI :: =emacsctl tool lrgterm 3d-state=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-state=
+
+Takes no arguments.
+
+** lrgterm_3d_unpin_all
+
+Release all manually-placed 3D panels back to automatic layout.
+
+- CLI :: =emacsctl tool lrgterm 3d-unpin-all=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm 3d-unpin-all=
+
+Takes no arguments.
+
+** lrgterm_force_redraw
+
+Force a full redraw + present of the lrg frame.
+
+- CLI :: =emacsctl tool lrgterm force-redraw=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm force-redraw=
+
+Takes no arguments.
+
+** lrgterm_frame_info
+
+Report the output_lrg frame's pixel/char size, font and monitor.
+
+- CLI :: =emacsctl tool lrgterm frame-info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm frame-info=
+
+Takes no arguments.
+
+** lrgterm_render_stats
+
+Report lrg display stats (frame count, visibility, focus, colour depth).
+
+- CLI :: =emacsctl tool lrgterm render-stats=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool lrgterm render-stats=
+
+Takes no arguments.
 
 * mail
 
@@ -636,6 +3137,99 @@ Replace the text of one block in a document, and save. INDEX comes from office_o
 | =text= | string | yes | Replacement text |
 | =slide= | integer | no | Slide number, for presentations only |
 
+* process
+
+** list_processes
+
+List all Emacs subprocesses with name, status, buffer, and command.
+
+- CLI :: =emacsctl tool process list-processes=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool process list-processes=
+
+Takes no arguments.
+
+* project
+
+** project_find_files
+
+Recursively find files in the workspace whose name matches an Emacs regexp (e.g. "\\.c\\'" for C files). The .git directory is skipped; up to 500 paths are returned relative to the workspace root.
+
+- CLI :: =emacsctl tool project find-files=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =pattern= | string | yes | Emacs regexp matched against file names |
+
+** project_grep
+
+Recursively grep for a pattern under a directory (defaults to the current default-directory; .git is excluded). Returns up to 200 'file:line:text' hits.
+
+- CLI :: =emacsctl tool project grep=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 90s)
+- Example :: =emacsctl tool project grep --regexp TODO --file-glob '*.el'=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =regexp= | string | yes | Basic grep regexp |
+| =directory= | string | no | Root directory to search (optional) |
+| =file_glob= | string | no | Restrict to files matching this glob (optional) |
+
+** project_list_files
+
+List the immediate entries of a workspace directory (defaults to the workspace root). Directories are suffixed with '/'; files are followed by a tab and their size in bytes.
+
+- CLI :: =emacsctl tool project list-files=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =directory= | string | no | Directory relative to the workspace root (optional) |
+
+** project_read_file
+
+Read a file from the workspace. The path is relative to the workspace root (absolute paths must still resolve inside it). Returns the raw file contents.
+
+- CLI :: =emacsctl tool project read-file=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool project read-file --path README.org=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | File path relative to the workspace root |
+
+** project_root
+
+Return the absolute path of the workspace root (the open project directory) that the other project_* tools resolve paths against.
+
+- CLI :: =emacsctl tool project root=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool project root=
+
+Takes no arguments.
+
+** project_write_file
+
+Write a file in the workspace, creating parent directories as needed. The path is resolved against the workspace root and cannot escape it. Overwrites any existing file.
+
+- CLI :: =emacsctl tool project write-file=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =path= | string | yes | File path relative to the workspace root |
+| =content= | string | yes | Full new file contents |
+
 * schedule
 
 ** schedule_create
@@ -709,6 +3303,31 @@ Enable or disable an existing schedule without deleting it.
 
 * secondbrain
 
+** secondbrain_doctor
+
+Which external programs (pandoc, pdftotext, yt-dlp, ffmpeg, ...) and cmacs features (office, whisper, ai) the ingester can use on this host.
+
+- CLI :: =emacsctl tool secondbrain doctor=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool secondbrain doctor=
+
+Takes no arguments.
+
+** secondbrain_expand
+
+Expand or collapse a department. With 'id', acts on that node; without one, acts on every department at once. Departments start collapsed, so this is how you see what is inside one.
+
+- CLI :: =emacsctl tool secondbrain expand=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain expand --id memory/areas=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | no | Node id; omit for all |
+| =collapse= | boolean | no | Collapse instead |
+
 ** secondbrain_find
 
 Search the second brain for notes about a query: semantic when the memory index exists, text search otherwise. Returns paths, titles and snippets.
@@ -742,6 +3361,19 @@ File a URL, a file (any format: PDF, Office, EPUB, mail, audio, video, YouTube, 
 | =title= | string | no | Title to use instead of the material's own |
 | =no_summary= | boolean | no | Skip the AI summary |
 
+** secondbrain_ingest_cancel
+
+Cancel an ingest job by id.
+
+- CLI :: =emacsctl tool secondbrain ingest-cancel=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: json
+- Example :: =emacsctl tool secondbrain ingest-cancel --id sbi-3=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Job id, e.g. sbi-3 |
+
 ** secondbrain_ingest_status
 
 Status of an ingest job by id, as JSON.
@@ -753,6 +3385,95 @@ Status of an ingest job by id, as JSON.
 | Argument | Type | Required | Description |
 |----------+------+----------+-------------|
 | =id= | string | yes | Job id, e.g. sbi-3 |
+
+** secondbrain_migrate
+
+Plan -- or with 'apply', perform -- the bulk migration of the Markdown notes under 'dir' (default: the whole tree) into Org nodes in place: same directory, same base name, front matter mapped onto the header, links rewritten to ids. Without 'apply' nothing is written and the plan lists every file and every link that would not resolve. 'remove' = 'trash' moves the originals to the trash afterwards.
+
+- CLI :: =emacsctl tool secondbrain migrate=
+- Surfaces :: mcp, menu, agents
+- Returns :: json
+- Flags :: destructive, confirm=ask
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =dir= | string | no | Directory to migrate; omit for the whole tree |
+| =apply= | boolean | no | Perform the migration instead of planning it |
+| =include_archives= | boolean | no | Also migrate 04_archives |
+| =ai= | boolean | no | Summarise and tag with the model |
+| =remove= | string | no | 'trash' moves the originals to the trash One of: trash. |
+
+** secondbrain_node_info
+
+Return the full record for a node id: title, role, ARMS ring, department and file.
+
+- CLI :: =emacsctl tool secondbrain node-info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain node-info --id memory/areas=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =id= | string | yes | Node id |
+
+** secondbrain_open
+
+Open the ARMS second-brain visualiser: the user's agentic workspace as four concentric rings (Applications, Routines, Memory, Skills). Set 'three_d' for the free 3D view rather than the flat one.
+
+- CLI :: =emacsctl tool secondbrain open=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain open --three-d=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =three_d= | boolean | no | Free 3D view |
+
+** secondbrain_refresh
+
+Re-read every enabled source and rebuild the graph.
+
+- CLI :: =emacsctl tool secondbrain refresh=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain refresh=
+
+Takes no arguments.
+
+** secondbrain_set_layout
+
+Switch the layout. 'rings' is the ARMS layout (concentric bands), 'circle' one circle per department, 'hex' a hex lattice, 'force' a force-directed graph. The change animates.
+
+- CLI :: =emacsctl tool secondbrain set-layout=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain set-layout --kind hex=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =kind= | string | yes | rings, circle, hex or force One of: rings, circle, hex, force. |
+
+** secondbrain_sources
+
+List the registered ARMS data sources -- where each ring's contents come from.
+
+- CLI :: =emacsctl tool secondbrain sources=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain sources=
+
+Takes no arguments.
+
+** secondbrain_stats
+
+Counts for the open view: total nodes, how many are visible (the rest are inside collapsed departments), edges, and the layout.
+
+- CLI :: =emacsctl tool secondbrain stats=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool secondbrain stats=
+
+Takes no arguments.
 
 ** secondbrain_tree
 
@@ -823,6 +3544,179 @@ Given a recording that has already been transcribed, propose which spans are wor
 | =file= | string | yes | Path to the recording |
 | =brief= | string | no | Extra direction, e.g. 'only the parts about X' |
 
+** vidstudio_add_audio
+
+Add an audio file to the lane at FROM_FRAME with VOLUME.
+
+- CLI :: =emacsctl tool vidstudio add-audio=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio add-audio --handle 1 --path ~/Music/bed.flac --volume 0.6=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =path= | string | yes | Audio file |
+| =from_frame= | integer | no | Frame the audio starts at (default 0) |
+| =volume= | number | no | Gain, 1.0 = unchanged (default 1.0) |
+
+** vidstudio_add_clip
+
+Append a clip to TRACK. KIND: video|image (PATH), solid (R G B), text (TEXT). DURATION_FRAMES at project fps. Video clips decode on a worker thread (see vidstudio_info's 'decoding' marker).
+
+- CLI :: =emacsctl tool vidstudio add-clip=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio add-clip --handle 1 --track 0 --kind video --path ~/Videos/take1.mp4=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =track= | integer | yes | Track index |
+| =kind= | string | yes | video, image, solid or text |
+| =path= | string | no | Media file, for a video or image clip |
+| =text= | string | no | The text, for a text clip |
+| =duration_frames= | integer | no | Length in frames (default 90) |
+| =r= | integer | no | Red 0-255, for a solid clip (default 128) |
+| =g= | integer | no | Green 0-255, for a solid clip (default 128) |
+| =b= | integer | no | Blue 0-255, for a solid clip (default 128) |
+
+** vidstudio_add_effect
+
+Append an effect to CLIP. TYPE: 0 blur,1 bloom,2 color-grade,3 vignette,4 grain.
+
+- CLI :: =emacsctl tool vidstudio add-effect=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio add-effect --handle 1 --clip 2 --type 3=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =clip= | integer | yes | Clip id |
+| =type= | integer | yes | Effect type, 0-4 |
+
+** vidstudio_add_keyframe
+
+Add a keyframe on CLIP_ID: PARAM (0 opacity,1 x,2 y,3 scale,4 rotation) at FRAME (clip-relative) = VALUE, optional EASING.
+
+- CLI :: =emacsctl tool vidstudio add-keyframe=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio add-keyframe --handle 1 --clip-id 2 --param 0 --frame 0 --value 0=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =clip_id= | integer | yes | Clip id |
+| =param= | integer | yes | Which parameter, 0-4 |
+| =frame= | number | yes | Frame, relative to the clip's start |
+| =value= | number | yes | Value of the parameter at that frame |
+| =easing= | integer | no | Easing type (default 0, linear) |
+
+** vidstudio_add_track
+
+Append a track (composites above lower tracks); returns its index.
+
+- CLI :: =emacsctl tool vidstudio add-track=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio add-track --handle 1=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+
+** vidstudio_export
+
+Export the timeline. FORMAT mp4 (H.264) or gif. Waits for any in-flight clip decodes, so output always has real frames.
+
+- CLI :: =emacsctl tool vidstudio export=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Flags :: async (timeout 3600s)
+- Example :: =emacsctl tool vidstudio export --handle 1 --path ~/Videos/out.mp4=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =path= | string | yes | Destination file |
+| =format= | string | no | mp4 (the default) or gif |
+
+** vidstudio_info
+
+Describe the project: size, fps, total frames, per-track clip layout.
+
+- CLI :: =emacsctl tool vidstudio info=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio info --handle 1=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+
+** vidstudio_new
+
+Create a WIDTHxHEIGHT video project at FPS; returns its handle.
+
+- CLI :: =emacsctl tool vidstudio new=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio new --width 1920 --height 1080 --fps 30=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =width= | integer | yes | Frame width in pixels |
+| =height= | integer | yes | Frame height in pixels |
+| =fps= | number | no | Frames per second (default 30) |
+
+** vidstudio_render_frame
+
+Composite FRAME and write it to PATH as PNG (agent-viewable preview).
+
+- CLI :: =emacsctl tool vidstudio render-frame=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio render-frame --handle 1 --frame 30 --path /tmp/frame.png=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =frame= | integer | yes | Frame to composite |
+| =path= | string | yes | Destination PNG file |
+
+** vidstudio_set_transition
+
+Set CLIP's leading transition. TYPE: 0 fade,1 dissolve,2 wipe,3 slide,4 zoom,5 iris,6 flip,7 push,8 clock-wipe; -1 removes.
+
+- CLI :: =emacsctl tool vidstudio set-transition=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio set-transition --handle 1 --clip 2 --type 1=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =clip= | integer | yes | Clip id |
+| =type= | integer | yes | Transition type, -1 to 8 |
+| =overlap_frames= | integer | no | Frames the transition overlaps (default 15) |
+
+** vidstudio_split
+
+Split CLIP at AT_FRAME (relative to the clip start).
+
+- CLI :: =emacsctl tool vidstudio split=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool vidstudio split --handle 1 --clip 2 --at-frame 45=
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =handle= | integer | yes | Project handle |
+| =clip= | integer | yes | Clip id |
+| =at_frame= | integer | yes | Frame to split at, relative to the clip's start |
+
 * web
 
 ** web_lql
@@ -864,3 +3758,74 @@ Open a libresearch web search in a results grid in the user's editor, for the US
 |----------+------+----------+-------------|
 | =query= | string | yes | What to search for |
 | =category= | string | no | A category: general, news, code, science, it, ... |
+
+* window
+
+** current_view
+
+What the user is looking at right now: the visible buffers, most recently selected first, with the AI chat surfaces excluded. Call this when the user refers to "here", "this" or "the above" without naming a buffer.
+
+- CLI :: =emacsctl tool window current-view=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =include_content= | boolean | no | Also return the buffers' text (default false: the listing alone is usually enough, and get_buffer_content fetches just the one you want) |
+
+** delete_window
+
+Delete (close) the currently selected window.
+
+- CLI :: =emacsctl tool window delete-window=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+Takes no arguments.
+
+** list_frames
+
+List all frames with name, dimensions, and selection status.
+
+- CLI :: =emacsctl tool window list-frames=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+Takes no arguments.
+
+** list_windows
+
+List all windows with buffer, point, dimensions, and position.
+
+- CLI :: =emacsctl tool window list-windows=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+- Example :: =emacsctl tool window list-windows=
+
+Takes no arguments.
+
+** select_window
+
+Select another window by direction (up/down/left/right) or cycle.
+
+- CLI :: =emacsctl tool window select-window=
+- Surfaces :: mcp, dbus, cli, menu, agents
+- Returns :: string
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =direction= | string | no | Direction to move (omit to cycle) One of: up, down, left, right. |
+
+** split_window
+
+Split the current window vertically or horizontally.
+
+- CLI :: =emacsctl tool window split-window=
+- Surfaces :: mcp, menu, agents
+- Returns :: string
+- Flags :: destructive
+
+| Argument | Type | Required | Description |
+|----------+------+----------+-------------|
+| =direction= | string | no | Split direction (default: vertical) One of: vertical, horizontal. |

@@ -91,15 +91,6 @@ cmacs_mcp_register_all_tools (McpServer *server)
   cmacs_mcp_tools_shell_register (server);
   cmacs_mcp_tools_project_register (server);
 
-#ifdef HAVE_CMACS_AI_BRIGADE
-  /* Registered after the built-ins so it can see them: a brigade tool
-     whose name collides with one is skipped with a warning rather than
-     replacing it (mcp_server_add_tool replaces on collision, so a user
-     tool called "eval" would otherwise silently take over the real
-     one). */
-  cmacs_mcp_tools_brigade_register (server);
-#endif
-
 #ifdef HAVE_CMACS_GI
   cmacs_mcp_tools_gi_register (server);
 #endif
@@ -158,6 +149,16 @@ cmacs_mcp_register_all_tools (McpServer *server)
 
 #ifdef HAVE_CMACS_DBEXPLORER
   cmacs_mcp_tools_dbexplorer_register (server);
+#endif
+
+#ifdef HAVE_CMACS_AI_BRIGADE
+  /* Last, so it sees every hand-written tool.  A registry tool whose
+     name one of them already serves is published only when it comes
+     from a migrated family (it then replaces the C tool, which was its
+     fallback); any other collision is skipped with a warning, so a
+     user tool called "eval" cannot quietly take over the real one.
+     See publish_one in cmacs-mcp-tools-brigade.c.  */
+  cmacs_mcp_tools_brigade_register (server);
 #endif
 }
 

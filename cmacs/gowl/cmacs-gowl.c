@@ -2978,6 +2978,8 @@ window in the rolled-away scratchpad. */)
            make_fixnum ((EMACS_INT)gowl_client_get_tags (c))),
     Fcons (intern_c_string ("floating"),
            gowl_client_get_floating (c) ? Qt : Qnil),
+    Fcons (intern_c_string ("fullscreen"),
+           gowl_client_get_fullscreen (c) ? Qt : Qnil),
     Fcons (intern_c_string ("embedded"),
            gowl_client_get_embedded (c) ? Qt : Qnil),
     Fcons (intern_c_string ("geometry"),

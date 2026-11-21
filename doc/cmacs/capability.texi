@@ -437,11 +437,16 @@ ordinary results.
 its @code{IS-CMACS-*} flag, so it is loaded with the brigade --- before
 the first MCP session lists its tools.
 @item
-@emph{Make the C stand aside.}  Registry tools are published before the
-per-subsystem C registrations, and @code{mcp_server_add_tool} replaces
-on collision, so an unchanged C file would quietly put its handler back
-in front.  @file{cmacs-mcp-tools-calculator.c} now adds a tool only
-when the server does not already serve that name.
+@emph{The C needs no edit.}  The registry is published last, after
+every per-subsystem C registration.  A tool registered while a family in
+@code{cmacs-capability-migrated-families} is loading is marked shipped
+(@code{cmacs-brigade-registering-shipped-family}, mirrored to C as
+@code{:replaces-builtin}), and the publisher lets a shipped tool take
+the name of the hand-written C tool; @code{mcp_server_add_tool} replaces
+on collision.  Any other registry tool that collides with a built-in
+name is refused with a warning, as before, so a tool of yours called
+@code{eval} cannot take over the real one.  Who may call the name does
+not change: the allowlist and the privileged set go by name.
 @item
 @emph{Regenerate the reference} (@option{--write-docs}) and add a guard
 like @code{cmacs-capability-test-calculator-family-matches-c} while the

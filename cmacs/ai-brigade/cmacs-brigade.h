@@ -68,6 +68,10 @@ typedef struct
   gint      timeout_ms;   /* 0 = use the default */
   gboolean  no_mcp;       /* :surfaces excludes `mcp': mirrored for the
                              allowlist gate, never published to MCP */
+  gboolean  replaces_builtin; /* registered by a shipped, migrated
+                             family (cmacs-capability.el): the MCP
+                             publisher lets it take the place of the
+                             hand-written C tool of the same name */
 } CmacsBrigadeTool;
 
 typedef void (*CmacsBrigadeToolFunc) (const CmacsBrigadeTool *tool,

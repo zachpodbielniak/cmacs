@@ -205,6 +205,69 @@ otherwise have to repeat the same check and one of them would forget."
       (error "Could not connect to %s" name))
     connection))
 
+(defun cmacs-dbexplorer-tools--check-name (name)
+  "Signal unless NAME has the shape of a saved connection name.
+
+A connection is named, never described: the name selects one an
+operator already saved, so a caller cannot hand cmacs a URL -- and with
+it a host and credentials -- of its own choosing."
+  (unless (and (stringp name) (string-match-p "\\`[A-Za-z0-9._-]+\\'" name))
+    (error "'connection' must be a saved connection name \
+\([A-Za-z0-9._-]+); connection URLs are not accepted")))
+
+(defun cmacs-dbexplorer-tools--identifier (value what)
+  "Return VALUE if it is a plain SQL identifier, nil if blank, else signal.
+WHAT names the argument for the error.
+
+Table and schema names reach the database as identifiers.  Quoted ones
+\(\"odd name\") are refused rather than half-handled: accepting the
+opening quote without owning the quoting rules of three dialects is how
+an injection gets in.  The C tools made this check before calling in;
+the registry's tools are reached without passing through them."
+  (cond
+   ((or (null value) (equal value "")) nil)
+   ((and (stringp value)
+         (string-match-p "\\`[A-Za-z_][A-Za-z0-9_$]*\\'" value))
+    value)
+   (t (error "'%s' must be a plain unquoted identifier" what))))
+
+(defun cmacs-dbexplorer-tools--connect-async (name done)
+  "Open the saved connection NAME, then call DONE with its JSON description.
+
+The non-blocking form of `cmacs-dbexplorer-tool-connect': the same
+checks and the same reply, but the handshake is waited for by the
+connect hooks rather than by this thread.  A failure reaches DONE as an
+\"Error: ...\" string, the registry's convention for an asynchronous
+tool; a bad name or an unconfigured connection is signalled at once."
+  (cmacs-dbexplorer-tools--ensure)
+  (cmacs-dbexplorer-tools--check-name name)
+  (let ((describe
+         (lambda (connection)
+           (funcall
+            done
+            (condition-case err
+                (cmacs-dbexplorer-tools--json
+                 (list (cons 'name name)
+                       (cons 'dialect
+                             (cmacs-dbexplorer-connection-dialect connection))
+                       (cons 'read_only
+                             (if (cmacs-dbexplorer-connection-read-only
+                                  connection)
+                                 t json-false))))
+              (error (format "Error: %s" (error-message-string err))))))))
+    (if (cmacs-dbexplorer-connection-open-p (cmacs-dbexplorer-connection name))
+        ;; Already open: left alone, and described.
+        (funcall describe (cmacs-dbexplorer-connection name))
+      (unless (cmacs-dbexplorer-connection-spec name)
+        (error "%s is not a configured connection" name))
+      ;; The failure watcher is what turns a bad password into an answer
+      ;; now instead of a timeout later.
+      (cmacs-dbexplorer-when-connected
+       name describe
+       (lambda (_name)
+         (funcall done (format "Error: could not connect to %s" name))))
+      (cmacs-dbexplorer-connect name))))
+
 (defun cmacs-dbexplorer-tools--cell-json (cell)
   "Render CELL for JSON, keeping NULL distinct from the string \"NULL\"."
   (cond
@@ -423,16 +486,23 @@ connection by the names this returns."
 permitted: SELECT, VALUES, EXPLAIN, SHOW and read-only pragmas.  Results are
 capped, and the reply says so when it was truncated."
     ((connection string "Connection name from db-connections")
-     (sql string "The SELECT statement to run"))
+     (sql string "The SELECT statement to run")
+     ;; The C tool of this name takes it, and the registry's is the one
+     ;; MCP clients reach once the C stands aside.
+     (max_rows integer "Maximum rows to fetch; omit for the configured default"
+               :optional t))
     :group 'database
-    (cmacs-dbexplorer-tool-query connection sql))
+    (cmacs-dbexplorer-tool-query connection sql
+                                 (and (integerp max_rows) (> max_rows 0)
+                                      max_rows)))
 
   (cmacs-brigade-deftool db-tables
     "List the tables and views in a database."
     ((connection string "Connection name from db-connections")
      (schema string "Schema to list; omit for the default" :optional t))
     :group 'database
-    (cmacs-dbexplorer-tool-tables connection schema))
+    (cmacs-dbexplorer-tool-tables
+     connection (cmacs-dbexplorer-tools--identifier schema "schema")))
 
   (cmacs-brigade-deftool db-columns
     "Describe one table: its columns with types and nullability, and its
@@ -443,7 +513,11 @@ seen."
      (schema string "Schema containing the table; omit for the default"
              :optional t))
     :group 'database
-    (cmacs-dbexplorer-tool-columns connection table schema))
+    (cmacs-dbexplorer-tool-columns
+     connection
+     (or (cmacs-dbexplorer-tools--identifier table "table")
+         (error "db_columns: missing 'table'"))
+     (cmacs-dbexplorer-tools--identifier schema "schema")))
 
   (cmacs-brigade-deftool db-execute
     "Run a statement that CHANGES the database -- INSERT, UPDATE, DELETE or
@@ -464,7 +538,39 @@ DDL.  Refused outright on a connection marked read-only."
     :group 'database
     :destructive t
     :confirm 'ask
+    ;; An exporter is named by a short symbol-shaped token; anything
+    ;; else is a mistake worth reporting instead of forwarding.
+    (unless (and (stringp format)
+                 (string-match-p "\\`[a-z][a-z0-9-]*\\'" format))
+      (error "db_export: 'format' must be an exporter name ([a-z][a-z0-9-]*)"))
     (cmacs-dbexplorer-tool-export connection sql format path))
+
+  ;; Opening and closing a saved connection.  These two were the last of
+  ;; the family still served only by cmacs-mcp-tools-dbexplorer.c.
+  ;;
+  ;; `db-connect' is :async: a connect is a network handshake, and the
+  ;; synchronous `cmacs-dbexplorer-tool-connect' waits for it on the
+  ;; calling thread -- which for an RPC is the dispatch thread, and under
+  ;; `emacs --gowl' the compositor's.  This one starts the connect and
+  ;; answers from the connect hooks.  The reply is the same JSON.
+  (cmacs-brigade-deftool db-connect
+    "Open the saved connection named CONNECTION, so queries can run
+against it.  Names come from db_connections; a connection URL is not
+accepted.  Already-open connections are left alone."
+    ((connection string "Saved connection name from db_connections"))
+    :group 'database
+    :async t
+    :timeout 60
+    (cmacs-dbexplorer-tools--connect-async connection done))
+
+  (cmacs-brigade-deftool db-disconnect
+    "Close the connection named CONNECTION, releasing its database handle
+and dropping its cached schema.  The saved definition survives, so
+db_connect brings it back."
+    ((connection string "Saved connection name from db_connections"))
+    :group 'database
+    (cmacs-dbexplorer-tools--check-name connection)
+    (cmacs-dbexplorer-tool-disconnect connection))
 
   ;; A panel on the brigade dashboard, so a running agent's database
   ;; access is visible next to everything else it is doing.

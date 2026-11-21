@@ -266,6 +266,29 @@ SPEC is (NAME TYPE DOC &rest KEYWORDS) where KEYWORDS may include
                     :required    (if (plist-get p :required) t :false)))
             params))))
 
+;;;; Shipped families and the built-in tools they replace
+
+(defvar cmacs-brigade-registering-shipped-family nil
+  "Non-nil while a migrated tool family is being loaded.
+Bound by cmacs-capability.el around each file named in
+`cmacs-capability-migrated-families'.  A tool registered meanwhile is
+remembered as shipped, which is what lets the MCP publisher put it in
+place of the hand-written C tool of the same name.  Any other tool that
+collides with a built-in name is refused there, so a tool of yours
+called `eval' cannot take over the real one by accident.")
+
+(defvar cmacs-brigade--shipped-tools (make-hash-table :test #'equal)
+  "Wire names registered while a shipped family was loading.
+Sticky on purpose: re-evaluating a family file while working on it must
+not demote its tools to colliding user tools.")
+
+(defun cmacs-brigade--shipped-tool-p (wire)
+  "Return non-nil when the tool with wire name WIRE is a shipped one.
+Records WIRE as shipped when called during a family load."
+  (when cmacs-brigade-registering-shipped-family
+    (puthash wire t cmacs-brigade--shipped-tools))
+  (gethash wire cmacs-brigade--shipped-tools))
+
 ;;;###autoload
 (cl-defun cmacs-brigade-register-tool
     (&key name description params handler
@@ -362,7 +385,11 @@ directly when registering tools programmatically."
                        ;; allowlist gate resolves groups from it) but is
                        ;; not offered to MCP clients.
                        :no-mcp (not (cmacs-brigade-tool-on-surface-p
-                                     tool 'mcp)))))
+                                     tool 'mcp))
+                       ;; Also read by the MCP publisher: see
+                       ;; `cmacs-brigade-registering-shipped-family'.
+                       :replaces-builtin
+                       (cmacs-brigade--shipped-tool-p wire))))
     ;; An alias dropped by a re-registration must stop answering.
     (when (and old (fboundp 'cmacs-brigade--mirror-remove))
       (dolist (a (cmacs-brigade-tool-aliases old))
