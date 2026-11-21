@@ -871,7 +871,10 @@ subsystem's tools, and the next full build would then call it stale."
     (cmacs-video-tools . IS-CMACS-VIDEO)
     ;; After cmacs-secondbrain-tools: three files, one C family.
     (cmacs-secondbrain-ingest-tools . IS-CMACS-SECONDBRAIN)
-    (cmacs-secondbrain-search-tools . IS-CMACS-SECONDBRAIN))
+    (cmacs-secondbrain-search-tools . IS-CMACS-SECONDBRAIN)
+    ;; `action_log' / `action_undo': the action log of every family
+    ;; above (cmacs-brigade-undo.el).  Core, like the dispatch it hooks.
+    (cmacs-brigade-undo-tools . t))
   "Alist of (FEATURE . FLAG): tool files to load when FLAG is non-nil.
 FLAG is an `IS-CMACS-*' variable from cmacs/core/cmacs-features.c, so a
 family is only offered by a build that compiled its subsystem in; t

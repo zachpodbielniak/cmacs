@@ -158,7 +158,11 @@ wrote them.  See `cmacs-brigade-structured-value'.")
   cli             ; nil (= derived) | "GROUP VERB"
   returns         ; string | json -- how a client should render the result
   example         ; nil | string, one sample invocation for the docs
-  aliases)        ; list of extra wire names answering to this tool
+  aliases         ; list of extra wire names answering to this tool
+  ;; Undo for agent actions (cmacs-brigade-undo.el).  nil = undeclared,
+  ;; a function (or a symbol naming one) = capture before the handler,
+  ;; `irreversible' or (irreversible REASON) = a declared "cannot".
+  undo)
 
 (define-error 'cmacs-brigade-tool-error
   "Invalid brigade tool definition" 'cmacs-brigade-error)
@@ -239,6 +243,21 @@ must not be list, describe, call or help" name cli))))
                (cl-every (lambda (a) (or (stringp a) (symbolp a))) aliases))
     (signal 'cmacs-brigade-tool-error
             (list "aliases must be a list of names" name aliases))))
+
+(defun cmacs-brigade--check-tool-undo (name undo)
+  "Signal `cmacs-brigade-tool-error' unless UNDO is a valid :undo for NAME.
+Valid: nil, a function, a symbol (naming a function that may not be
+loaded yet -- the capture functions live in files loaded after the
+families), `irreversible', or (irreversible REASON) with REASON a
+string.  See cmacs-brigade-undo.el for what each means."
+  (unless (or (null undo)
+              (functionp undo)
+              (symbolp undo)
+              (and (consp undo) (eq (car undo) 'irreversible)
+                   (or (null (cdr undo)) (stringp (cadr undo)))))
+    (signal 'cmacs-brigade-tool-error
+            (list ":undo must be a function, `irreversible' or \
+\(irreversible REASON)" name undo))))
 
 (defun cmacs-brigade--type-name (type spec)
   "Return TYPE, a symbol or string, as a known type name.
@@ -772,7 +791,7 @@ Records WIRE as shipped when called during a family load."
 (cl-defun cmacs-brigade-register-tool
     (&key name description params handler
           group destructive confirm async timeout menu menu-label
-          surfaces cli returns example aliases)
+          surfaces cli returns example aliases undo)
   "Publish a capability to every brigade agent surface.
 
 NAME is a symbol; the wire name is its snake_case form.  DESCRIPTION is
@@ -817,6 +836,13 @@ Optional keys:
   EXAMPLE      one sample invocation, shown in the generated reference
   ALIASES      extra wire names that answer to this tool, for a
                capability that used to be published under another name
+  UNDO         how a call is undone (cmacs-brigade-undo.el): a function
+               called BEFORE the handler with the same arguments,
+               returning an undo record, nil (\"nothing to undo for
+               this call\") or `irreversible' / (irreversible REASON);
+               or one of those last two given directly, for a tool
+               that can never be undone.  A DESTRUCTIVE tool without
+               it is logged as \"irreversible: no undo declared\"
 
 MENU is what makes the extension surface symmetrical: one
 `cmacs-brigade-deftool' form in your init already publishes a capability
@@ -840,6 +866,7 @@ directly when registering tools programmatically."
             (list "confirm must be nil, `ask' or `always'" confirm)))
   (cmacs-brigade--check-tool-metadata name surfaces cli returns example
                                       aliases)
+  (cmacs-brigade--check-tool-undo name undo)
   ;; The menu hands a tool's first parameter the thing that was clicked,
   ;; rendered as text.  Text is not an array or an object, so such a
   ;; tool could be offered and never run; refuse it where its author
@@ -858,6 +885,10 @@ target as text, so it cannot be an array or an object" name)))
          ;; argument reaches the body as a list or an alist whichever
          ;; surface delivered it.
          (handler (cmacs-brigade--structured-handler handler parsed async))
+         ;; Stored as given.  The dispatch converts structured arguments
+         ;; for the capture function exactly as for the handler, at call
+         ;; time, so a symbol naming a function not loaded yet is fine
+         ;; and the generated undo table can still name it.
          (alias-wires (delete wire
                               (delete-dups
                                (mapcar #'cmacs-brigade-wire-name aliases))))
@@ -874,7 +905,8 @@ target as text, so it cannot be an array or an object" name)))
                   :menu menu :menu-label menu-label
                   :surfaces surfaces :cli cli
                   :returns (or returns 'string) :example example
-                  :aliases alias-wires))
+                  :aliases alias-wires
+                  :undo undo))
          (old    (cmacs-brigade-registry-get 'tool name))
          (props  (list :group group :destructive destructive
                        :confirm confirm :async async
@@ -964,8 +996,11 @@ DESCRIPTION is the model-facing summary.  PARAMS is a list of
 
 BODY may be preceded by keyword options -- :group, :destructive,
 :confirm, :async, :timeout, :menu, :menu-label, :surfaces, :cli,
-:returns, :example and :aliases -- which mean what they do in
-`cmacs-brigade-register-tool'.
+:returns, :example, :aliases and :undo -- which mean what they do in
+`cmacs-brigade-register-tool'.  :undo is either quoted (a function
+name, \\='irreversible or \\='(irreversible \"REASON\")) or a FORM, which
+is evaluated with the parameters bound, before BODY, and returns the
+undo record (see `cmacs-brigade-undo-buffer-record' and friends).
 
 :menu is how a tool reaches you as well as your agents:
 
@@ -1011,7 +1046,31 @@ ignored:
     (setq opts (nreverse opts))
     (let* ((async (plist-get opts :async))
            (argnames (mapcar (lambda (p) (nth 0 p)) params))
-           (lambda-args (if async (cons 'done argnames) argnames)))
+           (lambda-args (if async (cons 'done argnames) argnames))
+           (undo (plist-get opts :undo)))
+      ;; :undo FORM, unless FORM is a quoted constant or #'FUNCTION, is
+      ;; evaluated like BODY -- with the parameters bound -- before the
+      ;; handler runs: `(:undo (my-capture buffer))'.  A quoted value
+      ;; ('irreversible, '(irreversible "why"), 'my-capture-fn)
+      ;; is passed through as it is.
+      (when (and undo (not (memq (car-safe undo) '(quote function))))
+        (setq opts (plist-put (copy-sequence opts) :undo
+                              `(lambda ,argnames
+                                 ;; Read by the generated undo table:
+                                 ;; the form, on one short line, with
+                                 ;; quotes escaped for `documentation'.
+                                 ,(replace-regexp-in-string
+                                   "'" "\\\\='"
+                                   (truncate-string-to-width
+                                    (format "Undo: %s"
+                                            (replace-regexp-in-string
+                                             "[ \t\n]+" " "
+                                             (let ((print-length nil)
+                                                   (print-level nil))
+                                               (prin1-to-string undo))))
+                                    72 nil nil "..."))
+                                 (ignore ,@argnames)
+                                 ,undo))))
       `(cmacs-brigade-register-tool
         :name ',name
         :description ,description

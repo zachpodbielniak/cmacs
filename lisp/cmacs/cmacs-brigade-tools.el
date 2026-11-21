@@ -28,6 +28,34 @@ Receives a plist with :tool and :agent.  The dashboard uses this to show
 denials, which is how you find out an agent is missing a capability
 rather than misbehaving.")
 
+(defvar cmacs-brigade-current-call nil
+  "The request plist of the tool call whose handler is running, or nil.
+Bound around the handler (and its undo capture) by the dispatch:
+:tool, :args, :agent and :task, as the hooks receive them.  This is
+how a tool learns who called it -- `action_undo' and `action_log' use
+it to keep an agent to its own actions -- without the caller's
+identity becoming an argument a model could fill in.  For an :async
+tool it is bound only while the handler's synchronous part runs.")
+
+;; The action log (cmacs-brigade-undo.el), loaded at the end of this
+;; file.  Called through these so a build where that file is missing
+;; still dispatches: the log is a record of what agents did, not a gate.
+(declare-function cmacs-brigade-undo--begin "cmacs-brigade-undo"
+                  (tool args req))
+(declare-function cmacs-brigade-undo--end "cmacs-brigade-undo"
+                  (pending result failure))
+
+(defun cmacs-brigade--undo-begin (tool args req)
+  "Capture what undoing this call of TOOL with ARGS would need.
+REQ is the hook plist.  Returns the pending action, or nil."
+  (and (fboundp 'cmacs-brigade-undo--begin)
+       (cmacs-brigade-undo--begin tool args req)))
+
+(defun cmacs-brigade--undo-end (pending result failure)
+  "Log the call PENDING stands for: RESULT on success, else FAILURE."
+  (when (and pending (fboundp 'cmacs-brigade-undo--end))
+    (cmacs-brigade-undo--end pending result failure)))
+
 (defcustom cmacs-brigade-confirm-function nil
   "Function used to confirm a tool call, or nil for the default.
 The default asks in the minibuffer.  Setting this is the quick way to
@@ -231,7 +259,7 @@ the model read what went wrong and try something else."
              (tool (nth 0 gated))
              (alist (nth 1 gated))
              (req (nth 2 gated)))
-        (let ((result (cmacs-brigade--invoke tool alist)))
+        (let ((result (cmacs-brigade--invoke tool alist req)))
           (run-hook-with-args 'cmacs-brigade-after-tool-call-functions
                               (append req (list :result result)))
           result))
@@ -303,6 +331,11 @@ Returns nil.  AGENT, ALLOWLIST and TASK are as in
   (let* ((settled nil)
          (timer nil)
          (req nil)
+         ;; The action-log entry this call will become (see
+         ;; `cmacs-brigade--undo-begin').  Ended from `finish', not from
+         ;; `settle': a tool that finishes after its timeout still did
+         ;; what it did, and the log is about that, not about the reply.
+         (pending nil)
          (settle
           (lambda (status text &optional err)
             (unless settled
@@ -332,12 +365,18 @@ Returns nil.  AGENT, ALLOWLIST and TASK are as in
                 (lambda (value)
                   (let ((text (cmacs-brigade--stringify value)))
                     (if (string-prefix-p "Error: " text)
-                        (funcall settle 'error
-                                 (substring text (length "Error: ")))
+                        (progn
+                          (cmacs-brigade--undo-end pending nil text)
+                          (funcall settle 'error
+                                   (substring text (length "Error: "))))
+                      (cmacs-brigade--undo-end pending text nil)
                       (funcall settle 'ok text))))))
           (setq req (nth 2 gated))
+          (setq pending (cmacs-brigade--undo-begin tool args req))
           (if (not (cmacs-brigade-tool-async tool))
-              (funcall finish (apply (cmacs-brigade-tool-handler tool) args))
+              (funcall finish
+                       (let ((cmacs-brigade-current-call req))
+                         (apply (cmacs-brigade-tool-handler tool) args)))
             ;; Armed before the handler starts, so a handler that calls
             ;; `done' synchronously finds a timer to cancel.
             (setq timer
@@ -348,8 +387,12 @@ Returns nil.  AGENT, ALLOWLIST and TASK are as in
                               (format "%s timed out after %ss"
                                       (cmacs-brigade-tool-wire-name tool)
                                       (cmacs-brigade-tool-timeout tool))))))
-            (apply (cmacs-brigade-tool-handler tool) finish args)))
+            (let ((cmacs-brigade-current-call req))
+              (apply (cmacs-brigade-tool-handler tool) finish args))))
       (error
+       ;; A handler that signalled did nothing worth logging; its change
+       ;; groups still have to be closed.
+       (cmacs-brigade--undo-end pending nil err)
        (funcall settle 'error (error-message-string err) err)))
     nil))
 
@@ -362,9 +405,28 @@ WIRE-NAME may also be one of the tool's :aliases."
                     (member wire-name (cmacs-brigade-tool-aliases tool)))
            return tool))
 
-(defun cmacs-brigade--invoke (tool alist)
-  "Apply TOOL's handler to the arguments in ALIST and return a string."
-  (let ((args (cmacs-brigade--tool-args tool alist)))
+(defun cmacs-brigade--invoke (tool alist &optional req)
+  "Apply TOOL's handler to the arguments in ALIST and return a string.
+REQ is the hook plist of the call; with it the call is recorded in the
+action log (cmacs-brigade-undo.el) and the handler runs with
+`cmacs-brigade-current-call' bound to it."
+  (let* ((args (cmacs-brigade--tool-args tool alist))
+         (pending (and req (cmacs-brigade--undo-begin tool args req)))
+         (result nil))
+    (condition-case err
+        (setq result (let ((cmacs-brigade-current-call req))
+                       (cmacs-brigade--invoke-1 tool args)))
+      (error
+       (cmacs-brigade--undo-end pending nil err)
+       (signal (car err) (cdr err))))
+    (if (string-prefix-p "Error: " result)
+        (cmacs-brigade--undo-end pending nil result)
+      (cmacs-brigade--undo-end pending result nil))
+    result))
+
+(defun cmacs-brigade--invoke-1 (tool args)
+  "Apply TOOL's handler to the positional ARGS and return a string."
+  (progn
     (if (not (cmacs-brigade-tool-async tool))
         (cmacs-brigade--stringify (apply (cmacs-brigade-tool-handler tool) args))
       ;; Async: the handler gets a DONE callback and we wait here.
@@ -466,6 +528,9 @@ and the task it belongs to does not change."
 ;; A build where it fails to load still fails closed, because each tool
 ;; requires it again in its body and that signals.
 (require 'cmacs-redact nil 'noerror)
+;; The action log and its undo: before the families, whose :undo
+;; declarations name capture functions in it.
+(require 'cmacs-brigade-undo nil 'noerror)
 (require 'cmacs-capability nil 'noerror)
 
 ;;; cmacs-brigade-tools.el ends here

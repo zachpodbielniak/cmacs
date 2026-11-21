@@ -197,6 +197,7 @@ document is preserved byte-for-byte."
      (value string "New value; a leading = makes it a formula"))
     :group 'office
     :destructive t
+    :undo '(irreversible "a queued package edit is not withdrawn by undo")
     :confirm 'ask
     (cmacs-office-tools--with path h
       (pcase-let ((`(,sheet ,row ,col) (cmacs-office-tools--parse-ref ref)))
@@ -220,6 +221,7 @@ flattened.  Nothing else in the document changes."
      (slide integer "Slide number, for presentations only" :optional t))
     :group 'office
     :destructive t
+    :undo '(irreversible "a queued package edit is not withdrawn by undo")
     :confirm 'ask
     (cmacs-office-tools--with path h
       (if (and slide (> slide 0))

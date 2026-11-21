@@ -128,6 +128,7 @@ environment."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "cycle again to the arrangement wanted")
   :example "emacsctl tool lrgterm 3d-cycle-arrangement"
   (let* ((f (cmacs-lrgterm-tools--frame))
          (next (cmacs-lrgterm-tools--next
@@ -141,6 +142,7 @@ environment."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "cycle again to the environment wanted")
   :example "emacsctl tool lrgterm 3d-cycle-environment"
   (let* ((f (cmacs-lrgterm-tools--frame))
          (next (cmacs-lrgterm-tools--next
@@ -155,6 +157,7 @@ see it)."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "the 3D frame keeps no previous camera")
   :example "emacsctl tool lrgterm 3d-camera-orbit"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d (cmacs-lrg-3d-camera "orbit-left" 20 f)
@@ -167,6 +170,7 @@ gesture."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "the 3D frame keeps no previous focus")
   :example "emacsctl tool lrgterm 3d-focus-selected"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d
@@ -179,6 +183,7 @@ longer moves it."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "unpin it with lrgterm_3d_unpin_all")
   :example "emacsctl tool lrgterm 3d-pin-selected"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d
@@ -190,6 +195,7 @@ longer moves it."
     ()
   :group 'lrgterm
   :destructive t
+  :undo '(irreversible "the pins it removed are not kept")
   :example "emacsctl tool lrgterm 3d-unpin-all"
   (let ((f (cmacs-lrgterm-tools--frame)))
     (cmacs-lrgterm-tools--3d

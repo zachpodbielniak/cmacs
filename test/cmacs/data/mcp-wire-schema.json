@@ -3,6 +3,52 @@
   "version": 1,
   "tools": [
     {
+      "name": "action_log",
+      "source": "registry",
+      "order": 0,
+      "ifdef": [],
+      "description": "List the actions (destructive tool calls) you made in this session, newest first, with what undoing each would do.  One line per action: #ID time caller tool [state] arguments -> result (undo would ...).  State is done, undone, irreversible, stale, failed-to-undo or nothing-to-undo.  Use action_undo with an ID to take one back.",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Most actions to list (default 20)"
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Every caller's actions, not only yours (needs a grant in cmacs-brigade-undo-log-all-callers)"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "action_undo",
+      "source": "registry",
+      "order": 0,
+      "ifdef": [],
+      "description": "Undo actions you made, by ID (see action_log) or, without an ID, your most recent one; with count, your last COUNT, newest first.  You can only undo your own actions.  An undo is refused, with the reason, when something changed since your action (the text you wrote was edited, the window you moved was moved again); a run stops at the first action that cannot be undone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "The action to undo, from action_log"
+          },
+          "count": {
+            "type": "integer",
+            "description": "Undo your last COUNT undoable actions (ignored with id)"
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "ai_call",
       "source": "cmacs-mcp-tools-ai.c",
       "order": 2,
@@ -30,6 +76,27 @@
           "tools": {
             "type": "boolean",
             "description": "Give the model the built-in agent tools"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Image file, relative to the workspace root"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "Base64 image bytes"
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "MIME type of data, e.g. image/png"
+                }
+              }
+            },
+            "description": "Images sent with the prompt: each {path} (a file in the workspace, as project_read_file reads it) or {data, mime} (base64 PNG/JPEG/GIF/WebP bytes)"
           }
         },
         "required": ["prompt"]
@@ -168,6 +235,27 @@
           "model": {
             "type": "string",
             "description": "Model name"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Image file, relative to the workspace root"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "Base64 image bytes"
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "MIME type of data, e.g. image/png"
+                }
+              }
+            },
+            "description": "Images sent with the prompt: each {path} (a file in the workspace, as project_read_file reads it) or {data, mime} (base64 PNG/JPEG/GIF/WebP bytes)"
           }
         },
         "required": ["prompt"]

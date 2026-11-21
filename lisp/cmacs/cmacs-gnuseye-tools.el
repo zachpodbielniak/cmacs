@@ -84,6 +84,7 @@ sent."
     ()
   :group 'gnuseye
   :destructive t
+  :undo '(irreversible "close the gnuseye buffer it opened")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.GnusEye.Open
   ;; has always done this, and is now served from this tool.
@@ -115,6 +116,7 @@ vessels, quakes, launches, fires)."
     ((name string "Layer name, as gnuseye_list_layers reports it"))
   :group 'gnuseye
   :destructive t
+  :undo '(irreversible "toggle the layer again with the tool")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.GnusEye.ToggleLayer
   ;; has always done this, and is now served from this tool.
@@ -140,6 +142,7 @@ units."
      (range number "Camera range in world units (default 14)" :optional t))
   :group 'gnuseye
   :destructive t
+  :undo '(irreversible "the globe keeps no previous camera")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.GnusEye.FlyTo
   ;; has always done this, and is now served from this tool.
@@ -238,6 +241,7 @@ Entities entering/leaving emit podomation events."
      (radius-km number "Radius in kilometres"))
   :group 'gnuseye
   :destructive t
+  :undo '(irreversible "remove the geofence in the gnuseye buffer")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.GnusEye.AddGeofence
   ;; has always done this, and is now served from this tool.
@@ -281,6 +285,7 @@ and US alert zones; flies to the strongest active storm."
     ()
   :group 'gnuseye
   :destructive t
+  :undo '(irreversible "the globe keeps no previous view")
   :example "emacsctl tool gnuseye weather-showcase"
   (require 'cmacs-gnuseye)
   (require 'cmacs-gnuseye-meteo)

@@ -1,0 +1,455 @@
+@c brigade-undo.texi --- the Undo for Agent Actions chapter
+@c Copyright (C) 2026 Zach Podbielniak
+@c SPDX-License-Identifier: AGPL-3.0-or-later
+@c
+@c The Info counterpart of doc_org/cmacs/cmacs-brigade-undo.org.  Keep
+@c the two in step: they say the same thing.  The table between the
+@c GENERATED markers is written by cmacs-brigade-undo-batch-write-table.
+
+@node CMacs Brigade Undo
+@chapter CMacs Brigade Undo: Undoing What an Agent Did
+
+@cindex undo, agent actions
+@cindex action log
+@cindex cmacs-brigade-undo
+@cindex action_undo
+@cindex action_log
+
+An agent edits a buffer, moves a window, switches your context, writes
+a file.  @code{cmacs-brigade-undo} answers ``undo what the agent just
+did''.
+
+@table @kbd
+@item M-x cmacs-brigade-undo
+Undo the last undoable agent action; with a prefix @var{n}, the last
+@var{n}, newest first.
+@item M-x cmacs-brigade-undo-task
+Everything one brigade run did.
+@item M-x cmacs-brigade-undo-agent
+Everything one agent did.
+@item M-x cmacs-brigade-actions
+The action log: inspect, undo, undo from here.
+@end table
+
+Every capability runs through one dispatch point,
+@code{cmacs-brigade-call-tool} / @code{cmacs-brigade-call-tool-async},
+whichever surface it arrived on: MCP, D-Bus forwarding,
+@command{emacsctl tool}, an in-process agent, bacon.  That is where the
+action log hooks in.  The code is in
+@file{lisp/cmacs/cmacs-brigade-undo.el} (log, records, undo, commands),
+@file{cmacs-brigade-undo-capture.el} (the per-tool capture functions),
+@file{cmacs-brigade-undo-tools.el} (@code{action_log},
+@code{action_undo}), with the dispatch in @file{cmacs-brigade-tools.el}
+and the @code{:undo} key in @file{cmacs-brigade-registry.el}.
+
+@menu
+* Undo Recording::         Capture before, one change group, log after.
+* Undo Undoing::           Staleness, order, force.
+* Undo Log Buffer::        The *cmacs agent actions* buffer.
+* Undo Tools::             action_log and action_undo; caller isolation.
+* Undo Privacy::           Nothing on disk by default.
+* Undo Writing::           Declaring an undo for your own tool.
+* Undo Decisions::         Every destructive tool's decision.
+* Undo Limits::            What it does not do.
+@end menu
+
+@node Undo Recording
+@section How a Call Is Recorded
+
+@subheading Before the handler: capture
+
+A tool declares how it is undone with @code{:undo} on its
+@code{cmacs-brigade-deftool} form.  Before the handler runs, the
+dispatch asks that declaration for an @dfn{undo record}: plain data
+about the state the call is about to change, plus the functions that
+check and restore it.  Capturing before is the only general way: the
+result of a call rarely says what was there before it.
+
+@lisp
+;; A capture function, named: called with the handler's arguments.
+(cmacs-brigade-deftool set-buffer-content ...
+  :destructive t
+  :undo 'cmacs-brigade-undo-capture-buffer-text
+  ...)
+
+;; A FORM, evaluated with the parameters bound, before the body.
+(cmacs-brigade-deftool my-rewrite "..." ((buffer string "Buffer"))
+  :destructive t
+  :undo (cmacs-brigade-undo-buffer-record buffer)
+  (my/rewrite buffer))
+
+;; A declared "cannot", with the reason the user will read.
+(cmacs-brigade-deftool gowl-close-client ...
+  :destructive t
+  :undo '(irreversible "a closed application cannot be reopened as it was")
+  ...)
+@end lisp
+
+The capture returns a record (a plist), @code{nil} (nothing to undo for
+this call), or @code{irreversible} / @code{(irreversible @var{reason})}.
+A capture that signals makes the call irreversible (``the state before
+the call could not be captured'') and never fails the call: the log is
+a record, not a gate.
+
+A @code{:destructive} tool with an @code{:undo} is logged with its
+record; one without is logged as ``irreversible: no undo declared''.  A
+tool that is not destructive and declares no @code{:undo} is not logged
+at all: reads are not actions.  A call that fails is not logged.
+
+@subheading Around the handler: one change group
+
+When the record names buffers, the dispatch wraps the handler in a
+change group in each (@code{prepare-change-group} @dots{}
+@code{accept-change-group} and @code{undo-amalgamate-change-group},
+then an @code{undo-boundary}).  The agent's edit is then ONE entry in
+that buffer's own undo list: a plain @kbd{C-/} in the buffer takes back
+the whole edit, however many changes the handler made, and so does a
+call that failed half way.
+
+@subheading After the handler: complete and log
+
+The record's @code{:after} function completes it with what the call
+left: the changed region between two markers, the hash of the written
+file, the geometry the window ended up with.  The call joins the
+@dfn{action log}, an in-memory ring of
+@code{cmacs-brigade-undo-log-size} entries (200), newest first.  An
+entry has an id (@samp{#@var{id}}), a time, the caller (the dispatch's
+agent string and the brigade task), the surface (@code{mcp},
+@code{dbus}, @code{cli}, @code{agent}, @code{lisp}), the tool and its
+arguments, the first line of the result, the record, and a state:
+@code{done}, @code{undone}, @code{failed-to-undo}, @code{irreversible},
+@code{stale} or @code{nothing-to-undo}.  An entry leaving the ring
+releases what its record holds.
+
+@node Undo Undoing
+@section Undoing
+
+@subheading Staleness
+
+Before an inverse runs, the world must still be what the agent left:
+for a buffer edit, the text between the markers is what the agent wrote
+(the user may edit elsewhere meanwhile); for a file, its sha256 is that
+of what the agent wrote; for the window layout, the frame's windows are
+unchanged; for a gowl window, it exists and is where the agent left it
+(or where it asked); focus, layout, workspace and context were not
+changed again; a created buffer was not modified; point did not move.
+
+Also, an older action refuses while a NEWER action that changed the same
+object is still done (``#7 edit_buffer changed the same thing later;
+undo it first'').  Newest first is always the order that works.
+
+A refused undo says, in one sentence, what changed, and leaves the
+entry @code{stale}, to be tried again once the world is back.  It never
+clobbers the user's later work.  @code{cmacs-brigade-undo-force} (and
+@kbd{F} in the log buffer) skips both checks after asking; it is for
+the user only, and no tool passes it.
+
+@subheading Buffer edits: the buffer's undo list first
+
+The inverse of a buffer edit prefers the buffer's own undo list: when
+the recorded change group is still intact at the head of
+@code{buffer-undo-list}, it undoes exactly that group, as @kbd{C-/}
+would.  Otherwise it replaces the region between the markers with the
+text that was there.  A buffer over @code{cmacs-brigade-undo-max-bytes}
+(1 MiB) is not snapshotted and can be undone only while the group is
+intact.  The undo is itself one change group, so @kbd{C-/} in the
+buffer re-applies the agent's edit: that is the only redo there is.
+When the buffer was unmodified before and the undo brings back exactly
+that text, it is unmodified again.
+
+@subheading Order
+
+@code{cmacs-brigade-undo} undoes the last @var{n} entries that have an
+undo record, newest first, stopping at the first refusal and passing
+over (and counting) irreversible ones.  @code{cmacs-brigade-undo-task},
+@code{cmacs-brigade-undo-agent}, @kbd{U} in the log and
+@code{action_undo} go newest first and stop at the first entry that
+cannot be undone, saying which and why.
+
+@node Undo Log Buffer
+@section The Log Buffer
+
+@kbd{M-x cmacs-brigade-actions} lists the log in
+@samp{*cmacs agent actions*}, refreshed as entries arrive.
+
+@table @kbd
+@item RET
+Inspect: caller, arguments, result, state and reason, what undo would
+do.
+@item u
+Undo this entry.
+@item U
+Undo it and everything the same caller did after it.
+@item F
+Force-undo, after asking.
+@item g
+Refresh.
+@end table
+
+In the brigade dashboard, @code{cmacs-brigade-undo-dashboard-task}
+undoes the task on the current line.
+
+@node Undo Tools
+@section The Tools
+
+@table @code
+@item action_log
+Read-only.  The caller's OWN actions, newest first, one line each, with
+what undoing would do.  @code{all=true} lists every caller's, only for
+an agent name or task id in @code{cmacs-brigade-undo-log-all-callers}.
+@item action_undo
+Destructive, asks.  Undoes the caller's own actions only, by @code{id}
+or the last @code{count}, with the staleness check always on.
+@end table
+
+Who the caller is comes from the dispatch
+(@code{cmacs-brigade-current-call}), never from an argument.  A caller
+with a task owns exactly that task's entries; the task id is the
+editor's own record.  Without a task, entries with the same agent string
+and no task: every external MCP client not on a scoped socket shares
+the agent @code{mcp}, and so shares an identity.  Another caller's
+@samp{#@var{id}} is answered exactly as one that does not exist.
+Arguments, results and reasons in @code{action_log} go through
+@code{cmacs-redact-text}; a missing redaction file fails the tool
+closed.
+
+@node Undo Privacy
+@section Privacy and Disk
+
+Records hold buffer and file contents, so the log is never written to
+disk by default.
+
+@table @code
+@item cmacs-brigade-undo-log-size
+Entries kept (200).
+@item cmacs-brigade-undo-max-bytes
+Largest buffer or file a record keeps a copy of (1 MiB).
+@item cmacs-brigade-undo-backup-large-files
+Non-nil keeps a backup copy of a larger file under
+@file{$XDG_STATE_HOME/cmacs/undo/} (0700, files 0600), deleted when the
+entry is undone or leaves the log; otherwise such a write is
+irreversible with that reason.  Default nil.
+@item cmacs-brigade-undo-persist-metadata
+Non-nil appends id, time, tool, agent, task and state (never arguments,
+results or records) to @file{$XDG_STATE_HOME/cmacs/undo/actions.jsonl}.
+Default nil.
+@item cmacs-brigade-undo-log-all-callers
+Who may call @code{action_log} with @code{all=true}.
+@end table
+
+A file the agent created is undone by moving it to the trash, not by
+deleting it.
+
+@node Undo Writing
+@section Writing an Undo for Your Own Tool
+
+The record is a plist.  The machinery reads @code{:summary} (one line:
+what undoing would do), @code{:object} (what the call changed, compared
+with @code{equal}, for the newest-first rule), @code{:buffers} (buffers
+to wrap in a change group), @code{:after} (@var{record} @var{result}
+@result{} the completed record, @code{nil} or @code{(irreversible
+@var{reason})}), @code{:stale} (@var{record} @result{} @code{nil} or a
+sentence), @code{:inverse} (@var{record} @result{} undo; signal
+@code{cmacs-brigade-undo-stale} when the world changed) and
+@code{:cleanup}.  The building blocks are
+@code{cmacs-brigade-undo-buffer-record}, @code{-created-buffer-record},
+@code{-killed-buffer-record}, @code{-point-record},
+@code{-file-record}, @code{-window-record} and
+@code{cmacs-brigade-undo-compose}.  A capture function's docstring's
+first line is what the decision table says about the tool.
+
+@node Undo Decisions
+@section Decisions for Every Destructive Tool
+
+Every destructive shipped tool has a decision: an inverse,
+@code{nothing} (it leaves no state behind), or irreversible with a
+reason.  Tools whose files carry no @code{:undo} yet have theirs in
+@code{cmacs-brigade-undo-decisions}.  The tests fail when a destructive
+tool has none, and when this table is stale; regenerate it with
+@code{cmacs-brigade-undo-batch-write-table}.
+
+@c GENERATED UNDO TABLE BEGIN
+@multitable @columnfractions .28 .12 .12 .48
+@headitem Tool @tab Group @tab Undo @tab What
+@item @code{action_undo} @tab action @tab nothing @tab Nothing to undo: the call leaves no state behind.
+@item @code{agent_cancel} @tab agent @tab irreversible @tab a cancelled run cannot be resumed where it stopped
+@item @code{agent_close} @tab mailbox @tab irreversible @tab a closed conversation cannot be reopened
+@item @code{agent_drop} @tab mailbox @tab irreversible @tab a dropped run's record is gone
+@item @code{agent_send} @tab mailbox @tab irreversible @tab a delivered message cannot be taken back
+@item @code{agent_spawn} @tab agent @tab irreversible @tab a started run has already spent its tokens; cancel it with agent_cancel
+@item @code{ai_call} @tab ai @tab irreversible @tab a model call cannot be taken back (its own tool calls are logged one by one)
+@item @code{ai_open_chat} @tab ai @tab irreversible @tab opens a chat buffer; close it like any other
+@item @code{ai_prompt} @tab ai @tab irreversible @tab a model call cannot be taken back
+@item @code{cad_assembly_set_joint} @tab cad @tab irreversible @tab no CAD undo is reachable from the tools
+@item @code{cad_export} @tab cad @tab irreversible @tab the export overwrites its destination
+@item @code{cad_patch_source} @tab cad @tab irreversible @tab no CAD undo is reachable from the tools
+@item @code{cad_print} @tab cad @tab irreversible @tab a print job cannot be taken back
+@item @code{cad_set_source} @tab cad @tab irreversible @tab no CAD undo is reachable from the tools
+@item @code{cad_slice} @tab cad @tab irreversible @tab slicer output is written by another program
+@item @code{context_switch} @tab context @tab inverse @tab Switch back to the context that was current (nothing it opened is closed).
+@item @code{create_buffer} @tab buffer @tab inverse @tab Kill the created buffer if unchanged since (or restore an existing one's text).
+@item @code{db_execute} @tab database @tab irreversible @tab a committed statement cannot be taken back
+@item @code{db_export} @tab database @tab inverse @tab Put the file the export wrote back as it was (or trash a new one).
+@item @code{delete_window} @tab window @tab inverse @tab Put the window layout back, unless it was changed again since.
+@item @code{deliverable_emit} @tab deliver @tab irreversible @tab a deliverable is delivered once it is emitted
+@item @code{desktop_click} @tab desktop @tab irreversible @tab input delivered to another program cannot be taken back
+@item @code{desktop_key} @tab desktop @tab irreversible @tab input delivered to another program cannot be taken back
+@item @code{desktop_launch} @tab desktop @tab irreversible @tab a started program is not stopped by undo; close its window
+@item @code{desktop_scroll} @tab desktop @tab irreversible @tab input delivered to another program cannot be taken back
+@item @code{desktop_type} @tab desktop @tab irreversible @tab input delivered to another program cannot be taken back
+@item @code{edit_buffer} @tab edit @tab inverse @tab Restore the buffer's text (its own undo list, else a snapshot).
+@item @code{find_file} @tab buffer @tab inverse @tab Kill the buffer the call opened if unchanged since; put the windows back.
+@item @code{generate_image} @tab ai @tab irreversible @tab a generated image is a new file; nothing it replaced
+@item @code{gnuseye_add_geofence} @tab gnuseye @tab irreversible @tab remove the geofence in the gnuseye buffer
+@item @code{gnuseye_fly_to} @tab gnuseye @tab irreversible @tab the globe keeps no previous camera
+@item @code{gnuseye_open} @tab gnuseye @tab irreversible @tab close the gnuseye buffer it opened
+@item @code{gnuseye_toggle_layer} @tab gnuseye @tab irreversible @tab toggle the layer again with the tool
+@item @code{gnuseye_weather_showcase} @tab gnuseye @tab irreversible @tab the globe keeps no previous view
+@item @code{goto_line} @tab edit @tab inverse @tab Move point back where it was, unless it moved again since.
+@item @code{gowl_broadcast_add_rule} @tab gowl @tab irreversible @tab remove it with gowl_broadcast_remove
+@item @code{gowl_broadcast_add_team} @tab gowl @tab irreversible @tab remove it with gowl_broadcast_remove
+@item @code{gowl_broadcast_assign} @tab gowl @tab irreversible @tab the broadcast module keeps no previous state
+@item @code{gowl_broadcast_focus_slot} @tab gowl @tab irreversible @tab focus moved; use gowl_focus_client
+@item @code{gowl_broadcast_remove} @tab gowl @tab irreversible @tab a removed team or rule's definition is gone
+@item @code{gowl_broadcast_set} @tab gowl @tab irreversible @tab the broadcast module keeps no previous state
+@item @code{gowl_clipboard_copy} @tab gowl @tab irreversible @tab the clipboard's previous content is not kept
+@item @code{gowl_close_client} @tab gowl @tab irreversible @tab a closed application cannot be reopened as it was
+@item @code{gowl_drain_recording} @tab gowl @tab irreversible @tab drained events are handed out once
+@item @code{gowl_focus_client} @tab gowl @tab inverse @tab Give focus back to the window that had it.
+@item @code{gowl_hotkey_add} @tab gowl @tab irreversible @tab remove it with gowl_hotkey_remove
+@item @code{gowl_hotkey_fire} @tab gowl @tab irreversible @tab a fired hotkey's action has run
+@item @code{gowl_hotkey_remove} @tab gowl @tab irreversible @tab a removed hotkey's definition is gone
+@item @code{gowl_hotkey_set} @tab gowl @tab irreversible @tab the hotkey module keeps no previous setting
+@item @code{gowl_macro_record} @tab gowl @tab irreversible @tab stop the recording with gowl_macro_stop
+@item @code{gowl_macro_run} @tab gowl @tab irreversible @tab a macro's input reached other programs
+@item @code{gowl_macro_stop} @tab gowl @tab irreversible @tab a stopped macro cannot resume where it was
+@item @code{gowl_macro_voice_match} @tab gowl @tab irreversible @tab a matched voice macro has run
+@item @code{gowl_reload_config} @tab gowl @tab irreversible @tab a reload replaces the compositor's config
+@item @code{gowl_screen_text} @tab gowl @tab nothing @tab Nothing to undo: the call leaves no state behind.
+@item @code{gowl_set_client_geometry} @tab gowl @tab inverse @tab Put the window back where it was (its float state and geometry).
+@item @code{gowl_set_layout} @tab gowl @tab inverse @tab Set the focused monitor's previous layout again.
+@item @code{gowl_set_monitor_transform} @tab gowl @tab inverse @tab Set the monitor's previous transform again.
+@item @code{gowl_spawn} @tab gowl @tab inverse @tab Close the windows of the spawned process, if they are still its.
+@item @code{gowl_start_recording} @tab gowl @tab irreversible @tab stop it with gowl_stop_recording
+@item @code{gowl_stop_recording} @tab gowl @tab irreversible @tab a stopped recording's ring is gone
+@item @code{gowl_workspace_switch} @tab gowl @tab inverse @tab Switch back to the workspace that was current.
+@item @code{gsurf_back} @tab gsurf @tab irreversible @tab history moved; use gsurf_forward
+@item @code{gsurf_click} @tab gsurf @tab irreversible @tab input delivered to a page cannot be taken back
+@item @code{gsurf_click_element} @tab gsurf @tab irreversible @tab input delivered to a page cannot be taken back
+@item @code{gsurf_download_cancel} @tab gsurf @tab irreversible @tab a cancelled download cannot be resumed
+@item @code{gsurf_eval_js} @tab gsurf @tab irreversible @tab a script's effects in a page cannot be taken back
+@item @code{gsurf_forward} @tab gsurf @tab irreversible @tab history moved; use gsurf_back
+@item @code{gsurf_lite_open} @tab gsurf @tab irreversible @tab close the buffer it opened
+@item @code{gsurf_navigate} @tab gsurf @tab inverse @tab Load the page the view showed before.
+@item @code{gsurf_open} @tab gsurf @tab inverse @tab Close the browser view the call opened.
+@item @code{gsurf_permission_policy} @tab gsurf @tab irreversible @tab the previous policy is not kept
+@item @code{gsurf_press_key} @tab gsurf @tab irreversible @tab input delivered to a page cannot be taken back
+@item @code{gsurf_print_pdf} @tab gsurf @tab irreversible @tab the PDF is written after the call returns
+@item @code{gsurf_reload} @tab gsurf @tab irreversible @tab a reload discards the page's state
+@item @code{gsurf_run_action} @tab gsurf @tab irreversible @tab an action's effect in a page cannot be taken back
+@item @code{gsurf_set_cookie} @tab gsurf @tab irreversible @tab the cookie it replaced is not kept
+@item @code{gsurf_set_zoom} @tab gsurf @tab inverse @tab Set the view's previous zoom level again.
+@item @code{gsurf_snapshot} @tab gsurf @tab irreversible @tab the image is written after the call returns
+@item @code{gsurf_stop} @tab gsurf @tab irreversible @tab a stopped load is not resumed; use gsurf_reload
+@item @code{gsurf_toggle_module} @tab gsurf @tab inverse @tab Set the module back to enabled or disabled, as it was.
+@item @code{gsurf_type_text} @tab gsurf @tab irreversible @tab input delivered to a page cannot be taken back
+@item @code{imgedit_add_layer} @tab imgedit @tab inverse @tab Remove the layer the call added.
+@item @code{imgedit_adjust} @tab imgedit @tab inverse @tab One step of the document's own undo.
+@item @code{imgedit_draw_shape} @tab imgedit @tab inverse @tab One step of the document's own undo.
+@item @code{imgedit_draw_text} @tab imgedit @tab inverse @tab One step of the document's own undo.
+@item @code{imgedit_filter} @tab imgedit @tab inverse @tab One step of the document's own undo.
+@item @code{imgedit_prompt} @tab imgedit @tab irreversible @tab a model-driven edit is several edits; use imgedit_undo on the document
+@item @code{imgedit_save} @tab imgedit @tab inverse @tab Put the file the call saved over back as it was (or trash a new one).
+@item @code{imgedit_set_color} @tab imgedit @tab irreversible @tab the draw colour has no reader to restore from
+@item @code{imgedit_transform} @tab imgedit @tab inverse @tab One step of the document's own undo.
+@item @code{imgedit_undo} @tab imgedit @tab inverse @tab Redo the step the call undid.
+@item @code{insert_org} @tab edit @tab inverse @tab Restore the buffer's text (its own undo list, else a snapshot).
+@item @code{kill_buffer} @tab buffer @tab inverse @tab Bring the buffer back: its file, or its text, mode and point.
+@item @code{lrgeditor_action} @tab lrgeditor @tab irreversible @tab lrgeditor's own undo is not reached from here
+@item @code{lrgeditor_add_primitive} @tab lrgeditor @tab irreversible @tab lrgeditor's own undo is not reached from here
+@item @code{lrgeditor_add_visual} @tab lrgeditor @tab irreversible @tab lrgeditor's own undo is not reached from here
+@item @code{lrgeditor_delete} @tab lrgeditor @tab irreversible @tab lrgeditor's own undo is not reached from here
+@item @code{lrgeditor_move} @tab lrgeditor @tab irreversible @tab lrgeditor's own undo is not reached from here
+@item @code{lrgeditor_open} @tab lrgeditor @tab irreversible @tab close the editor it opened
+@item @code{lrgeditor_play} @tab lrgeditor @tab irreversible @tab stop it with lrgeditor_stop
+@item @code{lrgeditor_save} @tab lrgeditor @tab irreversible @tab the saved file it overwrote is not kept
+@item @code{lrgeditor_select} @tab lrgeditor @tab irreversible @tab the selection before is not kept
+@item @code{lrgeditor_stop} @tab lrgeditor @tab irreversible @tab start it again with lrgeditor_play
+@item @code{lrgterm_3d_camera_orbit} @tab lrgterm @tab irreversible @tab the 3D frame keeps no previous camera
+@item @code{lrgterm_3d_cycle_arrangement} @tab lrgterm @tab irreversible @tab cycle again to the arrangement wanted
+@item @code{lrgterm_3d_cycle_environment} @tab lrgterm @tab irreversible @tab cycle again to the environment wanted
+@item @code{lrgterm_3d_focus_selected} @tab lrgterm @tab irreversible @tab the 3D frame keeps no previous focus
+@item @code{lrgterm_3d_pin_selected} @tab lrgterm @tab irreversible @tab unpin it with lrgterm_3d_unpin_all
+@item @code{lrgterm_3d_unpin_all} @tab lrgterm @tab irreversible @tab the pins it removed are not kept
+@item @code{office_set_cell} @tab office @tab irreversible @tab a queued package edit is not withdrawn by undo
+@item @code{office_set_text} @tab office @tab irreversible @tab a queued package edit is not withdrawn by undo
+@item @code{podomation_control} @tab podomation @tab inverse @tab Stop or start the engine again, as it was; a run cannot be undone.
+@item @code{podomation_emit_event} @tab podomation @tab irreversible @tab a delivered event's effects are the pods'
+@item @code{podomation_load_file} @tab podomation @tab irreversible @tab the engine cannot unload a loaded file
+@item @code{podomation_reload} @tab podomation @tab irreversible @tab a reload replaces the engine's configuration
+@item @code{podomation_set_context} @tab podomation @tab irreversible @tab the engine has no reader for its context
+@item @code{project_write_file} @tab project @tab inverse @tab Put the file's previous contents back (or trash a file the call created).
+@item @code{record_audio} @tab audio @tab irreversible @tab what the microphone heard is a new recording
+@item @code{replace_in_buffer} @tab edit @tab inverse @tab Restore the buffer's text (its own undo list, else a snapshot).
+@item @code{save_buffer} @tab buffer @tab inverse @tab Put the file's previous contents back on disk; the buffer keeps its text.
+@item @code{schedule_create} @tab schedule @tab irreversible @tab remove the schedule with schedule_delete
+@item @code{schedule_delete} @tab schedule @tab irreversible @tab a deleted schedule's definition is gone
+@item @code{schedule_set_enabled} @tab schedule @tab irreversible @tab set it back with schedule_set_enabled
+@item @code{screensaver_pause} @tab screensaver @tab inverse @tab Resume rendering, if it was running before the pause.
+@item @code{screensaver_restart} @tab screensaver @tab nothing @tab Nothing to undo: the call leaves no state behind.
+@item @code{screensaver_resume} @tab screensaver @tab inverse @tab Pause rendering again, if it was paused before.
+@item @code{screensaver_set_fps} @tab screensaver @tab inverse @tab Set the previous frame rate again.
+@item @code{screensaver_set_wallpaper} @tab screensaver @tab inverse @tab Set the animated wallpaper that ran before again (or stop it).
+@item @code{screensaver_stop_wallpaper} @tab screensaver @tab inverse @tab Start the animated wallpaper that was stopped again.
+@item @code{secondbrain_expand} @tab secondbrain @tab irreversible @tab the map keeps no previous expansion
+@item @code{secondbrain_ingest} @tab secondbrain @tab irreversible @tab an ingested note is new; delete it to undo
+@item @code{secondbrain_ingest_cancel} @tab secondbrain @tab irreversible @tab a cancelled ingest cannot be resumed
+@item @code{secondbrain_migrate} @tab secondbrain @tab irreversible @tab an applied migration is not reversed by undo
+@item @code{secondbrain_open} @tab secondbrain @tab irreversible @tab close the map buffer it opened
+@item @code{secondbrain_set_layout} @tab secondbrain @tab irreversible @tab set the layout back with the tool
+@item @code{select_window} @tab window @tab inverse @tab Put the window layout back, unless it was changed again since.
+@item @code{set_buffer_content} @tab buffer @tab inverse @tab Restore the buffer's text (its own undo list, else a snapshot).
+@item @code{speech_set} @tab audio @tab irreversible @tab the previous speech setting is not kept
+@item @code{split_window} @tab window @tab inverse @tab Put the window layout back, unless it was changed again since.
+@item @code{switch_to_buffer} @tab buffer @tab inverse @tab Put the window layout back, and kill the buffer if the call created it.
+@item @code{synthesize_speech} @tab audio @tab irreversible @tab spoken audio cannot be taken back
+@item @code{vidstudio_add_audio} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_add_clip} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_add_effect} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_add_keyframe} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_add_track} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_export} @tab vidstudio @tab irreversible @tab an export is written by ffmpeg after the call
+@item @code{vidstudio_render_frame} @tab vidstudio @tab irreversible @tab a rendered frame is written to a file
+@item @code{vidstudio_set_transition} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@item @code{vidstudio_split} @tab vidstudio @tab irreversible @tab the vidstudio project model has no undo
+@end multitable
+@c GENERATED UNDO TABLE END
+
+@node Undo Limits
+@section Limits
+
+@itemize @bullet
+@item
+The right-click menu calls a tool's handler directly, as the user's own
+action, and is not logged; buffer edits made that way are still in the
+buffer's undo list.
+@item
+An @code{:async} tool is logged when it calls @code{done}; its change
+groups span only its synchronous part.
+@item
+imgedit's undo stack does not say who pushed a step: undoing an agent's
+step after an edit in @code{cmacs-imgedit-mode} takes back that edit
+instead.
+@item
+@code{gsurf_navigate} is not stale after a redirect or a followed link;
+only a closed view refuses.
+@item
+@code{screensaver_set_wallpaper} knows the previous wallpaper only when
+a tool started it.
+@item
+A context switch's undo switches back; what the switch opened stays
+open.
+@item
+A tiled gowl window's geometry is the layout's: its undo puts it back in
+the tile layer, not at a pixel position.
+@end itemize

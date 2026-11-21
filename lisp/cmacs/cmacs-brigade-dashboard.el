@@ -791,10 +791,17 @@ knowing that `cmacs-brigade-plan-create\=' exists and where plans live."
   (interactive)
   (describe-keymap 'cmacs-brigade-dashboard-mode-map))
 
+;; An autoload, not a require: the undo log is loaded with the tools,
+;; and the dashboard has no reason to pull it in before `u' is pressed.
+(autoload 'cmacs-brigade-undo-dashboard-task "cmacs-brigade-undo" nil t)
+
 (defvar cmacs-brigade-dashboard-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "s") #'cmacs-brigade-dashboard-start)
     (define-key map (kbd "K") #'cmacs-brigade-dashboard-cancel)
+    ;; Undo what the task at point did (cmacs-brigade-undo.el), newest
+    ;; first, stopping at the first action that cannot be undone.
+    (define-key map (kbd "u") #'cmacs-brigade-undo-dashboard-task)
     (define-key map (kbd "RET") #'cmacs-brigade-dashboard-visit)
     (define-key map (kbd "o") #'cmacs-brigade-dashboard-output)
     ;; The conversation keys.  `i' for the same reason vi uses it: this

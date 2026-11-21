@@ -249,6 +249,7 @@ the buffer name."
     ((url string "URL or search query"))
   :group 'gsurf
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-gsurf-open
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Open
   ;; has always done this, and is now served from this tool.
@@ -264,6 +265,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-gsurf-navigate
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Navigate
   ;; has always done this, and is now served from this tool.
@@ -281,6 +283,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "history moved; use gsurf_forward")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Back
   ;; has always done this, and is now served from this tool.
@@ -294,6 +297,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "history moved; use gsurf_back")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Forward
   ;; has always done this, and is now served from this tool.
@@ -307,6 +311,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "a reload discards the page's state")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Reload
   ;; has always done this, and is now served from this tool.
@@ -320,6 +325,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "a stopped load is not resumed; use gsurf_reload")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Stop
   ;; has always done this, and is now served from this tool.
@@ -414,6 +420,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "a script's effects in a page cannot be taken back")
   :confirm 'ask
   (let ((name (cmacs-gsurf-tools--target-name buffer)))
     (cmacs-gsurf-mcp-eval-js (cmacs-gsurf-tools--string script "script")
@@ -426,6 +433,7 @@ the buffer name."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-gsurf-zoom
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.SetZoom
   ;; has always done this, and is now served from this tool.
@@ -443,6 +451,7 @@ once loaded."
     ((url string "URL or search query"))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "close the buffer it opened")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.LiteOpen
   ;; has always done this, and is now served from this tool.
@@ -499,6 +508,7 @@ after gsurf_lite_open."
     ((id integer "download id"))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "a cancelled download cannot be resumed")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.DownloadCancel
   ;; has always done this, and is now served from this tool.
@@ -527,6 +537,7 @@ path.  Set full_page for the whole document."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "the image is written after the call returns")
   :confirm 'ask
   :async t
   (let ((buf (cmacs-gsurf-tools--capture-target buffer))
@@ -546,6 +557,7 @@ path.  Set full_page for the whole document."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "the PDF is written after the call returns")
   :confirm 'ask
   :async t
   (let ((buf (cmacs-gsurf-tools--capture-target buffer))
@@ -566,6 +578,7 @@ path.  Set full_page for the whole document."
      (verdict string "allow or deny"))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "the previous policy is not kept")
   :confirm 'ask
   (require 'cmacs-gsurf)
   ;; The helper interns the verdict; only the two it documents get
@@ -591,6 +604,7 @@ getBoundingClientRect reports) in a gsurf page with a trusted click."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "input delivered to a page cannot be taken back")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.Click
   ;; has always done this, and is now served from this tool.
@@ -613,6 +627,7 @@ gsurf_click_element."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "input delivered to a page cannot be taken back")
   :confirm 'ask
   (unless (stringp text)
     (error "Missing required argument: text"))
@@ -628,6 +643,7 @@ or X name (Enter, Tab, Escape, ArrowDown, PageDown, a, ...)."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "input delivered to a page cannot be taken back")
   :confirm 'ask
   (cmacs-gsurf-mcp-press-key
    (cmacs-gsurf-tools--string key "key")
@@ -643,6 +659,7 @@ Asynchronous: returns at once; the outcome goes to the echo area."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "input delivered to a page cannot be taken back")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.ClickElement
   ;; has always done this, and is now served from this tool.
@@ -666,6 +683,7 @@ for a view in a container)."
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "the cookie it replaced is not kept")
   :confirm 'ask
   (unless (and (stringp name) (stringp value) (stringp domain))
     (error "Missing required argument: name, value or domain"))
@@ -686,6 +704,7 @@ hardening, containers, form_autofill, modal, ...)."
      (enabled boolean "true to enable, false to disable"))
   :group 'gsurf
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-gsurf-module
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.ToggleModule
   ;; has always done this, and is now served from this tool.
@@ -709,6 +728,7 @@ the modules (dark-mode-toggle, dark-mode-toggle-site, form-autofill, \
              :optional t))
   :group 'gsurf
   :destructive t
+  :undo '(irreversible "an action's effect in a page cannot be taken back")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Gsurf.RunAction
   ;; has always done this, and is now served from this tool.

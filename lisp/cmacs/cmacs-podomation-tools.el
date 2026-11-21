@@ -112,6 +112,7 @@ with a data object of string values."
     ((event string "Event name, e.g. on_buffer_save")
      (data object "Event payload (string values)" :optional t))
   :group 'podomation :destructive t
+  :undo '(irreversible "a delivered event's effects are the pods'")
   (unless (stringp event)
     (error "Missing required argument: event"))
   (cmacs-podomation-emit-event event
@@ -123,6 +124,7 @@ with a data object of string values."
 exposed to the DSL as {context->key} bindings."
     ((context object "Context key/value pairs (string values)"))
   :group 'podomation :destructive t
+  :undo '(irreversible "the engine has no reader for its context")
   (cmacs-podomation-set-context
    (cmacs-podomation-tools--string-pairs context))
   (cmacs-podomation-tools--printed "context set"))
@@ -131,6 +133,7 @@ exposed to the DSL as {context->key} bindings."
   "Load and parse a .pod DSL file into the automation engine."
     ((file string "Path to a .pod DSL file"))
   :group 'podomation :destructive t
+  :undo '(irreversible "the engine cannot unload a loaded file")
   (unless (stringp file)
     (error "Missing required argument: file"))
   (let ((path (expand-file-name file)))
@@ -141,6 +144,7 @@ exposed to the DSL as {context->key} bindings."
   "Hot-reload the podomation engine configuration."
     ()
   :group 'podomation :destructive t
+  :undo '(irreversible "a reload replaces the engine's configuration")
   (cmacs-podomation-reload)
   (cmacs-podomation-tools--printed "engine reloaded"))
 
@@ -153,6 +157,7 @@ its source had fired event (default: the pod's only bound event)."
      (pod string "Pod name, for action run" :optional t)
      (event string "Event to fire, for action run (optional)" :optional t))
   :group 'podomation :destructive t
+  :undo 'cmacs-brigade-undo-capture-podomation-control
   (pcase action
     ("start" (cmacs-podomation-start)
      (cmacs-podomation-tools--printed "engine started"))

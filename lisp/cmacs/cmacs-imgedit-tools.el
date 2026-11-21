@@ -132,6 +132,7 @@ The message is the C handler's: WHAT must be A|B|C."
      (path string "Destination file; the extension picks the format"))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-save
   :example "emacsctl tool imgedit save --handle 1 --path /tmp/out.png"
   (cmacs-imgedit-save (cmacs-imgedit-tools--int handle "handle") path)
   "saved")
@@ -162,6 +163,7 @@ The message is the C handler's: WHAT must be A|B|C."
      (a integer "Alpha, 0-255 (default 255)" :optional t))
   :group 'imgedit
   :destructive t
+  :undo '(irreversible "the draw colour has no reader to restore from")
   :example "emacsctl tool imgedit set-color --handle 1 --r 255 --g 0 --b 0"
   (cmacs-imgedit-set-color (cmacs-imgedit-tools--int handle "handle")
                            (cmacs-imgedit-tools--int r "r")
@@ -185,6 +187,7 @@ rect/circle/ellipse."
      (thickness integer "Stroke width in pixels (default 1)" :optional t))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-edit
   :example "emacsctl tool imgedit draw-shape --handle 1 --shape rect \
 --x1 10 --y1 10 --x2 90 --y2 60 --filled true"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
@@ -218,6 +221,7 @@ invert|grayscale."
              :optional t))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-edit
   :example "emacsctl tool imgedit adjust --handle 1 --kind contrast \
 --amount 1.2"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
@@ -247,6 +251,7 @@ sharpen|edge|emboss|bloom."
      (radius integer "Radius for blur and pixelate (default 2)" :optional t))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-edit
   :example "emacsctl tool imgedit filter --handle 1 --kind blur --radius 4"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
         (kind (cmacs-imgedit-tools--choice
@@ -270,6 +275,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
      (kind string "Which transform"))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-edit
   :example "emacsctl tool imgedit transform --handle 1 --kind rotate-cw"
   (let ((h (cmacs-imgedit-tools--int handle "handle"))
         (kind (cmacs-imgedit-tools--choice
@@ -291,6 +297,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
      (size integer "Font size in pixels (default 16)" :optional t))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-edit
   :example "emacsctl tool imgedit draw-text --handle 1 --x 8 --y 8 \
 --text Hello"
   (let ((h (cmacs-imgedit-tools--int handle "handle")))
@@ -306,6 +313,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
      (name string "Name for the layer" :optional t))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-add-layer
   :example "emacsctl tool imgedit add-layer --handle 1 --name Notes"
   (format "layer %d"
           (cmacs-imgedit-add-layer (cmacs-imgedit-tools--int handle "handle")
@@ -316,6 +324,7 @@ flip-h|flip-v|rotate-cw|rotate-ccw."
     ((handle integer "Document handle"))
   :group 'imgedit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-imgedit-undo
   :example "emacsctl tool imgedit undo --handle 1"
   ;; An empty undo stack is an answer, not a failure.
   (if (cmacs-imgedit-undo (cmacs-imgedit-tools--int handle "handle"))

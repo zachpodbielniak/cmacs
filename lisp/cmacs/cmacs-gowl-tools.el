@@ -387,6 +387,7 @@ redaction rules withhold"))))
      (by string "Match field (default: app-id)"
          :optional t :enum ("app-id" "title")))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-focus
   (gowl-focus-client (cmacs-gowl-tools--find-or-signal pattern by))
   (cmacs-gowl-tools--quoted "focused"))
 
@@ -396,6 +397,7 @@ redaction rules withhold"))))
      (by string "Match field (default: app-id)"
          :optional t :enum ("app-id" "title")))
   :group 'gowl :destructive t
+  :undo '(irreversible "a closed application cannot be reopened as it was")
   (gowl-close-client (cmacs-gowl-tools--find-or-signal pattern by))
   (cmacs-gowl-tools--quoted "closed"))
 
@@ -409,6 +411,7 @@ redaction rules withhold"))))
      (width integer "Width in pixels")
      (height integer "Height in pixels"))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-geometry
   (unless (and (integerp x) (integerp y) (integerp width) (integerp height))
     (cmacs-gowl-tools--missing "pattern, x, y, width, height"))
   (gowl-client-set-geometry (cmacs-gowl-tools--find-or-signal pattern by)
@@ -419,6 +422,7 @@ redaction rules withhold"))))
   "Spawn a command in the Wayland compositor."
     ((command string "Shell command to spawn"))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-spawn
   (unless (stringp command)
     (cmacs-gowl-tools--missing "command"))
   (cmacs-gowl-tools--running)
@@ -475,6 +479,7 @@ matching output name in the YAML `monitors:` block."
     ((name string "Output name (e.g. eDP-1)")
      (transform integer "Transform code 0-7"))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-transform
   (unless (stringp name)
     (cmacs-gowl-tools--missing "name"))
   (unless (integerp transform)
@@ -520,6 +525,7 @@ matching output name in the YAML `monitors:` block."
   "Set the tiling layout: \"tile\", \"monocle\", or \"float\"."
     ((layout string "Layout name" :enum ("tile" "monocle" "float")))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-layout
   (unless (stringp layout)
     (cmacs-gowl-tools--missing "layout"))
   (cmacs-gowl-tools--running)
@@ -544,6 +550,7 @@ matching output name in the YAML `monitors:` block."
   "Switch to the workspace with the given id."
     ((id integer "Workspace id"))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-gowl-workspace
   (unless (integerp id)
     (cmacs-gowl-tools--missing "id"))
   (cmacs-gowl-tools--running)
@@ -582,6 +589,7 @@ storing or sharing it."
      (max-events integer "Ring size in events (default 4096, \
 maximum 100000)" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "stop it with gowl_stop_recording")
   :returns 'json
   (cmacs-gowl-tools--running)
   (gowl-start-recording (cmacs-gowl-tools--limit max-seconds)
@@ -595,6 +603,7 @@ ring is reported rather than passed off as complete, plus active \
 and stop_reason."
     ((token string "Token from gowl_start_recording"))
   :group 'gowl :destructive t
+  :undo '(irreversible "drained events are handed out once")
   :returns 'json
   (unless (stringp token)
     (cmacs-gowl-tools--missing "token"))
@@ -607,6 +616,7 @@ gowl_drain_recording returns. Stopping a recording that already \
 stopped itself still returns its remaining events exactly once."
     ((token string "Token from gowl_start_recording"))
   :group 'gowl :destructive t
+  :undo '(irreversible "a stopped recording's ring is gone")
   :returns 'json
   ;; The DEFUN with no token stops whatever is running and keeps the
   ;; events; that is the person's way out, not an agent's, so a token is
@@ -649,6 +659,7 @@ or an Elisp macro), or a path to a .c file")
   ;; Destructive, and in the allowlist's privileged set by name: a macro
   ;; is arbitrary code in the compositor.
   :group 'gowl :destructive t
+  :undo '(irreversible "a macro's input reached other programs")
   (unless (and (stringp name) (not (string-empty-p name)))
     (cmacs-gowl-tools--missing "name"))
   ;; The module splits its line with g_shell_parse_argv; every word is
@@ -682,6 +693,7 @@ time budget, triggers -- the macro module's status JSON."
     ((which string "A macro name, a run id or all (the default)"
             :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "a stopped macro cannot resume where it was")
   (cmacs-gowl-tools--macro
    (if (and which (not (string-empty-p which)))
        (concat "macro-stop " (cmacs-gowl-tools--shell-quote which))
@@ -699,6 +711,7 @@ are not recorded."
              :enum ("start" "stop" "cancel" "status"))
      (name string "With start: also write NAME.c" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "stop the recording with gowl_macro_stop")
   (require 'cmacs-gowl-macro)
   ;; FOR-AGENT is always t: the record key needs no consent because the
   ;; person pressed it; a program asking is a different thing.
@@ -715,6 +728,7 @@ args) and runs nothing."
      (dry-run boolean "Report what would run, and run nothing"
               :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "a matched voice macro has run")
   (unless (and (stringp text) (not (string-empty-p text)))
     (cmacs-gowl-tools--missing "text"))
   (require 'cmacs-gowl-macro)
@@ -840,6 +854,7 @@ released. Or set strict one-press-one-window mode instead."
      (strict string "on, off or toggle"
              :optional t :enum ("on" "off" "toggle")))
   :group 'gowl :destructive t
+  :undo '(irreversible "the broadcast module keeps no previous state")
   (cond
    (strict
     (unless (member strict '("on" "off" "toggle"))
@@ -875,6 +890,7 @@ groups: {NAME: [slot]}}; match is a filter such as app-id = eqgame.exe"
            :optional t)
      (yaml string "The same as one line of flow YAML" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "remove it with gowl_broadcast_remove")
   (cmacs-gowl-tools--broadcast
    (concat "broadcast-add-team "
            (cmacs-gowl-tools--definition
@@ -889,6 +905,7 @@ modifiers, targets, translate, mode, reset-ms, delivery, mouse, \
 delay-ms, local}" :optional t)
      (yaml string "The same as one line of flow YAML" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "remove it with gowl_broadcast_remove")
   (cmacs-gowl-tools--broadcast
    (concat "broadcast-add-rule "
            (cmacs-gowl-tools--definition
@@ -900,6 +917,7 @@ delay-ms, local}" :optional t)
     ((kind string "team or rule" :enum ("team" "rule"))
      (name string "The team's or rule's name"))
   :group 'gowl :destructive t
+  :undo '(irreversible "a removed team or rule's definition is gone")
   (unless (member kind '("team" "rule"))
     (cmacs-gowl-tools--missing "kind (team or rule)"))
   (unless (cmacs-gowl-tools--word-p name)
@@ -913,6 +931,7 @@ delay-ms, local}" :optional t)
      (client-id integer "The window (default: the focused one); 0 hands \
 the slot back to its match" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "the broadcast module keeps no previous state")
   (unless (and (cmacs-gowl-tools--word-p team)
                (cmacs-gowl-tools--word-p slot))
     (cmacs-gowl-tools--missing "team and slot"))
@@ -946,6 +965,7 @@ the slot back to its match" :optional t))
     ((team string "The team (default: the only one)" :optional t)
      (slot string "The slot"))
   :group 'gowl :destructive t
+  :undo '(irreversible "focus moved; use gowl_focus_client")
   (unless (cmacs-gowl-tools--word-p slot)
     (cmacs-gowl-tools--missing "slot"))
   (when (and team (not (cmacs-gowl-tools--word-p team)))
@@ -973,6 +993,7 @@ section {hotkeys: [...], remaps: {...}, modes: {...}}" :optional t)
      (id string "Name it, so adding again replaces it and \
 gowl_hotkey_remove takes it back" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "remove it with gowl_hotkey_remove")
   (let ((text (cmacs-gowl-tools--definition
                hotkey yaml
                "a hotkey object, or yaml (one line of flow YAML)"
@@ -1013,6 +1034,7 @@ first thing to look at when a hotkey does not fire."
 disabled instead)."
     ((id string "The hotkey's id"))
   :group 'gowl :destructive t
+  :undo '(irreversible "a removed hotkey's definition is gone")
   (unless (cmacs-gowl-tools--word-p id)
     (cmacs-gowl-tools--missing "id"))
   (cmacs-gowl-tools--hotkey (concat "hotkey-remove " id)))
@@ -1027,6 +1049,7 @@ or enter a key mode."
                 :optional t :enum ("on" "off" "toggle"))
      (mode string "A key mode; default leaves every mode" :optional t))
   :group 'gowl :destructive t
+  :undo '(irreversible "the hotkey module keeps no previous setting")
   ;; One of three things, looked for in the C's order.
   (cmacs-gowl-tools--hotkey
    (cond
@@ -1052,6 +1075,7 @@ or enter a key mode."
   "Run a hotkey's actions as if it had been pressed."
     ((id string "The hotkey's id"))
   :group 'gowl :destructive t
+  :undo '(irreversible "a fired hotkey's action has run")
   (unless (cmacs-gowl-tools--word-p id)
     (cmacs-gowl-tools--missing "id"))
   (cmacs-gowl-tools--hotkey (concat "hotkey-fire " id)))
@@ -1168,6 +1192,7 @@ the screenshot module's)" :optional t)
      (copy boolean "Also put the text on the clipboard (default false)"
            :optional t))
   :group 'gowl :destructive t
+  :undo 'cmacs-brigade-undo-capture-nothing
   :async t :timeout 90
   (unless (and (integerp x) (integerp y) (integerp width) (integerp height))
     (cmacs-gowl-tools--missing "x, y, width, height"))
@@ -1274,6 +1299,7 @@ copied, in its MIME type)."
 window produces it. Replaces what the person has copied."
     ((id integer "The entry's id, from gowl_clipboard_list"))
   :group 'gowl :destructive t
+  :undo '(irreversible "the clipboard's previous content is not kept")
   (cmacs-gowl-tools--clipboard
    (format "clipboard-copy %d" (cmacs-gowl-tools--clipboard-id id))))
 
@@ -1302,6 +1328,7 @@ window produces it. Replaces what the person has copied."
     "Reload the gowl compositor configuration from YAML."
       ()
     :group 'gowl :destructive t
+    :undo '(irreversible "a reload replaces the compositor's config")
     (cmacs-gowl-tools--running)
     (gowl-reload-config-from-search-path)
     ;; `cmacs_dispatch_gowl_reload_config' answered the literal t.

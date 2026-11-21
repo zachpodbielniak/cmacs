@@ -133,6 +133,7 @@ list of rule names" :optional t)
      (dry_run boolean "Plan only; write nothing" :optional t))
   :group 'secondbrain :returns 'json
   :destructive t
+  :undo '(irreversible "an ingested note is new; delete it to undo")
   :example "emacsctl tool secondbrain ingest --input https://example.org/a \
 --para resources"
   (let ((input (cmacs-secondbrain-ingest-tools--text input))

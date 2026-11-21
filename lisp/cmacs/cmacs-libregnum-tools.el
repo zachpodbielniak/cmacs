@@ -129,6 +129,7 @@ editor's primitives."
      (name string "Name for the node (default Object)" :optional t))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "lrgeditor's own undo is not reached from here")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.AddPrimitive
   ;; has always done this, and is now served from this tool.
@@ -149,6 +150,7 @@ editor's primitives."
      (name string "Name for the node (default Object)" :optional t))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "lrgeditor's own undo is not reached from here")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.AddVisual
   ;; has always done this, and is now served from this tool.
@@ -169,6 +171,7 @@ editor's primitives."
      (z number "Z"))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "lrgeditor's own undo is not reached from here")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Move
   ;; has always done this, and is now served from this tool.
@@ -188,6 +191,7 @@ editor's primitives."
     ((id integer "Node id"))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "the selection before is not kept")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Select
   ;; has always done this, and is now served from this tool.
@@ -204,6 +208,7 @@ editor's primitives."
     ((id integer "Node id"))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "lrgeditor's own undo is not reached from here")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Delete
   ;; has always done this, and is now served from this tool.
@@ -223,6 +228,7 @@ one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, \
     ((path string "Project, level or asset to open" :optional t))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "close the editor it opened")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Open
   ;; has always done this, and is now served from this tool.
@@ -241,6 +247,7 @@ one of its editors handles (.rsong, .rfoley, .rmat, .rbt, .rparticles, \
     ((path string "Destination .rlevel file"))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "the saved file it overwrote is not kept")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Save
   ;; has always done this, and is now served from this tool.
@@ -257,6 +264,7 @@ it."
     ()
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "stop it with lrgeditor_stop")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Play
   ;; has always done this, and is now served from this tool.
@@ -275,6 +283,7 @@ it."
     ()
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "start it again with lrgeditor_play")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Stop
   ;; has always done this, and is now served from this tool.
@@ -294,6 +303,7 @@ them."
     ((id string "Action id, as lrgeditor_actions lists it"))
   :group 'lrgeditor
   :destructive t
+  :undo '(irreversible "lrgeditor's own undo is not reached from here")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Lrg.Action
   ;; has always done this, and is now served from this tool.

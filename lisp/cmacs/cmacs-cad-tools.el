@@ -126,6 +126,7 @@ ok+parts or the error with its source location. The edit-eval loop."
      (source string "The whole new source"))
   :group 'cad
   :destructive t
+  :undo '(irreversible "no CAD undo is reachable from the tools")
   :confirm 'ask
   (cmacs-cad-tools--call #'cmacs-cad-mcp-set-source
                          (cmacs-cad-tools--path path) (or source "")))
@@ -138,6 +139,7 @@ re-evaluate. Token-economical edits; errors if OLD is absent/ambiguous."
      (new string "Replacement text"))
   :group 'cad
   :destructive t
+  :undo '(irreversible "no CAD undo is reachable from the tools")
   :confirm 'ask
   (when (or (null old) (string-empty-p old))
     (error "Missing old"))
@@ -203,6 +205,7 @@ perimeter."
              :optional t))
   :group 'cad
   :destructive t
+  :undo '(irreversible "the export overwrites its destination")
   :confirm 'ask
   (let ((fmt (if (or (null format) (string-empty-p format)) "stl" format)))
     (unless (member fmt cmacs-cad-tools--export-formats)
@@ -220,6 +223,7 @@ perimeter."
               :optional t))
   :group 'cad
   :destructive t
+  :undo '(irreversible "slicer output is written by another program")
   :confirm 'ask
   :async t
   :timeout cmacs-cad-tools--slice-timeout
@@ -277,6 +281,7 @@ confirm are true; otherwise it only uploads (the safe default)."
               :optional t))
   :group 'cad
   :destructive t
+  :undo '(irreversible "a print job cannot be taken back")
   :confirm 'ask
   (when (or (null printer) (string-empty-p printer))
     (error "Missing printer"))
@@ -325,6 +330,7 @@ re-eval); report the new instance transforms."
      (value number "Value to drive the joint to"))
   :group 'cad
   :destructive t
+  :undo '(irreversible "no CAD undo is reachable from the tools")
   :example "emacsctl tool cad assembly-set-joint --path ~/cad/arm.cad \
 --name arm --joint 0 --value 45"
   (unless (integerp joint)

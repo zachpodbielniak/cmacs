@@ -133,6 +133,7 @@ cannot escape it. Overwrites any existing file."
     ((path string "File path relative to the workspace root")
      (content string "Full new file contents"))
   :group 'project :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-project-write
   (require 'cmacs-core-tools)
   (unless (and (stringp path) (stringp content))
     (error "Missing required arguments: path, content"))

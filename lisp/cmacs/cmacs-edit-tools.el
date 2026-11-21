@@ -331,6 +331,7 @@ the text becomes its body" :optional t)
              :optional t)
      (timestamp boolean "Prepend an inactive org timestamp" :optional t))
   :group 'edit :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-buffer-text
   (require 'cmacs-core-tools)
   (unless (and (stringp buffer) (stringp text))
     (error "Missing required arguments: buffer, text"))
@@ -352,6 +353,7 @@ exactly once unless replace_all is true. Errors if not found."
      (replace-all boolean "Replace every occurrence (default false)"
                   :optional t))
   :group 'edit :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-buffer-text
   (require 'cmacs-core-tools)
   (unless (and (stringp old-string) (stringp new-string))
     (error "Missing required arguments: buffer, old_string, new_string"))
@@ -383,6 +385,7 @@ number of matches replaced."
      (regexp string "Emacs regexp to match")
      (replacement string "Replacement string (\\N backrefs allowed)"))
   :group 'edit :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-buffer-text
   (require 'cmacs-core-tools)
   (unless (and (stringp regexp) (stringp replacement))
     (error "Missing required arguments: buffer, regexp, replacement"))
@@ -431,6 +434,7 @@ window if one is showing."
      (line integer "1-based line"))
   :group 'edit
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-goto-line
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.Edit.GotoLine
   ;; has always done this, and is now served from this tool.

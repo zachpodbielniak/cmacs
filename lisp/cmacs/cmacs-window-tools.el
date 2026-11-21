@@ -120,6 +120,7 @@ get_buffer_content fetches just the one you want)" :optional t))
     ((direction string "Split direction (default: vertical)"
                 :optional t :enum ("vertical" "horizontal")))
   :group 'window :destructive t
+  :undo 'cmacs-brigade-undo-capture-windows
   (require 'cmacs-core-tools)
   ;; Anything but "horizontal" is the default, as in the C handler.  The
   ;; printed value is the new window, `#<window N on BUFFER>', which
@@ -136,6 +137,7 @@ get_buffer_content fetches just the one you want)" :optional t))
   "Delete (close) the currently selected window."
     ()
   :group 'window :destructive t
+  :undo 'cmacs-brigade-undo-capture-windows
   (require 'cmacs-core-tools)
   (delete-window)
   ;; "(delete-window) t" in C, of which the dispatch evaluated only the
@@ -148,6 +150,7 @@ get_buffer_content fetches just the one you want)" :optional t))
                 :optional t :enum ("up" "down" "left" "right")))
   :group 'window
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-windows
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.WindowManager.Other
   ;; has always done this, and is now served from this tool.

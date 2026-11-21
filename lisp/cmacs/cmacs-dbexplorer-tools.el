@@ -752,6 +752,7 @@ DDL.  Refused outright on a connection marked read-only."
      (sql string "The statement to run"))
     :group 'database
     :destructive t
+    :undo '(irreversible "a committed statement cannot be taken back")
     :confirm 'ask
     :async t :timeout (+ cmacs-dbexplorer-tools-timeout 15)
     (cmacs-dbexplorer-tool-execute-async done connection sql))
@@ -764,6 +765,7 @@ DDL.  Refused outright on a connection marked read-only."
      (path string "Absolute path to write"))
     :group 'database
     :destructive t
+    :undo 'cmacs-brigade-undo-capture-db-export
     :confirm 'ask
     :async t :timeout (+ cmacs-dbexplorer-tools-export-timeout 15)
     ;; An exporter is named by a short symbol-shaped token; anything

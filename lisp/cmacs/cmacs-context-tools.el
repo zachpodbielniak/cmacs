@@ -125,6 +125,7 @@ is closed.  The user is asked before this runs.  Returns as soon as the \
 switch has been started."
     ((name string "The context's name, as context_list shows it"))
   :group 'context :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-context-switch
   :example "emacsctl tool context switch --name work"
   (let ((real (cmacs-context-tools--resolve name))
         ;; The confirmation that let this body run is the person's yes.

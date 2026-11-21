@@ -96,6 +96,7 @@ otherwise replaces entire buffer content."
      (start integer "Start position (1-based)" :optional t)
      (end integer "End position (1-based)" :optional t))
   :group 'buffer :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-buffer-text
   (require 'cmacs-core-tools)
   (unless (stringp content)
     (error "Missing required arguments: buffer, content"))
@@ -116,6 +117,7 @@ otherwise replaces entire buffer content."
     ((name string "Buffer name")
      (content string "Initial content" :optional t))
   :group 'buffer :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-create-buffer
   (require 'cmacs-core-tools)
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Missing required argument: name"))
@@ -134,6 +136,7 @@ otherwise replaces entire buffer content."
   "Kill (close) a buffer."
     ((buffer string "Buffer name"))
   :group 'buffer :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-kill-buffer
   (require 'cmacs-core-tools)
   (let ((target (cmacs-core-tools-buffer buffer))
         (inhibit-interaction t))
@@ -144,6 +147,7 @@ otherwise replaces entire buffer content."
     ((buffer string "Buffer name"))
   :group 'buffer
   :destructive t
+  :undo 'cmacs-brigade-undo-capture-switch-to-buffer
   (require 'cmacs-core-tools)
   ;; Like the command it wraps, this creates a buffer that does not
   ;; exist, so only exclusion is an error here.
@@ -154,6 +158,7 @@ otherwise replaces entire buffer content."
   "Save a buffer to its associated file."
     ((buffer string "Buffer name"))
   :group 'buffer :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-save-buffer
   (require 'cmacs-core-tools)
   (with-current-buffer (cmacs-core-tools-buffer buffer)
     ;; `save-buffer' is a prime source of prompts nobody can answer from
@@ -180,6 +185,7 @@ otherwise replaces entire buffer content."
   "Open a file in Emacs (equivalent to C-x C-f / find-file)."
     ((path string "File path to open"))
   :group 'buffer :destructive t :confirm 'ask
+  :undo 'cmacs-brigade-undo-capture-find-file
   (require 'cmacs-core-tools)
   (unless (and (stringp path) (not (string-empty-p path)))
     (error "Missing required argument: path"))

@@ -175,6 +175,7 @@ layout."
     ((handle integer "Project handle"))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio add-track --handle 1"
   (format "track %d"
           (cmacs-vidstudio-add-track
@@ -195,6 +196,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
      (b integer "Blue 0-255, for a solid clip (default 128)" :optional t))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio add-clip --handle 1 --track 0 \
 --kind video --path ~/Videos/take1.mp4"
   (let ((h (cmacs-vidstudio-tools--int handle "handle"))
@@ -230,6 +232,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
                      :optional t))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio set-transition --handle 1 --clip 2 \
 --type 1"
   (cmacs-vidstudio-set-transition
@@ -248,6 +251,7 @@ worker thread (see vidstudio_info's 'decoding' marker)."
      (type integer "Effect type, 0-4"))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio add-effect --handle 1 --clip 2 --type 3"
   (cmacs-vidstudio-add-effect
    (cmacs-vidstudio-tools--int handle "handle")
@@ -266,6 +270,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (easing integer "Easing type (default 0, linear)" :optional t))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio add-keyframe --handle 1 --clip-id 2 \
 --param 0 --frame 0 --value 0"
   (unless (cmacs-vidstudio-add-keyframe
@@ -287,6 +292,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (volume number "Gain, 1.0 = unchanged (default 1.0)" :optional t))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio add-audio --handle 1 \
 --path ~/Music/bed.flac --volume 0.6"
   ;; The primitive returns the new audio clip's id.
@@ -304,6 +310,7 @@ rotation) at FRAME (clip-relative) = VALUE, optional EASING."
      (at-frame integer "Frame to split at, relative to the clip's start"))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "the vidstudio project model has no undo")
   :example "emacsctl tool vidstudio split --handle 1 --clip 2 --at-frame 45"
   (let* ((clip (cmacs-vidstudio-tools--int clip "clip"))
          (at (cmacs-vidstudio-tools--int at-frame "at_frame"))
@@ -321,6 +328,7 @@ preview)."
      (path string "Destination PNG file"))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "a rendered frame is written to a file")
   :example "emacsctl tool vidstudio render-frame --handle 1 --frame 30 \
 --path /tmp/frame.png"
   (let ((path (cmacs-vidstudio-tools--path path "path"))
@@ -411,6 +419,7 @@ in-flight clip decodes, so output always has real frames."
      (format string "mp4 (the default) or gif" :optional t))
   :group 'vidstudio
   :destructive t
+  :undo '(irreversible "an export is written by ffmpeg after the call")
   :async t
   :timeout cmacs-vidstudio-tools--export-timeout
   :example "emacsctl tool vidstudio export --handle 1 --path ~/Videos/out.mp4"

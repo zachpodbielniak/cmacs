@@ -358,8 +358,20 @@ nothing ever loaded; the halves each work and the whole is void."
     ("cmacs-brigade-log.el" . "cmacs-brigade-run")
     ("cmacs-brigade-mailbox.el" . "cmacs-brigade-run")
     ("cmacs-brigade-output.el" . "cmacs-brigade-run")
-    ("cmacs-brigade-output.el" . "cmacs-brigade-mailbox"))
+    ("cmacs-brigade-output.el" . "cmacs-brigade-mailbox")
+    ("cmacs-brigade-undo.el" . "cmacs-brigade-tools")
+    ("cmacs-brigade-undo.el" . "cmacs-brigade-dashboard"))
   "Declarations that must stay declarations, with the reason.
+
+cmacs-brigade-tools requires cmacs-brigade-undo at its end (the action
+log wraps every call made through it), so the undo log requiring the
+tools back would be a load cycle; its one call, to look a tool up by
+wire name, is reached only from a call the tools file is making.  The
+undo log reaching the dashboard is the eager-load argument: the log is
+loaded with every session's tools, and requiring the dashboard from it
+would pull the brigade UI into all of them.  Its one call reads the
+task at point, `fboundp'-guarded, from a command that only makes sense
+in the dashboard.
 
 The dashboard requires compose -- for its `n', `V', `C' and `x' keys and
 for the provider/model reader -- so compose requiring the dashboard back

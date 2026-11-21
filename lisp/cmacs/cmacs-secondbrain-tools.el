@@ -94,6 +94,7 @@ as four concentric rings (Applications, Routines, Memory, Skills). Set \
     ((three_d boolean "Free 3D view" :optional t))
   :group 'secondbrain
   :destructive t
+  :undo '(irreversible "close the map buffer it opened")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.SecondBrain.Open
   ;; has always done this, and is now served from this tool.
@@ -111,6 +112,7 @@ force-directed graph.  The change animates."
            :enum ("rings" "circle" "hex" "force")))
   :group 'secondbrain
   :destructive t
+  :undo '(irreversible "set the layout back with the tool")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.SecondBrain.SetLayout
   ;; has always done this, and is now served from this tool.
@@ -132,6 +134,7 @@ collapsed, so this is how you see what is inside one."
      (collapse boolean "Collapse instead" :optional t))
   :group 'secondbrain
   :destructive t
+  :undo '(irreversible "the map keeps no previous expansion")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.SecondBrain.Expand
   ;; has always done this, and is now served from this tool.
@@ -198,6 +201,7 @@ come from."
     ((id string "Job id, e.g. sbi-3"))
   :group 'secondbrain :returns 'json
   :destructive t
+  :undo '(irreversible "a cancelled ingest cannot be resumed")
   ;; Destructive, and on `dbus' and `cli' all the same:
   ;; org.cmacs.Editor1.SecondBrain.IngestCancel
   ;; has always done this, and is now served from this tool.
@@ -227,6 +231,7 @@ the plan lists every file and every link that would not resolve.  \
   ;; `emacsctl sb' and org.cmacs.Editor1.SecondBrain already have their
   ;; own, deliberate, way to ask for this.
   :group 'secondbrain :returns 'json :destructive t :confirm 'ask
+  :undo '(irreversible "an applied migration is not reversed by undo")
   (require 'cmacs-secondbrain-ingest-migrate)
   ;; The options travel as the JSON object the D-Bus method and the C
   ;; tool hand the same function, so there is one parser of them.  Only

@@ -102,6 +102,7 @@ from cmacs-screensaver-configs (omit `config' for the default)."
     ((config string "Config name from cmacs-screensaver-configs \
 \(e.g. blackhole-cool)" :optional t))
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-wallpaper-set
   :surfaces '(mcp dbus cli agents)
   :example "emacsctl tool screensaver set-wallpaper --config blackhole-cool"
   (cmacs-screensaver-tools--running)
@@ -117,6 +118,7 @@ from cmacs-screensaver-configs (omit `config' for the default)."
   "Stop the animated screensaver wallpaper, restoring the static one."
     ()
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-wallpaper-stop
   :surfaces '(mcp dbus cli agents)
   (cmacs-screensaver-tools--running)
   (require 'cmacs-screensaver)
@@ -128,6 +130,7 @@ from cmacs-screensaver-configs (omit `config' for the default)."
 wallpaper/lock sessions (recovery)."
     ()
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-nothing
   :surfaces '(mcp dbus cli agents)
   (cmacs-screensaver-tools--running)
   (require 'cmacs-screensaver)
@@ -139,6 +142,7 @@ wallpaper/lock sessions (recovery)."
 drawing; the GPU goes idle)."
     ()
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-screensaver-pause
   :surfaces '(mcp dbus cli agents)
   (cmacs-screensaver-tools--running)
   (require 'cmacs-screensaver)
@@ -149,6 +153,7 @@ drawing; the GPU goes idle)."
   "Resume the animated wallpaper/lock rendering after a pause."
     ()
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-screensaver-resume
   :surfaces '(mcp dbus cli agents)
   (cmacs-screensaver-tools--running)
   (require 'cmacs-screensaver)
@@ -159,6 +164,7 @@ drawing; the GPU goes idle)."
   "Set the animated wallpaper/lock target frame rate (1-240)."
     ((fps integer "Target frames per second"))
   :group 'screensaver :destructive t
+  :undo 'cmacs-brigade-undo-capture-screensaver-fps
   :surfaces '(mcp dbus cli agents)
   :example "emacsctl tool screensaver set-fps --fps 30"
   (cmacs-screensaver-tools--running)
