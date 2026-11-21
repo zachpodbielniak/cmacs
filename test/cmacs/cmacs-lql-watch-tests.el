@@ -28,6 +28,7 @@
 (defvar cmacs-journal--in-tool-call)
 (defvar cmacs-journal-expose-to-agents)
 (defvar cmacs-gowl-bar-push-function)
+(defvar cmacs-lql-watch-sinks--bar-items)
 
 (defvar cmacs-lql-watch-tests--clock 1000.0 "The time watches see.")
 (defvar cmacs-lql-watch-tests--runs nil
@@ -782,10 +783,181 @@
         (cmacs-lql-watch-tests--ok '("n") '(1))
         (should-not events)))))
 
-(ert-deftest cmacs-lql-watch-test-bar-item ()
-  "A watch with :bar pushes its text on the first result and on a change."
+(defmacro cmacs-lql-watch-tests--with-bar (sets removes &rest body)
+  "Run BODY with the slot layer recording instead of reaching a bar.
+SETS collects the argument lists given to `cmacs-gowl-bar-slot-set' and
+REMOVES the ids given to `cmacs-gowl-bar-slot-remove', newest first."
+  (declare (indent 2))
+  `(let ((,sets nil)
+         (,removes nil)
+         (cmacs-lql-watch-sinks--bar-items (make-hash-table :test #'equal)))
+     (require 'cmacs-gowl-bar-slots)
+     (cl-letf (((symbol-function 'cmacs-gowl-bar-slot-set)
+                (lambda (&rest args) (push args ,sets) t))
+               ((symbol-function 'cmacs-gowl-bar-slot-remove)
+                (lambda (&rest args) (push (car args) ,removes) t)))
+       ,@body)))
+
+(ert-deftest cmacs-lql-watch-test-bar-slot ()
+  "A watch with :bar owns a slot: made, refilled, and taken away with it."
   (cmacs-lql-watch-tests--with
-    (let (pushed)
+    (cmacs-lql-watch-tests--with-bar sets removes
+      (cmacs-lql-watch 'inbox "fetch x" :every 10
+                       :bar "inbox {rows}: {title}")
+      ;; Nothing until there is a result to show.
+      (should-not sets)
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("title") '("first\nnote"))
+      (should (= (length sets) 1))
+      (let ((id (caar sets))
+            (plist (cdar sets)))
+        ;; Its own slot, named after the watch.
+        (should (equal id "lql-inbox"))
+        (should (equal (plist-get plist :text) "inbox 1: first note"))
+        (should (eq (plist-get plist :owner) 'cmacs-lql-watch))
+        (should (equal (plist-get plist :tooltip) "inbox: fetch x")))
+      ;; A change refills the same slot.
+      (cmacs-lql-watch-tests--advance 10)
+      (cmacs-lql-watch-tests--ok '("title") '("a") '("b"))
+      (should (= (length sets) 2))
+      (should (equal (caar sets) "lql-inbox"))
+      (should (equal (plist-get (cdar sets) :text) "inbox 2: a"))
+      ;; An identical result is not a change and pushes nothing.
+      (cmacs-lql-watch-tests--advance 10)
+      (cmacs-lql-watch-tests--ok '("title") '("a") '("b"))
+      (should (= (length sets) 2))
+      (should-not removes)
+
+      ;; Paused: the last value is nobody's current answer.
+      (cmacs-lql-watch-pause 'inbox)
+      (should (equal removes '("lql-inbox")))
+      ;; Resumed: it goes back at once, from the rows it had -- the run
+      ;; that follows may well find nothing changed and push nothing.
+      (cmacs-lql-watch-resume 'inbox)
+      (should (= (length sets) 3))
+      (should (equal (plist-get (cdar sets) :text) "inbox 2: a"))
+
+      ;; Removed: so is its slot.
+      (cmacs-lql-unwatch 'inbox)
+      (should (equal removes '("lql-inbox" "lql-inbox")))
+      ;; And once only: nothing is left to remove.
+      (cmacs-lql-watch-sinks--bar-removed "inbox" nil)
+      (should (= (length removes) 2)))))
+
+(ert-deftest cmacs-lql-watch-test-bar-slot-per-watch ()
+  "Every watch with :bar has a slot of its own -- any number of them."
+  (cmacs-lql-watch-tests--with
+    (cmacs-lql-watch-tests--with-bar sets removes
+      (cmacs-lql-watch 'mail "fetch m" :immediate t :bar t)
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("n") '(1) '(2) '(3))
+      (cmacs-lql-watch 'ci/main "fetch c" :immediate t :bar "{rows} failing")
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("n") '(1))
+      ;; (An :immediate watch's first result is both its baseline and
+      ;; a change, so each slot was set twice; the second is a no-op.)
+      (should (equal (sort (delete-dups (mapcar #'car sets)) #'string<)
+                     '("lql-ci-main" "lql-mail")))
+      ;; t is \"NAME: N\".
+      (should (equal (plist-get (cdr (assoc "lql-mail" sets)) :text)
+                     "mail: 3"))
+      (should (equal (plist-get (cdr (assoc "lql-ci-main" sets)) :text)
+                     "1 failing"))
+      ;; Removing one leaves the other.
+      (cmacs-lql-unwatch 'mail)
+      (should (equal removes '("lql-mail"))))))
+
+(ert-deftest cmacs-lql-watch-test-bar-slot-plist ()
+  "A :bar plist places and dresses the slot; a function decides per result."
+  (cmacs-lql-watch-tests--with
+    (cmacs-lql-watch-tests--with-bar sets removes
+      (let ((clicked nil))
+        (cmacs-lql-watch
+         'runs "fetch c" :every 10
+         :bar (list :slot "ci" :region 'left :order -1 :icon "!"
+                    :role 'green :empty nil
+                    :on-click (lambda (_) (setq clicked t))
+                    :format (lambda (rows)
+                              (if (> (length rows) 1)
+                                  (list :text (format "%d failing"
+                                                      (length rows))
+                                        :role 'red :urgency 'critical)
+                                (format "%s failing"
+                                        (cdr (assoc "name" (car rows))))))))
+        (cmacs-lql-watch--tick)
+        (cmacs-lql-watch-tests--ok '("name") '("main"))
+        (let ((plist (cdar sets)))
+          (should (equal (caar sets) "ci"))
+          (should (equal (plist-get plist :text) "main failing"))
+          (should (eq (plist-get plist :region) 'left))
+          (should (= (plist-get plist :order) -1))
+          (should (equal (plist-get plist :icon) "!"))
+          (should (eq (plist-get plist :role) 'green))
+          (should (functionp (plist-get plist :on-click)))
+          ;; Not the sink's own keys: the slot layer would refuse them.
+          (should-not (plist-member plist :format))
+          (should-not (plist-member plist :empty))
+          (should-not (plist-member plist :slot)))
+        ;; What the function returns goes over what the option said.
+        (cmacs-lql-watch-tests--advance 10)
+        (cmacs-lql-watch-tests--ok '("name") '("main") '("release"))
+        (let ((plist (cdar sets)))
+          (should (equal (plist-get plist :text) "2 failing"))
+          (should (eq (plist-get plist :role) 'red))
+          (should (eq (plist-get plist :urgency) 'critical))
+          (should (eq (plist-get plist :region) 'left)))
+        ;; No rows and `:empty nil': the slot shows nothing, and so
+        ;; takes no room, but it is still the watch's.
+        (cmacs-lql-watch-tests--advance 10)
+        (cmacs-lql-watch-tests--ok '("name"))
+        (should (equal (plist-get (cdar sets) :text) ""))
+        (should-not removes)
+        (should-not clicked)))))
+
+(ert-deftest cmacs-lql-watch-test-bar-slot-text-is-bounded ()
+  "What a watch puts on the bar is one line of bounded width."
+  (cmacs-lql-watch-tests--with
+    (cmacs-lql-watch-tests--with-bar sets removes
+      (let ((cmacs-lql-watch-bar-max-chars 12))
+        (cmacs-lql-watch 'long "fetch x" :immediate t :bar "{title}")
+        (cmacs-lql-watch--tick)
+        (cmacs-lql-watch-tests--ok
+         '("title") '("a very long\ntitle that goes on and on"))
+        (let ((text (plist-get (cdar sets) :text)))
+          (should (<= (string-width text) 12))
+          (should-not (string-match-p "\n" text)))
+        (should-not removes)))))
+
+(ert-deftest cmacs-lql-watch-test-bar-not-for-agents-or-typos ()
+  "An agent's watch gets no slot, and a bad :bar is an error on the watch."
+  (cmacs-lql-watch-tests--with
+    (cmacs-lql-watch-tests--with-bar sets removes
+      ;; An agent choosing a watch name must not write on your bar.
+      (cmacs-lql-watch "t1/x" "fetch x" :owner "t1" :immediate t :bar t)
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("n") '(1))
+      (should-not sets)
+      (cmacs-lql-unwatch "t1/x")
+      (should-not removes)
+      ;; A key that does not exist is said, on the watch, not ignored.
+      (cmacs-lql-watch 'typo "fetch x" :immediate t
+                       :bar '(:format "{rows}" :colour red))
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("n") '(1))
+      (should-not sets)
+      (should (string-match-p ":colour"
+                              (cmacs-lql-watch-get 'typo :callback-error)))
+      (cmacs-lql-watch 'worse "fetch x" :immediate t :bar 42)
+      (cmacs-lql-watch--tick)
+      (cmacs-lql-watch-tests--ok '("n") '(1))
+      (should-not sets)
+      (should (cmacs-lql-watch-get 'worse :callback-error)))))
+
+(ert-deftest cmacs-lql-watch-test-bar-item ()
+  "The route from before slots: :widget pushes a `text' setting at a widget."
+  (cmacs-lql-watch-tests--with
+    (let ((cmacs-lql-watch-sinks--bar-items (make-hash-table :test #'equal))
+          pushed)
       (cl-letf (((symbol-function 'cmacs-gowl-bar-push)
                  (lambda (&rest args) (push args pushed))))
         (cmacs-lql-watch 'inbox "fetch x" :every 10
@@ -798,7 +970,16 @@
         (cmacs-lql-watch-tests--advance 10)
         (cmacs-lql-watch-tests--ok '("title"))
         (should (equal (car pushed) '("label" (("text" . "inbox clear")))))
-        (should (= (length pushed) 2))))))
+        (should (= (length pushed) 2))
+        ;; "label" and "text" as bare strings still mean the widget:
+        ;; they were the only values that ever worked as one.
+        (cmacs-lql-watch 'old "fetch y" :immediate t :bar "text")
+        (cmacs-lql-watch--tick)
+        (cmacs-lql-watch-tests--ok '("n") '(1) '(2))
+        (should (equal (car pushed) '("text" (("text" . "old: 2")))))
+        ;; A widget is the user's to place, so removal only blanks it.
+        (cmacs-lql-unwatch 'old)
+        (should (equal (car pushed) '("text" (("text" . "")))))))))
 
 (ert-deftest cmacs-lql-watch-test-bar-place-amends ()
   "Placing a widget uses the bar's amendment keys, never a whole region."

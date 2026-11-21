@@ -260,6 +260,13 @@ Once per run of failures, not once per failed tick.")
 (defvar cmacs-lql-watch-removed-functions nil
   "Abnormal hook run with NAME and OWNER after a watch is removed.")
 
+(defvar cmacs-lql-watch-paused-functions nil
+  "Abnormal hook run with NAME and PAUSED after a watch is paused or resumed.
+PAUSED is t for a pause and nil for a resume.  For a consumer that
+DISPLAYS a watch: a value nothing is keeping up to date should not stay
+on show looking current.  Functions are guarded like those of
+`cmacs-lql-watch-change-functions'.")
+
 (define-error 'cmacs-lql-watch-error "LQL watch error")
 
 ;;;; Small helpers
@@ -1056,7 +1063,10 @@ backoff."
 (defun cmacs-lql-watch-pause (name)
   "Stop running the watch NAME until it is resumed."
   (interactive (list (cmacs-lql-watch--read "Pause watch: ")))
-  (setf (cmacs-lql-watcher-paused (cmacs-lql-watch--must name)) t)
+  (let ((w (cmacs-lql-watch--must name)))
+    (setf (cmacs-lql-watcher-paused w) t)
+    (cmacs-lql-watch--run-hook w 'cmacs-lql-watch-paused-functions
+                               (cmacs-lql-watcher-name w) t))
   (cmacs-lql-watch--arm)
   (cmacs-lql-watch--refresh-list))
 
@@ -1066,6 +1076,8 @@ backoff."
   (let ((w (cmacs-lql-watch--must name)))
     (setf (cmacs-lql-watcher-paused w) nil
           (cmacs-lql-watcher-next-due w) (cmacs-lql-watch--now))
+    (cmacs-lql-watch--run-hook w 'cmacs-lql-watch-paused-functions
+                               (cmacs-lql-watcher-name w) nil)
     (cmacs-lql-watch--arm)
     (cmacs-lql-watch--refresh-list)))
 

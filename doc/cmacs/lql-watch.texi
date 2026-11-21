@@ -106,7 +106,7 @@ Register it paused.
 @item :event
 Emit a podomation event on a change.  @xref{LQL Watch Podomation}.
 @item :bar
-Drive a gowl bar item.  @xref{LQL Watch Bar}.
+Be a gowl bar item, in a slot of its own.  @xref{LQL Watch Bar}.
 @item :toast
 A bar toast on a change; @code{t} or a template.
 @end table
@@ -173,8 +173,10 @@ Hooks, for code that wants every watch rather than one:
 @var{diff}), @code{cmacs-lql-watch-baseline-functions} (@var{name}
 @var{rows}; the first result, which is not a change),
 @code{cmacs-lql-watch-error-functions} (@var{name} @var{message}; once
-when a watch starts failing) and
-@code{cmacs-lql-watch-removed-functions} (@var{name} @var{owner}).  A
+when a watch starts failing),
+@code{cmacs-lql-watch-removed-functions} (@var{name} @var{owner}) and
+@code{cmacs-lql-watch-paused-functions} (@var{name} @var{paused}; after
+a pause or a resume).  A
 consumer that gives watches a new option adds its keyword to
 @code{cmacs-lql-watch-extra-keys}.  The three shipped consumers are
 written with exactly these and nothing private.
@@ -384,10 +386,180 @@ and prints.
 @cindex gowl bar, LQL watch items
 @findex cmacs-lql-watch-bar-place
 
-A watch with @code{:bar} sets the @code{text} setting of a bar widget
-on its first result and on every change, through
-@code{cmacs-gowl-bar-push}---the same push every Emacs-owned bar item
-uses.  With no bar running it does nothing.
+A watch with @code{:bar} @emph{is} a bar item.  It owns a slot on the
+gowl bar---an item of its own, created on the watch's first result,
+refilled on every change, and removed when the watch is paused or
+removed (@pxref{Gowl Bar Slots}).  One slot per watch, so any number of
+standing queries sit on the bar side by side, and nothing has to be
+placed in the bar's configuration first.  With no bar running the slot
+is remembered and shown when there is one.
+
+@lisp
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300
+  :bar "inbox @{n@}")
+@end lisp
+
+@code{:bar} is one of:
+
+@table @asis
+@item @code{t}
+A slot saying @samp{@var{name}: @var{n}}, @var{n} being the row count.
+@item a string
+A slot, with the string as the format.
+@item a function
+A slot; the function is called with the rows and returns the text.
+@item a plist
+A slot, placed and dressed by the plist's keys (below).
+@end table
+
+In a format @code{@{rows@}} is the row count, @code{@{total@}} the
+result's total, @code{@{name@}} the watch's name and
+@code{@{@var{column}@}} that column of the @emph{first} row.  A format
+function is called with the rows (a list of alists, column name to
+value) and returns a string, @code{nil} for nothing, or a plist of slot
+keys---@code{(:text "2 failing" :role red :urgency critical)}---to
+change more than the text with the result.  The text is one line, cut
+at @code{cmacs-lql-watch-bar-max-chars} (80).
+
+The plist's keys:
+
+@table @code
+@item :format
+A format string or function, as above.  Default @code{"@{name@}:
+@{rows@}"}.
+@item :empty
+The text for a result with no rows; @code{nil} shows nothing then (the
+slot takes no room).  Without it the format is used, @code{@{rows@}}
+being 0.
+@item :slot
+The slot's id, instead of @code{lql-@var{name}}.  Name one to fill a
+@code{slot:@var{id}} you put in the bar's widget list.
+@item :region
+@itemx :order
+@itemx :bar
+@itemx :output
+Where it goes: @code{left} / @code{center} / @code{right}, an order
+within the region, @code{top} / @code{bottom}, one output.
+@item :icon
+@itemx :role
+@itemx :urgency
+@itemx :tooltip
+How it looks: a glyph, a bar theme role (never a hex colour),
+@code{low} / @code{normal} / @code{critical}, hover text (default: the
+watch's name and query).
+@item :on-click
+A function called in Emacs with the click when the slot is clicked.
+@item :ttl
+Seconds after the last push at which the bar drops the slot by itself.
+@item :widget
+@emph{Not} a slot: push the text at the @code{text} setting of this
+existing bar widget.  See @emph{Driving an existing widget} below.
+@end table
+
+A key that does not exist is an error recorded on the watch (@kbd{M-x
+cmacs-lql-watches} shows it), not a setting silently ignored.  An
+agent's watch never gets a slot: an agent choosing a watch name must
+not be able to write on your bar.
+
+A paused watch's slot is taken off the bar---its last value is nobody's
+current answer, and left there it would read as one---and goes back,
+with the rows it had, the moment the watch is resumed.
+
+@subheading Three worked examples
+
+@emph{Unread mail.}  There is no mail source, so make one: a Maildir's
+@file{new/} directory is the unread mail, and listing a local directory
+is cheap enough to do on the editor thread just before the query runs.
+
+@lisp
+(cmacs-lql-define-source
+ "maildir_new" '(("folder" string) ("file" string))
+ (lambda ()
+   (cl-loop for folder in '("INBOX" "Lists")
+            for dir = (expand-file-name (concat folder "/new") "~/Mail")
+            when (file-directory-p dir)
+            append (mapcar (lambda (f) (list :folder folder :file f))
+                           (directory-files dir nil "\\`[^.]"))))
+ "Mail not yet seen, one row per message.")
+
+(cmacs-lql-define-watch unread
+  "fetch maildir_new | filter folder == \"INBOX\" | summarize n = count()"
+  :every 60
+  :bar (list :format (lambda (rows)
+                       (let ((n (cdr (assoc "n" (car rows)))))
+                         (and n (> n 0) (format "%d unread" n))))
+             :icon "✉" :role 'peach :region 'right :order 10
+             :on-click (lambda (_click) (mu4e))))
+@end lisp
+
+The function returns @code{nil} for an empty inbox, so the slot
+vanishes rather than saying ``0 unread''.
+
+@emph{Failing CI runs.}  The query has to run a program, and LQL does
+that on its own worker thread, never Emacs's.  Give the program a name
+with a command definition---a few lines of YAML in
+@file{~/.config/lql/commands/}---so the query cannot choose what runs:
+
+@example
+# ~/.config/lql/commands/ci.yaml
+- name: ci_runs
+  description: Recent pipelines of a GitLab project
+  argv: [glab, ci, list, --output, json, '--repo=@{repo@}']
+  format: json
+  timeout_ms: 20000
+  parameters:
+    - @{name: repo, type: String, required: true, description: OWNER/PROJECT@}
+@end example
+
+@lisp
+(cmacs-lql-define-watch ci
+  "ci_runs repo: \"me/project\" | filter status == \"failed\" | fields ref, id | sort id DESC"
+  :every 300 :key "id"
+  :bar (list :region 'right :order 20 :empty nil
+             :format (lambda (rows)
+                       (list :text (format "%d failing: %s" (length rows)
+                                           (cdr (assoc "ref" (car rows))))
+                             :urgency (if (> (length rows) 2)
+                                          'critical 'normal)
+                             :role 'red))
+             :on-click (lambda (_click)
+                         (browse-url "https://gitlab.com/me/project/-/pipelines"))))
+@end lisp
+
+@code{:empty nil} is what makes this a slot that exists only while
+something is failing.  The column names (@code{status}, @code{ref},
+@code{id}) are whatever your forge's CLI prints; run the query in
+@kbd{M-x cmacs-lql-query} first and look.
+
+@emph{What am I supposed to be doing.}  The first @samp{NEXT} heading
+of your projects, from the notes sources, on the left of the bar; a
+click goes to it.
+
+@lisp
+(cmacs-lql-define-watch doing
+  "fetch note_headings | filter todo == \"NEXT\" and para == \"projects\" | sort priority, deadline | fields heading, file, line | limit 1"
+  :every 120
+  :bar (list :region 'left :order 10 :icon "▶" :role 'accent
+             :format "@{heading@}" :empty "nothing is NEXT"
+             :on-click (lambda (_click)
+                         (when-let* ((row (car (cmacs-lql-watch-rows 'doing))))
+                           (find-file (cdr (assoc "file" row)))
+                           (goto-char (point-min))
+                           (forward-line (1- (cdr (assoc "line" row))))))))
+@end lisp
+
+The click handler reads the watch's current rows with
+@code{cmacs-lql-watch-rows} rather than closing over anything, so it
+always opens what the bar is showing.
+
+@subheading Driving an existing widget
+
+Before slots existed, @code{:bar} pushed a @code{text} setting at a
+widget already on the bar, and the only shipped widget whose text is a
+setting is @code{label} (alias @code{text}).  That route is still
+there, spelt out:
 
 @lisp
 (cmacs-lql-watch-bar-place "label")   ; once: add the widget, right region
@@ -397,30 +569,25 @@ uses.  With no bar running it does nothing.
   :bar '(:widget "label" :format "inbox @{n@}" :empty ""))
 @end lisp
 
-@code{:bar} is a widget name or a plist: @code{:widget},
-@code{:format} (a template, or a function of the rows returning the
-text; default @code{"@{name@}: @{rows@}"}) and @code{:empty} (the text
-for a result with no rows).  In a template @code{@{rows@}} is the row
-count, @code{@{total@}} the result's total, @code{@{name@}} the watch's
-name and @code{@{@var{column}@}} that column of the first row.  The
-text is one line, cut at @code{cmacs-lql-watch-bar-max-chars} (80).
+The bare strings @code{"label"} and @code{"text"} are read as
+@code{(:widget @dots{})} too: they were the only two values that ever
+worked as a widget name, and neither is a format anybody meant.  Every
+other string is now a format.
+
+It can drive two items in all---a bare @code{label} and a bare
+@code{text}---because @code{label:something} takes its text from its
+spec and shows ``something'' for ever.  (Making @code{label} prefer the
+setting would not have fixed that: a @code{label.text} setting reaches
+@emph{every} label by name, so each @code{label:Static text} on a bar
+that also pushed to @code{label} would have started showing the pushed
+text.)  Use it only for a layout built around it; a slot has no such
+limit.
 
 @code{cmacs-lql-watch-bar-place @var{widget} &optional @var{region}}
 adds a widget with the bar's amendment keys (@code{widgets-right-add}
 and friends), so the rest of your layout is left alone.  @var{region}
 is @code{left}, @code{center}, @code{right} (the default) or those
-prefixed @code{bottom-}.
-
-@emph{A limit you should know about.}  The only shipped widget whose
-text can be set from outside is @code{label} (alias @code{text}), and
-its text comes from its spec parameter before its @code{text}
-setting---so @code{label:something} cannot be driven, only a bare
-@code{label} and a bare @code{text}.  That is @emph{two} watch-driven
-bar items without writing a plugin.  Lifting it is a two-line change in
-gowl's @code{label_configure} (prefer the @code{text} setting over the
-spec parameter, as the comment in @file{cmacs-lql-watch-sinks.el}
-describes); a bar plugin of your own that reads a @code{text} setting
-has no such limit.
+prefixed @code{bottom-}.  A slot needs nothing placed.
 
 @code{:toast t} raises a bar toast on every change (@samp{@var{name}
 changed} and the counts), or a message where there is no bar.
@@ -569,7 +736,7 @@ The podomation event.  Default @code{on_lql_watch}.
 @item cmacs-lql-watch-event-diff-max
 Characters of diff in an event.  Default 4096.
 @item cmacs-lql-watch-bar-max-chars
-Longest bar text.  Default 80.
+Longest bar text, in columns.  Default 80.
 @item cmacs-lql-watch-tools-min-interval
 Floor on an agent's interval.  Default 30.
 @item cmacs-lql-watch-tools-default-interval
@@ -587,4 +754,8 @@ covers the baseline, a keyed diff, the in-flight rule, the watchdog,
 the busy skip, the typing skip, the generation skip and its bound,
 backoff and its cap, contained callbacks (a prompt included), the caps,
 ownership, the journal gate from both directions, the agent tools'
-delivery and coalescing, and each sink.
+delivery and coalescing, and each sink---for the bar: a slot per watch,
+refilled on a change, removed on pause and on removal and put back on
+resume, a plist placing and dressing it, a format function overriding
+it, no slot for an agent's watch, a bad option recorded on the watch,
+and the @code{:widget} route.

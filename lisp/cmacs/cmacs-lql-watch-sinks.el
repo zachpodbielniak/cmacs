@@ -35,9 +35,12 @@
 ;;                       c->on_lql_watch where event->watch == "dead-processes"
 ;;                           => cmacs->notify("Processes exited", "{event->rows} now");
 ;;
-;;   :bar WIDGET       The watch drives a gowl bar item: the widget's
-;;                     `text' setting is pushed on the first result and
-;;                     on every change.
+;;   :bar FORMAT       The watch IS a gowl bar item: a slot of its own
+;;                     (cmacs-gowl-bar-slots.el), created on the first
+;;                     result, refilled on every change, and removed
+;;                     when the watch is paused or removed.  t, a
+;;                     format string, a function of the rows, or a
+;;                     plist saying where it goes and how it looks.
 ;;
 ;;   :toast t          A bar toast (a message where there is no bar) on
 ;;                     every change.
@@ -68,6 +71,11 @@
 (declare-function cmacs-podomation-emit-event "cmacs-podomation.c" (event data))
 (declare-function cmacs-podomation-running-p "cmacs-podomation.c" ())
 (declare-function cmacs-gowl-bar-push "cmacs-gowl-bar-ai" (widget alist))
+(declare-function cmacs-gowl-bar-slot-set "cmacs-gowl-bar-slots"
+                  (id &rest plist))
+(declare-function cmacs-gowl-bar-slot-remove "cmacs-gowl-bar-slots" (id))
+(declare-function cmacs-gowl-bar-slot-id "cmacs-gowl-bar-slots" (name))
+(declare-function cmacs-lql-watch-rows "cmacs-lql-watch" (name))
 (declare-function gowl-bar-notify "cmacs-gowl.c" (summary &optional body panel))
 (declare-function gowl-running-p "cmacs-gowl.c" ())
 
@@ -84,7 +92,7 @@
   :group 'cmacs-lql-watch)
 
 (defcustom cmacs-lql-watch-bar-max-chars 80
-  "Longest text a watch pushes to a bar item; the rest is cut."
+  "Longest text, in columns, a watch puts on the bar; the rest is cut."
   :type 'natnum
   :group 'cmacs-lql-watch)
 
@@ -161,55 +169,212 @@ because that is what an event's data holds."
 
 ;;;; The gowl bar
 ;;
-;; There is no way to create a bar item from Elisp; what Elisp can do is
-;; set a widget's settings (`cmacs-gowl-bar-push'), and the one shipped
-;; widget whose text is a setting is `label' (alias `text').  Its
-;; configure (deps/gowl/modules/bar/bar-plugins-core.c, label_configure)
-;; reads the spec parameter BEFORE the `text' setting, so `label:inbox'
-;; shows "inbox" for ever and only a bare `label' and a bare `text' can
-;; be driven: two items.  Reading `text' first -- so that `label:ID' is
-;; an addressable, pushable slot -- is the whole of the C that unlimited
-;; watch-driven items need.  Until then a third wants a bar plugin that
-;; reads a `text' setting, which this code drives unchanged.
+;; A watch with :bar owns a bar SLOT: an item of its own that this code
+;; creates, fills and removes (cmacs-gowl-bar-slots.el; gowl's
+;; docs/bar.org, "Slots").  One slot per watch, named after the watch,
+;; so any number of standing queries can sit on the bar side by side
+;; and none of them needs anything placed in the bar's configuration
+;; first.
+;;
+;; That replaces what this file did before slots existed: push a `text'
+;; setting at the one shipped widget whose text is a setting, `label'.
+;; It could drive two items in all -- a bare `label' and its alias
+;; `text' -- because `label:NAME' reads its text from the spec and so
+;; shows "NAME" for ever.  (Making `label' read the setting first would
+;; not have fixed it: a `label.text' setting reaches EVERY label by
+;; name, so each `label:Static text' on a bar that also pushed to
+;; `label' would have started showing the pushed text.)  The old route
+;; is still here, spelt out -- `:bar (:widget "label")' -- for a bar
+;; layout that was built around it.
+
+(defconst cmacs-lql-watch-sinks--slot-keys
+  '(:icon :role :tooltip :urgency :region :order :bar :output :on-click :ttl)
+  "The keys of a :bar plist handed on to `cmacs-gowl-bar-slot-set'.")
+
+(defconst cmacs-lql-watch-sinks--bar-keys
+  (append '(:format :empty :slot :widget) cmacs-lql-watch-sinks--slot-keys)
+  "Every key a :bar plist may hold.")
+
+(defvar cmacs-lql-watch-sinks--bar-items (make-hash-table :test #'equal)
+  "What each watch has on the bar: name -> (slot . ID) or (widget . NAME).
+Kept here because a watch that has been removed can no longer be asked
+what its :bar option was, and its item still has to go.")
 
 (defun cmacs-lql-watch-sinks--bar-spec (name)
-  "The watch NAME's :bar option as a plist (:widget :format :empty), or nil.
-The option is a widget name, or a plist with :widget and optionally
-:format (a template for `cmacs-lql-watch-format', or a function of the
-rows returning the text) and :empty (the text for a result with no
-rows; without it the format is used, with `{rows}' being 0)."
+  "The watch NAME's :bar option as a plist, or nil when it has none.
+The option is
+
+  t            a slot of its own, saying \"NAME: N\" (the row count);
+  a string     the same, with the string as the format -- a template
+               for `cmacs-lql-watch-format';
+  a function   the same, calling it with the rows for the text;
+  a plist      :format, as above (a string or a function), and any of
+               :empty   the text for a result with no rows -- nil to
+                        show nothing then; without it the format is
+                        used, with `{rows}' being 0
+               :slot    the slot's id, instead of one made from NAME
+               :icon :role :tooltip :urgency :region :order :bar
+               :output :on-click :ttl
+                        as for `cmacs-gowl-bar-slot-set'
+               :widget  NOT a slot: push the text at the `text' setting
+                        of this existing bar widget (\"label\"), as
+                        this option did before slots existed.
+
+A format function may also return a plist of slot keys -- (:text ...
+:urgency critical) -- to change more than the text with the result.
+
+The strings \"label\" and \"text\" are read as (:widget ...): they were
+the only two values that ever worked as a widget name, and neither is
+a format anybody meant."
   (let ((bar (cmacs-lql-watch-get name :bar)))
-    (cond ((null bar) nil)
-          ((stringp bar) (list :widget bar))
-          ((and (consp bar) (stringp (plist-get bar :widget))) bar)
-          (t nil))))
+    (cond
+     ((null bar) nil)
+     ((eq bar t) (list :format nil))
+     ((member bar '("label" "text")) (list :widget bar))
+     ((stringp bar) (list :format bar))
+     ((functionp bar) (list :format bar))
+     ((and (consp bar) (keywordp (car bar)))
+      (let ((tail bar))
+        (while tail
+          (unless (memq (car tail) cmacs-lql-watch-sinks--bar-keys)
+            (error "A watch's :bar has no %S" (car tail)))
+          (setq tail (cddr tail))))
+      bar)
+     (t (error "A watch's :bar is t, a format, a function or a plist, not %S"
+               bar)))))
+
+(defun cmacs-lql-watch-sinks--bar-slot-id (name spec)
+  "The id of the slot the watch NAME owns, given its :bar SPEC."
+  (require 'cmacs-gowl-bar-slots)
+  (cmacs-gowl-bar-slot-id (or (plist-get spec :slot)
+                              (concat "lql-" name))))
+
+(defun cmacs-lql-watch-sinks--bar-value (name spec rows)
+  "What the watch NAME shows for ROWS under SPEC: a string or a plist.
+A plist is what a format function returned to change more than the
+text; anything else it returned is shown as text."
+  (let ((format (or (plist-get spec :format) "{name}: {rows}")))
+    (cond ((and (null rows) (plist-member spec :empty))
+           (or (plist-get spec :empty) ""))
+          ((functionp format)
+           (let ((value (funcall format rows)))
+             (cond ((null value) "")
+                   ((and (consp value) (keywordp (car value))) value)
+                   (t (format "%s" value)))))
+          (t (cmacs-lql-watch-format format name rows)))))
+
+(defun cmacs-lql-watch-sinks--bar-text (text)
+  "TEXT as one line no longer than `cmacs-lql-watch-bar-max-chars'."
+  (truncate-string-to-width
+   (replace-regexp-in-string "[\n\r\t]+" " " (format "%s" (or text "")))
+   cmacs-lql-watch-bar-max-chars nil nil t))
+
+(defun cmacs-lql-watch-sinks--bar-drop (name)
+  "Take what the watch NAME has on the bar off it.  Never signals."
+  (when-let* ((item (gethash name cmacs-lql-watch-sinks--bar-items)))
+    (remhash name cmacs-lql-watch-sinks--bar-items)
+    (condition-case err
+        (pcase item
+          (`(slot . ,id)
+           (require 'cmacs-gowl-bar-slots)
+           (cmacs-gowl-bar-slot-remove id))
+          (`(widget . ,widget)
+           ;; A widget is the user's to place; all there is to take
+           ;; back is the text.
+           (when (or (fboundp 'cmacs-gowl-bar-push)
+                     (require 'cmacs-gowl-bar-ai nil t))
+             (cmacs-gowl-bar-push widget '(("text" . ""))))))
+      (error (message "cmacs-lql-watch: could not clear %s from the bar: %s"
+                      name (error-message-string err))))))
 
 (defun cmacs-lql-watch-sinks--bar (name rows &rest _)
-  "Push the watch NAME's ROWS, formatted, to its bar item."
-  (when-let* ((spec (and (cmacs-lql-watch-sinks--user-p name)
-                         (cmacs-lql-watch-sinks--bar-spec name))))
-    (let* ((format (or (plist-get spec :format) "{name}: {rows}"))
-           (text (cond ((and (null rows) (plist-member spec :empty))
-                        (or (plist-get spec :empty) ""))
-                       ((functionp format) (format "%s" (funcall format rows)))
-                       (t (cmacs-lql-watch-format format name rows))))
-           (text (replace-regexp-in-string "[\n\r\t]+" " " text)))
-      ;; `cmacs-gowl-bar-push' is the one way Elisp sets a widget's
-      ;; settings, never signals, and is a no-op with no bar running.
-      (when (or (fboundp 'cmacs-gowl-bar-push)
-                (require 'cmacs-gowl-bar-ai nil t))
-        (cmacs-gowl-bar-push
-         (plist-get spec :widget)
-         (list (cons "text" (truncate-string-to-width
-                             text cmacs-lql-watch-bar-max-chars nil nil t))))))))
+  "Show the watch NAME's ROWS on the bar, as its :bar option says.
+On both the baseline and the change hook: a displayed watch needs its
+first value too.  A bad :bar option signals, which the watch records
+as its callback error -- visible in the watch list, and the reason
+nothing appeared."
+  (let ((spec (and (cmacs-lql-watch-sinks--user-p name)
+                   (cmacs-lql-watch-sinks--bar-spec name))))
+    (cond
+     ;; The watch was redefined without :bar: what it had goes.
+     ((null spec) (cmacs-lql-watch-sinks--bar-drop name))
+     ;; The route from before slots: a setting on a widget the user
+     ;; placed.
+     ((plist-get spec :widget)
+      (let ((value (cmacs-lql-watch-sinks--bar-value name spec rows)))
+        (puthash name (cons 'widget (plist-get spec :widget))
+                 cmacs-lql-watch-sinks--bar-items)
+        ;; `cmacs-gowl-bar-push' never signals and is a no-op with no
+        ;; bar running.
+        (when (or (fboundp 'cmacs-gowl-bar-push)
+                  (require 'cmacs-gowl-bar-ai nil t))
+          (cmacs-gowl-bar-push
+           (plist-get spec :widget)
+           (list (cons "text" (cmacs-lql-watch-sinks--bar-text
+                               (if (consp value)
+                                   (plist-get value :text)
+                                 value))))))))
+     (t
+      (let* ((id (cmacs-lql-watch-sinks--bar-slot-id name spec))
+             (value (cmacs-lql-watch-sinks--bar-value name spec rows))
+             (args (list :owner 'cmacs-lql-watch
+                         ;; What a count on a bar most needs said about
+                         ;; it: which question it is the answer to.
+                         :tooltip (format "%s: %s" name
+                                          (or (cmacs-lql-watch-get name :query)
+                                              "")))))
+        ;; The option's own keys over the defaults, then what a format
+        ;; function returned over those, then the text over everything.
+        (dolist (key cmacs-lql-watch-sinks--slot-keys)
+          (when (plist-member spec key)
+            (setq args (plist-put args key (plist-get spec key)))))
+        (when (consp value)
+          (let ((tail value))
+            (while tail
+              (setq args (plist-put args (car tail) (cadr tail))
+                    tail (cddr tail)))))
+        (setq args (plist-put args :text
+                              (cmacs-lql-watch-sinks--bar-text
+                               (if (consp value)
+                                   (plist-get value :text)
+                                 value))))
+        ;; A slot under another id from an earlier definition of this
+        ;; watch would otherwise stay beside the new one.
+        (let ((had (gethash name cmacs-lql-watch-sinks--bar-items)))
+          (unless (equal had (cons 'slot id))
+            (cmacs-lql-watch-sinks--bar-drop name)))
+        (puthash name (cons 'slot id) cmacs-lql-watch-sinks--bar-items)
+        ;; Remembered by the slot layer whether or not a bar is up, so
+        ;; a watch that fired before the compositor started is on the
+        ;; bar when it does.  Signals only for a bad option.
+        (apply #'cmacs-gowl-bar-slot-set id args))))))
+
+(defun cmacs-lql-watch-sinks--bar-paused (name paused)
+  "Take the watch NAME off the bar when PAUSED, and put it back when not.
+A paused watch's last value is nobody's current answer; left on the
+bar it reads as one.  On resume the last rows go back at once -- the
+watch runs again, but a result equal to the last is not a change and
+would never be pushed."
+  (cond
+   (paused (cmacs-lql-watch-sinks--bar-drop name))
+   ((and (cmacs-lql-watch-get name :last-run)
+         (not (cmacs-lql-watch-get name :last-error)))
+    (cmacs-lql-watch-sinks--bar name (cmacs-lql-watch-rows name)))))
+
+(defun cmacs-lql-watch-sinks--bar-removed (name &rest _)
+  "Take the removed watch NAME off the bar."
+  (cmacs-lql-watch-sinks--bar-drop name))
 
 ;;;###autoload
 (defun cmacs-lql-watch-bar-place (widget &optional region)
   "Add the bar WIDGET to REGION of the gowl bar, without replacing anything.
 REGION is `left', `center' or `right' (the default), or one of those
 prefixed `bottom-' for the bottom bar.  Uses the bar's amendment keys,
-so the rest of the layout -- shipped or yours -- is left alone.  Call it
-once, at startup, for a widget a watch drives:
+so the rest of the layout -- shipped or yours -- is left alone.
+
+Only for a watch that drives an existing widget, `:bar (:widget ...)'.
+A watch with any other :bar has a slot of its own and needs nothing
+placed: say where it goes in the option, with :region and :order.
 
   (cmacs-lql-watch-bar-place \"label\")
   (cmacs-lql-define-watch inbox \"fetch notes | filter para == \\\"inbox\\\"\"
@@ -256,6 +421,10 @@ once, at startup, for a widget a watch drives:
 (add-hook 'cmacs-lql-watch-change-functions #'cmacs-lql-watch-sinks--bar)
 (add-hook 'cmacs-lql-watch-change-functions #'cmacs-lql-watch-sinks--toast)
 (add-hook 'cmacs-lql-watch-baseline-functions #'cmacs-lql-watch-sinks--bar)
+(add-hook 'cmacs-lql-watch-paused-functions
+          #'cmacs-lql-watch-sinks--bar-paused)
+(add-hook 'cmacs-lql-watch-removed-functions
+          #'cmacs-lql-watch-sinks--bar-removed)
 
 (provide 'cmacs-lql-watch-sinks)
 

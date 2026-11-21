@@ -40,7 +40,7 @@ Files: =lisp/cmacs/cmacs-lql-watch.el= (the watches and the list buffer), =cmacs
 | =:timeout=    | Seconds one run may take; default ~cmacs-lql-watch-timeout~ (30)                                      |
 | =:paused=     | Register it paused                                                                                    |
 | =:event=      | Emit a podomation event on a change; see [[#podomation][podomation]]                                  |
-| =:bar=        | Drive a gowl bar item; see [[#bar][The gowl bar]]                                                     |
+| =:bar=        | Be a gowl bar item, in a slot of its own; see [[#bar][The gowl bar]]                                  |
 | =:toast=      | A bar toast on a change; =t= or a template                                                            |
 
 An option that is none of these is an error at registration: a typo in =:on-change= must not produce a watch that silently does nothing.
@@ -74,7 +74,7 @@ Any difference in the result fires, including order. *Write a query whose result
 | ~cmacs-lql-watch-pause~ / ~-resume NAME~  | Stop and restart it                                                  |
 | ~cmacs-lql-watch-diff-json DIFF &optional MAX~ | The diff as bounded JSON, for anything that carries text       |
 
-Hooks, for code that wants every watch rather than one: ~cmacs-lql-watch-change-functions~ (NAME NEW OLD DIFF), ~cmacs-lql-watch-baseline-functions~ (NAME ROWS; the first result, which is not a change), ~cmacs-lql-watch-error-functions~ (NAME MESSAGE; once when a watch starts failing), ~cmacs-lql-watch-removed-functions~ (NAME OWNER). A consumer that gives watches a new option adds its keyword to ~cmacs-lql-watch-extra-keys~. The three shipped consumers are written with exactly these and nothing private.
+Hooks, for code that wants every watch rather than one: ~cmacs-lql-watch-change-functions~ (NAME NEW OLD DIFF), ~cmacs-lql-watch-baseline-functions~ (NAME ROWS; the first result, which is not a change), ~cmacs-lql-watch-error-functions~ (NAME MESSAGE; once when a watch starts failing), ~cmacs-lql-watch-removed-functions~ (NAME OWNER), ~cmacs-lql-watch-paused-functions~ (NAME PAUSED; after a pause or a resume). A consumer that gives watches a new option adds its keyword to ~cmacs-lql-watch-extra-keys~. The three shipped consumers are written with exactly these and nothing private.
 
 * The list: =M-x cmacs-lql-watches=
 
@@ -179,7 +179,126 @@ There is one event name for every watch, told apart by =event->watch=: a module'
 :CUSTOM_ID: bar
 :END:
 
-A watch with =:bar= sets the =text= setting of a bar widget on its first result and on every change, through ~cmacs-gowl-bar-push~ -- the same push every Emacs-owned bar item uses. With no bar running it does nothing.
+A watch with =:bar= *is* a bar item. It owns a slot on the gowl bar --- an item of its own, created on the watch's first result, refilled on every change, and removed when the watch is paused or removed (see [[file:cmacs-gowl-bar-slots.org][cmacs-gowl-bar-slots]]). One slot per watch, so any number of standing queries sit on the bar side by side, and nothing has to be placed in the bar's configuration first. With no bar running the slot is remembered and shown when there is one.
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-watch inbox
+  "fetch notes | filter para == \"inbox\" | summarize n = count()"
+  :every 300
+  :bar "inbox {n}")
+#+end_src
+
+=:bar= is one of:
+
+| Value      | Means                                                                                              |
+|------------+----------------------------------------------------------------------------------------------------|
+| =t=        | A slot saying =NAME: N=, N being the row count.                                                    |
+| a string   | A slot, with the string as the format.                                                             |
+| a function | A slot; the function is called with the rows and returns the text.                                 |
+| a plist    | A slot, placed and dressed by the plist's keys (below).                                            |
+
+In a format ={rows}= is the row count, ={total}= the result's total, ={name}= the watch's name and ={COLUMN}= that column of the /first/ row. A format function is called with the rows (a list of alists, column name to value) and returns a string, =nil= for nothing, or a plist of slot keys --- =(:text "2 failing" :role red :urgency critical)= --- to change more than the text with the result. The text is one line, cut at ~cmacs-lql-watch-bar-max-chars~ (80).
+
+The plist's keys:
+
+| Key                                                                         | Meaning                                                                                                    |
+|-----------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------|
+| =:format=                                                                   | A format string or function, as above. Default ="{name}: {rows}"=.                                         |
+| =:empty=                                                                    | The text for a result with no rows; =nil= shows nothing then (the slot takes no room). Without it the format is used, ={rows}= being 0. |
+| =:slot=                                                                     | The slot's id, instead of =lql-NAME=. Name one to fill a =slot:ID= you put in the bar's widget list.       |
+| =:region= =:order= =:bar= =:output=                                         | Where it goes: =left= / =center= / =right=, an order within the region, =top= / =bottom=, one output.      |
+| =:icon= =:role= =:urgency= =:tooltip=                                       | How it looks: a glyph, a bar theme role (never a hex colour), =low= / =normal= / =critical=, hover text (default: the watch's name and query). |
+| =:on-click=                                                                 | A function called in Emacs with the click when the slot is clicked.                                        |
+| =:ttl=                                                                      | Seconds after the last push at which the bar drops the slot by itself.                                     |
+| =:widget=                                                                   | *Not* a slot: push the text at the =text= setting of this existing bar widget. See [[#bar-widget][below]]. |
+
+A key that does not exist is an error recorded on the watch (=M-x cmacs-lql-watches= shows it), not a setting silently ignored. An agent's watch never gets a slot: an agent choosing a watch name must not be able to write on your bar.
+
+A paused watch's slot is taken off the bar --- its last value is nobody's current answer, and left there it would read as one --- and goes back, with the rows it had, the moment the watch is resumed.
+
+*** Three worked examples
+:PROPERTIES:
+:CUSTOM_ID: bar-examples
+:END:
+
+*Unread mail.* There is no mail source, so make one: a Maildir's =new/= directory is the unread mail, and listing a local directory is cheap enough to do on the editor thread just before the query runs.
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-source
+ "maildir_new" '(("folder" string) ("file" string))
+ (lambda ()
+   (cl-loop for folder in '("INBOX" "Lists")
+            for dir = (expand-file-name (concat folder "/new") "~/Mail")
+            when (file-directory-p dir)
+            append (mapcar (lambda (f) (list :folder folder :file f))
+                           (directory-files dir nil "\\`[^.]"))))
+ "Mail not yet seen, one row per message.")
+
+(cmacs-lql-define-watch unread
+  "fetch maildir_new | filter folder == \"INBOX\" | summarize n = count()"
+  :every 60
+  :bar (list :format (lambda (rows)
+                       (let ((n (cdr (assoc "n" (car rows)))))
+                         (and n (> n 0) (format "%d unread" n))))
+             :icon "✉" :role 'peach :region 'right :order 10
+             :on-click (lambda (_click) (mu4e))))
+#+end_src
+
+The function returns =nil= for an empty inbox, so the slot vanishes rather than saying "0 unread".
+
+*Failing CI runs.* The query has to run a program, and LQL does that on its own worker thread, never Emacs's. Give the program a name with a command definition --- a few lines of YAML in =~/.config/lql/commands/= --- so the query cannot choose what runs:
+
+#+begin_src yaml
+# ~/.config/lql/commands/ci.yaml
+- name: ci_runs
+  description: Recent pipelines of a GitLab project
+  argv: [glab, ci, list, --output, json, '--repo={repo}']
+  format: json
+  timeout_ms: 20000
+  parameters:
+    - {name: repo, type: String, required: true, description: OWNER/PROJECT}
+#+end_src
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-watch ci
+  "ci_runs repo: \"me/project\" | filter status == \"failed\" | fields ref, id | sort id DESC"
+  :every 300 :key "id"
+  :bar (list :region 'right :order 20 :empty nil
+             :format (lambda (rows)
+                       (list :text (format "%d failing: %s" (length rows)
+                                           (cdr (assoc "ref" (car rows))))
+                             :urgency (if (> (length rows) 2)
+                                          'critical 'normal)
+                             :role 'red))
+             :on-click (lambda (_click)
+                         (browse-url "https://gitlab.com/me/project/-/pipelines"))))
+#+end_src
+
+=:empty nil= is what makes this a slot that exists only while something is failing. The column names (=status=, =ref=, =id=) are whatever your forge's CLI prints; run the query in =M-x cmacs-lql-query= first and look.
+
+*What am I supposed to be doing.* The first =NEXT= heading of your projects, from the notes sources, on the left of the bar; a click goes to it.
+
+#+begin_src emacs-lisp
+(cmacs-lql-define-watch doing
+  "fetch note_headings | filter todo == \"NEXT\" and para == \"projects\" | sort priority, deadline | fields heading, file, line | limit 1"
+  :every 120
+  :bar (list :region 'left :order 10 :icon "▶" :role 'accent
+             :format "{heading}" :empty "nothing is NEXT"
+             :on-click (lambda (_click)
+                         (when-let* ((row (car (cmacs-lql-watch-rows 'doing))))
+                           (find-file (cdr (assoc "file" row)))
+                           (goto-char (point-min))
+                           (forward-line (1- (cdr (assoc "line" row))))))))
+#+end_src
+
+The click handler reads the watch's current rows with ~cmacs-lql-watch-rows~ rather than closing over anything, so it always opens what the bar is showing.
+
+*** Driving an existing widget
+:PROPERTIES:
+:CUSTOM_ID: bar-widget
+:END:
+
+Before slots existed, =:bar= pushed a =text= setting at a widget already on the bar, and the only shipped widget whose text is a setting is =label= (alias =text=). That route is still there, spelt out:
 
 #+begin_src emacs-lisp
 (cmacs-lql-watch-bar-place "label")          ; once: add the widget, right region
@@ -189,11 +308,11 @@ A watch with =:bar= sets the =text= setting of a bar widget on its first result 
   :bar '(:widget "label" :format "inbox {n}" :empty ""))
 #+end_src
 
-=:bar= is a widget name or a plist: =:widget=, =:format= (a template, or a function of the rows returning the text; default ="{name}: {rows}"=) and =:empty= (the text for a result with no rows). In a template ={rows}= is the row count, ={total}= the result's total, ={name}= the watch's name and ={COLUMN}= that column of the first row. The text is one line, cut at ~cmacs-lql-watch-bar-max-chars~ (80).
+The bare strings ="label"= and ="text"= are read as =(:widget ...)= too: they were the only two values that ever worked as a widget name, and neither is a format anybody meant. Every other string is now a format.
 
-~cmacs-lql-watch-bar-place WIDGET &optional REGION~ adds a widget with the bar's amendment keys (=widgets-right-add= and friends), so the rest of your layout is left alone. REGION is =left=, =center=, =right= (default) or those prefixed =bottom-=.
+It can drive two items in all --- a bare =label= and a bare =text= --- because =label:something= takes its text from its spec and shows "something" for ever. (Making =label= prefer the setting would not have fixed that: a =label.text= setting reaches /every/ label by name, so each =label:Static text= on a bar that also pushed to =label= would have started showing the pushed text.) Use it only for a layout built around it; a slot has no such limit.
 
-*A limit you should know about.* The only shipped widget whose text can be set from outside is =label= (alias =text=), and its text comes from its spec parameter before its =text= setting -- so =label:something= cannot be driven, only a bare =label= and a bare =text=. That is *two* watch-driven bar items without writing a plugin. Lifting it is a two-line change in gowl's =label_configure= (prefer the =text= setting over the spec parameter, as the comment in =cmacs-lql-watch-sinks.el= describes); a bar plugin of your own that reads a =text= setting has no such limit.
+~cmacs-lql-watch-bar-place WIDGET &optional REGION~ adds a widget with the bar's amendment keys (=widgets-right-add= and friends), so the rest of your layout is left alone. REGION is =left=, =center=, =right= (default) or those prefixed =bottom-=. A slot needs nothing placed.
 
 =:toast t= raises a bar toast on every change (=NAME changed= and the counts), or a message where there is no bar. =:toast "template"= uses a template for the summary.
 
@@ -257,11 +376,11 @@ An entry that cannot be registered is reported and skipped; the others still are
 | ~cmacs-lql-watch-agent-gated-sources~     | =activity= | Sources an agent's watch may name only when allowed   |
 | ~cmacs-lql-watch-event-name~              | =on_lql_watch= | The podomation event                              |
 | ~cmacs-lql-watch-event-diff-max~          | 4096    | Characters of diff in an event                           |
-| ~cmacs-lql-watch-bar-max-chars~           | 80      | Longest bar text                                         |
+| ~cmacs-lql-watch-bar-max-chars~           | 80      | Longest bar text, in columns                             |
 | ~cmacs-lql-watch-tools-min-interval~      | 30      | Floor on an agent's interval                             |
 | ~cmacs-lql-watch-tools-default-interval~  | 120     | An agent's interval when it names none                   |
 | ~cmacs-lql-watch-tools-max-chars~         | 4000    | Characters of diff in a message to an agent              |
 
 * Tests
 
-=test/cmacs/cmacs-lql-watch-tests.el= needs no engine: ~cmacs-lql-run~ is replaced by a stub that hands the test the callback, the timer is never armed, and the clock is the test's. It covers the baseline, a keyed diff, the in-flight rule, the watchdog, the busy skip, the typing skip, the generation skip and its bound, backoff and its cap, contained callbacks (a prompt included), the caps, ownership, the journal gate from both directions, the agent tools' delivery and coalescing, and each sink.
+=test/cmacs/cmacs-lql-watch-tests.el= needs no engine: ~cmacs-lql-run~ is replaced by a stub that hands the test the callback, the timer is never armed, and the clock is the test's. It covers the baseline, a keyed diff, the in-flight rule, the watchdog, the busy skip, the typing skip, the generation skip and its bound, backoff and its cap, contained callbacks (a prompt included), the caps, ownership, the journal gate from both directions, the agent tools' delivery and coalescing, and each sink --- for the bar: a slot per watch, refilled on a change, removed on pause and on removal and put back on resume, a plist placing and dressing it, a format function overriding it, no slot for an agent's watch, a bad option recorded on the watch, and the =:widget= route.

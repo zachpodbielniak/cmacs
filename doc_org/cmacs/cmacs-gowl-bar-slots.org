@@ -1,0 +1,200 @@
+#+TITLE: cmacs-gowl-bar-slots — Bar Items Elisp Creates and Fills
+#+AUTHOR: Zach Podbielniak
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Every widget on the gowl bar finds out what to show by itself: the clock reads the time, the cpu widget reads =/proc=. A *slot* is told. It is a bar item with a name, created at run time by something outside the bar, whose text, glyph, colour, hover text and urgency are pushed whenever they change, and whose clicks are reported back to whoever made it.
+
+=cmacs-gowl-bar-slots.el= is how Elisp makes one:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-slot-set "mail" :text "3 unread" :role 'peach
+                         :on-click (lambda (_click) (mu4e)))
+(cmacs-gowl-bar-slot-set "mail" :text "4 unread")   ; only the text changes
+(cmacs-gowl-bar-slot-remove "mail")
+#+end_src
+
+No restart, no configuration reload and no entry in a widget list: the slot appears when it is set and is gone when it is removed. It needs =cmacs --gowl= with the bar loaded; anywhere else every function here does nothing and returns nil.
+
+Three things about it, stated plainly:
+
+- *Nothing a slot carries is run by the compositor.* A slot has no command. An =:on-click= function stays in Emacs; the bar only reports that a click happened, and Emacs calls the function, from a timer, on its own thread.
+- *A colour is a role, never a hex value.* =:role 'peach= follows the session palette like the rest of the bar. =:role "#fab387"= is an error in Elisp and refused by the bar, so a slot cannot be left the wrong colour by a theme change.
+- *A slot that outlives its owner is a bar that lies*, so slots have owners, and a way of going away on their own. See [[#lifetime][Lifetime]].
+
+The compositor's half --- the slot table, the =slot= plugin that draws one, the IPC commands and JSON-RPC methods that standalone gowl users get --- is documented in gowl's =docs/bar.org=, /Slots/. This page is the Elisp.
+
+* Setting a slot
+:PROPERTIES:
+:CUSTOM_ID: set
+:END:
+
+~cmacs-gowl-bar-slot-set ID &rest PLIST~ creates the slot ID or changes it. ID is a string or a symbol of letters, digits, =_=, =.= and =-=, starting with a letter, a digit or =_= (~cmacs-gowl-bar-slot-id~ makes one out of any name). Only the keys PLIST names change; the rest of the slot stays as it was.
+
+| Key         | Value                                                                                                   | Default   |
+|-------------+---------------------------------------------------------------------------------------------------------+-----------|
+| =:text=     | What it says. =nil= or =""= shows nothing --- a slot with neither text nor icon takes no room.            | empty     |
+| =:icon=     | A glyph drawn before the text, in the bar's icon font (what =button.icon= takes).                       | none      |
+| =:role=     | A bar theme role, symbol or string: =text=, =accent=, =red=, =green=, =yellow=, =peach= ... (~cmacs-gowl-bar-slot-roles~). | by urgency |
+| =:tooltip=  | Hover text.                                                                                             | the id    |
+| =:urgency=  | =low= (drawn muted), =normal=, or =critical= (the red role, over a wash of it).                          | =normal=  |
+| =:region=   | =left=, =center= or =right=.                                                                             | =right=   |
+| =:order=    | An integer: where among the region's slots. Negative sorts before the region's own widgets, zero and up after them. | =0= |
+| =:bar=      | =top= or =bottom=.                                                                                      | =top=     |
+| =:output=   | The one output to show on (="eDP-1"=); =nil= for all of them.                                           | all       |
+| =:on-click= | A function of one argument; see [[#clicks][Clicks]].                                                     | none      |
+| =:owner=    | A symbol naming the package the slot belongs to, for ~cmacs-gowl-bar-slot-clear~.                       | none      |
+| =:ttl=      | Seconds after the last push at which the bar removes the slot by itself.                                | never     |
+
+It returns non-nil when the bar took the slot now, and nil when no bar is running or the bar refused --- which is reported in the echo area, once per slot and reason, not on every push. It signals an error only for a PLIST that could never be right: an unknown key, a role that is not a role, an order that is not an integer. That kind of mistake is better found where it was written than reported from a timer.
+
+The text is made one line and cut to ~cmacs-gowl-bar-slots-max-text~ columns (120) with an ellipsis. The bar has its own, larger limit of 256 bytes.
+
+** Where a slot goes
+:PROPERTIES:
+:CUSTOM_ID: placement
+:END:
+
+A slot is not in any widget list. That is what lets one be added to a bar somebody else configured --- and what keeps it there, because a configuration replaces a region's /widgets/ and leaves its slots alone. =:region= and =:order= say "at the start" or "at the end" of a region:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-slot-set "task" :region 'left :order 10 :text "write the report")
+(cmacs-gowl-bar-slot-set "build" :region 'right :order -1 :text "building")
+#+end_src
+
+In the right region "before" means nearer the screen edge, as it does in =widgets-right=, which reads outward from the edge.
+
+To put a slot /between/ two particular widgets, give it a place in the bar's own list and the slot of that id fills it:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top '(("widgets-left" . "tags slot:task title")))
+(cmacs-gowl-bar-slot-set "task" :text "write the report")
+#+end_src
+
+A listed =slot:ID= sits where the list says; the slot's own =:bar=, =:region= and =:order= then no longer apply, and removing the slot empties the place without taking it out of the list.
+
+* Clicks
+:PROPERTIES:
+:CUSTOM_ID: clicks
+:END:
+
+A slot with =:on-click= is clickable. The function is called with one argument, a plist:
+
+| Key          | Value                                                                  |
+|--------------+------------------------------------------------------------------------|
+| =:id=        | The slot's id, a string.                                               |
+| =:button=    | =left=, =right=, =middle=, or =button-N= for anything else.             |
+| =:modifiers= | A list of =shift=, =ctrl=, =alt= and =super=; =nil= for none.           |
+| =:output=    | The name of the output it was clicked on, or =nil=.                    |
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-slot-set
+ "mail" :text "3 unread"
+ :on-click (lambda (click)
+             (pcase (plist-get click :button)
+               ('left  (mu4e))
+               ('right (cmacs-gowl-bar-slot-set "mail" :text "")))))
+#+end_src
+
+How it gets there: the bar announces =slot-click ID BUTTON MODIFIERS OUTPUT OWNER= as a module event, cmacs carries the compositor's =module-event= signal to Emacs's thread and runs ~cmacs-gowl-module-event-functions~, and this file's listener looks the slot up and schedules the function with a zero-second timer. So the function does /not/ run inside the compositor's signal dispatch: it may prompt, pop a buffer or signal an error like any command, and an error is reported in the echo area rather than taking the hook down. A click on a slot that is not Elisp's --- another owner's, or one made from the socket --- is ignored here.
+
+A slot without =:on-click= is not a button; a press on it falls through as it does on a label.
+
+* Slots that keep themselves up to date
+:PROPERTIES:
+:CUSTOM_ID: define
+:END:
+
+~cmacs-gowl-bar-define-slot ID &rest PLIST~ is for an init file. ID is an unquoted symbol (or a string). It takes every key above and two more:
+
+| Key       | Value                                                                                                             |
+|-----------+-------------------------------------------------------------------------------------------------------------------|
+| =:update= | A function of no arguments giving what the slot shows: a string (its text), =nil= (nothing), or a plist of slot keys to change. |
+| =:every=  | Call it again this many seconds apart. Without it the function runs once, and again on ~cmacs-gowl-bar-slot-refresh~. |
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-define-slot clock-in
+  :region 'left :role 'accent
+  :update (lambda ()
+            (and (bound-and-true-p org-clock-current-task)
+                 (substring-no-properties org-clock-current-task)))
+  :every 30
+  :on-click (lambda (_click) (org-clock-goto)))
+
+(cmacs-gowl-bar-define-slot unsaved
+  :update (lambda ()
+            (let ((n (cl-count-if (lambda (b)
+                                    (and (buffer-file-name b)
+                                         (buffer-modified-p b)))
+                                  (buffer-list))))
+              (when (> n 0)
+                (list :text (format "%d unsaved" n)
+                      :urgency (if (> n 5) 'critical 'normal)))))
+  :every 20)
+#+end_src
+
+Evaluating the form again /replaces/ the slot: a key the new form no longer has is gone, and the old timer is cancelled. It works before the compositor has started; the slot is remembered and shown when the bar is.
+
+*The update function runs from a timer in Emacs --- under =cmacs --gowl= on the thread the whole desktop waits on. It must return at once.* Read state Emacs already has. Never run a process, read the network or prompt in it. For anything that has to be computed elsewhere, set the slot from that computation's callback with ~cmacs-gowl-bar-slot-set~ instead; an LQL watch's =:bar= option does exactly that, and is the easy way to put a /query/ on the bar (see [[file:cmacs-lql-watch.org::#bar][cmacs-lql-watch]]).
+
+An update function that signals is reported once and leaves the slot as it was.
+
+* Lifetime
+:PROPERTIES:
+:CUSTOM_ID: lifetime
+:END:
+
+Every slot Elisp makes is remembered in a table, and carries the owner tag ~cmacs-gowl-bar-slots-owner~ (="cmacs"=) on the bar. Between them those two do the following.
+
+- *Before the bar exists.* A slot set before =cmacs-gowl-mode= has started is remembered and pushed by ~cmacs-gowl-bar-slots-restore~, which the mode calls once its bar is up.
+- *When the compositor restarts.* The same call puts every slot back after a =gowl-stop= and =gowl-start=. It begins by asking the bar to drop everything carrying the tag, so what the bar shows afterwards is exactly what the table holds --- nothing an earlier Emacs state left behind.
+- *When the configuration reloads.* Nothing to do: slots are not part of a widget list, and a reload does not touch them.
+- *When a package goes away.* ~(cmacs-gowl-bar-slot-clear 'my-package)~ removes every slot made with =:owner 'my-package=. With no argument it removes every slot Elisp has made.
+- *When Emacs stops pushing.* =:ttl 180= has the /bar/ remove the slot three minutes after the last push to it. Every push is a heartbeat, so a slot refreshed once a minute stays as long as its timer runs and no longer.
+- *Somebody else's slot of the same id.* The bar lets only a slot's owner change it. A push to an id that a script on the IPC socket made is refused and reported, not silently fought over, and ~cmacs-gowl-bar-slot-remove~ names the tag so it never removes one that is not cmacs's.
+
+The bar holds at most 64 slots.
+
+* Functions
+
+| Function                                         | Does                                                                                                  |
+|--------------------------------------------------+-------------------------------------------------------------------------------------------------------|
+| ~cmacs-gowl-bar-slot-set ID &rest PLIST~         | Create or change a slot; non-nil when the bar took it.                                                |
+| ~cmacs-gowl-bar-slot-remove ID~                  | Forget the slot and take it off the bar; non-nil if there was one.                                    |
+| ~cmacs-gowl-bar-slot-list &optional LIVE~        | The slots Elisp has made, as =(ID . PLIST)= by id. With LIVE, what the bar is showing for cmacs, parsed from its JSON. |
+| ~cmacs-gowl-bar-slot-clear &optional OWNER~      | Remove one package's slots, or all of them; returns how many.                                         |
+| ~cmacs-gowl-bar-define-slot ID &rest PLIST~      | Macro: define a slot in an init file, optionally with =:update= and =:every=.                          |
+| ~cmacs-gowl-bar-slot-refresh &optional ID~       | Command: run the =:update= function of one slot, or of every slot that has one.                       |
+| ~cmacs-gowl-bar-slot-id NAME~                    | NAME as a valid slot id; the same name always gives the same id.                                      |
+| ~cmacs-gowl-bar-slots-restore~                   | Show every remembered slot on the bar that is running now. Called by =cmacs-gowl-mode=.                |
+
+* Options
+
+| Option                             | Default   | Meaning                                                    |
+|------------------------------------+-----------+------------------------------------------------------------|
+| ~cmacs-gowl-bar-slots-owner~       | ="cmacs"= | The owner tag every slot made from Elisp carries on the bar |
+| ~cmacs-gowl-bar-slots-max-text~    | 120       | Longest text, in columns, a slot is given                  |
+
+* The primitives
+
+Four DEFUNs in =cmacs/gowl/cmacs-gowl-bar-slots.c= sit under the functions above. Each sends one command to the bar module --- the path every other bar DEFUN takes --- with the gowl lock held for the call, and returns the bar's reply as a string, or nil when no compositor is running.
+
+| Primitive                                | Reply                                                |
+|------------------------------------------+------------------------------------------------------|
+| ~gowl-bar-slot-set ID FIELDS~            | ="created ID"=, ="updated ID"= or ="error: REASON"=  |
+| ~gowl-bar-slot-remove ID &optional OWNER~ | ="removed ID"= or ="error: REASON"=                  |
+| ~gowl-bar-slot-clear OWNER~              | ="removed N"=; OWNER =t= removes every slot          |
+| ~gowl-bar-slot-list &optional OWNER~     | a JSON array                                         |
+
+FIELDS is an alist of =(KEY . VALUE)= with KEY a string or symbol and VALUE a string, an integer, or =t= / =nil= for true and false. The request is built as a JSON object in C, so no text --- a mail subject, a task heading, whatever a query returned --- can break out of its field. They exist rather than going through ~gowl-run-command~ for that reason, and because a command run that way is announced to every IPC subscriber, which for a status that changes every few seconds would be most of what a subscriber hears.
+
+Use the Elisp functions rather than these: a slot set with the primitive is not remembered, its clicks are not dispatched, and it is not put back when the compositor restarts.
+
+In an Emacs built before the primitives, =cmacs-gowl-bar-slots.el= falls back to ~gowl-run-command~ with the same bar commands.
+
+* Tests
+
+=test/cmacs/cmacs-gowl-bar-slots-tests.el= needs no bar: the one function that would reach one, ~cmacs-gowl-bar-slots-command-function~, is rebound to record what it was given. It covers a push carrying the whole slot, bounded one-line text, every bad argument signalling and sending nothing, ids from arbitrary names, no bar and a refusing bar (said once), removal by owner, the click line's parsing and its deferred dispatch (never inside the event; never for somebody else's slot), a failing handler contained, ~cmacs-gowl-bar-define-slot~ replacing and timing itself, and a restore clearing before it pushes. The C half is held by source to the gowl lock rules --- one function calls into gowl, takes the scoped lock first and leaves only through =unbind_to=. The primitives themselves are exercised only for their argument checks, with no compositor running.
+
+The slot table, the limits and placement are tested in gowl, against the real bar module: =deps/gowl/tests/test-bar-slots.c=.
