@@ -329,8 +329,12 @@ Anything holding more than one output is refused."
 
 (defconst cmacs-gowl-input-remap--analog-keys
   '(:deadzone :press :release :invert :centred :pointer-speed
-    :pointer-curve :pointer-accel :scroll-rate :mouse-gain :mouse-idle-ms)
-  "The keys of a rule's `:analog' plist, as the module reads them.")
+    :pointer-curve :pointer-accel :scroll-rate :mouse-gain :mouse-idle-ms
+    :slant :gate)
+  "The keys of a rule's `:analog' plist, as the module reads them.
+`slant' is degrees toward +X that a vertical push reads as, removed
+from X in proportion to |Y|.  `gate' drops the lesser axis of a
+near-straight push.  Both need a gowl that knows them (v0.5.5).")
 
 (defun cmacs-gowl-input-remap--analog (rule analog)
   "The JSON `analog' object for ANALOG, the settings plist of RULE."
@@ -484,7 +488,11 @@ PLIST keys:
   :analog PLIST   :deadzone, :press, :release, :invert (axes),
                   :centred, :pointer-speed, :pointer-curve,
                   :pointer-accel, :scroll-rate, :mouse-gain,
-                  :mouse-idle-ms.
+                  :mouse-idle-ms, :slant (degrees a vertical push
+                  leans toward +X, taken off X by |Y|), :gate
+                  (lesser/greater ratio below which the lesser
+                  axis is not a key).  :slant and :gate need gowl
+                  v0.5.5.
   :virtual-pad    NAME, or (:name NAME :id \"VVVV:PPPP\" :buttons
                   (BTN_...) :axes (ABS_...)): the gamepad its stick,
                   trigger and pad-button targets drive.
