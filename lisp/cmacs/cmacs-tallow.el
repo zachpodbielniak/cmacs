@@ -30,7 +30,12 @@
 ;;    indentation and imenu; eglot runs `tallow lsp' for everything else
 ;;    -- completion, types on hover, inlay hints, diagnostics, rename,
 ;;    references, call hierarchy, code actions, semantic tokens -- and
-;;    formats on save.
+;;    formats on save.  `completion-preview-mode' gives as-you-type
+;;    completion when no corfu/company popup is around, and
+;;    `cmacs-tallow-include-dirs' / `cmacs-tallow-gir-dirs' (usually
+;;    from .dir-locals.el) reach the server and every command.
+;;  - `cmacs-tallow-command-map' (C-c C-a, and SPC m under Doom): build,
+;;    run (C or suet, --watch), check, test, fuzz, explain, caps, verify.
 ;;  - `cmacs-tallow-repl': a comint REPL over `tallow repl --json'.  It
 ;;    is a subprocess on purpose: a panicking program cannot take the
 ;;    editor (or, under --gowl, the session) down with it.
@@ -50,7 +55,8 @@
 (require 'comint)
 (require 'compile)
 
-(declare-function cmacs-lsp-ensure "cmacs-lsp" ())
+(declare-function cmacs-lsp--setup-doc-frame "cmacs-lsp" ())
+(declare-function project-root "project" (project))
 (declare-function eglot-managed-p "eglot" ())
 (declare-function eglot-format-buffer "eglot" ())
 (declare-function tallow-mode "tallow-mode" ())
@@ -89,6 +95,33 @@
 compiler needed) runs `tallow-suet repl --json'; \"tallow\" runs
 `tallow repl --json'."
   :type '(choice (const "suet") (const "tallow")))
+
+(defcustom cmacs-tallow-completion-preview t
+  "Non-nil means .tlw buffers get as-you-type completion out of the box.
+This turns on the built-in `completion-preview-mode' (the language
+server's candidates, shown inline; TAB accepts, M-i completes) unless
+the buffer already has a completion UI of its own (corfu, company).
+\\[completion-at-point] always lists every candidate."
+  :type 'boolean)
+
+(defcustom cmacs-tallow-include-dirs nil
+  "Extra Tallow module directories (-I) for the language server and commands.
+Relative entries are under the project root (the directory of
+tallow.yaml, else the project.el root).  A project with a tallow.yaml
+usually needs none: its `sources' are searched already.  Set per
+directory, e.g. in .dir-locals.el:
+
+  ((tallow-mode . ((cmacs-tallow-include-dirs . (\"src\" \"lib\")))))"
+  :type '(repeat directory)
+  :safe (lambda (v) (and (listp v) (cl-every #'stringp v))))
+
+(defcustom cmacs-tallow-gir-dirs nil
+  "Extra directories of .gir files, prepended to TALLOW_GIR_PATH.
+Used by the language server and every tallow command run from a
+buffer, e.g. for a project's generated GIRs.  Relative entries are
+under the project root, like `cmacs-tallow-include-dirs'."
+  :type '(repeat directory)
+  :safe (lambda (v) (and (listp v) (cl-every #'stringp v))))
 
 ;;;; Finding the toolchain
 
@@ -130,9 +163,47 @@ compiler needed) runs `tallow-suet repl --json'; \"tallow\" runs
 
 ;;;; Language server
 
+(defun cmacs-tallow--root ()
+  "The directory relative search dirs are under.
+The nearest tallow.yaml's directory, else the project.el root, else
+`default-directory'."
+  (or (cmacs-tallow--project-root)
+      (and (fboundp 'project-current)
+           (when-let* ((pr (project-current nil)))
+             (expand-file-name (project-root pr))))
+      default-directory))
+
+(defun cmacs-tallow--expand-dirs (dirs)
+  "DIRS made absolute against `cmacs-tallow--root'."
+  (let ((root (cmacs-tallow--root)))
+    (mapcar (lambda (d) (expand-file-name d root)) dirs)))
+
+(defun cmacs-tallow--gir-path ()
+  "TALLOW_GIR_PATH with `cmacs-tallow-gir-dirs' first, or nil if unchanged."
+  (when cmacs-tallow-gir-dirs
+    (string-join (append (cmacs-tallow--expand-dirs cmacs-tallow-gir-dirs)
+                         (and (getenv "TALLOW_GIR_PATH")
+                              (list (getenv "TALLOW_GIR_PATH"))))
+                 path-separator)))
+
+(defun cmacs-tallow--include-args ()
+  "The -I options for `cmacs-tallow-include-dirs'."
+  (mapcan (lambda (d) (list "-I" d))
+          (cmacs-tallow--expand-dirs cmacs-tallow-include-dirs)))
+
 (defun cmacs-tallow-server-contact (&optional _interactive)
-  "Command line of the Tallow language server."
-  (list (or (cmacs-tallow-program) "tallow") "lsp"))
+  "Command line of the Tallow language server, for eglot.
+`cmacs-tallow-include-dirs' become the server's includeDirs
+initialization option; `cmacs-tallow-gir-dirs' are put on its
+TALLOW_GIR_PATH (through env(1), since eglot has no per-server
+environment)."
+  (let ((gir (cmacs-tallow--gir-path)))
+    (append (and gir (list "env" (concat "TALLOW_GIR_PATH=" gir)))
+            (list (or (cmacs-tallow-program) "tallow") "lsp")
+            (list :initializationOptions
+                  (list :includeDirs
+                        (vconcat (cmacs-tallow--expand-dirs
+                                  cmacs-tallow-include-dirs)))))))
 
 (with-eval-after-load 'eglot
   (setq eglot-server-programs
@@ -146,13 +217,44 @@ compiler needed) runs `tallow-suet repl --json'; \"tallow\" runs
              (fboundp 'eglot-managed-p) (eglot-managed-p))
     (ignore-errors (eglot-format-buffer))))
 
+(defun cmacs-tallow--start-eglot ()
+  "Start eglot (`tallow lsp') in this buffer.
+Not `cmacs-lsp-ensure': that one is for the servers compiled into
+the cmacs binary and does nothing in a build without them, while
+`tallow lsp' is an ordinary program.  The at-point doc frame of
+cmacs-lsp is still used when it is there."
+  ;; Load eglot outside the mode hook first: on Emacs 30 its autoload
+  ;; firing under `delay-mode-hooks' recursively expands macros.
+  (unless (featurep 'eglot)
+    (with-temp-buffer (require 'eglot nil t)))
+  (when (fboundp 'eglot-ensure)
+    (when (and (require 'cmacs-lsp nil t)
+               (fboundp 'cmacs-lsp--setup-doc-frame))
+      (cmacs-lsp--setup-doc-frame))
+    ;; eglot-ensure connects after this command, so .dir-locals.el
+    ;; values (include and GIR dirs) are in place by then.
+    (eglot-ensure)))
+
+(defun cmacs-tallow--completion-ui-p ()
+  "Non-nil when the buffer already has a completion popup of its own.
+The global modes count too: they turn the buffer's mode on only
+after the major mode's hooks have run."
+  (or (bound-and-true-p corfu-mode)
+      (bound-and-true-p global-corfu-mode)
+      (bound-and-true-p company-mode)
+      (bound-and-true-p global-company-mode)
+      (bound-and-true-p completion-preview-mode)))
+
 (defun cmacs-tallow--mode-setup ()
   "Make a `tallow-mode' buffer work out of the box."
   (add-hook 'before-save-hook #'cmacs-tallow--format-before-save nil t)
+  (when (and cmacs-tallow-completion-preview
+             (not (cmacs-tallow--completion-ui-p))
+             (require 'completion-preview nil t))
+    (completion-preview-mode 1))
   (when (and cmacs-tallow-auto-eglot buffer-file-name
-             (cmacs-tallow-program)
-             (require 'cmacs-lsp nil t))
-    (cmacs-lsp-ensure)))
+             (cmacs-tallow-program))
+    (cmacs-tallow--start-eglot)))
 
 ;;;; Running, testing, checking
 
@@ -161,13 +263,28 @@ compiler needed) runs `tallow-suet repl --json'; \"tallow\" runs
   (when-let* ((dir (locate-dominating-file default-directory "tallow.yaml")))
     (expand-file-name dir)))
 
-(defun cmacs-tallow--compile (args &optional name)
-  "Run the tallow program with ARGS in a compilation buffer named NAME."
-  (let ((default-directory (or (cmacs-tallow--project-root) default-directory))
-        (compilation-buffer-name-function
-         (lambda (_) (or name "*tallow*"))))
+(defun cmacs-tallow--compile (args &optional name comint)
+  "Run the tallow program with ARGS in a compilation buffer named NAME.
+`cmacs-tallow-gir-dirs' are put on TALLOW_GIR_PATH.  COMINT non-nil
+makes the buffer interactive, for programs that read stdin."
+  (let* ((gir (cmacs-tallow--gir-path))
+         (compilation-environment
+          (append (and gir (list (concat "TALLOW_GIR_PATH=" gir)))
+                  compilation-environment))
+         (default-directory (or (cmacs-tallow--project-root) default-directory))
+         (compilation-buffer-name-function
+          (lambda (_) (or name "*tallow*"))))
     (compile (mapconcat #'shell-quote-argument
-                        (cons (cmacs-tallow--ensure-program) args) " "))))
+                        (cons (cmacs-tallow--ensure-program) args) " ")
+             comint)))
+
+(defun cmacs-tallow--file-or-error ()
+  "The buffer's file, saved first; a `user-error' when there is none."
+  (unless buffer-file-name
+    (user-error "cmacs-tallow: this buffer visits no file"))
+  (when (buffer-modified-p)
+    (save-buffer))
+  buffer-file-name)
 
 (defcustom cmacs-tallow-c-dependencies nil
   "C dependencies of Tallow code that calls C, for build, run, test and fuzz.
@@ -212,15 +329,17 @@ With a prefix argument, read extra program ARGS."
   (interactive (list (and current-prefix-arg
                           (split-string-and-unquote (read-string "Arguments: ")))))
   (cmacs-tallow--compile (append (list "run")
+                                 (cmacs-tallow--include-args)
                                  (cmacs-tallow--c-dep-args)
                                  (cmacs-tallow--file-arg)
                                  (and args (cons "--" args)))
-                         "*tallow run*"))
+                         "*tallow run*" t))
 
 (defun cmacs-tallow-test ()
   "Run the tests of the project, or of the current file, with `tallow test'."
   (interactive)
-  (cmacs-tallow--compile (append '("test") (cmacs-tallow--c-dep-args)
+  (cmacs-tallow--compile (append '("test") (cmacs-tallow--include-args)
+                                 (cmacs-tallow--c-dep-args)
                                  (cmacs-tallow--file-arg))
                          "*tallow test*"))
 
@@ -233,6 +352,7 @@ argument, read the SEED to replay."
   (interactive (list (and current-prefix-arg (read-number "Seed: "))))
   (cmacs-tallow--compile (append '("fuzz")
                                  (and seed (list "--seed" (number-to-string seed)))
+                                 (cmacs-tallow--include-args)
                                  (cmacs-tallow--c-dep-args)
                                  (cmacs-tallow--file-arg))
                          "*tallow fuzz*"))
@@ -241,8 +361,69 @@ argument, read the SEED to replay."
   "Type-check the current file (or project) with `tallow check'."
   (interactive)
   (cmacs-tallow--compile (append '("check")
+                                 (cmacs-tallow--include-args)
                                  (and buffer-file-name (list buffer-file-name)))
                          "*tallow check*"))
+
+(defun cmacs-tallow-build ()
+  "Build the project of the nearest tallow.yaml, else the current file.
+A single file is built with -g (gdb and `tallow dap' step its .tlw
+lines) into the program next to it, named without the extension."
+  (interactive)
+  (if (cmacs-tallow--project-root)
+      (cmacs-tallow--compile (append '("build") (cmacs-tallow--include-args)
+                                     (cmacs-tallow--c-dep-args))
+                             "*tallow build*")
+    (let ((file (cmacs-tallow--file-or-error)))
+      (cmacs-tallow--compile (append '("build" "-g")
+                                     (cmacs-tallow--include-args)
+                                     (cmacs-tallow--c-dep-args)
+                                     (list file "-o" (file-name-sans-extension file)))
+                             "*tallow build*"))))
+
+(defun cmacs-tallow-run-suet (&optional args)
+  "Run the current file on suet, the bytecode VM (no C compiler).
+With a prefix argument, read extra program ARGS."
+  (interactive (list (and current-prefix-arg
+                          (split-string-and-unquote (read-string "Arguments: ")))))
+  (cmacs-tallow--compile (append '("run" "--backend=suet")
+                                 (cmacs-tallow--include-args)
+                                 (list (cmacs-tallow--file-or-error))
+                                 args)
+                         "*tallow run*" t))
+
+(defun cmacs-tallow-run-watch ()
+  "Run the current file and hot-reload it whenever it or an import changes."
+  (interactive)
+  (cmacs-tallow--compile (append '("run" "--watch")
+                                 (cmacs-tallow--include-args)
+                                 (list (cmacs-tallow--file-or-error)))
+                         "*tallow watch*" t))
+
+(defun cmacs-tallow-explain-item ()
+  "Show the item at point beside the C it lowers to (`tallow explain -l')."
+  (interactive)
+  (cmacs-tallow--compile (append '("explain")
+                                 (cmacs-tallow--include-args)
+                                 (list "-l" (number-to-string (line-number-at-pos))
+                                       (cmacs-tallow--file-or-error)))
+                         "*tallow explain*"))
+
+(defun cmacs-tallow-caps ()
+  "List the capabilities the current program needs, as YAML."
+  (interactive)
+  (cmacs-tallow--compile (append '("check" "--caps")
+                                 (cmacs-tallow--include-args)
+                                 (list (cmacs-tallow--file-or-error)))
+                         "*tallow caps*"))
+
+(defun cmacs-tallow-verify ()
+  "Prove the contracts of the current file with z3 or cvc5 (`tallow verify')."
+  (interactive)
+  (cmacs-tallow--compile (append '("verify")
+                                 (cmacs-tallow--include-args)
+                                 (list (cmacs-tallow--file-or-error)))
+                         "*tallow verify*"))
 
 (defun cmacs-tallow-explain (code)
   "Explain the diagnostic CODE (the one at point by default)."
@@ -535,6 +716,53 @@ debugger, which can step backwards."
 
 ;;;; Mode wiring
 
+(defvar-keymap cmacs-tallow-command-map
+  :doc "Every Tallow command on one letter: C-c C-a in `tallow-mode',
+and the localleader (SPC m) under Doom Emacs."
+  "b" #'cmacs-tallow-build
+  "r" #'cmacs-tallow-run
+  "s" #'cmacs-tallow-run-suet
+  "w" #'cmacs-tallow-run-watch
+  "c" #'cmacs-tallow-check
+  "t" #'cmacs-tallow-test
+  "u" #'cmacs-tallow-fuzz
+  "e" #'cmacs-tallow-explain-item
+  "E" #'cmacs-tallow-explain
+  "k" #'cmacs-tallow-caps
+  "v" #'cmacs-tallow-verify
+  "R" #'cmacs-tallow-repl
+  "d" #'cmacs-tallow-debug
+  "n" #'cmacs-tallow-new)
+
+(defvar doom-localleader-key)
+(defvar doom-localleader-alt-key)
+(declare-function general-define-key "general" (&rest args))
+
+(defvar cmacs-tallow--localleader-bound nil
+  "Non-nil once Doom's localleader carries `cmacs-tallow-command-map'.")
+
+(defun cmacs-tallow--bind-doom-localleader ()
+  "Put `cmacs-tallow-command-map' on Doom's localleader in `tallow-mode'.
+Does what Doom's `map! :localleader' does, as a function call, so
+this file needs neither Doom nor general.el to compile or load."
+  (when (and (fboundp 'general-define-key) (boundp 'doom-localleader-alt-key))
+    (let ((binds (let (acc)
+                   (map-keymap (lambda (ev cmd)
+                                 (push (key-description (vector ev)) acc)
+                                 (push cmd acc))
+                               cmacs-tallow-command-map)
+                   (nreverse acc))))
+      (apply #'general-define-key
+             :keymaps 'tallow-mode-map
+             :major-modes t
+             (append (if (featurep 'evil)
+                         (list :states '(normal visual motion emacs insert)
+                               :prefix doom-localleader-key
+                               :non-normal-prefix doom-localleader-alt-key)
+                       (list :prefix doom-localleader-alt-key))
+                     binds))
+      t)))
+
 (defun cmacs-tallow--install ()
   "Load `tallow-mode' and bind cmacs's commands in it."
   (when (cmacs-tallow--load-mode)
@@ -550,6 +778,10 @@ debugger, which can step backwards."
     (define-key tallow-mode-map (kbd "C-c C-u") #'cmacs-tallow-fuzz)
     (define-key tallow-mode-map (kbd "C-c C-e") #'cmacs-tallow-explain)
     (define-key tallow-mode-map (kbd "C-c C-d") #'cmacs-tallow-debug)
+    (define-key tallow-mode-map (kbd "C-c C-a") cmacs-tallow-command-map)
+    (unless cmacs-tallow--localleader-bound
+      (setq cmacs-tallow--localleader-bound
+            (cmacs-tallow--bind-doom-localleader)))
     (add-hook 'tallow-mode-hook #'cmacs-tallow--mode-setup)
     t))
 

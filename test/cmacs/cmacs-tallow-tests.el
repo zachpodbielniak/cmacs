@@ -22,6 +22,7 @@
 
 (defvar eglot-server-programs)
 (defvar dape-configs)
+(defvar global-corfu-mode)
 
 (ert-deftest cmacs-tallow-auto-mode ()
   "A .tlw file is routed through cmacs's mode setup."
@@ -62,6 +63,63 @@
   (let ((cmacs-tallow-c-dependencies nil))
     (should-not (cmacs-tallow--c-dep-args)))
   (should (get 'cmacs-tallow-c-dependencies 'risky-local-variable)))
+
+(ert-deftest cmacs-tallow-search-dirs ()
+  "Include and GIR dirs reach the server (initializationOptions,
+TALLOW_GIR_PATH) and the commands (-I), absolute under the project."
+  (skip-unless (fboundp 'cmacs-tallow-server-contact))
+  (let* ((root (make-temp-file "cmacs-tallow" t))
+         (default-directory (file-name-as-directory root)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "tallow.yaml" root) (insert "name: t\n"))
+          (let ((cmacs-tallow-include-dirs '("src" "lib"))
+                (cmacs-tallow-gir-dirs '("gir"))
+                (process-environment (cons "TALLOW_GIR_PATH=/x" process-environment)))
+            (let ((c (cmacs-tallow-server-contact)))
+              (should (equal (car c) "env"))
+              (should (equal (cadr c) (concat "TALLOW_GIR_PATH="
+                                              (expand-file-name "gir" root) ":/x")))
+              (should (equal (nth 3 c) "lsp"))
+              (should (equal (plist-get (plist-get (memq :initializationOptions c)
+                                                   :initializationOptions)
+                                        :includeDirs)
+                             (vector (expand-file-name "src" root)
+                                     (expand-file-name "lib" root)))))
+            (should (equal (cmacs-tallow--include-args)
+                           (list "-I" (expand-file-name "src" root)
+                                 "-I" (expand-file-name "lib" root)))))
+          ;; Nothing set: a bare `tallow lsp', no -I.
+          (let ((cmacs-tallow-include-dirs nil) (cmacs-tallow-gir-dirs nil))
+            (should-not (cmacs-tallow--include-args))
+            (should (equal (cadr (cmacs-tallow-server-contact)) "lsp"))))
+      (delete-directory root t)))
+  (should (funcall (get 'cmacs-tallow-include-dirs 'safe-local-variable) '("src")))
+  (should-not (funcall (get 'cmacs-tallow-gir-dirs 'safe-local-variable) '(1))))
+
+(ert-deftest cmacs-tallow-command-map ()
+  "One-letter commands under C-c C-a, the same letters as Doom's SPC m."
+  (skip-unless (boundp 'cmacs-tallow-command-map))
+  (dolist (b '(("b" . cmacs-tallow-build) ("r" . cmacs-tallow-run)
+               ("s" . cmacs-tallow-run-suet) ("w" . cmacs-tallow-run-watch)
+               ("e" . cmacs-tallow-explain-item) ("k" . cmacs-tallow-caps)
+               ("v" . cmacs-tallow-verify) ("d" . cmacs-tallow-debug)))
+    (should (eq (keymap-lookup cmacs-tallow-command-map (car b)) (cdr b)))
+    (should (commandp (cdr b)))))
+
+(ert-deftest cmacs-tallow-completion-preview ()
+  "Inline completion is turned on, unless another popup will be."
+  (skip-unless (and (fboundp 'cmacs-tallow--mode-setup)
+                    (require 'completion-preview nil t)))
+  (with-temp-buffer
+    (let ((cmacs-tallow-auto-eglot nil) (cmacs-tallow-completion-preview t))
+      (cmacs-tallow--mode-setup)
+      (should completion-preview-mode)))
+  (with-temp-buffer
+    (let ((cmacs-tallow-auto-eglot nil) (cmacs-tallow-completion-preview t)
+          (global-corfu-mode t))
+      (cmacs-tallow--mode-setup)
+      (should-not completion-preview-mode))))
 
 (defconst cmacs-tallow-tests--root
   (expand-file-name "../.." (file-name-directory

@@ -3,8 +3,8 @@
 #+authors: Zach Podbielniak
 #+categories: cmacs subsystem tallow language lsp repl dap debugging
 #+created: 2026-11-14T00:00:00-05:00
-#+updated: 2026-11-14T00:00:00-05:00
-#+version: 0.2
+#+updated: 2026-11-24T22:00:00-05:00
+#+version: 0.3
 
 * Overview
 
@@ -14,6 +14,8 @@
 
 - =tallow-mode= (upstream, =deps/tallow/editors/emacs=) provides syntax highlighting, indentation that matches =tallow fmt=, imenu, comments, and compilation error regexps.
 - eglot runs =tallow lsp= automatically.  You get completion, types on hover, inlay hints, signature help, diagnostics, go-to definition, declaration, type definition and implementation, references, rename, document and workspace symbols, call and type hierarchies, code actions, code lenses and semantic tokens.  The buffer is formatted on save.
+- As-you-type completion out of the box: the built-in =completion-preview-mode= shows the server's candidate inline, unless corfu or company is already the buffer's popup (Doom's corfu is used as is).
+- Extra module and GIR directories (=cmacs-tallow-include-dirs=, =cmacs-tallow-gir-dirs=, usually from =.dir-locals.el=) reach the server and every command.
 - =cmacs-tallow-repl= is a comint REPL over =tallow-suet repl --json=.
 - Debugging goes through dape, with a =tallow= configuration (gdb, programs built =-g=) and a =tallow-suet= configuration that can step backwards and reverse-continue.
 - There are commands to run, test and check a file or project, explain a diagnostic code, and create a new project.
@@ -59,10 +61,43 @@ So a development build always uses the tallow it was built with.  An in-tree =ta
 | =C-c C-r= | =cmacs-tallow-send-region= | Evaluate the region in the REPL                         |
 | =C-M-x=   | =cmacs-tallow-send-defun=  | Evaluate the definition at point                        |
 | =C-c C-b= | =cmacs-tallow-send-buffer= | Evaluate the buffer                                     |
+| =C-c C-a= | =cmacs-tallow-command-map= | Every command on one letter (below)                     |
+
+=C-c C-a= is a prefix with one letter per command.  Under Doom Emacs the same map is the localleader (=SPC m= in normal state, =M-SPC m= elsewhere), bound through =general-define-key= when Doom is loaded, so a Doom config needs no =map!= of its own.
+
+| Key | Command                     | Does                                                         |
+|-----+-----------------------------+--------------------------------------------------------------|
+| =b= | =cmacs-tallow-build=        | =tallow build= the project; a lone file is built =-g= next to itself |
+| =r= | =cmacs-tallow-run=          | =tallow run= (interactive: the program can read stdin)        |
+| =s= | =cmacs-tallow-run-suet=     | =tallow run --backend=suet=: no gcc                           |
+| =w= | =cmacs-tallow-run-watch=    | =tallow run --watch=: hot-reload on every save               |
+| =c= | =cmacs-tallow-check=        | =tallow check=                                               |
+| =t= | =cmacs-tallow-test=         | =tallow test=                                                |
+| =u= | =cmacs-tallow-fuzz=         | =tallow fuzz=                                                |
+| =e= | =cmacs-tallow-explain-item= | =tallow explain -l LINE=: the item at point beside its C     |
+| =E= | =cmacs-tallow-explain=      | Explain a diagnostic code                                    |
+| =k= | =cmacs-tallow-caps=         | =tallow check --caps=: the capabilities the program needs    |
+| =v= | =cmacs-tallow-verify=       | =tallow verify=: prove the contracts with z3 or cvc5         |
+| =R= | =cmacs-tallow-repl=         | The REPL                                                     |
+| =d= | =cmacs-tallow-debug=        | Debug with dape                                              |
+| =n= | =cmacs-tallow-new=          | A new project                                                |
 
 =M-x cmacs-tallow-new= creates a project with =tallow new= and opens it in dired.
 
 Run, test and check use =compilation-mode=, in the project root when there is a =tallow.yaml= above the file.  Errors are clickable through upstream's compilation regexp.
+
+*** Module and GIR directories
+
+A project with a =tallow.yaml= needs nothing: its =sources= are on the module search path.  For loose files, or modules outside the manifest, set =cmacs-tallow-include-dirs=; for =.gir= files outside the system search path (a project's generated GIRs), set =cmacs-tallow-gir-dirs=.  Relative entries are under the project root: the =tallow.yaml= directory, else the project.el root.  Both are safe as file-local values.
+
+#+begin_src emacs-lisp
+;; .dir-locals.el
+((tallow-mode . ((cmacs-tallow-include-dirs . ("src" "lib"))
+                 (cmacs-tallow-gir-dirs . ("build")))))
+#+end_src
+
+- The language server gets the include dirs as its =includeDirs= initialization option, and the GIR dirs on =TALLOW_GIR_PATH= (through =env(1)=, before any inherited value).
+- Every command gets =-I DIR= for each include dir and the same =TALLOW_GIR_PATH= in =compilation-environment=.
 
 *** Code that calls C
 
@@ -79,7 +114,13 @@ The values become compiler and linker flags, so the variable is marked risky: a 
 
 * The language server
 
-=eglot-server-programs= maps =tallow-mode= to =cmacs-tallow-server-contact=, which returns =(TALLOW "lsp")=.  Upstream's own registration (=tallow-register-with-eglot=) is turned off so the two cannot race.  =cmacs-lsp-ensure= starts eglot when a =.tlw= file opens; =cmacs-tallow-auto-eglot= turns that off.  With =cmacs-tallow-format-on-save= set, =before-save-hook= formats through =eglot-format-buffer=, which is =tallow fmt=.
+=eglot-server-programs= maps =tallow-mode= to =cmacs-tallow-server-contact=, which returns =(TALLOW "lsp")=.  Upstream's own registration (=tallow-register-with-eglot=) is turned off so the two cannot race.  =cmacs-tallow--start-eglot= starts eglot when a =.tlw= file opens; =cmacs-tallow-auto-eglot= turns that off.  It calls =eglot-ensure= itself rather than =cmacs-lsp-ensure=: the latter serves the servers compiled into the cmacs binary and does nothing in a build without them, while =tallow lsp= is an ordinary program.  It still uses cmacs-lsp's at-point doc frame when that is loaded.  =eglot-ensure= connects after the current command, so =.dir-locals.el= values are in place when the contact is computed.
+
+Inlay hints (types and parameter names) and semantic tokens are on by default in both the server and eglot, so neither needs configuring.
+
+** Completion
+
+eglot supplies the =completion-at-point= function; =C-M-i= lists every candidate anywhere.  For as-you-type completion, =cmacs-tallow-completion-preview= (default =t=) turns on the built-in =completion-preview-mode=: after three symbol characters the best candidate is shown inline, =TAB= accepts it and =M-i= completes the common part.  It stays off when the buffer has corfu or company, including their global modes (which switch the buffer on only after the major mode's hooks), so Doom's corfu popup is used unchanged.  With =cmacs-tallow-format-on-save= set, =before-save-hook= formats through =eglot-format-buffer=, which is =tallow fmt=.
 
 * The REPL
 
@@ -141,11 +182,16 @@ gdb pretty-printers for Tallow values ship in the runtime (=tallow_gdb.py=) and 
 |--------------------------------+----------+--------------------------------------------------|
 | =cmacs-tallow-format-on-save=  | =t=      | Format with =tallow fmt= (via eglot) on save     |
 | =cmacs-tallow-auto-eglot=      | =t=      | Start eglot in =.tlw= buffers                    |
+| =cmacs-tallow-completion-preview= | =t=   | Inline as-you-type completion when no corfu/company |
+| =cmacs-tallow-include-dirs=    | =nil=    | Extra module dirs: =includeDirs= for the server, =-I= for commands |
+| =cmacs-tallow-gir-dirs=        | =nil=    | Extra =.gir= dirs, prepended to =TALLOW_GIR_PATH= |
 | =cmacs-tallow-repl-backend=    | ="suet"= | =tallow-suet repl= or =tallow repl=              |
 | =cmacs-tallow-repl-buffer-name= | =*Tallow*= | The REPL buffer                               |
 | =cmacs-tallow-repl-prompt=     | =tallow> = | The prompt cmacs draws                         |
 
 * Troubleshooting
+
+- *A Doom config's own =tallow.el= shadows all of this* :: A private =tallow-mode= loaded after cmacs's autoload takes the =.tlw= entry in =auto-mode-alist=, and its eglot contact replaces cmacs's.  Remove it; nothing in it is needed.
 
 - *=.tlw= opens in =prog-mode= with a message* :: =tallow-mode= was not found.  Check that =deps/tallow/editors/emacs= exists in a dev tree, or that the installed site-lisp copy does.
 - *"no `tallow'"* :: The toolchain was not built (=--with-cmacs-tallow= off), or is not on =PATH= for an installed cmacs.
